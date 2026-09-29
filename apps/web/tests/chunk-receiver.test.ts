@@ -1,0 +1,161 @@
+import { describe, it, expect, vi } from 'vitest';
+import { ChunkReceiver } from '@/lib/chunk-receiver';
+import { encodeChunkHeader } from '@openmeet/protocol';
+
+function fakeWriter() {
+  return { write: vi.fn().mockResolvedValue(undefined), fileName: 'guest.mp4' };
+}
+
+describe('ChunkReceiver', () => {
+  it('writes a binary payload at the offset from the preceding header', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(4);
+  });
+
+  it('acks every 5 chunks', async () => {
+    const writer = fakeWriter();
+    const acks: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => acks.push(m),
+    });
+    for (let i = 0; i < 5; i++) {
+      await r.handleMessage(encodeChunkHeader({ idx: i, offset: i * 4, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    }
+    const parsed = acks.map((a) => JSON.parse(a));
+    const ack = parsed.find((p) => p.type === 'ack');
+    expect(ack).toMatchObject({ type: 'ack', recordingId: 'r1', uptoIdx: 4, uptoOffset: 20 });
+  });
+
+  it('ignores control strings (host->guest messages) without writing', async () => {
+    const writer = fakeWriter();
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: vi.fn() });
+    await r.handleMessage(JSON.stringify({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 1 }));
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it('drops a binary payload with no preceding header', async () => {
+    const writer = fakeWriter();
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: vi.fn() });
+    await r.handleMessage(new Uint8Array([9]).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+  });
+
+  it('answers a clock_ping with a clock_pong echoing seq/t0 + a host receive time', async () => {
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: (m) => sent.push(m),
+    });
+    await r.handleMessage(JSON.stringify({ type: 'clock_ping', recordingId: 'r1', seq: 3, t0: 1234 }));
+    const pong = JSON.parse(sent[0]!);
+    expect(pong.type).toBe('clock_pong');
+    expect(pong.seq).toBe(3);
+    expect(pong.t0).toBe(1234);
+    expect(typeof pong.t1).toBe('number');
+  });
+
+  it('captures recording_meta as the guest start (host clock) + rtt', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    expect(r.guestStartHostMs).toBeNull();
+    await r.handleMessage(
+      JSON.stringify({ type: 'recording_meta', recordingId: 'r1', guestStartHostMs: 987654, rttMs: 42 })
+    );
+    expect(r.guestStartHostMs).toBe(987654);
+    expect(r.syncRttMs).toBe(42);
+  });
+
+  it('answers resume_query with resume_offset of last written position', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: (m) => sent.push(m) });
+    await r.handleMessage(encodeChunkHeader({ idx: 3, offset: 30, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    sent.length = 0;
+    await r.handleMessage(JSON.stringify({ type: 'resume_query', recordingId: 'r1' }));
+    const ro = sent.map((s) => JSON.parse(s)).find((m) => m.type === 'resume_offset');
+    expect(ro).toMatchObject({ type: 'resume_offset', recordingId: 'r1', lastIdx: 3, lastByte: 40 });
+  });
+
+  it('reports a write failure via onError instead of throwing', async () => {
+    const writer = {
+      write: vi.fn().mockRejectedValue(Object.assign(new Error('full'), { name: 'DiskFullError' })),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).name).toBe('DiskFullError');
+    expect(r.bytesWritten).toBe(0); // failed write does not count toward bytes
+  });
+
+  it('flushAck() emits an ack for the latest index even below the cadence', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: (m) => sent.push(m) });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    sent.length = 0;
+    r.flushAck();
+    const ack = sent.map((s) => JSON.parse(s)).find((m) => m.type === 'ack');
+    expect(ack).toMatchObject({ type: 'ack', uptoIdx: 0, uptoOffset: 4 });
+  });
+});
+
+describe('ChunkReceiver — host-driven stop', () => {
+  // The host signals stop over the WS, so the guest's tail is still a round
+  // trip plus an encoder flush away. Closing the writer on the host's own
+  // schedule truncated the last seconds of every guest take.
+  it('whenFinalized resolves once the sender reports recording-finalized', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: () => {},
+    });
+    let settled = false;
+    const waiting = r.whenFinalized(5000).then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await r.handleMessage(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'r1', totalBytes: 8, sha256: 'abc' })
+    );
+    await waiting;
+    expect(settled).toBe(true);
+    expect(r.senderSha256).toBe('abc');
+  });
+
+  // A guest that crashed mid-take must not strand the host holding an open
+  // file handle — an unclosed FileSystemWritableFileStream is a 0-byte MP4.
+  it('whenFinalized gives up after the timeout rather than hanging', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: () => {},
+    });
+    await expect(r.whenFinalized(10)).resolves.toBeUndefined();
+  });
+});

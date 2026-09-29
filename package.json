@@ -1,0 +1,37 @@
+{
+  "name": "openmeet",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source, self-hostable studio-quality remote recording. Up to 4 recorded participants over browser P2P WebRTC; every track is written straight to the host's disk and never touches a server.",
+  "license": "MIT",
+  "homepage": "https://github.com/pranshhu/openMeet",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pranshhu/openMeet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pranshhu/openMeet/issues"
+  },
+  "keywords": [
+    "webrtc",
+    "recording",
+    "podcast",
+    "self-hosted",
+    "cloudflare-workers",
+    "peer-to-peer"
+  ],
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/**' --filter './apps/**' build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev:worker": "pnpm --filter @openmeet/worker dev",
+    "db:migrate:local": "pnpm --filter @openmeet/worker db:migrate:local"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

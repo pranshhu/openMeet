@@ -1,0 +1,409 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  bindHostScreenChannel,
+  collectScreenSegments,
+  startScreenRecording,
+  stopScreenRecording,
+  type RecordingHandles,
+} from '@/hooks/recording-controller';
+
+/**
+ * Screen share was rendered but never recorded: share a deck for twenty minutes
+ * and nothing survived the session. These cover the file bookkeeping — one file
+ * per share stretch, so repeated toggles don't overwrite each other.
+ */
+
+const files: string[] = [];
+function fakeDir() {
+  return {
+    getFileHandle: async (name: string) => {
+      files.push(name);
+      return {
+        name,
+        createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+      };
+    },
+  } as unknown as NonNullable<RecordingHandles['dir']>;
+}
+
+function fakeScreen(trackOverrides?: Record<string, unknown>): MediaStream {
+  const track = {
+    readyState: 'live',
+    getSettings: () => ({ width: 2560, height: 1440 }),
+    stop() { this.readyState = 'ended'; },
+    ...trackOverrides,
+  };
+  return {
+    getVideoTracks: () => [track],
+    getAudioTracks: () => [],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+}
+
+// MediaRecorder isn't in jsdom; ChunkRecorder only needs it to construct/start.
+function installMediaRecorder() {
+  class FakeMR {
+    state = 'inactive';
+    ondataavailable: ((e: unknown) => void) | null = null;
+    onstop: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop?.(); }
+    pause() {}
+    resume() {}
+  }
+  (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMR;
+  (globalThis as { MediaRecorder: { isTypeSupported: (m: string) => boolean } }).MediaRecorder.isTypeSupported =
+    () => true;
+}
+
+describe('screen recording', () => {
+  it('opens one file per share stretch, numbered so repeats do not collide', async () => {
+    installMediaRecorder();
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec1', dir: fakeDir() };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    await stopScreenRecording(h);
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    await stopScreenRecording(h);
+
+    expect(files).toEqual(['host_screen_rec1.mp4', 'host_screen_rec1_2.mp4']);
+    expect(h.screenSegment).toBe(2);
+  });
+
+  it('ignores a second start while one is already running', async () => {
+    installMediaRecorder();
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec2', dir: fakeDir() };
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    expect(files).toHaveLength(1);
+  });
+
+  it('stop is a no-op when nothing is recording', async () => {
+    const h: RecordingHandles = { recordingId: 'rec3' };
+    await expect(stopScreenRecording(h)).resolves.toBeUndefined();
+  });
+
+  it('creates and starts a screen backup on the sharer, and stops it on stopScreenRecording', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-backup', dir: fakeDir() };
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    expect(h.screenBackup).toBeDefined();
+    const backup = h.screenBackup;
+    const stopSpy = vi.spyOn(backup!, 'stop');
+
+    await stopScreenRecording(h);
+    expect(stopSpy).toHaveBeenCalled();
+    expect(h.screenBackup).toBeUndefined();
+  });
+
+  it('records each stretch start time for the sync sidecar', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec4', dir: fakeDir() };
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    await stopScreenRecording(h);
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    expect([...(h.screenStartsByFile?.keys() ?? [])]).toEqual(['host_screen_rec4.mp4', 'host_screen_rec4_2.mp4']);
+  });
+
+  it('does nothing when the host has no chosen directory', async () => {
+    installMediaRecorder();
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec5' }; // host not recording yet
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    expect(files).toHaveLength(0);
+  });
+
+  it('a stop landing during startScreenRecording await leaves screenRecorder unset and the next start records', async () => {
+    installMediaRecorder();
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec-race', dir: fakeDir() };
+    const screen1 = fakeScreen();
+    const track1 = screen1.getVideoTracks()[0] as { readyState: string; stop: () => void };
+
+    const origDir = h.dir!;
+    h.dir = {
+      ...origDir,
+      getFileHandle: async (name: string) => {
+        track1.stop();
+        return origDir.getFileHandle(name);
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+
+    await startScreenRecording(h, screen1, 'host', null);
+
+    expect(h.screenRecorder).toBeUndefined();
+    expect(h.screenSegment).toBeUndefined();
+    expect(h.screenStartsByFile).toBeUndefined();
+
+    // Next start records normally
+    h.dir = origDir;
+    const screen2 = fakeScreen();
+    await startScreenRecording(h, screen2, 'host', null);
+
+    expect(h.screenRecorder).toBeDefined();
+    expect(h.screenSegment).toBe(1);
+    await stopScreenRecording(h);
+  });
+
+  it('a start with no active take is a no-op (leaves screenRecorder unset and does not increment segment)', async () => {
+    installMediaRecorder();
+    const hHost: RecordingHandles = { recordingId: 'no-take-host' };
+    await startScreenRecording(hHost, fakeScreen(), 'host', null);
+    expect(hHost.screenRecorder).toBeUndefined();
+    expect(hHost.screenSegment).toBeUndefined();
+    expect(hHost.screenStartsByFile).toBeUndefined();
+
+    const hGuest: RecordingHandles = { recordingId: 'no-take-guest' };
+    await startScreenRecording(hGuest, fakeScreen(), 'guest', null);
+    expect(hGuest.screenRecorder).toBeUndefined();
+    expect(hGuest.screenSegment).toBeUndefined();
+    expect(hGuest.screenStartsByFile).toBeUndefined();
+  });
+
+  it('a stop landing during guest channel open await leaves screenRecorder unset and rolls back', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-guest' };
+    const screen = fakeScreen();
+    const track = screen.getVideoTracks()[0] as { readyState: string; stop: () => void };
+
+    let channelOpenListener: (() => void) | undefined;
+    const fakeChannel = {
+      readyState: 'connecting',
+      addEventListener: (_event: string, cb: () => void) => {
+        channelOpenListener = cb;
+      },
+      close: vi.fn(),
+    } as unknown as RTCDataChannel;
+
+    const fakePeer = {
+      createRecordingScreenChannel: () => fakeChannel,
+    };
+
+    const startPromise = startScreenRecording(h, screen, 'guest', fakePeer);
+
+    track.stop();
+    channelOpenListener?.();
+    await startPromise;
+
+    expect(h.screenRecorder).toBeUndefined();
+    expect(h.screenSegment).toBeUndefined();
+    expect(fakeChannel.close).toHaveBeenCalled();
+  });
+
+  it('start error leaves screenRecorder unset, closes writer, and notifies onError', async () => {
+    installMediaRecorder();
+    const origMR = (globalThis as unknown as { MediaRecorder: { prototype: { start: () => void } } }).MediaRecorder;
+    const origStart = origMR.prototype.start;
+    origMR.prototype.start = () => {
+      throw new Error('MediaRecorder start failed');
+    };
+
+    const h: RecordingHandles = { recordingId: 'rec-err', dir: fakeDir() };
+    const screen = fakeScreen();
+    const onError = vi.fn();
+
+    await startScreenRecording(h, screen, 'host', null, onError);
+
+    expect(h.screenRecorder).toBeUndefined();
+    expect(h.screenSegment).toBeUndefined();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+
+    origMR.prototype.start = origStart;
+  });
+
+  it('host drops the empty file of a guest share stopped before its first chunk', async () => {
+    const removed: string[] = [];
+    const dir = { ...fakeDir(), removeEntry: async (n: string) => { removed.push(n); } };
+    const h = { recordingId: 'r1', dir } as unknown as RecordingHandles;
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    await bindHostScreenChannel(channel, h);
+    expect(h.screenWriters).toHaveLength(1);
+
+    channel.dispatchEvent(new Event('close'));
+    await vi.waitFor(() => expect(removed).toEqual(['guest_screen_r1.mp4']));
+    expect(h.screenWriters).toEqual([]);
+  });
+
+  // Host and guest segments are registered at different moments, so pairing
+  // start times with files by position gave a segment another one's offset.
+  it('pairs each screen file with its own start when host and guest segments interleave', async () => {
+    installMediaRecorder();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const base = fakeDir();
+      const dir = {
+        getFileHandle: async (name: string) => {
+          if (name.startsWith('host_')) await gate; // host file opens slowly
+          return base.getFileHandle(name);
+        },
+      } as unknown as NonNullable<RecordingHandles['dir']>;
+      const h: RecordingHandles = { recordingId: 'r', dir, hostStartMs: 1_000_000 };
+
+      vi.setSystemTime(1_005_000);
+      const hostShare = startScreenRecording(h, fakeScreen(), 'host', null);
+      vi.setSystemTime(1_007_000);
+      await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h);
+      vi.setSystemTime(1_008_000);
+      release();
+      await hostShare;
+
+      expect(collectScreenSegments(h)).toEqual([
+        { file: 'guest_screen_r.mp4', offsetMs: 7_000 },
+        { file: 'host_screen_r.mp4', offsetMs: 8_000 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps screen offsets right after an empty guest segment is dropped', async () => {
+    installMediaRecorder();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const dir = { ...fakeDir(), removeEntry: async () => {} };
+      const h = { recordingId: 'r', dir, hostStartMs: 1_000_000 } as unknown as RecordingHandles;
+
+      vi.setSystemTime(1_002_000);
+      const channel = new EventTarget() as unknown as RTCDataChannel;
+      await bindHostScreenChannel(channel, h);
+      channel.dispatchEvent(new Event('close'));
+      await vi.waitFor(() => expect(h.screenWriters).toEqual([]));
+
+      vi.setSystemTime(1_005_000);
+      await startScreenRecording(h, fakeScreen(), 'host', null);
+
+      expect(collectScreenSegments(h)).toEqual([{ file: 'host_screen_r.mp4', offsetMs: 5_000 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps finished screen backups on RecordingHandles.screenBackups across multiple stretches', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-backups-keep', dir: fakeDir() };
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    const backup1 = h.screenBackup;
+    expect(backup1).toBeDefined();
+    await stopScreenRecording(h);
+
+    expect(h.screenBackups).toHaveLength(1);
+    expect(h.screenBackups?.[0]).toBe(backup1);
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+    const backup2 = h.screenBackup;
+    expect(backup2).toBeDefined();
+    expect(backup2).not.toBe(backup1);
+    await stopScreenRecording(h);
+
+    expect(h.screenBackups).toHaveLength(2);
+    expect(h.screenBackups).toEqual([backup1, backup2]);
+  });
+
+  it('does not create a second MediaRecorder for the screen backup and writes chunks to it', async () => {
+    let mrInstances = 0;
+    class FakeMR {
+      state = 'inactive';
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      start() {
+        mrInstances++;
+        this.state = 'recording';
+      }
+      stop() {
+        this.state = 'inactive';
+        this.onstop?.();
+      }
+    }
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMR;
+    (globalThis as { MediaRecorder: { isTypeSupported: (m: string) => boolean } }).MediaRecorder.isTypeSupported =
+      () => true;
+
+    const h: RecordingHandles = { recordingId: 'rec-one-encode', dir: fakeDir() };
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+
+    expect(mrInstances).toBe(1);
+    expect(h.screenBackup).toBeDefined();
+
+    const writeChunkSpy = vi.spyOn(h.screenBackup!, 'writeChunk');
+    const chunkData = new Uint8Array([1, 2, 3, 4]).buffer;
+    const mr = (h.screenRecorder as any).mr;
+    mr.ondataavailable?.({
+      data: { size: 4, arrayBuffer: async () => chunkData } as unknown as Blob,
+    });
+
+    await vi.waitFor(() => {
+      expect(writeChunkSpy).toHaveBeenCalledWith(chunkData);
+    });
+
+    await stopScreenRecording(h);
+  });
+
+  it('marks a screen segment ended early when the host screen receiver channel closes without recording-finalized', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'r-interrupted', dir: fakeDir(), hostStartMs: 1_000_000 };
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h);
+
+    const rec = (h.screenReceivers as Map<number, any>).get(1);
+    await rec.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }));
+    await rec.handleMessage(new ArrayBuffer(4));
+
+    channel.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      const segments = collectScreenSegments(h);
+      expect(segments).toHaveLength(1);
+      expect((segments[0] as any)?.endedEarly).toBe(true);
+    });
+  });
+
+  it('does not mark a screen segment ended early when recording-finalized was received before close', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'r-clean', dir: fakeDir(), hostStartMs: 1_000_000 };
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h);
+
+    const rec = (h.screenReceivers as Map<number, any>).get(1);
+    await rec.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }));
+    await rec.handleMessage(new ArrayBuffer(4));
+
+    await rec.handleMessage(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'r-clean', totalBytes: 4, sha256: 'abc' })
+    );
+    channel.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      const segments = collectScreenSegments(h);
+      expect(segments).toHaveLength(1);
+      expect((segments[0] as any)?.endedEarly).toBeUndefined();
+    });
+  });
+
+  it('collects sharer display name for both host and guest screen segments', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'r-sharer', dir: fakeDir(), hostStartMs: 1_000_000 };
+
+    // Host share with explicit sharer name
+    await startScreenRecording(h, fakeScreen(), 'host', null, undefined, 'Host Alice');
+    await stopScreenRecording(h);
+
+    // Guest share with peerId resolved via getPeerName
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h, undefined, 'peer-bob');
+
+    const getPeerName = (peerId: string) => (peerId === 'peer-bob' ? 'Bob' : undefined);
+    const segments = collectScreenSegments(h, getPeerName);
+
+    expect(segments).toHaveLength(2);
+    expect(segments[0]?.sharer).toBe('Host Alice');
+    expect(segments[1]?.sharer).toBe('Bob');
+  });
+});

@@ -1,0 +1,105 @@
+name: Bug report
+description: Something doesn't work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you file:** if recording does nothing at all, check your browser
+        first — this is by far the most common report. Recording writes MP4, and
+        which codecs `MediaRecorder` can encode varies by operating system.
+        Firefox can't record. Safari can't host, and a Safari guest is recorded
+        as video only (no WAV). On Linux, Chrome has no AAC encoder (in the
+        official .deb as well as the snap), so recordings there use H.264+Opus
+        instead.
+
+        Paste the output of this in your browser's DevTools console and include it
+        below — it tells us more than anything else in this form:
+
+        ```js
+        ['video/mp4;codecs=avc3.42E01F,mp4a.40.2','video/mp4;codecs=avc3.42E01F,opus','video/mp4;codecs=avc1.42E01F,mp4a.40.2','video/mp4;codecs=avc1.42E01F,opus','video/mp4']
+          .map(m => m + ' = ' + MediaRecorder.isTypeSupported(m)).join('\n')
+        ```
+
+        Found a security vulnerability? Don't file it here — see
+        [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a room as host
+        2. Join from a second profile as guest
+        3. Click Record
+        4. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: Which side saw the problem?
+      options:
+        - Host
+        - Guest
+        - Both
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and exact build
+      description: >
+        Paste the full version string from chrome://version (or equivalent).
+        On Linux, say whether it's the .deb, the snap, or a flatpak — they do
+        differ in other ways, even though codec availability is the same.
+      placeholder: "Chrome 151.0.7922.137 (official .deb) on Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04 / macOS 15.1 / Windows 11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Where were you running it?
+      options:
+        - Local dev (pnpm dev)
+        - My own self-hosted deploy
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console output
+      description: >
+        Errors from the DevTools console on the side that broke. For connection
+        problems, chrome://webrtc-internals is far more useful than the console.
+      render: text
+
+  - type: checkboxes
+    id: network
+    attributes:
+      label: If the call failed to connect
+      options:
+        - label: Both peers were on the same network
+        - label: Peers were on different networks
+        - label: One or both peers were on a mobile hotspot or corporate VPN

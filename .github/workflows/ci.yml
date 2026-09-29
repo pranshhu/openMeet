@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR makes the in-flight run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Without this wrangler can block on an interactive telemetry prompt
+  # during `pnpm build`, hanging the job until it times out.
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Version comes from the "packageManager" field in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22        # LTS; satisfies the ">=20.11" engines constraint
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The strict tsconfig is the real safety net in this repo.
+      - run: pnpm -r typecheck
+
+      - run: pnpm -r test
+
+      # Catches Next.js static-export breakage and Worker bundling errors,
+      # neither of which the unit tests can see. Both run without credentials.
+      #
+      # NEXT_PUBLIC_API_BASE is inlined into the bundle, so next.config.ts
+      # refuses a production build without it — otherwise the deployed site
+      # silently calls localhost. CI compiles but never deploys, so it passes a
+      # reserved .invalid host (RFC 2606, guaranteed not to resolve): if this
+      # artifact ever did reach a deploy, it fails loudly instead of quietly.
+      - run: pnpm build
+        env:
+          NEXT_PUBLIC_API_BASE: https://ci.invalid
+
+  # NOTE: nothing here covers the media paths. getUserMedia, getDisplayMedia
+  # and RTCPeerConnection cannot run headless, so recording, screen share and
+  # the call UI are verified only by a manual two-browser test. A green check
+  # does NOT mean the call works -- see CONTRIBUTING.md.

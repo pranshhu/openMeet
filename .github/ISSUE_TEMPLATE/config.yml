@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/pranshhu/openMeet/security/advisories/new
+    about: Report privately. Please do not open a public issue.
+  - name: Recording doesn't start at all
+    url: https://github.com/pranshhu/openMeet/blob/main/CONTRIBUTING.md#prerequisites
+    about: Almost always the browser. Recording needs Chromium; codec support varies by OS.

@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an idea
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        openMeet is deliberately narrow: **up to 4 recorded participants plus 2
+        unrecorded producers**, full mesh, browser-only, recording straight to the
+        host's disk. Requests that contradict that scope (an SFU, larger calls,
+        server-side recording, cloud storage) are likely to be declined — not
+        because they're bad ideas, but because they're a different product.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered instead?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This works within a 4-participant mesh (no SFU)
+        - label: This doesn't require recording bytes to touch a server

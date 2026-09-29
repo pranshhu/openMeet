@@ -1,0 +1,62 @@
+name = "openmeet-worker"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "openmeet_db"
+# Create your own with `wrangler d1 create openmeet_db` and paste the id it
+# prints. This is per-account: a database id from someone else's account does
+# not resolve in yours, and `wrangler deploy` fails on it.
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "../../migrations"
+
+[durable_objects]
+bindings = [
+  { name = "ROOM_DO", class_name = "Room" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+# wrangler 3.x only emits rate-limit bindings via unsafe.bindings; switch to
+# a top-level [[ratelimits]] table after upgrading to wrangler 4.
+[[unsafe.bindings]]
+name = "ROOM_CREATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+[[unsafe.bindings]]
+name = "TURN_CRED_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 20, period = 60 }
+
+[vars]
+# Set PAGES_ORIGIN to your Pages origin before deploying (install.sh writes it
+# for you). CORS is strict single-origin, so it must match exactly, scheme and
+# all. Set it here rather than with `wrangler deploy --var PAGES_ORIGIN:...`:
+# --var does not persist, so the next plain `wrangler deploy` would go back to
+# whatever this file holds.
+#
+# Local dev overrides it for localhost — see the `dev` script in package.json.
+PAGES_ORIGIN = "https://REPLACE-WITH-YOUR-PROJECT.pages.dev"
+
+# Optional sponsor wall on the landing page, backed by your own Polar account.
+# It stays off until POLAR_PRODUCT_ID, SPONSOR_CHECKOUT_URL and the
+# POLAR_ACCESS_TOKEN secret are all set. POLAR_API_BASE defaults to
+# https://api.polar.sh when empty.
+POLAR_PRODUCT_ID = ""
+SPONSOR_CHECKOUT_URL = ""
+POLAR_API_BASE = ""
+
+# Secrets set via `wrangler secret put` in production:
+# TURN_API_TOKEN     - Cloudflare Realtime API token for minting TURN creds
+# TURN_APP_ID        - Cloudflare Realtime app ID
+# POLAR_ACCESS_TOKEN - Polar API access token for sponsor data

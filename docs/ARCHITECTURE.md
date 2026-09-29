@@ -1,0 +1,484 @@
+# openMeet — Architecture and contributor guide
+
+Open-source, self-hostable, studio-quality remote recording. Riverside.fm alternative for
+**up to 4 recorded participants + 2 unrecorded producers** (full mesh, no SFU). Pure browser P2P WebRTC; each peer's local track is recorded
+and the bytes are written to the **host's local disk** (File System Access API). Recording
+bytes never touch any server — zero cloud-storage cost. Runs entirely on a free Cloudflare
+account (Pages + Worker + Durable Object + D1). MIT licensed.
+
+
+---
+
+## Monorepo layout
+
+pnpm workspace (`pnpm@9.12.0`, node ≥ 20.11). Workspaces: `apps/*`, `packages/*`.
+
+| Package | What |
+|---|---|
+| `apps/worker` | Cloudflare Worker — Hono REST (`/api/*`) + `Room` Durable Object (WS signaling) + D1 |
+| `apps/web` | Next.js 16 (App Router, React 19, Turbopack, Tailwind v4). Static export in **prod only** |
+| `packages/protocol` | Shared TS: WS message unions, chunk header + DC control messages, all tuning constants. Consumed as **raw TS source** (no build step) via tsconfig `paths` + vitest `alias` |
+| `migrations` | D1 SQL (`0001_init.sql`, `0002_recordings_ms.sql`) |
+
+`tsconfig.base.json` is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+`verbatimModuleSyntax`, `isolatedModules`, `noFallthroughCasesInSwitch`.
+
+### Commands
+```bash
+pnpm install
+pnpm --filter @openmeet/worker db:migrate:local   # apply D1 migrations to local
+pnpm --filter @openmeet/worker dev                 # wrangler dev -> :8787
+pnpm --filter @openmeet/web dev                    # next dev --turbopack -> :3000
+pnpm -r test                                       # all vitest suites
+pnpm -r typecheck
+pnpm --filter @openmeet/worker run deploy          # wrangler deploy (web is a static export; install.sh deploys it to Pages, or by hand per README Self-hosting)
+```
+`NEXT_PUBLIC_API_BASE` (default `http://localhost:8787`) points web at the Worker; `WS_BASE`
+is derived by swapping `http`→`ws`. **No linter** (there is no `lint` script).
+
+---
+
+## Architecture (data flow)
+
+```
+GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel)──▶  HOST browser
+   getUserMedia                                                                     getUserMedia
+   MediaRecorder ──chunks──▶ DataChannel "recording" ──▶ ChunkReceiver ──▶ FileWriter ──▶ host disk
+   BackupRecorder (OPFS chunk files, safety net)                                    (own track -> disk + own BackupRecorder)
+        │                                                                                  │
+        └──────────────── WS signaling (SDP/ICE/chat/presence) ────────────────────────────┘
+                                          │
+                       Cloudflare Worker (REST) + Room Durable Object (WS hub, per slug) + D1 (metadata only)
+```
+
+- Worker = stateless REST. `Room` DO = per-slug WS hub; **dumb relay** (never inspects SDP/ICE;
+  relays each msg to every other peer — SDP/ICE carrying `to` go to that one peer only — stamped
+  with `from: Role`, `fromPeerId`, and `fromName` on chat/presence/marker).
+- D1 holds **metadata only** (rooms, sessions, participants, recordings) — never bytes.
+- TURN bytes (symmetric NAT) are SRTP/SCTP-encrypted, opaque to operators.
+
+---
+
+## Wire protocol (`packages/protocol`)
+
+**Two transports, two ack mechanisms — do not conflate:**
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (13 variants) ↔ `ServerMessage` (16).
+  Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
+  recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
+  `fromPeerId` on all but `recording-started|stop`. SDP/ICE take an optional `to` (peerId) so
+  the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
+  `type` discriminant**, not payload shape.
+- **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
+  `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
+  `recording_meta` (last three = recording clock-sync). Recording acks flow here, **not** over WS.
+- `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
+  room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
+  or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
+  no remote audio, and shares the 2 unrecorded slots with producers (does not use a recorded seat;
+  role is still host/guest); the DO enforces the per-role caps at `join`. "Present only" is never
+  offered to a producer: `?producer=1` wins over `?present=1`. `role-assigned` (peers)
+  and `peer-joined` echo `companion?: boolean`.
+
+**Chunk wire format** — each chunk = **TWO ordered DataChannel sends**: (1) a JSON **string**
+header `{idx,offset,size,ts}` (`encodeChunkHeader` = `JSON.stringify`), then (2) the binary
+`ArrayBuffer` payload. It is **NOT a packed binary struct.** Channel `binaryType` must be
+`'arraybuffer'`. `decodeChunkHeader` rejects `idx|offset|size` that aren't non-negative safe
+integers and a `ts` that is negative or non-finite; returns a field-whitelisted copy.
+
+**Constants** (`constants.ts`): `CHUNK_TIMESLICE_MS=2000`, `DC_BUFFERED_HIGH_WATERMARK=16MiB`,
+`DC_BUFFERED_LOW_WATERMARK=8MiB`, `GUEST_RETRANSMIT_BUFFER_CAP=32MiB`, `ACK_EVERY_N_CHUNKS=5`,
+`ACK_EVERY_N_MS=10000`, `WS_HEARTBEAT_INTERVAL_MS=30000`, `DRAIN_HARD_CAP_MS=30000`,
+`ROOM_TTL_MS=30d` (extended on every join), `TURN_CRED_TTL_S=43200` (12 h, **seconds**, unlike every `*_MS`; must outlast a session — the client never refreshes TURN credentials and Cloudflare drops a relayed call soon after its credential expires),
+`RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
+Recording quality: `RECORDING_VIDEO_WIDTH=1920`/`HEIGHT=1080`/`FRAME_RATE=30` (capture, `ideal`),
+`RECORDING_VIDEO_BPS=5_000_000`, `RECORDING_AUDIO_BPS=160_000` (encode; `BackupRecorder`'s
+defaults, and the 1080p entry of `lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which
+`ChunkRecorder` gets the bitrate for the actual track via `presetForTrack`; capture constraints in
+`lib/media.ts` `RECORDING_CONSTRAINTS`).
+DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
+`recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
+`recording-screen-<n>` (the host matches the prefix). WS close codes: `4001` capacity-full,
+`4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
+`4005` invalid message, `4006` replaced (another host connection took over).
+
+---
+
+## Worker (`apps/worker`)
+
+### REST (`src/index.ts` Hono app, `src/api/*`)
+- `POST /api/rooms` → 201 `{slug, host_token, expires_at}` + `Set-Cookie host_token__<slug>` (HttpOnly,
+  SameSite=Lax, Path=/, Secure only over https). Generates 32-byte hex `host_token`, slug
+  (3-4-3 lowercase, ~47 bits, 5-retry collision loop → 503 `slug_exhausted`). IP rate limit
+  10/60s → 429 via the `ROOM_CREATE_LIMITER` rate-limit binding (per Cloudflare location, not
+  global; fails open if the binding is missing).
+- `GET /api/rooms/:slug` → 200 `{slug, expires_at, consumed}` | 404 `invalid_slug|not_found|expired`.
+- `POST /api/turn-cred` `{slug}` → the operator's own `TURN_URLS` (+ `TURN_USERNAME`/
+  `TURN_CREDENTIAL`) if set; else mints a Cloudflare Realtime TURN cred if `TURN_API_TOKEN`+
+  `TURN_APP_ID` set; else STUN-only **stub** (`username/credential='stub'`). **No host auth on
+  this route** — a valid room slug is the only credential, rate-limited to 20/60s per IP
+  (`TURN_CRED_LIMITER`, same shape as `ROOM_CREATE_LIMITER`). Mint failure → 502 (`turn_unavailable`).
+- `GET|PATCH /api/recordings/:id` → host-token auth, cookie or `Authorization: Bearer` (does
+  **not** check room expiry).
+  PATCH always returns 200 even on no-op; no field validation.
+- `GET /api/sponsors` → 200 JSON sponsor wall data read from Polar (`POLAR_ACCESS_TOKEN`,
+  `POLAR_PRODUCT_ID`, `SPONSOR_CHECKOUT_URL`, optional `POLAR_API_BASE`). Filtered to customers
+  with `metadata.sponsor_approved` (`true` or `"true"`) and total ≥ 2500 cents ($25). Returns
+  normalized weights (never absolute amounts) and available space. Cached for 10 minutes
+  (`caches.default`, `max-age=600`). Unconfigured or Polar errors degrade gracefully to 200
+  empty shape (errors cache for 60s); never logs or returns tokens, emails, or amounts.
+- `*  /ws/r/:slug` → `ROOM_DO.idFromName(slug)` → forwards raw request (cookie included) to DO.
+
+### Room Durable Object (`src/do/Room.ts`)
+One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+- **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
+  `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
+  evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
+  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
+  WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
+  instance `Map`; `allPeers()` derives the live peer list from `state.getWebSockets()` (skipping
+  sockets flagged `left: true`) instead. `slug`/`hostToken`, `sessionId`/`recording`, and
+  `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
+  `room`, `session`, `nextOrdinal`) and reloaded in the constructor via `blockConcurrencyWhile`, so
+  a woken instance picks up exactly where the evicted one left off. The client's `{"type":"ping"}`
+  heartbeat is answered `{"type":"pong"}` by `setWebSocketAutoResponse` without waking the DO; the
+  `ping` case in the message switch stays as a fallback.
+- **Expiry is enforced mid-call by `alarm()`, not only at connect.** Every successful `join` arms
+  `storage.setAlarm(expiresAt)` for the same `expiresAt` just passed to `touchRoom`. `alarm()`
+  re-reads the room row: if it still exists and `expires_at > Date.now()` (a later join extended
+  it), it re-arms for that new `expires_at` and returns; otherwise it closes every socket from
+  `allPeers()` with `WS_CLOSE_EXPIRED_SLUG`/`'expired_slug'` and, if a session is open, ends it
+  (`endSession(…, 'expired')`, best-effort `.catch`) and clears `sessionId`/`recording`. This is
+  what stops a room that lapses mid-call from running on until everyone happens to leave —
+  connect-time expiry alone only ever guards the *next* connection.
+- `join` (first one lazily creates `sessionId` + `insertSession` + `markRoomConsumed`, then
+  per-peer `insertParticipant`) → replies `role-assigned`, broadcasts `peer-joined`.
+- Relays `webrtc-offer|answer` and `ice-candidate` to the peer named in `to` (everyone else when
+  `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
+  (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
+  `leave`→broadcast `peer-left` + close 1000.
+- `recording-started` is **persisted to D1 AND relayed** — it is what starts every guest's capture.
+  `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
+  **persisted, not relayed**. The DO tracks `recording: boolean` and reports it in `role-assigned`
+  so a peer joining mid-recording catches up. (`insertRecording`
+  / `updateRecordingProgress`, best-effort `.catch(()=>{})`).
+- `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
+  attachment's `left` flag: `markParticipantLeft`; if `allPeers().length===0 && sessionId` →
+  `endSession` (`host-left`/`guest-left`). Rooms are reusable (TTL is extended on join, not
+  one-shot; each gathering starts a new session).
+
+### lib + db
+- `lib/token.ts`: `generateHostToken` (256-bit hex), `timingSafeEqualHex` (custom constant-time;
+  length-check early-return is acceptable — token length is public).
+- `lib/cookie.ts`: cookie name `host_token__<slug>` (per-room), Max-Age = `ROOM_TTL_MS/1000`.
+- `lib/cors.ts`: **strict single-origin** — headers only when `Origin === PAGES_ORIGIN`.
+  `handlePreflight` 204s with method/header hints. Change `PAGES_ORIGIN` per deploy.
+- `lib/slug.ts`: `crypto.getRandomValues`, `bytes%26` (minor modulo bias, non-security-critical).
+- `db/queries.ts`: parameterized D1 CRUD; `updateRecordingProgress` builds SET from a fixed
+  allowlist (injection-safe), early-returns if no fields. `markRoomConsumed`/`endSession`/
+  `markParticipantLeft` idempotent-guarded.
+- **Schema** (`migrations/0001_init.sql`): `rooms`(PK slug, host_token, expires_at, consumed) →
+  `sessions`(FK room_slug) → `participants`(FK session_id) → `recordings`(FK session_id +
+  participant_id). D1 timestamps are uniformly ms (TURN TTL stays seconds).
+- `wrangler.toml`: D1 `DB` (db `openmeet_db`, placeholders shipped, not a prod UUID), DO `ROOM_DO`→`Room`
+  (`new_sqlite_classes`), rate-limit bindings `ROOM_CREATE_LIMITER` (10/60s) / `TURN_CRED_LIMITER`
+  (20/60s), `PAGES_ORIGIN` var, secrets `TURN_API_TOKEN`/`TURN_APP_ID` (or, for self-hosted TURN,
+  `TURN_URLS`/`TURN_USERNAME`/`TURN_CREDENTIAL`).
+
+---
+
+## Web (`apps/web`)
+
+### Routes / UI (all components are `'use client'`; layouts are server)
+- `/` → `app/page.tsx` (Landing). "New Room" → `createRoom()` → `window.location.href =
+  '/r/${slug}/'` (**trailing slash required** for static export).
+- `/r/[slug]` → `RoomPage` unwraps `params: Promise` via React `use()` → `<RoomView>`.
+  `app/r/[slug]/layout.tsx` is **server** (hosts `generateStaticParams` placeholder shell;
+  real slug resolved client-side; `public/_redirects` rewrites every `/r/*` to that shell on Pages).
+- Unknown paths → `app/not-found.tsx` (exported as `out/404.html`).
+- `next.config.ts`: `output:'export'` **only when `NODE_ENV==='production'`** — dev intentionally
+  skips it so `/r/[slug]` resolves at runtime. **Don't unconditionally enable export.**
+- `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
+  and any connection warning, and for `peer-left`) / CallStage, plus light status screens
+  (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
+  `replaced` (4006: another tab/device took the host seat), `left` (Rejoin + Back to home, plus
+  download links for sync.json/chapters.txt/backups when a take was finalized on the way out; a host
+  holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
+  release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
+  WaitingRoom ("Everyone else left"): the tab stays in the room, camera on, and resumes when someone
+  joins. `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
+  (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
+  form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
+  `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
+  with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  Leftover backups are listed in the join panel, beside Join.
+  `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
+  the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
+  CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
+  local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
+  recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
+  controls and no media board in the call.
+- **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
+  `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
+  tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
+  floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
+  Stop presenting button, no self-mirror; a phone presenting its rear camera or a photo/video gets that
+  feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
+  keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
+  (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
+  full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
+  `className` to fill the spotlight or size a PiP.
+
+### Call orchestration (`hooks/useRoom.ts`)
+State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
+(+ `not-found|peer-left|left|full|replaced|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
+present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
+guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
+`localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
+`capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`.
+Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
+register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
+channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
+stream); stop = `removeTrack` + renegotiate, idempotent.
+
+- `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
+  backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
+- `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
+  `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
+  drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
+  `recording-audio`, or prefix `recording-screen`). Guest **creates** the recording DataChannels;
+  host **receives** them. `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
+  companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
+  for a camera feed and hidden. For normal peers, the first stream is camera
+  (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
+  `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
+  mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
+- `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
+  bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
+
+### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
+- `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
+  **synchronously** in `ondataavailable`, serializes `blob.arrayBuffer()` via a `tail` promise
+  chain to preserve order; skips empty blobs.
+- `chunk-sender.ts` (guest egress): `sendChunk` → `hash.update` → `buffer.add` → `enqueueOrSend`.
+  Backpressure: `bufferedAmount>16MiB` → queue + pause recorder; drains + resumes at ≤8MiB
+  (hysteresis). Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
+  own header `idx`/`offset`; `rawSend` = one fragment's two-frame header+payload. Ack truncates
+  retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
+  `drain()` polls 100ms until empty or 30s cap.
+- `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; **drops
+  `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; acks every 5
+  chunks / 10s; `answerResume` replies `resume_offset{lastByte,lastIdx}`.
+- `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
+  `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
+  (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
+  `QuotaExceededError`→`DiskFullError`.
+- `retransmit-buffer.ts`: FIFO capped at 32MiB by bytes; always keeps ≥1 item; `truncate(idx)`,
+  `since(idx)`.
+- `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
+  the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
+  so it stays idempotent / updatable. Two independent digests (guest=sent, host=written) compared at
+  finalize for integrity.
+- `backup-recorder.ts`: a 2nd MediaRecorder over the same stream, on **both** host
+  (`startHostRecording`) and guest (`beginGuestRecording`), plus a WAV master backup (its own
+  `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
+  labels it "(WAV)") → **writes committed per-chunk files** (`NNNNNN.part`) to an OPFS directory
+  (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
+  backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
+  A failed write is retried once and then the rest of the take continues in RAM with a warning
+  banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. After a
+  clean host take (no recording error or connection warning) `markFinalized()` drops a `finalized`
+  marker and the next lobby's `findBackups()` deletes that directory. Guest backups are **never**
+  auto-deleted (a guest can't know the host's file was saved); they stay listed in the lobby until
+  deleted by hand. Each screen segment has its own backup (`openmeet-backup-screen-…`) fed the
+  segment recorder's chunks via `writeChunk` — no second screen encode; the host's are finalized
+  with its camera/WAV backups after a clean take.
+- `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
+  click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
+  `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
+  `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
+  builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
+  for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
+  the host start, with `sharer` display name on each entry — plus integrity verdicts, lossless `+faststart` remux and WAV-pairing commands),
+  surfaced in the session summary as "Download sync.json" (downloaded as
+  `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
+  (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
+  `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
+  button copies the invite link instead and the summary stays. The summary's file list names only
+  files that got bytes (a guest WAV only if written; unwritten host files for host companions are omitted; empty screen segments are deleted). Clock-sync needs the host to be
+  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. Phones present a photo/video (`presentFile`) or the rear camera (`presentRearCamera`); a real screen comes from a second device joined with "Present only".
+- `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
+  (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
+  `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
+  A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
+  WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
+  record only screen segments on `recording-started` without camera, WAV, or backup recorders.
+  Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
+  `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
+  `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  Sender↔recorder backpressure cycle broken via `recorderRef` box. `rolePicker` defaults unknown
+  role → `host`.
+- `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the
+  raw mic on every peer connection (`replaceAudioTrack`) and in the MP4 + backup of every take
+  started afterwards (`withBoardAudio`); the WAV master always records the raw mic (`micStream`). A
+  take already recording when the board is first opened keeps a mic-only MP4 (a running
+  `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
+  board says so for that take.
+
+---
+
+## End-to-end flows (quick map)
+
+1. **Room create/join/auth** — New Room → `POST /api/rooms` (token+cookie) → nav `/r/slug/` →
+   `getRoom` → lobby → join → WS → DO assigns host (cookie match or token in join) / guest (invite link, no token)
+   → `role-assigned` + `peer-joined`. Peer past capacity → close 4001.
+2. **WebRTC signaling** — perfect negotiation over WS relay; guest creates DataChannel, host
+   `ondatachannel`; ICE trickled in parallel; DO never inspects SDP.
+3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
+   Host click → `startHostRecording` (one folder prompt, opens `host_*.mp4` + `host_*.wav` +
+   `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
+   auto-runs `beginGuestRecording`, opening `recording` + `recording-audio` (+ `recording-screen-N`
+   while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
+   FileWriter at offset; acks every 5 chunks/10s; backpressure via watermarks.
+   Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s per file,
+   `GUEST_TAIL_TIMEOUT_MS`) for each guest's
+   `recording-finalized` before closing writers — closing early truncates the guest's tail.
+4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
+   `buffer.since(lastIdx)`; idempotent dedupe; 32MiB cap (beyond → BackupRecorder only).
+   **Full WS reconnect rebuilds the PeerConnection; `startPeer` (`useRoom.ts`) calls
+   `rebindGuestRecording` for the guest's connection to the host, which recreates the camera
+   (and WAV, if present) recording DataChannels, `ChunkSender.rebind()`s the existing senders onto
+   them (queue, retransmit buffer, hash and indices all survive), and fires `resume_query` on each
+   `open` — so the guest resumes streaming into the same host files from the last acked chunk with
+   no gap.** When sharing screen, a reconnect finishes the old screen segment and starts a new
+   numbered segment on the rebuilt connection, with each segment backed up locally in OPFS. Host
+   rebinds new channel to existing receiver, found by a stable key (see below), not by the DO's
+   fresh-per-socket peerId.
+5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
+   optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
+   **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
+   `Stage` presenting mode renders it (+ a `presence` flag). Backup (host's or guest's own) → object
+   URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete).
+6. **TURN/ICE** — `POST /api/turn-cred` → operator `TURN_URLS`, real Cloudflare TURN, or STUN-only
+   stub; if the request fails, the client falls back to the STUN stub. **No symmetric-NAT
+   detection / `iceTransportPolicy:'relay'`** — relies on native ICE fallback to the relay
+   candidate; in stub mode (no relay) symmetric-NAT calls can't connect. Each connection gets one
+   `restartIce()`: from the connect watchdog (`startConnectWatchdog`, ~10 s without `connected`) or
+   the first `failed` state, whichever comes first (re-armed once connected). A second `failed`
+   shows a can't-connect warning, worded by whether the TURN cred carries a `turn:`/`turns:` URL.
+   The warning is cleared when the mesh empties, so it never greets the next person to join.
+
+---
+
+## Gotchas (read before changing)
+
+- Next static export is **production-only** by design (dev needs runtime slug resolution).
+- Chunk header is **JSON-over-string**, not binary; a chunk header must never contain a `type` key
+  (receiver distinguishes control vs header by `type` presence).
+- Two ack systems: DataChannel `ack` (`uptoIdx/uptoOffset`) vs WS `recording-ack` — the WS one and
+  `recording-completed.lastIdx` are defined in protocol but **the DO never produces/consumes them**;
+  real acks are DataChannel-side.
+- **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
+  `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
+  two H.264 streams into one unplayable MP4, which is the default case because one click starts every
+  guest. Slot 0 keeps the original `guest_<id>.*` names.
+- **The slot key is the channel-label key, not the raw peerId, when one is present.** The DO mints a
+  fresh `peerId` per socket, so a full WS reconnect changes it; if `bindHostGuestChannel`/
+  `bindHostAudioChannel` keyed slots on `peerId` directly, a reconnected guest would land on a brand
+  new slot/file/receiver with `lastIdx=-1` instead of resuming the one it already had open. Recording
+  channel labels can carry a stable key after `#` (`recording#<key>`, `recording-audio#<key>` —
+  `recordingChannelKind()` in `@openmeet/protocol` splits it out); the guest passes its own
+  `recordingId` as that key from both `beginGuestRecording` and `rebindGuestRecording`, so the key
+  survives the reconnect even though the peerId doesn't. `bindHostGuestChannel`/`bindHostAudioChannel`
+  use `recordingChannelKind(channel.label).key ?? peerId` — old plain-label channels (no `#`) fall
+  back to `peerId`, unchanged. `PeerConnection.ondatachannel` and `useRoom`'s `onDataChannel` routing
+  both filter/compare on the label's `base`, not the full label, so a keyed label still matches.
+- **A room never has two hosts (newest verified host wins)** — when a connection
+  proves the host token (cookie path in `fetch` or token path in `join`), it becomes host
+  first, and every other peer whose role is host is closed with `4006` (`WS_CLOSE_REPLACED`,
+  `'replaced'`). This lets a reconnecting host or second tab take over. A take running in the
+  replaced tab is not torn down (`phaseOnFatalClose` holds the phase and asks for End & save), but
+  its files end there — see Known gaps.
+- **Negotiation is presence-gated and joiner-offers** (`useRoom`): exactly one side offers first per
+  pair — the joiner. On `role-assigned` when peers are present (`peerCount>=2`), the joiner adds its tracks
+  (or recvonly audio/video transceivers if joining as a producer) and triggers the initial offer.
+  Existing peers on `peer-joined` create the PeerConnection but do not add tracks up front; they call
+  `setLocalStreamAfterFirstOffer(stream)`, which waits to add tracks until right after answering the joiner's
+  first remote offer. This eliminates glare and candidate drops while preserving the presence gate
+  (nobody offers into an empty room). The joiner also opens a `control` data channel before its first offer
+  so every later recording channel opens without renegotiation (the first data channel on a connection is
+  the only one that renegotiates, and that renegotiation would collide with the host's track offer and wedge the channels).
+- Time units: D1 timestamps are uniformly ms (TURN TTL stays seconds).
+- **Recording is Chromium + MP4 only (by design), and the codec is PROBED, never assumed.**
+  Which codecs `MediaRecorder` can encode varies **by OS**, not by Chrome build. Measured on
+  Chrome 151: **Linux has NO AAC-LC encoder — in the official `.deb` *and* the Chromium snap** —
+  while H.264 is present in both. macOS/Windows have AAC. So `pickRecordingMime()`
+  (`lib/recorder.ts`) walks `RECORDING_MIME_CANDIDATES` and takes the first supported entry:
+  H.264+AAC first, H.264+Opus as the Linux fallback. **Never hardcode a mime string.**
+  Each candidate is tried as **`avc3` before its `avc1` twin**: they are the same H.264
+  bytestream, but `avc1` signals its parameter sets once, out-of-band, while `avc3`
+  repeats them in-band on every keyframe. A resolution change mid-recording (a shared
+  window resized, a camera switching mode) changes those parameter sets — under `avc1`
+  every frame after the change decodes as garbage, under `avc3` it just decodes. The
+  companion remux command (`sync-report.ts`) adds `-tag:v avc1` so the file an editor
+  opens is always tagged `avc1`, whichever codec was actually recorded.
+  Every candidate stays in the **MP4 container** on purpose — the host opens `guest_<id>.mp4`
+  before the guest picks a codec, so a WebM fallback would put WebM bytes behind an `.mp4` name.
+  Firefox can't record; Safari can't host, and a Safari guest is recorded as video only (no WAV);
+  `recordCapability` and the lobby's browser notes say so before anyone records.
+  WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
+  import, flaky Premiere), and WebM→MP4 needs a lossy transcode.
+- **Guest recording RAM is bounded** — `sha256.ts` streams (incremental, O(1)) and
+  `backup-recorder.ts` spills to OPFS, so guest memory is ~the 2s timeslice + the 32MiB retransmit
+  cap, not the recording length. Raising `RECORDING_VIDEO_BPS` is bounded by disk, not RAM. The only
+  buffer that grows on failure is the retransmit buffer, capped at 32MiB (beyond that,
+  BackupRecorder/OPFS only).
+- `DiskFullError` surfaces as a `recordingError` **banner**, deliberately NOT `phase:'error'` —
+  switching phase unmounts `CallStage`, which takes "End & save" with it, and that button is the
+  only thing that closes the file handle.
+- Worker vitest `isolatedStorage:false` is intentional (SQLite DO + live WS hold SHM locks);
+  reset DB state manually in tests.
+- `@openmeet/protocol` resolves via tsconfig `paths` + vitest `alias` — breaking either breaks all
+  consumers.
+- **Stable stream for mid-take device switching (`lib/switchable-media.ts`)**:
+  Removing or adding a track on a `MediaStream` that a running `MediaRecorder` is recording throws
+  `InvalidModificationError` and kills the take. Furthermore, Chrome's AAC MP4 muxer and our `PcmRecorder`
+  (WAV master) lock their sample rate on the first frame, so switching directly to a mic with a different
+  sample rate (e.g. 44.1 kHz, 24 kHz, or 16 kHz Bluetooth) would corrupt both files.
+  To solve this, `useRoom.join` constructs `SwitchableMedia` which wraps the lobby stream into ONE stable
+  output stream handed to everything (preview, PeerConnection, ChunkRecorder, BackupRecorder, and WAV).
+  It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
+  stream would conjure a blank video track and a silent audio track).
+  - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
+    switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
+    video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
+    Real camera settings are delegated from the real track.
+  - Audio is an `AudioContext` locked to the initial mic's sample rate (default 48000) and channel count,
+    routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
+    the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+  - **iOS Safari fallback**: where `MediaStreamTrackGenerator` is missing, raw tracks are kept directly,
+    switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
+    by current track to avoid colliding with screen share senders), and mid-take switching is refused with
+    a "Switch after this take" prompt because iOS Safari cannot hot-swap tracks in MediaRecorder without breaking.
+
+---
+
+## Known gaps
+
+- **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
+  (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
+  finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
+  connection, with each segment backed up locally in OPFS.
+- **A second host tab mid-take ends the first tab's files.** The new tab takes the host
+  seat (4006 to the old one); the old tab keeps its phase and shows "Press End & save to
+  keep this recording", but its files stop at the takeover, and the rest of each guest's
+  part exists only in that guest's backup. The new tab records only from its own new take.
+- **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
+  running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
+  markers; takes started later include them. The WAV master is mic-only by design.
+- **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
+  timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- Anyone with a room's invite link can mint short-lived TURN credentials
+  (rate-limited to 20 per minute per IP) — the invite link is the only
+  credential, so share it only with participants.

@@ -1,0 +1,1164 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
+import { CallStage } from '@/components/CallStage';
+
+const baseProps = {
+  role: 'host' as const,
+  phase: 'in-call' as const,
+  localStream: null,
+  remoteStream: null,
+  remotePeers: [],
+  remoteScreenStream: null,
+  localScreenStream: null,
+  localName: 'Alice',
+  peerName: 'Bob',
+  screenSharing: false,
+  canRecord: true,
+  roomRecording: false,
+  recordBlocked: false,
+  messages: [],
+  peerPresence: null,
+  screenShareSupported: true,
+  backupUrl: null,
+  wavBackupUrl: null,
+  syncReportUrl: null,
+  recordingError: null,
+  recordUnavailableReason: null,
+  onToggleMic: vi.fn(),
+  onToggleCam: vi.fn(),
+  onRecord: vi.fn(),
+  onEnd: vi.fn(),
+  onLeave: vi.fn(),
+  onSendChat: vi.fn(),
+  slug: 'abc-defg-hij',
+  onMark: vi.fn(),
+  markerCount: 0,
+  chaptersUrl: null,
+  summary: null,
+  takes: [],
+  onNewTake: vi.fn(),
+  onDiscardTake: vi.fn(),
+  onOpenMediaBoard: vi.fn(() => null),
+  onToggleScreen: vi.fn(),
+  capabilities: {},
+};
+
+describe('CallStage layout', () => {
+  // A bar floating over the stage covered the PiP, name tags, the bottom of a
+  // shared screen and the summary's last links at one width or another. In the
+  // flow, the stage simply ends where the bar begins, at every width.
+  it('lays the control bar out below the stage instead of floating it over the stage', () => {
+    render(<CallStage {...baseProps} />);
+    const column = screen.getByTestId('stage-column');
+    const main = screen.getByTestId('stage-main');
+    const bar = Array.from(column.children).find((c) => c.contains(screen.getByLabelText('Leave call')))!;
+
+    expect(main.contains(bar)).toBe(false);
+    expect(main.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.className).not.toMatch(/\babsolute\b/);
+    expect(main.className).not.toMatch(/(^|\s)pb-\d+/);
+  });
+
+  // Without it the column grows to the summary's min-content width (719px at a
+  // 390px viewport) and the root's overflow-hidden clips the right half.
+  it('lets the stage column shrink below its content width', () => {
+    render(<CallStage {...baseProps} />);
+    expect(screen.getByTestId('stage-column').className).toMatch(/\bmin-w-0\b/);
+  });
+
+  it("puts the guest's recording hint above the stage, not over it", () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        canRecord={false}
+        recordUnavailableReason="The host starts the recording for everyone — you’ll be captured automatically."
+      />
+    );
+    const hint = screen.getByText(/The host starts the recording/);
+    const column = screen.getByTestId('stage-column');
+    expect(column.contains(hint)).toBe(false);
+    expect(hint.compareDocumentPosition(column) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // In the flow, the toast pushed the stage down when a take started and back
+  // up seven seconds later. It floats over the stage column instead, which
+  // still keeps it off the Recording pill in the status bar.
+  it('shows the consent toast over the stage column, below the status bar and its Recording pill', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording />);
+    const toast = screen.getByText('This call is now being recorded');
+    const pill = screen.getByText('Recording');
+    const column = screen.getByTestId('stage-column');
+    expect(pill.compareDocumentPosition(toast) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(column.contains(toast)).toBe(true);
+    expect(column.contains(pill)).toBe(false);
+    expect(column.className).toMatch(/\brelative\b/);
+  });
+
+  // A permanent pill between the status bar and the stage cost the guest a
+  // row for the whole call and looked like the yellow warnings.
+  it("puts the guest's recording hint in the status bar, not in a pill of its own", () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        canRecord={false}
+        recordUnavailableReason="The host starts the recording for everyone — you’ll be captured automatically."
+      />
+    );
+    const hint = screen.getByText(/The host starts the recording/);
+    expect(screen.getByTestId('status-bar').contains(hint)).toBe(true);
+    expect(hint.className).not.toMatch(/rounded-full/);
+  });
+
+  it('keeps a real recording problem as a yellow line of its own under the status bar', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        canRecord={false}
+        recordBlocked
+        recordUnavailableReason="This browser can’t record MP4."
+      />
+    );
+    const warning = screen.getByText('This browser can’t record MP4.');
+    expect(screen.getByTestId('status-bar').contains(warning)).toBe(false);
+    expect(warning.className).toMatch(/text-\[#fdd663\]/);
+  });
+
+  // The waiting room was the only place with the invite link, and the host
+  // leaves it as soon as the first guest arrives.
+  it('gives the host a Copy invite link in the call, and not a guest', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      render(<CallStage {...baseProps} role="host" />);
+      const invite = screen.getByRole('button', { name: 'Copy invite link' });
+      expect(screen.getByTestId('status-bar').contains(invite)).toBe(true);
+      await act(async () => {
+        fireEvent.click(invite);
+      });
+      expect(writeText).toHaveBeenCalledWith(`${location.origin}${location.pathname}`);
+      expect(screen.getByText('Link copied')).toBeInTheDocument();
+
+      cleanup();
+      render(<CallStage {...baseProps} role="guest" canRecord={false} />);
+      expect(screen.queryByText('Copy invite link')).toBeNull();
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  // Plain-http self-hosts have no clipboard, and a denied permission rejects:
+  // either way the click must say something instead of doing nothing.
+  it('tells the host when the invite link could not be copied', async () => {
+    render(<CallStage {...baseProps} role="host" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
+    expect(screen.getByText('Couldn’t copy — use the address bar')).toBeInTheDocument();
+
+    cleanup();
+    const writeText = vi.fn(() => Promise.reject(new Error('denied')));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      render(<CallStage {...baseProps} role="host" />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
+      });
+      expect(screen.getByText('Couldn’t copy — use the address bar')).toBeInTheDocument();
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('returns focus to the Chat button when chat is closed with Escape', async () => {
+    render(<CallStage {...baseProps} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Escape' });
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText('Chat')).toHaveFocus());
+  });
+
+  // The mobile chat sheet is `absolute inset-0`: it fills whichever box is its
+  // positioned ancestor. That box must not be the one holding the Recording
+  // pill, or opening chat hides the only on-screen sign of the recording.
+  it('keeps the Recording pill outside the box the mobile chat sheet fills', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    const sheetBox = screen.getByTestId('chat-column').parentElement!.closest('.relative')!;
+    expect(sheetBox.contains(screen.getByText('Recording'))).toBe(false);
+  });
+
+  it('scopes the floating control bar to the stage column, not the chat column, so it stays centred over the stage when chat is open', () => {
+    render(<CallStage {...baseProps} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    const stageColumn = screen.getByTestId('stage-column');
+    const chatColumn = screen.getByTestId('chat-column');
+    const leaveButton = screen.getByLabelText('Leave call');
+
+    expect(stageColumn.contains(leaveButton)).toBe(true);
+    expect(chatColumn.contains(leaveButton)).toBe(false);
+    expect(stageColumn.contains(chatColumn)).toBe(false);
+  });
+});
+
+describe('CallStage chat unread indicator', () => {
+  const msg = (text: string) => ({ from: 'guest' as const, text, ts: 1 });
+
+  it('counts messages that arrive while chat is closed and clears on open', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    expect(screen.getByLabelText('Chat')).toBeInTheDocument();
+
+    rerender(<CallStage {...baseProps} messages={[msg('a'), msg('b')]} />);
+    const button = screen.getByLabelText('Chat, 2 unread');
+    expect(button.querySelector('[data-testid="badge"]')).not.toBeNull();
+
+    fireEvent.click(button);
+    expect(screen.getByLabelText('Chat').querySelector('[data-testid="badge"]')).toBeNull();
+
+    // Seen while open, so closing doesn't bring them back; only new ones count.
+    rerender(<CallStage {...baseProps} messages={[msg('a'), msg('b'), msg('c')]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(screen.getByLabelText('Chat')).toBeInTheDocument();
+    rerender(<CallStage {...baseProps} messages={[msg('a'), msg('b'), msg('c'), msg('d')]} />);
+    expect(screen.getByLabelText('Chat, 1 unread')).toBeInTheDocument();
+  });
+});
+
+// The host can't tell who is actually being captured until it's too
+// late (playback). This label is that warning, shown before Record is pressed.
+describe('CallStage recording-capability labels', () => {
+  it("tells the host a guest that can't encode MP4 won't be recorded", () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    expect(screen.getByText(/Bob.*won.t be recorded \(browser can.t record MP4\)/)).toBeInTheDocument();
+  });
+
+  it('repeats that warning on its own line, since name tags truncate', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    expect(screen.getByText('Bob won’t be recorded — their browser can’t record MP4.')).toBeInTheDocument();
+  });
+
+  it('tells the host a guest with MP4 but no PCM path gets no WAV master', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: true, wav: false } }}
+      />
+    );
+    expect(screen.getByText(/Bob.*no WAV master/)).toBeInTheDocument();
+  });
+
+  it('says nothing extra once both mp4 and wav are supported', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: true, wav: true } }}
+      />
+    );
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+  });
+
+  it('shows short note on Safari guest tag for the host', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: true, wav: false, note: 'safari' } }}
+      />
+    );
+    expect(screen.getByText('Bob — Safari: video only; no WAV master')).toBeInTheDocument();
+  });
+
+  it('shows short note on iPhone/iPad guest tag for the host', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: true, wav: false, note: 'ios' } }}
+      />
+    );
+    expect(
+      screen.getByText('Bob — iPhone/iPad: recording stops in background; no WAV master')
+    ).toBeInTheDocument();
+  });
+
+  it('a guest viewer sees no capability label — only the host acts on it', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.queryByText(/won.t be recorded/)).toBeNull();
+  });
+
+  it('with two remote peers, each tile gets its own name and presence', () => {
+    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
+    const s2 = { id: 'stream-carol' } as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        localName="Alice"
+        remoteStream={s1}
+        remotePeers={[
+          {
+            peerId: 'p-bob',
+            name: 'Bob',
+            stream: s1,
+            presence: { micOn: true, camOn: true, screenSharing: false },
+          },
+          {
+            peerId: 'p-carol',
+            name: 'Carol',
+            stream: s2,
+            presence: { micOn: false, camOn: false, screenSharing: true },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Alice (You)')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Carol')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Muted' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Camera off' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Sharing screen' })).toBeInTheDocument();
+  });
+
+  it('renders "Mark this moment" for guests during recording, but not "End & save recording"', () => {
+    render(<CallStage {...baseProps} role="guest" phase="recording" />);
+    expect(screen.getByLabelText(/Mark this moment/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('End & save recording')).toBeNull();
+  });
+
+  it('renders "End & save recording" for host during recording', () => {
+    render(<CallStage {...baseProps} role="host" phase="recording" />);
+    expect(screen.getByLabelText(/Mark this moment/)).toBeInTheDocument();
+    expect(screen.getByLabelText('End & save recording')).toBeInTheDocument();
+  });
+
+  // Record was a red circle beside the red Leave button, and both Record and
+  // End & save were the same unlabeled disc, so neither said what it did.
+  it('labels Record in words and keeps it out of the red Leave skin', () => {
+    render(<CallStage {...baseProps} role="host" phase="in-call" />);
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    expect(record).toHaveTextContent('Record');
+    expect(record.className).not.toMatch(/bg-\[#ea4335\]/);
+    expect(screen.getByRole('button', { name: 'Leave call' }).className).toMatch(/bg-\[#ea4335\]/);
+  });
+
+  it('shows End & save in words with a stop square, not the record dot', () => {
+    render(<CallStage {...baseProps} role="host" phase="recording" />);
+    const end = screen.getByRole('button', { name: 'End & save recording' });
+    expect(end).toHaveTextContent('End & save');
+    expect(end.querySelector('svg rect')).not.toBeNull();
+    expect(end.querySelector('svg circle')).toBeNull();
+  });
+
+  it("gives the guest's recovery button the words its banner tells them to press", () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        phase="recording"
+        recordingError="The connection to the room ended. Press Stop and save my recording to keep this recording."
+      />
+    );
+    const stop = screen.getByRole('button', { name: 'Stop and save my recording' });
+    expect(stop).toHaveTextContent('Stop and save');
+    expect(stop.querySelector('svg rect')).not.toBeNull();
+  });
+
+  it('never shows the disconnect banner on the saved summary', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        phase="done"
+        recordingError="The other person disconnected. Press End & save to keep this recording."
+      />
+    );
+    expect(
+      screen.queryByText('The other person disconnected. Press End & save to keep this recording.')
+    ).toBeNull();
+  });
+
+  it('shows host the real count of saved files in the status line', () => {
+    const summary4 = {
+      files: { host: 'host_1.mp4', guest: 'guest_1.mp4' },
+      fileList: [
+        { name: 'host_1.mp4', kind: 'video' as const },
+        { name: 'guest_1.mp4', kind: 'video' as const },
+        { name: 'host_1.wav', kind: 'audio' as const },
+        { name: 'guest_1.wav', kind: 'audio' as const },
+      ],
+      audioMasters: { host: 'host_1.wav', guest: 'guest_1.wav' },
+      screenFiles: [],
+      alignment: '',
+      backupNote: '',
+      integrity: { ok: true, text: 'Integrity verified' },
+      warnings: [],
+      markers: [],
+      commands: [],
+    };
+
+    const { rerender } = render(
+      <CallStage {...baseProps} role="host" phase="done" summary={summary4} />
+    );
+    expect(screen.getByText(/Saved — 4 files in your recording folder\./)).toBeInTheDocument();
+
+    const summary6 = {
+      ...summary4,
+      fileList: [
+        ...summary4.fileList,
+        { name: 'guest2_1.mp4', kind: 'video' as const },
+        { name: 'guest2_1.wav', kind: 'audio' as const },
+      ],
+    };
+
+    rerender(<CallStage {...baseProps} role="host" phase="done" summary={summary6} />);
+    expect(screen.getByText(/Saved — 6 files in your recording folder\./)).toBeInTheDocument();
+  });
+
+  it('shows guest role-appropriate copy without host-only file count', () => {
+    render(<CallStage {...baseProps} role="guest" phase="done" />);
+    expect(screen.getByText(/Sent to the host\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Saved — \d+ files/)).toBeNull();
+    expect(screen.queryByText(/Saved — two files/)).toBeNull();
+  });
+
+  // A guest can't see the host's disk, and the drain can give up at its cap:
+  // "Saved" there was a promise the app couldn't keep, and gave no reason to
+  // send the backup that holds the rest.
+  it('tells a guest whose last seconds may not have arrived to send their backup', () => {
+    render(<CallStage {...baseProps} role="guest" phase="done" drained={false} backupUrl="blob:backup" />);
+    expect(
+      screen.getByText(/may not have reached the host — download your backup and send it to them/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Sent to the host/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
+  });
+
+  it('hides the Saved status line on a guest while roomRecording is still true', () => {
+    render(<CallStage {...baseProps} role="guest" phase="done" roomRecording={true} />);
+    expect(screen.getByText('Recording')).toBeInTheDocument();
+    expect(screen.queryByText(/Sent to the host/)).toBeNull();
+    expect(screen.queryByText(/Saved —/)).toBeNull();
+  });
+
+  it('renders presenter placeholder for the local sharer when no remote screen is shown', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        screenSharing={true}
+        remoteScreenStream={null}
+        localScreenStream={null}
+      />
+    );
+    expect(screen.getByText(/you’re presenting/i)).toBeInTheDocument();
+    expect(screen.getByText('Everyone in the call can see what you’re sharing.')).toBeInTheDocument();
+  });
+
+  it('stops presenting from the placeholder with a plain toggle, no source', () => {
+    const onToggleScreen = vi.fn();
+    render(<CallStage {...baseProps} screenSharing onToggleScreen={onToggleScreen} />);
+    const stops = screen.getAllByRole('button', { name: 'Stop presenting' });
+    expect(stops).toHaveLength(2); // the control bar's and the placeholder's
+    fireEvent.click(stops.find((b) => b.textContent === 'Stop presenting')!);
+    expect(onToggleScreen).toHaveBeenCalledWith();
+  });
+
+  // A phone showing its rear camera has to see what it is aiming at.
+  it('shows the rear camera itself, not the placeholder, when a self-preview is passed', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        screenSharing
+        presentingRearCamera
+        localScreenStream={{ id: 'rear' } as unknown as MediaStream}
+      />
+    );
+    expect(screen.getByText('Your rear camera')).toBeInTheDocument();
+    expect(screen.queryByText(/you’re presenting/i)).toBeNull();
+  });
+
+  it('renders presenter screen label with presenter name when remote screen is shown', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        screenSharing={false}
+        remoteScreenStream={{} as MediaStream}
+        peerName="Bob"
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+  });
+
+  it('names the screen after the peer who is sharing, not the first peer, in a group call', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p1', name: 'Bob', stream: null, presence: { micOn: true, camOn: true, screenSharing: false } },
+          { peerId: 'p2', name: 'Cara', stream: null, presence: { micOn: true, camOn: true, screenSharing: true } },
+        ]}
+      />
+    );
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+  });
+
+  it('without getDisplayMedia the Present control offers photo/video and rear camera options', () => {
+    const onToggleScreen = vi.fn();
+    render(<CallStage {...baseProps} screenShareSupported={false} onToggleScreen={onToggleScreen} />);
+
+    // Present button is enabled (not disabled with phones can't present message),
+    // and says what a phone can actually present.
+    const presentBtn = screen.getByLabelText(/Present/i);
+    expect(presentBtn).not.toBeDisabled();
+    expect(presentBtn).toHaveAccessibleName('Present a photo, video or your rear camera');
+    expect(screen.queryByText('A photo or video')).toBeNull();
+    expect(screen.queryByText('Rear camera')).toBeNull();
+
+    // Clicking opens menu
+    fireEvent.click(presentBtn);
+    expect(screen.getByText('A photo or video')).toBeInTheDocument();
+    expect(screen.getByText('Rear camera')).toBeInTheDocument();
+
+    const fileInput = document.querySelector('input[type="file"][accept*="image/"][accept*="video/"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+
+    // Selecting a file triggers onToggleScreen with the file
+    const file = new File(['test'], 'photo.jpg', { type: 'image/jpeg' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    expect(onToggleScreen).toHaveBeenCalledWith(file);
+
+    // Clean up and test clicking Rear camera option
+    cleanup();
+    const onToggleScreen2 = vi.fn();
+    render(<CallStage {...baseProps} screenShareSupported={false} onToggleScreen={onToggleScreen2} />);
+    const presentBtn2 = screen.getByLabelText(/Present/i);
+    fireEvent.click(presentBtn2);
+    const rearBtn = screen.getByText('Rear camera');
+    fireEvent.click(rearBtn);
+    expect(onToggleScreen2).toHaveBeenCalledWith('rear-camera');
+  });
+
+  it('with getDisplayMedia present, Present control toggles directly with no menu', () => {
+    const onToggleScreen = vi.fn();
+    render(<CallStage {...baseProps} screenShareSupported={true} onToggleScreen={onToggleScreen} />);
+
+    const presentBtn = screen.getByLabelText('Present screen');
+    fireEvent.click(presentBtn);
+    expect(onToggleScreen).toHaveBeenCalled();
+    expect(screen.queryByText('A photo or video')).toBeNull();
+    expect(screen.queryByText('Rear camera')).toBeNull();
+  });
+
+  it('shows placeholder instead of video frame when presenting rear camera on mobile device', () => {
+    const origUserAgent = navigator.userAgent;
+    try {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)',
+        configurable: true,
+      });
+      const dummyTrack = { kind: 'video', readyState: 'ended', enabled: true } as any;
+      const dummyStream = {
+        getVideoTracks: () => [dummyTrack],
+        getAudioTracks: () => [],
+      } as any;
+
+      const { container } = render(
+        <CallStage
+          {...baseProps}
+          localStream={dummyStream}
+          screenSharing={true}
+          presentingRearCamera={true}
+        />
+      );
+      // When placeholder is shown, VideoTile video has opacity-0
+      const localVideo = container.querySelector('video');
+      expect(localVideo).toHaveClass('opacity-0');
+    } finally {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: origUserAgent,
+        configurable: true,
+      });
+    }
+  });
+});
+
+describe('CallStage self-view', () => {
+  // Mirrored like the lobby preview; the recording and the remote tiles never are.
+  it('mirrors your own camera tile and no one else’s', () => {
+    const video = { kind: 'video', enabled: true, getSettings: () => ({ facingMode: 'user' }) };
+    const local = {
+      id: 'local',
+      getTracks: () => [video],
+      getAudioTracks: () => [],
+      getVideoTracks: () => [video],
+    } as unknown as MediaStream;
+    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        localStream={local}
+        remoteStream={bob}
+        remotePeers={[{ peerId: 'p-bob', name: 'Bob', stream: bob }]}
+      />
+    );
+    const pip = screen.getByRole('button', { name: 'Swap spotlight' }).querySelector('video')!;
+    const big = Array.from(document.querySelectorAll('video')).find((v) => !pip.isSameNode(v))!;
+    expect(pip).toHaveClass('-scale-x-100');
+    expect(big).not.toHaveClass('-scale-x-100');
+  });
+});
+
+describe('CallStage initial device state from stream', () => {
+  it('initializes mic control as off when local stream audio track is disabled', () => {
+    const disabledAudioTrack = { kind: 'audio', enabled: false } as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [disabledAudioTrack],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+
+    render(<CallStage {...baseProps} localStream={stream} />);
+
+    const micBtn = screen.getByLabelText('Turn on microphone');
+    expect(micBtn).toBeInTheDocument();
+    expect(screen.queryByLabelText('Turn off microphone')).toBeNull();
+
+    // Clicking turns it on with a single click
+    fireEvent.click(micBtn);
+    expect(baseProps.onToggleMic).toHaveBeenCalledWith(true);
+    expect(screen.getByLabelText('Turn off microphone')).toBeInTheDocument();
+  });
+
+  it('initializes cam control as off when local stream video track is disabled', () => {
+    const disabledVideoTrack = { kind: 'video', enabled: false } as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [],
+      getVideoTracks: () => [disabledVideoTrack],
+    } as unknown as MediaStream;
+
+    render(<CallStage {...baseProps} localStream={stream} />);
+
+    const camBtn = screen.getByLabelText('Turn on camera');
+    expect(camBtn).toBeInTheDocument();
+    expect(screen.queryByLabelText('Turn off camera')).toBeNull();
+
+    // Clicking turns it on with a single click
+    fireEvent.click(camBtn);
+    expect(baseProps.onToggleCam).toHaveBeenCalledWith(true);
+    expect(screen.getByLabelText('Turn off camera')).toBeInTheDocument();
+  });
+
+  it('does not render peers with role=producer as stage tiles', () => {
+    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        localName="Alice"
+        remoteStream={s1}
+        remotePeers={[
+          {
+            peerId: 'p-bob',
+            name: 'Bob',
+            stream: s1,
+            presence: { micOn: true, camOn: true, screenSharing: false },
+            role: 'guest',
+          },
+          {
+            peerId: 'p-pat',
+            name: 'Pat Producer',
+            stream: null,
+            presence: { micOn: false, camOn: false, screenSharing: false },
+            role: 'producer',
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Alice (You)')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.queryByText('Pat Producer')).toBeNull();
+  });
+
+  it('producer in-call copy says watching and not recorded, with no "you will be captured" claim', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="producer"
+        canRecord={false}
+        recordUnavailableReason="You’re a producer — you are watching and are not recorded."
+      />
+    );
+    expect(screen.getByText(/you are watching and are not recorded/i)).toBeInTheDocument();
+    expect(screen.queryByText(/you.ll be captured automatically/i)).toBeNull();
+  });
+
+  it('shows WAV backup link only when wavBackupUrl is provided in done phase', () => {
+    const { rerender } = render(
+      <CallStage
+        {...baseProps}
+        phase="done"
+        backupUrl="blob:backup"
+        wavBackupUrl={null}
+      />
+    );
+    expect(screen.getByText('Download your backup')).toBeInTheDocument();
+    expect(screen.queryByText('Download your WAV backup')).toBeNull();
+
+    rerender(
+      <CallStage
+        {...baseProps}
+        phase="done"
+        backupUrl="blob:backup"
+        wavBackupUrl="blob:wav-backup"
+      />
+    );
+    const wavLink = screen.getByText('Download your WAV backup');
+    expect(wavLink).toBeInTheDocument();
+    expect(wavLink.getAttribute('href')).toBe('blob:wav-backup');
+    // Named for the room and whose copy it is, so backups sent to the host
+    // don't all arrive as backup.wav.
+    expect(wavLink.getAttribute('download')).toBe('openmeet-abc-defg-hij-backup-alice.wav');
+  });
+
+  it('companion peer has no camera tile on the stage', () => {
+    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        localName="Alice"
+        remoteStream={s1}
+        remotePeers={[
+          {
+            peerId: 'p-bob',
+            name: 'Bob',
+            stream: s1,
+            presence: { micOn: true, camOn: true, screenSharing: false },
+            role: 'guest',
+          },
+          {
+            peerId: 'p-colin',
+            name: 'Colin Companion',
+            stream: null,
+            presence: { micOn: false, camOn: false, screenSharing: false },
+            role: 'guest',
+            companion: true,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Alice (You)')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.queryByText('Colin Companion')).toBeNull();
+  });
+
+  it('companion peer sharing screen labels the screen as Name (Presenting)', () => {
+    const fakeScreen = { id: 'scr-companion' } as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={fakeScreen}
+        remotePeers={[
+          {
+            peerId: 'p-colin',
+            name: 'Colin',
+            stream: null,
+            presence: { micOn: false, camOn: false, screenSharing: true },
+            role: 'guest',
+            companion: true,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Colin (Presenting)')).toBeInTheDocument();
+    expect(screen.queryByText("Colin's screen")).toBeNull();
+  });
+
+  // A producer joins with no tracks: the toggles showed red and did nothing,
+  // and the media board opened empty with no mic to mix into.
+  it('producer client has no mic or camera buttons and no media board', () => {
+    render(<CallStage {...baseProps} role="producer" canRecord={false} />);
+    expect(screen.queryByRole('button', { name: /turn (on|off) microphone/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /turn (on|off) camera/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /select (microphone|camera)/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Media board' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Leave call' })).toBeInTheDocument();
+  });
+
+  it('companion client has no mic or camera buttons but keeps present, chat, leave', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        companion={true}
+      />
+    );
+
+    expect(screen.queryByLabelText(/microphone/i)).toBeNull();
+    expect(screen.queryByLabelText(/camera/i)).toBeNull();
+    expect(screen.getByLabelText(/present screen/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/chat/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/leave call/i)).toBeInTheDocument();
+  });
+});
+
+describe('CallStage chat preview pop-up and title updates', () => {
+  const remoteMsg = (text: string, fromName?: string) => ({
+    from: 'guest' as const,
+    text,
+    ts: 1,
+    ...(fromName ? { fromName } : {}),
+  });
+  const selfMsg = (text: string) => ({
+    from: 'host' as const,
+    text,
+    ts: 1,
+    self: true,
+  });
+
+  it('shows the sender and text when a remote message arrives with chat closed', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    expect(screen.queryByRole('status')).toBeNull();
+
+    rerender(<CallStage {...baseProps} messages={[remoteMsg('Hello world', 'Bob')]} />);
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Hello world')).toBeInTheDocument();
+  });
+
+  it('shows nothing when a self message arrives', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    rerender(<CallStage {...baseProps} messages={[selfMsg('My own message')]} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('shows nothing when a message arrives with chat open', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+
+    rerender(<CallStage {...baseProps} messages={[remoteMsg('Hello there', 'Bob')]} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('opens chat when the pop-up is clicked and dismisses the pop-up', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    rerender(<CallStage {...baseProps} messages={[remoteMsg('Click me', 'Bob')]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Bob.*Click me/ }));
+
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('disappears after the timeout (fake timers)', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<CallStage {...baseProps} />);
+      rerender(<CallStage {...baseProps} messages={[remoteMsg('Expiring soon', 'Bob')]} />);
+      expect(screen.getByRole('status')).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(6000);
+      });
+
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('truncates a long message with an ellipsis', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    const longText = 'x'.repeat(150);
+    rerender(<CallStage {...baseProps} messages={[remoteMsg(longText, 'Bob')]} />);
+
+    const expected = `${'x'.repeat(120)}…`;
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(longText)).toBeNull();
+  });
+
+  it('prefixes document.title with the unread count while hidden and loses it when visible', () => {
+    document.title = 'openMeet';
+    const originalHidden = document.hidden;
+    try {
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      const { rerender } = render(<CallStage {...baseProps} />);
+      rerender(<CallStage {...baseProps} messages={[remoteMsg('One'), remoteMsg('Two')]} />);
+
+      expect(document.title).toBe('(2) openMeet');
+
+      Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+
+      expect(document.title).toBe('openMeet');
+    } finally {
+      Object.defineProperty(document, 'hidden', { value: originalHidden, writable: true, configurable: true });
+      document.title = 'openMeet';
+    }
+  });
+
+  it('shows no pop-up for messages that were already there on mount', () => {
+    render(<CallStage {...baseProps} messages={[remoteMsg('Old message', 'Bob')]} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});
+
+
+
+
+
+describe('CallStage after a take', () => {
+  const summary = {
+    files: { host: 'host_1.mp4', guest: 'guest_1.mp4' },
+    fileList: [
+      { name: 'host_1.mp4', kind: 'video' as const },
+      { name: 'guest_1.mp4', kind: 'video' as const },
+    ],
+    audioMasters: { host: null },
+    screenFiles: [],
+    alignment: '',
+    backupNote: '',
+    integrity: { ok: true, text: 'Integrity verified' },
+    warnings: [],
+    markers: [],
+    commands: [],
+  };
+  const bob = { id: 'stream-bob' } as unknown as MediaStream;
+  const doneProps = {
+    ...baseProps,
+    role: 'host' as const,
+    phase: 'done' as const,
+    summary,
+    takes: [{ take: 2, durationMs: 60_000, discarded: false }],
+    syncReportUrl: 'blob:sync',
+    backupUrl: 'blob:backup',
+    remoteStream: bob,
+    remotePeers: [{ peerId: 'p-bob', name: 'Bob', stream: bob }],
+  };
+
+  // The summary replaced the whole stage while the call carried on, so the
+  // host couldn't see the guest between takes, or tell that they had left.
+  it('shows the summary beside the stage, not instead of it, and closes back to the call', async () => {
+    render(<CallStage {...doneProps} />);
+    expect(screen.getByTestId('stage-main')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the call' }));
+    expect(screen.queryByTestId('summary-column')).toBeNull();
+    expect(screen.getByTestId('stage-main')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show session summary' })).toHaveFocus());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show session summary' }));
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+  });
+
+  it('never shows chat and the summary side by side', () => {
+    render(<CallStage {...doneProps} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+    expect(screen.queryByTestId('summary-column')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show session summary' }));
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+  });
+
+  // Closing chat when the take ended threw away whatever was being typed.
+  it('leaves chat and its draft open when the take ends, with the summary a click away', () => {
+    const { rerender } = render(<CallStage {...doneProps} phase="recording" summary={null} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'one more thing' } });
+    rerender(<CallStage {...doneProps} />);
+    expect(screen.getByLabelText('Message')).toHaveValue('one more thing');
+    expect(screen.queryByTestId('summary-column')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show session summary' }));
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+  });
+
+  it('opens the summary when the take ends with chat closed', () => {
+    const { rerender } = render(<CallStage {...doneProps} phase="recording" summary={null} />);
+    rerender(<CallStage {...doneProps} />);
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+  });
+
+  // A finalize that threw used to hold 'finalizing' for good, with Leave off.
+  // Without a summary the host's line said "Saved — 0 files".
+  it('says saving did not finish, keeps the backup to hand, and lets the host leave', () => {
+    const onLeave = vi.fn();
+    render(
+      <CallStage
+        {...baseProps}
+        phase="done"
+        recordingError="Saving didn’t finish (disk full). Some files in your recording folder may be incomplete."
+        backupUrl="blob:backup"
+        onLeave={onLeave}
+      />
+    );
+    const bar = screen.getByTestId('status-bar');
+    expect(bar).toHaveTextContent('Saving didn’t finish.');
+    expect(bar).not.toHaveTextContent(/Saved/);
+    expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/disk full/);
+    const leave = screen.getByRole('button', { name: 'Leave call' });
+    expect(leave).toBeEnabled();
+    fireEvent.click(leave);
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  // It used to only reset the take and drop the host back on the call, not
+  // recording, while its label said otherwise.
+  it('really records when Record another take is pressed', () => {
+    const onNewTake = vi.fn();
+    const onRecord = vi.fn();
+    render(<CallStage {...doneProps} onNewTake={onNewTake} onRecord={onRecord} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Record another take' }));
+    expect(onNewTake).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onNewTake.mock.invocationCallOrder[0]!).toBeLessThan(onRecord.mock.invocationCallOrder[0]!);
+  });
+
+  it('keeps a Record button in the bar between takes', () => {
+    const onNewTake = vi.fn();
+    const onRecord = vi.fn();
+    render(<CallStage {...doneProps} onNewTake={onNewTake} onRecord={onRecord} />);
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    expect(record).toHaveTextContent('Record');
+    fireEvent.click(record);
+    expect(onNewTake).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+  });
+
+  // newTake dropped the host into the waiting room, losing the summary and
+  // the take's sync.json with it.
+  it('offers the invite link, and keeps the summary, when everyone else has left', async () => {
+    const onNewTake = vi.fn();
+    const onRecord = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(
+      <CallStage {...doneProps} remoteStream={null} remotePeers={[]} onNewTake={onNewTake} onRecord={onRecord} />
+    );
+    expect(screen.queryByRole('button', { name: 'Start recording' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}${location.pathname}`);
+    expect(await screen.findByRole('button', { name: 'Link copied' })).toBeInTheDocument();
+    expect(onNewTake).not.toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+  });
+
+  // The summary holds the host's downloads; the bar only gives the verdict.
+  it("keeps the host's status line to the verdict, with downloads named for the room and take", () => {
+    render(<CallStage {...doneProps} />);
+    const bar = screen.getByTestId('status-bar');
+    expect(bar).toHaveTextContent('Saved — 2 files in your recording folder.');
+    expect(bar.querySelector('a')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download sync.json' }).getAttribute('download')).toBe(
+      'openmeet-abc-defg-hij-take2-sync.json'
+    );
+    expect(screen.getByRole('link', { name: 'Download your backup' }).getAttribute('download')).toBe(
+      'openmeet-abc-defg-hij-take2-backup-alice.mp4'
+    );
+  });
+
+  it('says saved with warnings when the take has any', () => {
+    render(<CallStage {...doneProps} summary={{ ...summary, warnings: ['Bob: no WAV master'] }} />);
+    expect(screen.getByTestId('status-bar')).toHaveTextContent('Saved with warnings — 2 files in your recording folder.');
+  });
+
+  // Leave mid-save started a second finalize and tore down the connections the
+  // guests' last seconds were still arriving on.
+  it('says to keep the tab open while saving, and holds Leave until it finishes', () => {
+    const onLeave = vi.fn();
+    render(<CallStage {...baseProps} phase="finalizing" finalizingGuests={['Bob']} onLeave={onLeave} />);
+    // Announced by the status bar, a live region that is always mounted; the
+    // toast mounts with its text, which many screen readers skip.
+    expect(screen.getByTestId('status-bar')).toHaveTextContent(
+      /getting the last few seconds from Bob\. Keep this tab open\./
+    );
+    expect(screen.getAllByText(/Keep this tab open/).filter((el) => !el.closest('[aria-hidden]'))).toHaveLength(1);
+    const leave = screen.getByRole('button', { name: /^Leave call/ });
+    expect(leave).toBeDisabled();
+    fireEvent.click(leave);
+    expect(onLeave).not.toHaveBeenCalled();
+  });
+
+  it('tells a saving guest to keep the tab open too', () => {
+    render(<CallStage {...baseProps} role="guest" phase="finalizing" />);
+    expect(screen.getByTestId('status-bar')).toHaveTextContent(
+      'Sending your last few seconds to the host. Keep this tab open.'
+    );
+  });
+
+  it.each(['host', 'guest'] as const)('shows the %s how long the take has been running', (role) => {
+    vi.useFakeTimers();
+    try {
+      render(<CallStage {...baseProps} role={role} phase="recording" />);
+      expect(screen.getByRole('timer')).toHaveTextContent('0:00');
+      act(() => {
+        vi.advanceTimersByTime(65_000);
+      });
+      expect(screen.getByRole('timer')).toHaveTextContent('1:05');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CallStage media board', () => {
+  // Only the take running when the board is first opened misses the pads.
+  it('says the pads miss this take only when the board is first opened mid-take', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="recording" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Media board' }));
+    expect(screen.getByText(/This take keeps your mic only/)).toBeInTheDocument();
+
+    rerender(<CallStage {...baseProps} phase="finalizing" />);
+    expect(screen.queryByText(/This take keeps your mic only/)).toBeNull();
+  });
+
+  it('says nothing about it when opened between takes', () => {
+    render(<CallStage {...baseProps} phase="in-call" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Media board' }));
+    expect(screen.getByText(/Load intros, stingers or ad reads/)).toBeInTheDocument();
+    expect(screen.queryByText(/This take keeps your mic only/)).toBeNull();
+  });
+});

@@ -1,0 +1,4 @@
+# Cloudflare Pages: serve the exported room shell for any /r/<slug>.
+# The room page is a client component that reads its real slug from the URL,
+# so every room path rewrites (200, not redirect) to the placeholder shell.
+/r/*  /r/placeholder/  200
