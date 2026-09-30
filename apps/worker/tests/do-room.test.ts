@@ -1610,3 +1610,33 @@ describe('Room DO — mid-call expiry (alarm)', () => {
     ws.close();
   });
 });
+
+describe('WS Origin check', () => {
+  const upgrade = (slug: string, origin?: string) =>
+    SELF.fetch(`https://test/ws/r/${slug}`, {
+      headers: { Upgrade: 'websocket', ...(origin ? { Origin: origin } : {}) },
+    });
+
+  it('refuses a handshake from a foreign Origin with 403', async () => {
+    await seedRoom('ori-gine-vil', 'tok-origin-evil');
+    const res = await upgrade('ori-gine-vil', 'https://evil.example');
+    expect(res.status).toBe(403);
+    expect(res.webSocket).toBeNull();
+  });
+
+  it('upgrades a handshake from the configured PAGES_ORIGIN', async () => {
+    await seedRoom('ori-ginp-age', 'tok-origin-page');
+    const res = await upgrade('ori-ginp-age', env.PAGES_ORIGIN);
+    expect(res.status).toBe(101);
+    res.webSocket!.accept();
+    res.webSocket!.close();
+  });
+
+  it('upgrades a handshake with no Origin (non-browser tooling)', async () => {
+    await seedRoom('ori-ginn-one', 'tok-origin-none');
+    const res = await upgrade('ori-ginn-one');
+    expect(res.status).toBe(101);
+    res.webSocket!.accept();
+    res.webSocket!.close();
+  });
+});

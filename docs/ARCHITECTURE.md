@@ -32,6 +32,8 @@ pnpm --filter @openmeet/web dev                    # next dev --turbopack -> :30
 pnpm -r test                                       # all vitest suites
 pnpm -r typecheck
 pnpm --filter @openmeet/worker run deploy          # wrangler deploy (web is a static export; install.sh deploys it to Pages, or by hand per README Self-hosting)
+pnpm --filter @openmeet/worker run deploy:demo     # wrangler deploy --env demo: the maintainers' public demo (openmeet.pages.dev); full steps in CONTRIBUTING
+pnpm --filter @openmeet/worker run db:migrate:demo # D1 migrations on the demo database, before a deploy that adds one
 ```
 `NEXT_PUBLIC_API_BASE` (default `http://localhost:8787`) points web at the Worker; `WS_BASE`
 is derived by swapping `http`→`ws`. **No linter** (there is no `lint` script).
@@ -126,7 +128,10 @@ DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each opti
   normalized weights (never absolute amounts) and available space. Cached for 10 minutes
   (`caches.default`, `max-age=600`). Unconfigured or Polar errors degrade gracefully to 200
   empty shape (errors cache for 60s); never logs or returns tokens, emails, or amounts.
-- `*  /ws/r/:slug` → `ROOM_DO.idFromName(slug)` → forwards raw request (cookie included) to DO.
+- `*  /ws/r/:slug` → 400 on a bad slug format; **403 when an `Origin` header is present and isn't
+  `PAGES_ORIGIN`** (`isAllowedOrigin`, `lib/cors.ts` — CORS doesn't cover WebSocket handshakes;
+  a missing Origin is non-browser tooling and the tests, so it's allowed) →
+  `ROOM_DO.idFromName(slug)` → forwards raw request (cookie included) to DO.
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
@@ -171,7 +176,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `lib/token.ts`: `generateHostToken` (256-bit hex), `timingSafeEqualHex` (custom constant-time;
   length-check early-return is acceptable — token length is public).
 - `lib/cookie.ts`: cookie name `host_token__<slug>` (per-room), Max-Age = `ROOM_TTL_MS/1000`.
-- `lib/cors.ts`: **strict single-origin** — headers only when `Origin === PAGES_ORIGIN`.
+- `lib/cors.ts`: **strict single-origin** — headers only when `Origin === PAGES_ORIGIN`
+  (`isAllowedOrigin`, also the `/ws/r/:slug` Origin check).
   `handlePreflight` 204s with method/header hints. Change `PAGES_ORIGIN` per deploy.
 - `lib/slug.ts`: `crypto.getRandomValues`, `bytes%26` (minor modulo bias, non-security-critical).
 - `db/queries.ts`: parameterized D1 CRUD; `updateRecordingProgress` builds SET from a fixed
@@ -180,10 +186,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - **Schema** (`migrations/0001_init.sql`): `rooms`(PK slug, host_token, expires_at, consumed) →
   `sessions`(FK room_slug) → `participants`(FK session_id) → `recordings`(FK session_id +
   participant_id). D1 timestamps are uniformly ms (TURN TTL stays seconds).
-- `wrangler.toml`: D1 `DB` (db `openmeet_db`, placeholders shipped, not a prod UUID), DO `ROOM_DO`→`Room`
+- `wrangler.toml`: D1 `DB` (db `openmeet_db`, top level ships placeholders, not a prod UUID), DO `ROOM_DO`→`Room`
   (`new_sqlite_classes`), rate-limit bindings `ROOM_CREATE_LIMITER` (10/60s) / `TURN_CRED_LIMITER`
   (20/60s), `PAGES_ORIGIN` var, secrets `TURN_API_TOKEN`/`TURN_APP_ID` (or, for self-hosted TURN,
   `TURN_URLS`/`TURN_USERNAME`/`TURN_CREDENTIAL`).
+  `[env.demo]` is the maintainers' public demo (openmeet.pages.dev): same script name
+  `openmeet-worker`, real D1 `openmeet` id, demo `PAGES_ORIGIN` and Polar vars — public
+  identifiers only; its secrets are set with `wrangler secret put --env demo`. wrangler does not
+  inherit `vars`/`d1_databases`/`durable_objects`/`unsafe` into an env, so the section repeats them
+  (`[[migrations]]` and `[observability]` are inherited). `install.sh`'s sed rewrites only lines
+  before the first `[env.` header, so self-host installs never touch it.
 
 ---
 
@@ -198,6 +210,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - Unknown paths → `app/not-found.tsx` (exported as `out/404.html`).
 - `next.config.ts`: `output:'export'` **only when `NODE_ENV==='production'`** — dev intentionally
   skips it so `/r/[slug]` resolves at runtime. **Don't unconditionally enable export.**
+- `public/_headers` (copied into `out/` like `_redirects`): Pages security headers on `/*` — CSP
+  (`script-src 'self' 'unsafe-inline'` for the export's inline bootstrap scripts; `connect-src
+  'self' https: wss:` stays generic because each deploy's Worker URL differs), `X-Frame-Options:
+  DENY`, `Referrer-Policy`, `nosniff`, `Permissions-Policy` (camera/mic/display-capture/fullscreen
+  self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change.
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),

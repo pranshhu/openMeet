@@ -1,5 +1,9 @@
+export function isAllowedOrigin(allowOrigin: string, requestOrigin: string | null): requestOrigin is string {
+  return !!requestOrigin && requestOrigin === allowOrigin;
+}
+
 export function corsHeaders(allowOrigin: string, requestOrigin: string | null): Record<string, string> {
-  if (!requestOrigin || requestOrigin !== allowOrigin) return {};
+  if (!isAllowedOrigin(allowOrigin, requestOrigin)) return {};
   return {
     'Access-Control-Allow-Origin': requestOrigin,
     'Access-Control-Allow-Credentials': 'true',

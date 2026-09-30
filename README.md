@@ -14,6 +14,18 @@ Self-hostable on a free Cloudflare account. MIT licensed.
 > as video only (no uncompressed WAV), which is untested. Phones present a photo/video or the
 > rear camera; a real screen comes from a second device joined with "Present only".
 
+## Live demo
+
+Try it at **<https://openmeet.pages.dev>** before you self-host. It is deployed from
+`main`. Recordings go straight to the host's own disk, as on any instance; nothing is
+uploaded, and the server keeps only room metadata. That includes display names and user
+agents, which are kept in the demo's database (see [SECURITY.md](SECURITY.md#trust-model)
+for retention).
+
+It's one shared public instance on Cloudflare's free-tier limits, so it can hit them.
+For real work, [run your own](#get-your-own-instance). The sponsor wall on its landing
+page funds the project.
+
 ---
 
 ## Why this exists

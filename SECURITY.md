@@ -53,6 +53,17 @@ Treat an invite link as a live secret, not a one-time ticket.
 and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
 persisted, but it is not end-to-end encrypted either.
 
+**The signaling socket accepts only the site's own origin.** A WebSocket handshake
+whose `Origin` isn't the deployment's `PAGES_ORIGIN` gets a 403, so another website
+can't open a socket into a room from a visitor's browser. A client that sends no
+`Origin` (not a browser) is let through; the room slug still gates it.
+
+**The web app ships security headers.** `apps/web/public/_headers` gives every page a
+Content-Security-Policy, `X-Frame-Options: DENY` (no framing), a Permissions-Policy
+that keeps camera, microphone and screen capture to the site itself, `nosniff` and a
+strict referrer policy. The static export needs inline scripts, so the CSP restricts
+where code, fonts and media load from rather than blocking inline script.
+
 **Display names and user agents are stored in D1 and never deleted.** There is no
 retention policy or cleanup job today.
 

@@ -257,11 +257,14 @@ say "  domain $PAGES_ORIGIN"
 # 3. Config -------------------------------------------------------------------
 # Both values ship as placeholders so a fresh clone doesn't deploy against
 # someone else's account. Rewrite whatever is there — makes re-runs idempotent.
+# Only the top level: everything from the first [env.*] header on (the
+# maintainers' public demo) is passed through untouched.
 step "Writing your values into apps/worker/wrangler.toml"
 TOML="$ROOT/apps/worker/wrangler.toml"
 [ -f "$TOML" ] || die "missing $TOML — is this an openMeet checkout?"
 TMP=$(mktemp)
-sed -e "s|^database_id = \".*\"|database_id = \"$DB_ID\"|" \
+sed -e '/^\[env\./,$b' \
+    -e "s|^database_id = \".*\"|database_id = \"$DB_ID\"|" \
     -e "s|^PAGES_ORIGIN = \".*\"|PAGES_ORIGIN = \"$PAGES_ORIGIN\"|" \
     "$TOML" > "$TMP"
 mv "$TMP" "$TOML"

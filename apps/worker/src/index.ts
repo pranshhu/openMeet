@@ -4,7 +4,7 @@ import { postRooms, getRoomsSlug } from './api/rooms.js';
 import { postTurnCred } from './api/turn.js';
 import { getRecording, patchRecording } from './api/recordings.js';
 import { getSponsors } from './api/sponsors.js';
-import { corsHeaders, handlePreflight } from './lib/cors.js';
+import { corsHeaders, handlePreflight, isAllowedOrigin } from './lib/cors.js';
 import { isValidSlugFormat } from './lib/slug.js';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -39,6 +39,13 @@ app.all('/ws/r/:slug', async (c) => {
   // Object, so an unvalidated path let anyone spin up unbounded DOs (each one
   // billable, and DO count is a free-tier limit) just by varying the URL.
   if (!isValidSlugFormat(slug)) return c.text('invalid slug', 400);
+  // Browsers always send Origin on a WebSocket handshake and CORS does not
+  // apply to it, so without this any site could open a socket into a room.
+  // A missing Origin is not a browser (CLI tooling, tests) and stays allowed.
+  const origin = c.req.header('Origin');
+  if (origin !== undefined && !isAllowedOrigin(c.env.PAGES_ORIGIN, origin)) {
+    return c.text('forbidden origin', 403);
+  }
   const id = c.env.ROOM_DO.idFromName(slug);
   const stub = c.env.ROOM_DO.get(id);
   return stub.fetch(c.req.raw);

@@ -60,3 +60,47 @@ POLAR_API_BASE = ""
 # TURN_API_TOKEN     - Cloudflare Realtime API token for minting TURN creds
 # TURN_APP_ID        - Cloudflare Realtime app ID
 # POLAR_ACCESS_TOKEN - Polar API access token for sponsor data
+
+# --- Public demo (maintainers only) ------------------------------------------
+# The instance at https://openmeet.pages.dev, deployed with
+# `pnpm --filter @openmeet/worker run deploy:demo` (see CONTRIBUTING.md).
+# Self-hosters: ignore this section. Plain `wrangler deploy` and install.sh use
+# only the settings above; install.sh never rewrites anything below this line.
+#
+# Every value here is a public identifier, not a secret. The demo's secrets
+# live on the Worker, set with `wrangler secret put <NAME> --env demo`.
+#
+# wrangler does not inherit vars, d1_databases, durable_objects or unsafe into
+# a named environment, so they are repeated here. [[migrations]] and
+# [observability] are inherited from the top level.
+[env.demo]
+name = "openmeet-worker"
+
+[[env.demo.d1_databases]]
+binding = "DB"
+database_name = "openmeet"
+database_id = "74238c98-ace8-4c9d-b8f3-39fccc1225d2"
+migrations_dir = "../../migrations"
+
+[env.demo.durable_objects]
+bindings = [
+  { name = "ROOM_DO", class_name = "Room" }
+]
+
+[[env.demo.unsafe.bindings]]
+name = "ROOM_CREATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
+[[env.demo.unsafe.bindings]]
+name = "TURN_CRED_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 20, period = 60 }
+
+[env.demo.vars]
+PAGES_ORIGIN = "https://openmeet.pages.dev"
+POLAR_PRODUCT_ID = "d3d23082-cf3a-427a-ba12-81ab7f4c63d1"
+SPONSOR_CHECKOUT_URL = "https://buy.polar.sh/polar_cl_DLY0le8o9OsQs4W6HKaKy9azHZNPpY1wM7u1E2hiIks"
+POLAR_API_BASE = ""

@@ -134,6 +134,38 @@ File issues here on GitHub using the templates.
 For security vulnerabilities, do **not** open a public issue. See
 [SECURITY.md](SECURITY.md).
 
+## Deploying the public demo (maintainers)
+
+The demo at https://openmeet.pages.dev is the `[env.demo]` section of
+`apps/worker/wrangler.toml`: the same `openmeet-worker` script, pointed at the
+demo's D1 database, Pages origin and Polar product. Everything in that section is
+a public identifier. Its three secrets live on the Worker, never in a file:
+
+```bash
+pnpm --filter @openmeet/worker exec wrangler secret put TURN_APP_ID --env demo
+pnpm --filter @openmeet/worker exec wrangler secret put TURN_API_TOKEN --env demo
+pnpm --filter @openmeet/worker exec wrangler secret put POLAR_ACCESS_TOKEN --env demo
+```
+
+To deploy `main`:
+
+```bash
+pnpm --filter @openmeet/worker run db:migrate:demo   # first, only if the deploy adds a migration
+pnpm --filter @openmeet/worker run deploy:demo
+NEXT_PUBLIC_API_BASE=https://openmeet-worker.pranshu11111.workers.dev pnpm --filter @openmeet/web build
+pnpm --filter @openmeet/worker exec wrangler pages deploy ../web/out --project-name openmeet --branch main
+```
+
+wrangler runs from `apps/worker`, hence `../web/out`. A plain `wrangler deploy`
+and `install.sh` never read `[env.demo]`, which is why neither may run against the
+demo:
+
+> **Never run `install.sh` or a plain `wrangler deploy` while logged in to the demo's
+> Cloudflare account.** Both deploy the same `openmeet-worker` script with the
+> top-level template config, and `install.sh`'s default Pages project name is
+> `openmeet`, the demo's own, so either overwrites the live demo. Deploy the demo only
+> with the commands above, and try a self-host install on a different account.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the

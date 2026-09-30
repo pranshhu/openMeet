@@ -8,6 +8,24 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 Security fixes are listed here too, crediting whoever reported them unless they'd
 rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
+## [Unreleased]
+
+### Added
+
+- A public demo environment: `[env.demo]` in `apps/worker/wrangler.toml`, deployed with
+  `pnpm --filter @openmeet/worker run deploy:demo` (migrations with `db:migrate:demo`).
+  Self-host installs never read it.
+
+### Security
+
+- Security headers on every page Cloudflare Pages serves (`apps/web/public/_headers`):
+  a Content-Security-Policy, `X-Frame-Options: DENY`, `Referrer-Policy`,
+  `X-Content-Type-Options` and a Permissions-Policy limiting camera, microphone, screen
+  capture and fullscreen to the site itself.
+- The signaling WebSocket refuses a handshake whose `Origin` isn't the deployment's
+  `PAGES_ORIGIN` (403), so another website can't open a socket into a room from a
+  visitor's browser.
+
 ## [0.1.0] - 2026-09-29
 
 The first public release.

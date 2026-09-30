@@ -8,10 +8,12 @@
     "dev": "wrangler dev --var PAGES_ORIGIN:http://localhost:3000",
     "build": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
+    "deploy:demo": "wrangler deploy --env demo",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate:local": "wrangler d1 migrations apply openmeet_db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply openmeet_db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply openmeet_db --remote",
+    "db:migrate:demo": "wrangler d1 migrations apply openmeet --remote --env demo"
   },
   "dependencies": {
     "@openmeet/protocol": "workspace:*",
