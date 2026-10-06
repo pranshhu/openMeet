@@ -1,10 +1,12 @@
 import { DEFAULT_QUALITY_ID, presetForTrack } from './quality';
 import { cameraConstraints, micConstraints } from './media';
+import { watchMic, type MicWarning } from './mic-watch';
 
 export interface SwitchableMediaOptions {
   qualityId?: string;
   isRecording?: () => boolean;
   onTrackReplaced?: (kind: 'audio' | 'video', newTrack: MediaStreamTrack, oldTrack: MediaStreamTrack) => void;
+  onMicWarning?: (warning: MicWarning | null) => void;
 }
 
 /**
@@ -46,6 +48,8 @@ export class SwitchableMedia {
   private audioCtx: AudioContext | null = null;
   private destinationNode: MediaStreamAudioDestinationNode | null = null;
   private audioSourceNode: MediaStreamAudioSourceNode | null = null;
+  private levelTap: ChannelSplitterNode | null = null;
+  private stopMicWatch: (() => void) | null = null;
   private qualityId: string;
   private options: SwitchableMediaOptions;
 
@@ -111,6 +115,23 @@ export class SwitchableMedia {
     if (rawMicTrack) {
       this.audioSourceNode = this.audioCtx.createMediaStreamSource(new MediaStream([rawMicTrack]));
       this.audioSourceNode.connect(this.destinationNode);
+      if (options.onMicWarning) {
+        try {
+          const splitter = this.audioCtx.createChannelSplitter(2);
+          const analysers = [this.audioCtx.createAnalyser(), this.audioCtx.createAnalyser()];
+          analysers.forEach((analyser, channel) => splitter.connect(analyser, channel));
+          this.audioSourceNode.connect(splitter);
+          this.levelTap = splitter;
+          this.stopMicWatch = watchMic(
+            analysers,
+            () => this._currentMicTrack?.enabled === true,
+            options.onMicWarning
+          );
+        } catch {
+          // Warning tap is a courtesy on the join path; an AudioContext missing
+          // splitter/analyser nodes still joins and records without throwing.
+        }
+      }
     }
 
     const stableAudioTrack = this.destinationNode.stream.getAudioTracks()[0];
@@ -277,6 +298,7 @@ export class SwitchableMedia {
       this.audioSourceNode.disconnect();
       const newSource = this.audioCtx.createMediaStreamSource(new MediaStream([newTrack]));
       newSource.connect(this.destinationNode);
+      if (this.levelTap) newSource.connect(this.levelTap);
       this.audioSourceNode = newSource;
     }
 
@@ -302,6 +324,8 @@ export class SwitchableMedia {
   }
 
   stop(): void {
+    this.stopMicWatch?.();
+    this.stopMicWatch = null;
     if (this.currentVideoReader) {
       try {
         this.currentVideoReader.cancel();

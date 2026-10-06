@@ -493,6 +493,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   - Audio is an `AudioContext` locked to the initial mic's sample rate (default 48000) and channel count,
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and
+    one `AnalyserNode` per channel, beside the path to the destination node and never in it; `watchMic`
+    (`lib/mic-watch.ts`) polls them every 300 ms and reports `'silent'` once no channel has carried a
+    sample above -80 dBFS for 10 s while the mic is on in the app (the raw track's `enabled`), and `null`
+    again when sound returns or the mic is turned off; and the tap reads the microphone as it arrives,
+    before the destination mixes channels.
   - **iOS Safari fallback**: where `MediaStreamTrackGenerator` is missing, raw tracks are kept directly,
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with

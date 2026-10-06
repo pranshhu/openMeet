@@ -3,6 +3,7 @@ import {
   SwitchableMedia,
   isTrackGeneratorSupported,
 } from '@/lib/switchable-media';
+import { MIC_POLL_MS, MIC_SILENT_AFTER_MS } from '@/lib/mic-watch';
 
 function createMockTrack(kind: 'audio' | 'video', id: string, settings: Record<string, unknown> = {}) {
   return {
@@ -279,6 +280,157 @@ describe('SwitchableMedia', () => {
 
       await sm.switchCamera('cam-2');
       expect(sm.activeCamId).toBe('cam-2');
+    });
+
+    describe('mic level watch', () => {
+      let mockSplitter: { connect: ReturnType<typeof vi.fn> };
+      let analysers: unknown[];
+      let level: number;
+
+      beforeEach(() => {
+        vi.useFakeTimers();
+        mockSplitter = { connect: vi.fn() };
+        analysers = [];
+        level = 0;
+        mockAudioCtx.createChannelSplitter = vi.fn(() => mockSplitter);
+        mockAudioCtx.createAnalyser = vi.fn(() => {
+          const analyser = {
+            fftSize: 2048,
+            context: mockAudioCtx,
+            getFloatTimeDomainData: (into: Float32Array) => {
+              into.fill(level);
+            },
+          };
+          analysers.push(analyser);
+          return analyser;
+        });
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('reports a dead mic with the tap beside the recorded path', () => {
+        const initialCam = createMockTrack('video', 'cam-1');
+        const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+        const lobbyStream = createMockStream(initialMic, initialCam);
+
+        level = 0;
+        const onMicWarning = vi.fn();
+        const sm = new SwitchableMedia(lobbyStream, { onMicWarning });
+
+        expect(mockSourceNode.connect).toHaveBeenCalledWith(mockDestinationNode);
+        expect(mockSourceNode.connect).toHaveBeenCalledWith(mockSplitter);
+        expect(mockSplitter.connect).toHaveBeenCalledWith(analysers[0], 0);
+        expect(mockSplitter.connect).toHaveBeenCalledWith(analysers[1], 1);
+        expect(mockSplitter.connect).toHaveBeenCalledTimes(2);
+        expect(mockAudioCtx.createChannelSplitter).toHaveBeenCalledWith(2);
+
+        vi.advanceTimersByTime(MIC_SILENT_AFTER_MS + 2 * MIC_POLL_MS);
+        expect(onMicWarning).toHaveBeenCalledTimes(1);
+        expect(onMicWarning).toHaveBeenCalledWith('silent');
+
+        sm.stop();
+      });
+
+      it('does not report silent when off in the app on purpose', () => {
+        const initialCam = createMockTrack('video', 'cam-1');
+        const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+        const lobbyStream = createMockStream(initialMic, initialCam);
+
+        level = 0;
+        const onMicWarning = vi.fn();
+        const sm = new SwitchableMedia(lobbyStream, { onMicWarning });
+
+        sm.setAudioEnabled(false);
+        vi.advanceTimersByTime(6 * MIC_SILENT_AFTER_MS);
+        expect(onMicWarning).not.toHaveBeenCalled();
+
+        sm.setAudioEnabled(true);
+        vi.advanceTimersByTime(MIC_SILENT_AFTER_MS + 2 * MIC_POLL_MS);
+        expect(onMicWarning).toHaveBeenCalledWith('silent');
+
+        sm.setAudioEnabled(false);
+        vi.advanceTimersByTime(MIC_POLL_MS);
+        expect(onMicWarning).toHaveBeenLastCalledWith(null);
+
+        sm.stop();
+      });
+
+      it('watches a switched mic and judges it by its own on/off', async () => {
+        const nextMic = createMockTrack('audio', 'mic-2');
+        const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+          if (constraints.audio) return createMockStream(nextMic, undefined);
+          throw new Error('unexpected');
+        });
+
+        vi.stubGlobal('navigator', {
+          userAgent: 'test-desktop',
+          mediaDevices: { getUserMedia },
+        });
+
+        const initialCam = createMockTrack('video', 'cam-1');
+        const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+        const lobbyStream = createMockStream(initialMic, initialCam);
+
+        level = 0;
+        const onMicWarning = vi.fn();
+        const sm = new SwitchableMedia(lobbyStream, { onMicWarning });
+
+        const second = { connect: vi.fn(), disconnect: vi.fn() };
+        mockAudioCtx.createMediaStreamSource.mockReturnValueOnce(second);
+
+        await sm.switchMic('mic-2');
+        expect(second.connect).toHaveBeenCalledWith(mockDestinationNode);
+        expect(second.connect).toHaveBeenCalledWith(mockSplitter);
+
+        sm.setAudioEnabled(false);
+        vi.advanceTimersByTime(6 * MIC_SILENT_AFTER_MS);
+        expect(onMicWarning).not.toHaveBeenCalled();
+
+        sm.stop();
+      });
+
+      it('ends the watch on stop and does not throw on second stop', () => {
+        const initialCam = createMockTrack('video', 'cam-1');
+        const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+        const lobbyStream = createMockStream(initialMic, initialCam);
+
+        level = 0;
+        const onMicWarning = vi.fn();
+        const sm = new SwitchableMedia(lobbyStream, { onMicWarning });
+
+        sm.stop();
+        vi.advanceTimersByTime(6 * MIC_SILENT_AFTER_MS);
+        expect(onMicWarning).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+
+        expect(() => sm.stop()).not.toThrow();
+      });
+
+      it('never stands in the way of joining or recording', () => {
+        const initialCam = createMockTrack('video', 'cam-1');
+        const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+        const lobbyStream = createMockStream(initialMic, initialCam);
+
+        // Without onMicWarning
+        const sm1 = new SwitchableMedia(lobbyStream);
+        expect(mockAudioCtx.createAnalyser).not.toHaveBeenCalled();
+        expect(mockAudioCtx.createChannelSplitter).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        sm1.stop();
+
+        // With onMicWarning and throwing createAnalyser
+        mockAudioCtx.createAnalyser = vi.fn(() => {
+          throw new Error('analyser not supported');
+        });
+        const onMicWarning = vi.fn();
+        const sm2 = new SwitchableMedia(lobbyStream, { onMicWarning });
+        expect(sm2.stream.getAudioTracks()[0]?.id).toBe('stable-dest-audio-id');
+        expect(vi.getTimerCount()).toBe(0);
+        vi.advanceTimersByTime(6 * MIC_SILENT_AFTER_MS);
+        expect(onMicWarning).not.toHaveBeenCalled();
+        sm2.stop();
+      });
     });
   });
 
