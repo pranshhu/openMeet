@@ -17,6 +17,7 @@ import { RecordingNotice } from './RecordingNotice';
 import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
+import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -378,6 +379,11 @@ export function CallStage({
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, onMark]);
 
+  useProblemAlert({
+    active: phase === 'recording' || phase === 'finalizing',
+    message: recordingError,
+  });
+
   const [spotlight, setSpotlight] = useState<'local' | 'remote'>('remote');
 
   const peerFallback = role === 'host' ? 'Guest' : 'Host';
@@ -433,9 +439,13 @@ export function CallStage({
   // startRecording reads refs and reuses the folder, so both run inside the one
   // click: no second folder prompt, and the user activation still holds.
   const canRecordNext = isHost && canRecord && !!remote;
+  const handleRecord = () => {
+    requestProblemNotifications();
+    onRecord();
+  };
   const recordNextTake = () => {
     onNewTake();
-    onRecord();
+    handleRecord();
   };
 
   const toastPlace = prompterOpen ? 'top-3 sm:top-auto sm:bottom-3' : 'top-3';
@@ -946,7 +956,7 @@ export function CallStage({
                   text="Record"
                   label="Start recording"
                   variant="record"
-                  onClick={phase === 'done' ? recordNextTake : onRecord}
+                  onClick={phase === 'done' ? recordNextTake : handleRecord}
                 />
               )}
               {phase === 'recording' && (

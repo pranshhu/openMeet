@@ -460,7 +460,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   BackupRecorder/OPFS only).
 - `DiskFullError` surfaces as a `recordingError` **banner**, deliberately NOT `phase:'error'` —
   switching phase unmounts `CallStage`, which takes "End & save" with it, and that button is the
-  only thing that closes the file handle.
+  only thing that closes the file handle. CallStage plays two short beeps and, if the tab is
+  hidden and notifications are permitted, shows a system notification so the problem is noticed
+  right away.
 - Worker vitest `isolatedStorage:false` is intentional (SQLite DO + live WS hold SHM locks);
   reset DB state manually in tests.
 - `@openmeet/protocol` resolves via tsconfig `paths` + vitest `alias` — breaking either breaks all

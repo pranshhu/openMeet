@@ -12,6 +12,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A sound and a system notification when a recording problem appears during a take.
 - A public demo environment: `[env.demo]` in `apps/worker/wrangler.toml`, deployed with
   `pnpm --filter @openmeet/worker run deploy:demo` (migrations with `db:migrate:demo`).
   Self-host installs never read it.

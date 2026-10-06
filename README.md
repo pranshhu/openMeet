@@ -68,6 +68,7 @@ retention policy to trust, because there's nothing retained.
   screen share (phones present a photo/video or the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
+- Sound and a system notification when a recording problem appears during a take
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**
