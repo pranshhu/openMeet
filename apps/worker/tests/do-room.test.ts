@@ -301,6 +301,54 @@ describe('Room DO — WS join', () => {
     expect(reason).toBe('expired_slug');
   });
 
+  it('does not corrupt room slug when a percent-encoded request routes to the room', async () => {
+    const { slug, hostToken } = await createRoom('10.0.19.5');
+    const host = await openWs(slug, `host_token__${slug}=${hostToken}`);
+
+    // Percent-encode the last character of the slug: the router decodes it,
+    // so it routes to the same Durable Object, but the raw path has the percent encoding.
+    const lastChar = slug[slug.length - 1]!;
+    const encodedChar = `%${lastChar.charCodeAt(0).toString(16)}`;
+    const encodedSlug = `${slug.slice(0, -1)}${encodedChar}`;
+
+    const encodedRes = await SELF.fetch(`https://test/ws/r/${encodedSlug}`, {
+      headers: { Upgrade: 'websocket' },
+    });
+    expect(encodedRes.status).toBe(101);
+    const encodedWs = encodedRes.webSocket!;
+    encodedWs.accept();
+    const { code, reason } = await waitForClose(encodedWs as unknown as WebSocket);
+    expect(code).toBe(4002);
+    expect(reason).toBe('invalid_slug');
+
+    host.send(JSON.stringify({ type: 'join', displayName: 'H', userAgent: 'ua' }));
+    const msg = await waitForMessage(host);
+    expect(msg.type).toBe('role-assigned');
+
+    const session = await env.DB.prepare('SELECT id, room_slug FROM sessions WHERE room_slug = ?')
+      .bind(slug)
+      .first<{ id: string; room_slug: string }>();
+    expect(session).not.toBeNull();
+    expect(session?.room_slug).toBe(slug);
+
+    host.close();
+  });
+
+  it('closes with 4002 (invalid_slug) when raw path is not a well-formed slug', async () => {
+    await seedRoom('not-a-valid-slug', 'tok-not-valid');
+    const id = env.ROOM_DO.idFromName('mal-form-aaa');
+    const stub = env.ROOM_DO.get(id);
+    const res = await stub.fetch('https://test/ws/r/not-a-valid-slug', {
+      headers: { Upgrade: 'websocket' },
+    });
+    expect(res.status).toBe(101);
+    const ws = res.webSocket!;
+    ws.accept();
+    const { code, reason } = await waitForClose(ws as unknown as WebSocket);
+    expect(code).toBe(4002);
+    expect(reason).toBe('invalid_slug');
+  });
+
   it('assigns role=host when join carries a valid hostToken (no cookie, cross-origin path)', async () => {
     await seedRoom('hto-kenn-aaa', 'tok-host-aaa');
     const ws = await openWs('hto-kenn-aaa'); // no cookie

@@ -14,6 +14,7 @@ import {
 import type { Env } from '../env.js';
 import { parseHostTokenCookie } from '../lib/cookie.js';
 import { timingSafeEqualHex } from '../lib/token.js';
+import { isValidSlugFormat } from '../lib/slug.js';
 import {
   endSession,
   getRoomBySlug,
@@ -211,10 +212,10 @@ export class Room implements DurableObject {
     const upgrade = req.headers.get('Upgrade');
     if (upgrade !== 'websocket') return new Response('expected websocket', { status: 426 });
 
-    const slug = url.pathname.slice('/ws/r/'.length);
-    this.slug = slug;
-
-    const room = await getRoomBySlug(this.env.DB, slug);
+    const rawSlug = url.pathname.slice('/ws/r/'.length);
+    // The router picks this object from the percent-decoded slug but forwards
+    // the raw request, so the path is not trusted for the slug; the row is.
+    const room = isValidSlugFormat(rawSlug) ? await getRoomBySlug(this.env.DB, rawSlug) : null;
     if (!room || room.expires_at < Date.now()) {
       const { 0: client, 1: server } = new WebSocketPair();
       server.accept();
@@ -227,12 +228,13 @@ export class Room implements DurableObject {
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    this.slug = room.slug;
     this.hostToken = room.host_token;
-    await this.state.storage.put('room', { slug, hostToken: room.host_token } satisfies RoomRow);
+    await this.state.storage.put('room', { slug: room.slug, hostToken: room.host_token } satisfies RoomRow);
     // Same-origin/local-dev path: host_token may arrive as an httpOnly cookie.
     // Cross-origin deploys (*.pages.dev + *.workers.dev) can't send it, so the
     // host also presents the token in its `join` message (see webSocketMessage).
-    const cookie = parseHostTokenCookie(req.headers.get('Cookie'), slug);
+    const cookie = parseHostTokenCookie(req.headers.get('Cookie'), room.slug);
     const isHost = !!cookie && timingSafeEqualHex(cookie, room.host_token);
 
     const { 0: client, 1: server } = new WebSocketPair();

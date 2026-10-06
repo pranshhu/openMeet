@@ -25,6 +25,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The signaling WebSocket refuses a handshake whose `Origin` isn't the deployment's
   `PAGES_ORIGIN` (403), so another website can't open a socket into a room from a
   visitor's browser.
+- A room URL with a percent-encoded character could leave the room unable to start its next session.
 
 ## [0.1.0] - 2026-09-29
 
