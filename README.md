@@ -69,6 +69,8 @@ retention policy to trust, because there's nothing retained.
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - Sound and a system notification when a recording problem appears during a take
+- Screen kept awake during a take, REC badge when the tab is hidden, and
+  warnings if the tab was in the background or the battery is low
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**

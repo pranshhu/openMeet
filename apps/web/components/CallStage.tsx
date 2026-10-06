@@ -18,6 +18,7 @@ import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
+import { useTakeGuard } from '@/hooks/use-take-guard';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -182,6 +183,8 @@ export function CallStage({
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
+  const isTakeActive = phase === 'recording' || phase === 'finalizing';
+  const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
 
   // The invite link is only in the waiting room otherwise, and the host leaves
   // that as soon as the first guest arrives. origin+pathname drops ?producer=1
@@ -334,13 +337,20 @@ export function CallStage({
     return () => clearTimeout(t);
   }, [popup]);
 
-  // While the page is hidden, prefix document.title with the unread count.
+  // While the page is hidden, prefix document.title with REC during a take and unread count.
   useEffect(() => {
     const updateTitle = () => {
       const raw = document.title;
-      const base = raw.replace(/^\(\d+\)\s*/, '');
-      if (document.hidden && unread > 0) {
-        document.title = `(${unread}) ${base || 'openMeet'}`;
+      const base = raw.replace(/^(?:● REC )?(?:\(\d+\)\s*)?/, '');
+      if (document.hidden) {
+        const takePrefix = isTakeActive ? '● REC ' : '';
+        const unreadPrefix = unread > 0 ? `(${unread}) ` : '';
+        const prefix = `${takePrefix}${unreadPrefix}`;
+        if (prefix) {
+          document.title = `${prefix}${base || 'openMeet'}`;
+        } else {
+          document.title = base;
+        }
       } else {
         document.title = base;
       }
@@ -350,9 +360,9 @@ export function CallStage({
     document.addEventListener('visibilitychange', updateTitle);
     return () => {
       document.removeEventListener('visibilitychange', updateTitle);
-      document.title = document.title.replace(/^\(\d+\)\s*/, '');
+      document.title = document.title.replace(/^(?:● REC )?(?:\(\d+\)\s*)?/, '');
     };
-  }, [unread]);
+  }, [unread, isTakeActive]);
 
   const [prompterOpen, setPrompterOpen] = useState(false);
   const [board, setBoard] = useState<MediaBoard | null>(null);
@@ -572,6 +582,29 @@ export function CallStage({
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {recordUnavailableReason}
+        </p>
+      )}
+      {backgroundNote && (
+        <div
+          role="status"
+          className="mb-1 flex max-w-[92vw] items-center gap-2 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          <span>{backgroundNote}</span>
+          <button
+            type="button"
+            onClick={dismissBackgroundNote}
+            className="rounded-full px-2 py-0.5 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {batteryNote && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          {batteryNote}
         </p>
       )}
 

@@ -934,11 +934,108 @@ describe('CallStage chat preview pop-up and title updates', () => {
     }
   });
 
+  it('prefixes document.title with ● REC while hidden during a take, including unread count', () => {
+    document.title = 'openMeet';
+    const originalHidden = document.hidden;
+    try {
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      const { rerender, unmount } = render(<CallStage {...baseProps} phase="recording" />);
+
+      expect(document.title).toBe('● REC openMeet');
+
+      rerender(
+        <CallStage
+          {...baseProps}
+          phase="recording"
+          messages={[remoteMsg('One'), remoteMsg('Two'), remoteMsg('Three')]}
+        />
+      );
+      expect(document.title).toBe('● REC (3) openMeet');
+
+      Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(document.title).toBe('openMeet');
+
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(document.title).toBe('● REC (3) openMeet');
+
+      unmount();
+      expect(document.title).toBe('openMeet');
+    } finally {
+      Object.defineProperty(document, 'hidden', { value: originalHidden, writable: true, configurable: true });
+      document.title = 'openMeet';
+    }
+  });
+
+  it('shows background and battery notes with role status, and dismiss button works', async () => {
+    class FakeBattery extends EventTarget {
+      charging = false;
+      level = 0.08;
+    }
+    const fakeBattery = new FakeBattery();
+    Object.defineProperty(navigator, 'getBattery', {
+      value: vi.fn().mockResolvedValue(fakeBattery),
+      configurable: true,
+      writable: true,
+    });
+    let hidden = false;
+    Object.defineProperty(document, 'hidden', {
+      get: () => hidden,
+      configurable: true,
+    });
+
+    try {
+      vi.useFakeTimers();
+      render(<CallStage {...baseProps} phase="recording" />);
+      await act(async () => {});
+
+      // Battery note is shown with role status
+      const batteryNotice = screen
+        .getByText(/Battery at 8% and not charging/)
+        .closest('[role="status"]')!;
+      expect(batteryNotice).toBeInTheDocument();
+      expect(batteryNotice.className).toMatch(/text-\[#fdd663\]/);
+      expect(batteryNotice.getAttribute('role')).toBe('status');
+
+      // Hide tab for 5s
+      act(() => {
+        hidden = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        vi.advanceTimersByTime(5000);
+        hidden = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+
+      const bgNotice = screen
+        .getByText(/This tab was in the background for 5 s/)
+        .closest('[role="status"]')!;
+      expect(bgNotice).toBeInTheDocument();
+      expect(bgNotice.className).toMatch(/text-\[#fdd663\]/);
+      expect(bgNotice.getAttribute('role')).toBe('status');
+
+
+      // Dismiss button removes background note
+      const dismissBtn = screen.getByRole('button', { name: 'Dismiss' });
+      act(() => {
+        fireEvent.click(dismissBtn);
+      });
+      expect(screen.queryByText(/This tab was in the background/)).toBeNull();
+      // Battery note still present
+      expect(screen.getByText(/Battery at 8% and not charging/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      Reflect.deleteProperty(navigator, 'getBattery');
+    }
+  });
+
+
   it('shows no pop-up for messages that were already there on mount', () => {
     render(<CallStage {...baseProps} messages={[remoteMsg('Old message', 'Bob')]} />);
     expect(screen.queryByRole('status')).toBeNull();
   });
 });
+
 
 
 

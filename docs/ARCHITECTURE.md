@@ -251,7 +251,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
   full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP.
+  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
+  tab was backgrounded or the battery drops to 10%.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
