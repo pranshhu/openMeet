@@ -34,6 +34,8 @@ export interface RecordingHandles {
   channelRef?: { current: RTCDataChannel | null };
   // Host's own recorder start, in host wall-clock (for the sync sidecar).
   hostStartMs?: number;
+  /** The frame rate the camera track reported when this side's recorder started, as the browser gave it. */
+  videoFps?: number | undefined;
   /** Room slug, carried so backups know which room they came from. */
   room?: string;
 
@@ -323,6 +325,7 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
     wavChannelRef: { current: null },
     ...(args.channel ? { channel: args.channel } : {}),
     hostStartMs,
+    videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
     ...(args.room ? { room: args.room } : {}),
   };
 }

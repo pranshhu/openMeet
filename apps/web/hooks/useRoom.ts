@@ -1782,6 +1782,7 @@ export function useRoom(slug: string) {
             ...(h.hostWriter?.fileName ? { hostFile: h.hostWriter.fileName } : {}),
             guests: guestReports,
             hostStartMs: h.hostStartMs ?? Date.now(),
+            hostTrackFps: h.videoFps,
             hostWavFile:
               (h.hostPcm?.totalBytes ?? 1) > 0 ? h.hostWavWriter?.fileName : undefined,
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),

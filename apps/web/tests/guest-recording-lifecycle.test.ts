@@ -674,6 +674,7 @@ describe('host backup after a take in useRoom', () => {
       take: 1,
       dir: fakeDir as never,
       hostStartMs: 10_000,
+      videoFps: 25,
       hostWriter: { fileName: 'host_rec-host-sidecars.mp4' },
       guestWriter: { fileName: 'guest_rec-host-sidecars.mp4' },
       slotPeerIds: new Map([[0, 'p-guest']]),
@@ -733,7 +734,12 @@ describe('host backup after a take in useRoom', () => {
       'host_rec-host-sidecars.mp4',
       'guest_rec-host-sidecars.mp4',
     ]);
+    expect(parsedSync.frameRate.files[0]).toMatchObject({
+      file: 'host_rec-host-sidecars.mp4',
+      trackFps: 25,
+    });
     expect(parsedSync.frameRate.files[0].conform).toContain('host_rec-host-sidecars_cfr.mp4');
+    expect(parsedSync.frameRate.files[0].conform).toContain('-vf fps=25 ');
 
     expect(writtenFiles.has('chat_rec-host-sidecars.txt')).toBe(true);
     const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-sidecars.txt')?.data);

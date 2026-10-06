@@ -196,4 +196,57 @@ describe('host backup recording', () => {
     const result = await endHostRecording(handles);
     expect(result.backup).toBeNull();
   });
+
+  it('keeps the frame rate the camera reported when the take started', async () => {
+    let reported = 25;
+    const trackWithFps = {
+      getSettings: () => ({ width: 1280, height: 720, frameRate: reported }),
+    };
+    const streamWithFps = {
+      getTracks: () => [trackWithFps],
+      getVideoTracks: () => [trackWithFps],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+
+    const handles1 = await startHostRecording({
+      recordingId: 'test-rec-fps-1',
+      localStream: streamWithFps,
+      dir: fakeDir() as never,
+    });
+    reported = 30;
+    expect(handles1.videoFps).toBe(25);
+    await endHostRecording(handles1);
+
+    const trackWithoutFps = {
+      getSettings: () => ({ width: 1280, height: 720 }),
+    };
+    const streamWithoutFps = {
+      getTracks: () => [trackWithoutFps],
+      getVideoTracks: () => [trackWithoutFps],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+
+    const handles2 = await startHostRecording({
+      recordingId: 'test-rec-fps-2',
+      localStream: streamWithoutFps,
+      dir: fakeDir() as never,
+    });
+    expect(handles2.videoFps).toBeUndefined();
+    await endHostRecording(handles2);
+
+    const trackWithoutSettings = {};
+    const streamWithoutSettings = {
+      getTracks: () => [trackWithoutSettings],
+      getVideoTracks: () => [trackWithoutSettings],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+
+    const handles3 = await startHostRecording({
+      recordingId: 'test-rec-fps-3',
+      localStream: streamWithoutSettings,
+      dir: fakeDir() as never,
+    });
+    expect(handles3.videoFps).toBeUndefined();
+    await endHostRecording(handles3);
+  });
 });
