@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording } from '@/hooks/recording-controller';
+import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks } from '@/hooks/recording-controller';
 import { buildSyncReport } from '@/lib/sync-report';
 import type { ServerMessage } from '@openmeet/protocol';
 
@@ -120,6 +120,7 @@ vi.mock('@/hooks/recording-controller', async () => {
     })),
     endHostRecording: vi.fn().mockResolvedValue({ sha256: 'abc', totalBytes: 1, backup: null }),
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
+    collectFileChecks: vi.fn(actual.collectFileChecks),
   };
 });
 
@@ -753,6 +754,113 @@ describe('host backup after a take in useRoom', () => {
     expect(chatContent).toContain('Host Ana');
   });
 
+  it('puts the writers sizes into summary.fileList and sync.json', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    const hostWriter = { fileName: 'host_rec-size.mp4', size: 0 };
+    const guestWriter = { fileName: 'guest_rec-size.mp4', size: 0 };
+    const hostWavWriter = { fileName: 'host_rec-size.wav', size: 0 };
+    const screenWriter = { fileName: 'host_screen_rec-size.mp4', size: 0 };
+
+    // The tail lands while the host waits for its guests: sizes are only final once this returns.
+    vi.mocked(endHostRecording).mockImplementationOnce(async () => {
+      hostWriter.size = 2048;
+      guestWriter.size = 512;
+      hostWavWriter.size = 44;
+      screenWriter.size = 7;
+      return { sha256: 'abc', totalBytes: 1, backup: null };
+    });
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-size',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      videoFps: 25,
+      hostWriter,
+      guestWriter,
+      hostWavWriter,
+      screenWriters: [screenWriter],
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBeNull();
+
+    expect(result.current.state.summary?.fileList).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'host_rec-size.mp4', bytes: 2048 }),
+        expect.objectContaining({ name: 'guest_rec-size.mp4', bytes: 512 }),
+        expect.objectContaining({ name: 'host_rec-size.wav', bytes: 44 }),
+        expect.objectContaining({ name: 'host_screen_rec-size.mp4', bytes: 7 }),
+      ])
+    );
+
+    expect(writtenFiles.has('sync_rec-size.json')).toBe(true);
+    const syncJson = new TextDecoder().decode(writtenFiles.get('sync_rec-size.json')?.data);
+    const parsedSync = JSON.parse(syncJson);
+    expect(parsedSync.verification).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: 'host_rec-size.mp4', bytes: 2048 }),
+        expect.objectContaining({ file: 'guest_rec-size.mp4', bytes: 512 }),
+        expect.objectContaining({ file: 'host_rec-size.wav', bytes: 44 }),
+        expect.objectContaining({ file: 'host_screen_rec-size.mp4', bytes: 7 }),
+      ])
+    );
+  });
+
+  it('finalizes cleanly when reading file sizes fails', async () => {
+    vi.mocked(collectFileChecks).mockImplementationOnce(() => {
+      throw new Error('size read failed');
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result } = await hostTake();
+      expect(result.current.state.summary).not.toBeNull();
+      expect(result.current.state.recordingError).toBeNull();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('leaves sidecarsSaved: false, phase: "done" and no recordingError when sidecar write fails', async () => {
     const rejectingDir = {
       getFileHandle: vi.fn().mockResolvedValue({
@@ -1299,6 +1407,86 @@ describe('host backup after a take in useRoom', () => {
         expect.objectContaining({ markers: [] })
       );
       expect(writtenFiles.has('sync_rec-host-retry-markers.json')).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('carries file sizes into the summary when buildSyncReport retries without markers', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const hostWriter = { fileName: 'host_rec-retry-size.mp4', size: 1024, close: vi.fn().mockResolvedValue(undefined) };
+      const guestWriter = { fileName: 'guest_rec-retry-size.mp4', size: 512, close: vi.fn().mockResolvedValue(undefined) };
+      vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+        recordingId: 'rec-retry-size',
+        take: 1,
+        dir: fakeDir as never,
+        hostStartMs: 10_000,
+        hostWriter,
+        guestWriter,
+        slotPeerIds: new Map([[0, 'p-guest']]),
+        receiver: {
+          digestHex: async () => 'abc',
+          senderSha256: 'abc',
+          guestStartHostMs: 10_500,
+          syncRttMs: 10,
+          bytesWritten: 1,
+        },
+      } as never));
+
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      const fakeStream = {
+        getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+        getAudioTracks: () => [{ kind: 'audio' }],
+        getVideoTracks: () => [{ kind: 'video' }],
+      } as unknown as MediaStream;
+
+      await act(async () => {
+        await result.current.join(fakeStream, 'Host Ana');
+      });
+
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+          recording: false,
+        });
+      });
+
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(result.current.state.phase).toBe('recording');
+
+      act(() => {
+        emitSignal('marker', {
+          type: 'marker',
+          label: 'marker-to-fail',
+          from: 'guest',
+        });
+      });
+
+      vi.mocked(buildSyncReport).mockImplementationOnce(() => {
+        throw new Error('first call with markers threw');
+      });
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+
+      expect(result.current.state.phase).toBe('done');
+      expect(result.current.state.recordingError).toBeNull();
+      expect(result.current.state.summary?.fileList).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'host_rec-retry-size.mp4', bytes: 1024 }),
+          expect.objectContaining({ name: 'guest_rec-retry-size.mp4', bytes: 512 }),
+        ])
+      );
+      expect(writtenFiles.has('sync_rec-retry-size.json')).toBe(true);
     } finally {
       warnSpy.mockRestore();
     }

@@ -15,7 +15,7 @@ import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind } from '@openmeet/p
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
-import type { GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
+import type { FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
 
 export interface RecordingHandles {
   recordingId: string;
@@ -1205,4 +1205,11 @@ export function collectScreenSegments(
         ...(sharer ? { sharer } : {}),
       };
     });
+}
+
+/** The size of every file this take wrote, keyed by file name. */
+export function collectFileChecks(h: RecordingHandles): Map<string, FileCheck> {
+  const out = new Map<string, FileCheck>();
+  for (const w of allWriters(h)) out.set(w.fileName, { bytes: w.size });
+  return out;
 }

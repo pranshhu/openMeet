@@ -50,6 +50,7 @@ export class FileWriter {
   private readonly picker: SaveFilePicker;
   private writable: FsWritable | null = null;
   private handleName = '';
+  private _size = 0;
   // A FileSystemWritableFileStream serializes its own ops, but overlapping
   // write() calls (e.g. the host's own-track recorder fires writes without
   // awaiting) can interleave and corrupt the file. Chain every write so they
@@ -64,6 +65,11 @@ export class FileWriter {
 
   get fileName(): string {
     return this.handleName;
+  }
+
+  /** The file's length: the furthest byte any completed write has reached. */
+  get size(): number {
+    return this._size;
   }
 
   /** Prompts for a save location. Costs one transient user activation. */
@@ -86,11 +92,17 @@ export class FileWriter {
   write(position: number, data: ArrayBuffer | ArrayBufferView): Promise<void> {
     if (!this.writable) return Promise.reject(new Error('FileWriter: write before openFile'));
     const writable = this.writable;
+    const end = position + data.byteLength;
     const result = this.writeTail.then(() =>
-      writable.write({ type: 'write', position, data }).catch((e: unknown) => {
-        if ((e as { name?: string }).name === 'QuotaExceededError') throw new DiskFullError();
-        throw e;
-      })
+      writable.write({ type: 'write', position, data }).then(
+        () => {
+          this._size = Math.max(this._size, end);
+        },
+        (e: unknown) => {
+          if ((e as { name?: string }).name === 'QuotaExceededError') throw new DiskFullError();
+          throw e;
+        }
+      )
     );
     // The sequencing chain must never hold a rejection. Previously writeTail
     // itself was the rejected promise, so ONE failed write poisoned every

@@ -84,6 +84,34 @@ describe('FileWriter', () => {
     await fw.openFile('h.mp4');
     await expect(fw.write(0, new ArrayBuffer(4))).rejects.toBeInstanceOf(DiskFullError);
   });
+
+  it('tracks size as the furthest byte reached and does not decrease on write at position 0', async () => {
+    const writable = fakeWritable();
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'test.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('test.mp4');
+
+    await fw.write(0, new Uint8Array(10));
+    await fw.write(100, new Uint8Array(10));
+    await fw.write(0, new Uint8Array(4));
+    expect(fw.size).toBe(110);
+  });
+
+  it('does not move size on rejected write, still rejects to caller, and subsequent write lands', async () => {
+    const writable = {
+      write: vi.fn().mockRejectedValueOnce(new Error('x')).mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'err.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('err.mp4');
+
+    await expect(fw.write(0, new Uint8Array(10))).rejects.toThrow('x');
+    expect(fw.size).toBe(0);
+
+    await fw.write(0, new Uint8Array(6));
+    expect(fw.size).toBe(6);
+  });
 });
 
 describe('writeTakeSidecars', () => {

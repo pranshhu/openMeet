@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
-import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText } from '@/lib/sync-report';
+import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, type FileCheck } from '@/lib/sync-report';
 
 describe('buildSyncReport', () => {
   const base = {
@@ -618,5 +618,50 @@ describe('frame rate section', () => {
     expect(s.conformNote).toContain('re-encodes');
     expect(s.conformNote).toContain('not lossless');
     expect(s.note).toContain('Neither is a count of the frames');
+  });
+});
+
+describe('verification and file sizes', () => {
+  it('formats byte counts in decimal units as file managers do', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(44_000)).toBe('44 kB');
+    expect(formatBytes(812_300_000)).toBe('812 MB');
+    expect(formatBytes(1_500_000_000)).toBe('1.5 GB');
+  });
+
+  it('puts bytes on fileList entries with a check, leaves others without, and lists every file in verification in order', () => {
+    const checks = new Map<string, FileCheck>([
+      ['host_rec.mp4', { bytes: 812_300_000 }],
+      ['guest_rec.mp4', { bytes: 44_000 }],
+    ]);
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 10_000,
+      guests: [{ slot: 0, file: 'guest_rec.mp4', startHostMs: 10_500, rttMs: 10 }],
+      screenSegments: [{ file: 'host_screen_rec.mp4', offsetMs: 1000 }],
+      checks,
+    });
+
+    expect(r.data.fileList).toEqual([
+      expect.objectContaining({ name: 'host_rec.mp4', bytes: 812_300_000 }),
+      expect.objectContaining({ name: 'guest_rec.mp4', bytes: 44_000 }),
+      expect.objectContaining({ name: 'host_screen_rec.mp4' }),
+    ]);
+    expect(r.data.fileList.find((f) => f.name === 'host_screen_rec.mp4')?.bytes).toBeUndefined();
+
+    const parsed = JSON.parse(r.json);
+    expect(parsed.verification.map((v: { file: string }) => v.file)).toEqual(
+      r.data.fileList.map((f) => f.name)
+    );
+    expect(parsed.verification[0]).toEqual(
+      expect.objectContaining({ file: 'host_rec.mp4', bytes: 812_300_000 })
+    );
+    expect(parsed.verification[1]).toEqual(
+      expect.objectContaining({ file: 'guest_rec.mp4', bytes: 44_000 })
+    );
+    expect(parsed.verification[2]).toEqual(
+      expect.objectContaining({ file: 'host_screen_rec.mp4', bytes: null })
+    );
   });
 });

@@ -29,6 +29,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   and, where known, the rate each one reported, plus two `ffmpeg` commands per
   video file, one that measures how variable its frame rate is and one that
   re-encodes it to a constant frame rate.
+- The session summary and the sync file show the size of every file a take wrote.
 
 ### Security
 

@@ -51,6 +51,7 @@ import {
   rebindGuestRecordingWhenConnected,
   collectGuestReports,
   collectScreenSegments,
+  collectFileChecks,
   takeName,
   writeTakeSidecars,
   type RecordingHandles,
@@ -1798,11 +1799,20 @@ export function useRoom(slug: string) {
 
           const guestReports = await collectGuestReports(h, (peerId) => peerNameMap.get(peerId));
 
+          // Sizes decorate the report; failing to read them must not cost the take.
+          let checks: ReturnType<typeof collectFileChecks> = new Map();
+          try {
+            checks = collectFileChecks(h);
+          } catch (e) {
+            console.warn('openMeet: reading file sizes failed', e);
+          }
+
           // Editor companion: start-offset alignment + lossless faststart remux commands.
           const syncInput = {
             recordingId: h.recordingId,
             ...(h.hostWriter?.fileName ? { hostFile: h.hostWriter.fileName } : {}),
             guests: guestReports,
+            checks,
             hostStartMs: h.hostStartMs ?? Date.now(),
             hostTrackFps: h.videoFps,
             hostWavFile:

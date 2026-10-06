@@ -48,6 +48,12 @@ export interface ScreenSegmentInput {
   sharer?: string | undefined;
 }
 
+/** What the host measured about one file once the take has ended. */
+export interface FileCheck {
+  /** Size on the host's disk. */
+  bytes: number;
+}
+
 export interface SyncReportInput {
   recordingId: string;
   hostFile?: string | undefined;
@@ -61,6 +67,8 @@ export interface SyncReportInput {
   screenSegments?: ScreenSegmentInput[] | undefined;
   /** What the host's camera track reported when the take started. */
   hostTrackFps?: number | null | undefined;
+  /** One entry per file in the folder, keyed by file name. */
+  checks?: ReadonlyMap<string, FileCheck> | undefined;
 }
 
 export interface SummaryFile {
@@ -68,6 +76,7 @@ export interface SummaryFile {
   kind: 'video' | 'audio' | 'screen';
   detail?: string | undefined;
   participant?: string | undefined;
+  bytes?: number | undefined;
 }
 
 export interface SyncReport {
@@ -111,6 +120,14 @@ export function formatTimecode(ms: number): string {
   const sec = total % 60;
   const ss = String(sec).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+/** `1.5 GB`, `812 MB`, `44 kB`, `0 B`: decimal units, as file managers show them. */
+export function formatBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} kB`;
+  return `${n} B`;
 }
 
 // Names, chapter labels and chat text originate from other participants and
@@ -439,7 +456,10 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         ...(sharer ? { participant: sharer } : {}),
       };
     }),
-  ];
+  ].map((f: SummaryFile) => {
+    const c = input.checks?.get(f.name);
+    return c ? { ...f, bytes: c.bytes } : f;
+  });
 
   const screenRemuxCommands = screenFiles.map((f, i) => ({
     label: `Make screen segment ${i + 1} seekable`,
@@ -487,6 +507,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
     integrity: overallIntegrity.text,
+    verification: fileList.map((f) => ({ file: f.name, bytes: f.bytes ?? null })),
     warnings,
     seekability: {
       note: 'MediaRecorder writes MP4 progressively and may lack a seek index/duration until remuxed. This is lossless (no re-encode) and fast.',

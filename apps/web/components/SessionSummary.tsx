@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Icon } from './Icon';
-import { formatTimecode } from '@/lib/sync-report';
+import { formatBytes, formatTimecode } from '@/lib/sync-report';
 
 /**
  * What you have, whether it's intact, and what to run next.
@@ -165,6 +165,7 @@ export function SessionSummary({
               <code className="min-w-0 break-words text-xs text-white/85">{f.name}</code>
               <span className="text-xs text-white/60">
                 {KIND[f.kind]}
+                {f.bytes !== undefined ? ` · ${formatBytes(f.bytes)}` : ''}
                 {f.detail ? ` (${f.detail})` : ''}
               </span>
             </li>

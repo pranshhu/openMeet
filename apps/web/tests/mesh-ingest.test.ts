@@ -4,6 +4,7 @@ import {
   bindHostGuestChannel,
   bindHostAudioChannel,
   collectGuestReports,
+  collectFileChecks,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 
@@ -143,6 +144,31 @@ describe('host ingest routes by source peer', () => {
     const ch = fakeChannel();
     await bindHostGuestChannel(ch, h, 'peer-b');
     expect(ch.onmessage).toBeNull();
+  });
+
+  it("collectFileChecks returns one entry per open writer with that file's size", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+
+    const a = fakeChannel();
+    const b = fakeChannel();
+    const w = fakeChannel();
+
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await sendChunk(b, 0, 0, 250);
+
+    await bindHostAudioChannel(w, h, 'peer-a');
+    await sendChunk(w, 0, 0, 40);
+
+    await new Promise((r) => setTimeout(r));
+
+    const checks = collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.bytes).toBe(250);
+    expect(checks.get('guest_rec.wav')?.bytes).toBe(40);
+    expect(checks.size).toBe(2);
   });
 });
 

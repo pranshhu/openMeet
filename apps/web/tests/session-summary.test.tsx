@@ -94,6 +94,28 @@ describe('SessionSummary', () => {
     expect(screen.getByText(/Screen.*\+27000ms/)).toBeInTheDocument();
   });
 
+  it('shows file size after kind when bytes is present and shows no size when bytes is absent', () => {
+    const files: SummaryFile[] = [
+      { name: 'host_r.mp4', kind: 'video', bytes: 812_300_000 },
+      { name: 'guest_r.mp4', kind: 'video' },
+      { name: 'host_r.wav', kind: 'audio', bytes: 0 },
+    ];
+    render(<SessionSummary {...baseProps} files={files} />);
+    expect(screen.getByText('Camera · 812 MB')).toBeInTheDocument();
+    expect(screen.getByText('Camera')).toBeInTheDocument();
+    expect(screen.getByText('Audio master (uncompressed) · 0 B')).toBeInTheDocument();
+  });
+
+  it('puts the size between the kind and the detail', () => {
+    render(
+      <SessionSummary
+        {...baseProps}
+        files={[{ name: 'host_screen_r.mp4', kind: 'screen', detail: 'Alice, +5000ms', bytes: 12_000_000 }]}
+      />
+    );
+    expect(screen.getByText('Screen · 12 MB (Alice, +5000ms)')).toBeInTheDocument();
+  });
+
   it('renders integrity-missing message once, not duplicated', () => {
     const integrityMsg = 'Integrity not verified — one of the digests is missing.';
     render(

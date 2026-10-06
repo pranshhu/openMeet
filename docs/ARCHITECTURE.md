@@ -325,7 +325,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry — plus integrity verdicts, lossless
+  the host start, with `sharer` display name on each entry — plus integrity verdicts,
+  each file's size (`verification[]`), lossless
   `+faststart` remux and WAV-pairing commands, and a `frameRate` section: the requested rate, each camera
   file's track-reported rate where known, and per video file a `measure` (ffmpeg `vfrdet`) and a
   re-encoding `conform` command), saved to the recording folder alongside chapters and
