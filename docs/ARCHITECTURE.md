@@ -141,8 +141,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
   `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
   WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
-  instance `Map`; `allPeers()` derives the live peer list from `state.getWebSockets()` (skipping
-  sockets flagged `left: true`) instead. `slug`/`hostToken`, `sessionId`/`recording`, and
+  instance `Map`; `allPeers()` derives the live socket list from `state.getWebSockets()` (skipping
+  sockets flagged `left: true`) instead, and `joinedPeers()` narrows it to the sockets whose `join`
+  was admitted — the room itself, which is all that relays, broadcasts and `peerCount` look at, and
+  what session end counts. A socket that hasn't joined, or was refused at the cap, gets its own
+  `join`/`ping` answered and nothing else; one flagged `left` (replaced, or after its own `leave`)
+  has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `nextOrdinal`) and reloaded in the constructor via `blockConcurrencyWhile`, so
   a woken instance picks up exactly where the evicted one left off. The client's `{"type":"ping"}`
@@ -168,8 +172,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   so a peer joining mid-recording catches up. (`insertRecording`
   / `updateRecordingProgress`, best-effort `.catch(()=>{})`).
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
-  attachment's `left` flag: `markParticipantLeft`; if `allPeers().length===0 && sessionId` →
-  `endSession` (`host-left`/`guest-left`). Rooms are reusable (TTL is extended on join, not
+  attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
+  !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
+  the session and its `recording` flag across a cookie-path host reconnect, which replaces the old
+  socket before the new one has joined. Rooms are reusable (TTL is extended on join, not
   one-shot; each gathering starts a new session).
 
 ### lib + db

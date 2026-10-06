@@ -1640,3 +1640,460 @@ describe('WS Origin check', () => {
     res.webSocket!.close();
   });
 });
+
+// A socket is in the room only between a `join` that passed the caps and its
+// close. These drive the sockets that are NOT: connected but never joined,
+// refused at the cap, or already replaced — each of which keeps a working
+// socket for as long as its client declines to finish the closing handshake.
+describe('Room DO — only a joined socket is in the room', () => {
+  // Everything a socket is sent, so a test can assert on what it did NOT get.
+  function collect(ws: WebSocket): ServerMessage[] {
+    const heard: ServerMessage[] = [];
+    ws.addEventListener('message', (e) => heard.push(JSON.parse(e.data as string) as ServerMessage));
+    return heard;
+  }
+
+  function ofType<T extends ServerMessage['type']>(heard: ServerMessage[], type: T) {
+    return heard.filter((m): m is Extract<ServerMessage, { type: T }> => m.type === type);
+  }
+
+  async function enter(slug: string, displayName: string, extra: Record<string, unknown> = {}, cookie?: string) {
+    const ws = await openWs(slug, cookie);
+    const heard = collect(ws);
+    const assigned = waitForRoleAssigned(ws);
+    ws.send(JSON.stringify({ type: 'join', displayName, userAgent: 'ua', ...extra }));
+    return { ws, heard, me: await assigned };
+  }
+
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+
+  async function until(cond: () => boolean | Promise<boolean>): Promise<void> {
+    for (let i = 0; i < 80 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 25));
+  }
+
+  const sessionOf = (slug: string) =>
+    env.DB.prepare('SELECT id, ended_at FROM sessions WHERE room_slug = ? ORDER BY started_at DESC')
+      .bind(slug)
+      .first<{ id: string; ended_at: number | null }>();
+
+  const started = (recordingId: string, over: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'recording-started', recordingId, kind: 'camera', filename: `guest_${recordingId}.mp4`, ...over });
+
+  it('delivers nothing to a socket that never sent join', async () => {
+    const slug = 'unj-hear-aaa';
+    await seedRoom(slug, 'tok-unj-hear');
+    const lurker = await openWs(slug);
+    const overheard = collect(lurker);
+
+    const host = await enter(slug, 'H', { hostToken: 'tok-unj-hear' });
+    const guest = await enter(slug, 'G');
+    host.ws.send(JSON.stringify({ type: 'chat', text: 'private', ts: 1 }));
+    host.ws.send(JSON.stringify({ type: 'presence', micOn: true, camOn: true, screenSharing: false }));
+    host.ws.send(JSON.stringify({ type: 'marker', label: 'm' }));
+    host.ws.send(started('r-unj-hear'));
+    host.ws.send(JSON.stringify({ type: 'recording-stop', recordingId: 'r-unj-hear' }));
+    await until(() => ofType(guest.heard, 'recording-stop').length > 0);
+    guest.ws.close();
+    await until(() => ofType(host.heard, 'peer-left').length > 0);
+
+    // The guest, who did join, got all of it — so this is not just a quiet room.
+    expect(guest.heard.map((m) => m.type)).toEqual([
+      'role-assigned',
+      'chat',
+      'presence',
+      'marker',
+      'recording-started',
+      'recording-stop',
+    ]);
+    expect(overheard).toEqual([]);
+    host.ws.close();
+    lurker.close();
+  });
+
+  it('relays nothing sent by a socket that never sent join', async () => {
+    const slug = 'unj-send-aaa';
+    await seedRoom(slug, 'tok-unj-send');
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+    const lurker = await openWs(slug);
+    for (const msg of [
+      { type: 'chat', text: 'from nobody', ts: 1 },
+      { type: 'presence', micOn: false, camOn: false, screenSharing: true },
+      { type: 'marker', label: 'm' },
+      { type: 'recording-capability', mp4: true, wav: true },
+      { type: 'webrtc-offer', sdp: 'v=0' },
+      { type: 'recording-started', recordingId: 'r-unj-send', kind: 'camera', filename: 'x.mp4' },
+      { type: 'recording-stop', recordingId: 'r-unj-send' },
+      { type: 'leave', reason: 'user-exit' },
+    ]) {
+      lurker.send(JSON.stringify(msg));
+    }
+    await settle();
+    b.ws.send(JSON.stringify({ type: 'chat', text: 'sentinel', ts: 2 }));
+    await until(() => ofType(a.heard, 'chat').some((m) => m.text === 'sentinel'));
+
+    expect(a.heard.map((m) => m.type)).toEqual(['role-assigned', 'peer-joined', 'chat']);
+    expect(b.heard.map((m) => m.type)).toEqual(['role-assigned']);
+    a.ws.close();
+    b.ws.close();
+    lurker.close();
+  });
+
+  // The cookie path makes a socket role=host at connect, before any join.
+  it('does not let an un-joined socket holding the host cookie mark the room as recording', async () => {
+    const slug = 'unj-cook-aaa';
+    await seedRoom(slug, 'tok-unj-cook');
+    const lurker = await openWs(slug, `host_token__${slug}=tok-unj-cook`);
+    lurker.send(started('r-unj-cook'));
+    await settle();
+    const late = await enter(slug, 'L');
+    expect(late.me.recording).toBe(false);
+    late.ws.close();
+    lurker.close();
+  });
+
+  it('counts only joined sockets in role-assigned.peerCount', async () => {
+    const slug = 'unj-coun-taa';
+    await seedRoom(slug, 'tok-unj-count');
+    const idle = [await openWs(slug), await openWs(slug)];
+    const a = await enter(slug, 'A');
+    expect(a.me.peerCount).toBe(1);
+    const b = await enter(slug, 'B');
+    expect(b.me.peerCount).toBe(2);
+    expect(b.me.peers).toHaveLength(1);
+    [a.ws, b.ws, ...idle].forEach((w) => w.close());
+  });
+
+  it('keeps a socket refused at the cap outside the room', async () => {
+    const slug = 'cap-outs-ide';
+    await seedRoom(slug, 'tok-cap-outside');
+    const seated: Array<Awaited<ReturnType<typeof enter>>> = [];
+    for (let i = 0; i < 4; i++) seated.push(await enter(slug, `P${i}`));
+
+    const fifth = await openWs(slug);
+    const refused = waitForClose(fifth);
+    fifth.send(JSON.stringify({ type: 'join', displayName: 'X', userAgent: 'ua' }));
+    expect((await refused).code).toBe(4001);
+    // Refused, but its client has not closed its own end yet.
+    fifth.send(JSON.stringify({ type: 'chat', text: 'from outside', ts: 1 }));
+    await settle();
+    fifth.close();
+    await settle();
+    seated[1]!.ws.send(JSON.stringify({ type: 'chat', text: 'sentinel', ts: 2 }));
+    await until(() => ofType(seated[0]!.heard, 'chat').some((m) => m.text === 'sentinel'));
+
+    expect(ofType(seated[0]!.heard, 'chat').map((m) => m.text)).toEqual(['sentinel']);
+    // Nobody was told it joined, so nobody is told it left.
+    expect(ofType(seated[0]!.heard, 'peer-left')).toEqual([]);
+    seated.forEach((s) => s.ws.close());
+  });
+
+  it('ignores everything a replaced host sends after it was replaced', async () => {
+    const slug = 'rep-ghos-taa';
+    const hostToken = 'tok-rep-ghost';
+    await seedRoom(slug, hostToken);
+    const old = await enter(slug, 'Old', { hostToken });
+    const guest = await enter(slug, 'G');
+    const replaced = waitForClose(old.ws);
+    const next = await enter(slug, 'New', { hostToken });
+    expect((await replaced).code).toBe(4006);
+
+    old.ws.send(JSON.stringify({ type: 'chat', text: 'ghost', ts: 1 }));
+    old.ws.send(started('r-rep-ghost'));
+    await settle();
+    next.ws.send(JSON.stringify({ type: 'chat', text: 'sentinel', ts: 2 }));
+    await until(() => ofType(guest.heard, 'chat').some((m) => m.text === 'sentinel'));
+
+    expect(ofType(guest.heard, 'chat').map((m) => m.text)).toEqual(['sentinel']);
+    expect(ofType(guest.heard, 'recording-started')).toEqual([]);
+    const late = await enter(slug, 'L');
+    expect(late.me.recording).toBe(false);
+    [old.ws, guest.ws, next.ws, late.ws].forEach((w) => w.close());
+  });
+
+  it('treats a second join on a joined socket as a no-op', async () => {
+    const slug = 'rej-oinn-oop';
+    await seedRoom(slug, 'tok-rejoin-noop');
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+    b.ws.send(JSON.stringify({ type: 'join', displayName: 'Someone else', userAgent: 'ua2', producer: true }));
+    b.ws.send(JSON.stringify({ type: 'join', displayName: 'Someone else', userAgent: 'ua2', hostToken: 'tok-rejoin-noop' }));
+    await settle();
+    b.ws.send(JSON.stringify({ type: 'chat', text: 'sentinel', ts: 1 }));
+    await until(() => ofType(a.heard, 'chat').length > 0);
+
+    expect(ofType(a.heard, 'peer-joined')).toHaveLength(1);
+    expect(ofType(b.heard, 'role-assigned')).toHaveLength(1);
+    // Neither the name nor the role moved.
+    expect(ofType(a.heard, 'chat')[0]).toMatchObject({ from: 'guest', fromName: 'B' });
+    const session = await sessionOf(slug);
+    const rows = await env.DB.prepare('SELECT COUNT(*) AS n FROM participants WHERE session_id = ?')
+      .bind(session!.id)
+      .first<{ n: number }>();
+    expect(rows?.n).toBe(2);
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it('persists a recordings row only for a bounded id and filename and a known kind', async () => {
+    const slug = 'rec-vali-daa';
+    await seedRoom(slug, 'tok-rec-valid');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-valid' });
+    const guest = await enter(slug, 'G');
+    const hostRec = crypto.randomUUID();
+    const honest = crypto.randomUUID();
+    host.ws.send(started(hostRec, { filename: `host_${hostRec}.mp4` }));
+    guest.ws.send(started(crypto.randomUUID(), { filename: 'f'.repeat(3000) }));
+    guest.ws.send(started('i'.repeat(3000)));
+    guest.ws.send(started(crypto.randomUUID(), { kind: 'audio' }));
+    guest.ws.send(started(crypto.randomUUID(), { kind: undefined }));
+    guest.ws.send(started(crypto.randomUUID(), { filename: { nested: true } }));
+    // What a real guest sends once the host's recording-started reaches it.
+    guest.ws.send(started(honest));
+
+    const session = await sessionOf(slug);
+    const rows = () =>
+      env.DB.prepare(
+        `SELECT r.id, r.kind, r.filename, p.role FROM recordings r
+           JOIN participants p ON p.id = r.participant_id WHERE r.session_id = ?`
+      )
+        .bind(session!.id)
+        .all<{ id: string; kind: string; filename: string; role: string }>();
+    await until(async () => (await rows()).results.some((r) => r.id === honest));
+    await settle();
+
+    const written = (await rows()).results;
+    expect(written.map((r) => r.id).sort()).toEqual([hostRec, honest].sort());
+    expect(written.find((r) => r.id === honest)).toMatchObject({
+      kind: 'camera',
+      filename: `guest_${honest}.mp4`,
+      role: 'guest',
+    });
+    // Only persistence is gated: the relay to the room is unchanged.
+    expect(ofType(host.heard, 'recording-started')).toHaveLength(6);
+    host.ws.close();
+    guest.ws.close();
+  });
+
+  it('bounds the recordings rows one socket can create', async () => {
+    const slug = 'rec-boun-daa';
+    await seedRoom(slug, 'tok-rec-bound');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-bound' });
+    for (let i = 0; i < 70; i++) host.ws.send(started(crypto.randomUUID()));
+
+    const session = await sessionOf(slug);
+    const count = async () =>
+      (await env.DB.prepare('SELECT COUNT(*) AS n FROM recordings WHERE session_id = ?')
+        .bind(session!.id)
+        .first<{ n: number }>())!.n;
+    await until(async () => (await count()) >= 64);
+    await settle();
+    expect(await count()).toBe(64);
+    host.ws.close();
+  });
+
+  it('truncates an over-long displayName and userAgent in D1 and in peer-joined', async () => {
+    const slug = 'trn-cate-aaa';
+    await seedRoom(slug, 'tok-truncate');
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'n'.repeat(3000), { userAgent: 'u'.repeat(3000) });
+    await until(() => ofType(a.heard, 'peer-joined').length > 0);
+
+    expect(ofType(a.heard, 'peer-joined')[0]).toMatchObject({
+      displayName: 'n'.repeat(64),
+      userAgent: 'u'.repeat(512),
+    });
+    const session = await sessionOf(slug);
+    const row = await env.DB.prepare(
+      "SELECT display_name, user_agent FROM participants WHERE session_id = ? AND display_name LIKE 'n%'"
+    )
+      .bind(session!.id)
+      .first<{ display_name: string; user_agent: string }>();
+    expect(row).toEqual({ display_name: 'n'.repeat(64), user_agent: 'u'.repeat(512) });
+
+    b.ws.send(JSON.stringify({ type: 'chat', text: 'hi', ts: 1 }));
+    await until(() => ofType(a.heard, 'chat').length > 0);
+    expect(ofType(a.heard, 'chat')[0]!.fromName).toBe('n'.repeat(64));
+    // A later joiner is given the same capped name.
+    const c = await enter(slug, 'C');
+    expect(c.me.peers.map((p) => p.displayName).sort()).toEqual(['A', 'n'.repeat(64)]);
+    // A cut that lands inside a surrogate pair drops the pair, rather than
+    // storing and relaying half of one.
+    await enter(slug, 'e'.repeat(63) + '\u{1F600}');
+    await until(() => ofType(c.heard, 'peer-joined').length > 0);
+    expect(ofType(c.heard, 'peer-joined')[0]!.displayName).toBe('e'.repeat(63));
+    [a.ws, b.ws, c.ws].forEach((w) => w.close());
+  });
+
+  // The attachment is limited to 2048 bytes and a string outside Latin-1 costs
+  // two bytes a character, so this is the largest attachment a socket can have:
+  // every capped field at its cap, every optional one set.
+  it('fits the socket attachment when every capped field is at its cap in two-byte characters', async () => {
+    const slug = 'trn-wide-aaa';
+    await seedRoom(slug, 'tok-truncate-wide');
+    const wide = await enter(slug, '名'.repeat(3000), {
+      userAgent: '名'.repeat(3000),
+      clientId: '名'.repeat(64),
+      producer: true,
+      companion: true,
+    });
+    expect(wide.me.role).toBe('producer');
+    // One more write to the attachment after join: the recordings counter.
+    const rec = crypto.randomUUID();
+    wide.ws.send(started(rec));
+    let row: { id: string } | null = null;
+    await until(async () => {
+      row = await env.DB.prepare('SELECT id FROM recordings WHERE id = ?').bind(rec).first<{ id: string }>();
+      return row !== null;
+    });
+    expect(row).not.toBeNull();
+    wide.ws.close();
+  });
+
+  it('announces a graceful leave exactly once, with the reason the leaver gave', async () => {
+    const slug = 'lea-veon-cea';
+    await seedRoom(slug, 'tok-leave-once');
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+    const closed = waitForClose(b.ws);
+    b.ws.send(JSON.stringify({ type: 'leave', reason: 'user-exit' }));
+    expect((await closed).code).toBe(1000);
+    // What a browser does next: finish the handshake, which runs the DO's own
+    // close callback for the same socket.
+    b.ws.close();
+    await settle();
+
+    expect(ofType(a.heard, 'peer-left')).toEqual([
+      { type: 'peer-left', role: 'guest', reason: 'user-exit', peerId: b.me.peerId },
+    ]);
+    a.ws.close();
+  });
+
+  it('ends the session when the last joined peer leaves, even with an un-joined socket still connected', async () => {
+    const slug = 'ses-ends-aaa';
+    await seedRoom(slug, 'tok-session-ends');
+    const idle = await openWs(slug);
+    const a = await enter(slug, 'A');
+    expect((await sessionOf(slug))?.ended_at).toBeNull();
+    a.ws.close();
+    await until(async () => (await sessionOf(slug))?.ended_at != null);
+    expect((await sessionOf(slug))?.ended_at).not.toBeNull();
+    idle.close();
+  });
+
+  it('does not end a session, or announce a departure, when an un-joined socket closes', async () => {
+    const slug = 'ses-stay-saa';
+    await seedRoom(slug, 'tok-session-stays');
+    const a = await enter(slug, 'A');
+    const idle = await openWs(slug);
+    idle.close();
+    await settle();
+    expect((await sessionOf(slug))?.ended_at).toBeNull();
+    expect(a.heard.map((m) => m.type)).toEqual(['role-assigned']);
+    a.ws.close();
+  });
+
+  it('still closes an un-joined socket with 4003 when the room expires mid-call', async () => {
+    const slug = 'alm-unjo-ina';
+    await seedRoom(slug, 'tok-alarm-unjoined');
+    const a = await enter(slug, 'A'); // join arms the alarm
+    const idle = await openWs(slug);
+    const closes = [waitForClose(a.ws), waitForClose(idle)];
+    await env.DB.prepare('UPDATE rooms SET expires_at = ? WHERE slug = ?').bind(Date.now() - 1000, slug).run();
+    await runDurableObjectAlarm(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)));
+    expect((await Promise.all(closes)).map((c) => c.code)).toEqual([4003, 4003]);
+  });
+
+  // The cookie path replaces the old host at connect, before the new socket
+  // has joined — so for a moment the room has a host but no joined peer.
+  it('keeps the take and the session when a host alone in the room reconnects on the cookie path', async () => {
+    const slug = 'coo-krec-onn';
+    const cookie = `host_token__${slug}=tok-cookie-reconnect`;
+    await seedRoom(slug, 'tok-cookie-reconnect');
+    const old = await enter(slug, 'H', {}, cookie);
+    const rec = crypto.randomUUID();
+    old.ws.send(started(rec));
+    await until(async () => (await env.DB.prepare('SELECT 1 FROM recordings WHERE id = ?').bind(rec).first()) !== null);
+
+    const replaced = waitForClose(old.ws);
+    const next = await openWs(slug, cookie);
+    expect((await replaced).code).toBe(4006);
+    // The old socket's close has run to its end before the new one joins.
+    await settle();
+    const assigned = waitForRoleAssigned(next);
+    next.send(JSON.stringify({ type: 'join', displayName: 'H', userAgent: 'ua' }));
+    expect((await assigned).recording).toBe(true);
+    const late = await enter(slug, 'G');
+    expect(late.me.recording, 'a guest joining now would not be recorded').toBe(true);
+    const sessions = await env.DB.prepare('SELECT COUNT(*) AS n FROM sessions WHERE room_slug = ?')
+      .bind(slug)
+      .first<{ n: number }>();
+    expect(sessions?.n).toBe(1);
+    [old.ws, next, late.ws].forEach((w) => w.close());
+  });
+
+  it('ends the session when a socket holding the host cookie closes without joining and nobody else is left', async () => {
+    const slug = 'coo-kidl-eaa';
+    await seedRoom(slug, 'tok-cookie-idle');
+    const a = await enter(slug, 'A');
+    const idleHost = await openWs(slug, `host_token__${slug}=tok-cookie-idle`);
+    a.ws.close();
+    await settle();
+    idleHost.close();
+    await until(async () => (await sessionOf(slug))?.ended_at != null);
+    expect((await sessionOf(slug))?.ended_at).not.toBeNull();
+  });
+
+  it('finalizes a recording once, and only with an integer size and a hash no longer than a SHA-256', async () => {
+    const slug = 'rec-comp-let';
+    await seedRoom(slug, 'tok-rec-complete');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-complete' });
+    const guest = await enter(slug, 'G');
+    const rec = crypto.randomUUID();
+    host.ws.send(started(rec));
+    const row = () =>
+      env.DB.prepare('SELECT status, sha256, total_bytes FROM recordings WHERE id = ?')
+        .bind(rec)
+        .first<{ status: string; sha256: string | null; total_bytes: number }>();
+    await until(async () => (await row()) !== null);
+    const completed = (over: Record<string, unknown>) =>
+      guest.ws.send(
+        JSON.stringify({ type: 'recording-completed', recordingId: rec, lastIdx: 0, totalBytes: 1, sha256: null, ...over })
+      );
+
+    completed({ sha256: 'f'.repeat(100_000) });
+    completed({ sha256: { nested: true } });
+    completed({ totalBytes: 't'.repeat(100_000) });
+    completed({ totalBytes: -1 });
+    completed({ totalBytes: 1.5 });
+    completed({ recordingId: { nested: true } });
+    await settle();
+    expect(await row()).toEqual({ status: 'recording', sha256: null, total_bytes: 0 });
+
+    completed({ totalBytes: 42, sha256: 'a'.repeat(64) });
+    await until(async () => (await row())?.status === 'finalized');
+    completed({ totalBytes: 43, sha256: 'b'.repeat(64) });
+    await settle();
+    expect(await row()).toEqual({ status: 'finalized', sha256: 'a'.repeat(64), total_bytes: 42 });
+    host.ws.close();
+    guest.ws.close();
+  });
+
+  // Called on the instance, since over the wire a throw is only a log line.
+  it('drops a frame that is not a JSON object without throwing', async () => {
+    const slug = 'bad-fram-eaa';
+    await seedRoom(slug, 'tok-bad-frame');
+    const a = await enter(slug, 'A');
+    const idle = await openWs(slug);
+    await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        for (const frame of ['null', '5', '"join"', '[]', 'true', '{}', '{"type":null}', '']) {
+          await (instance as Room).webSocketMessage(ws, frame);
+        }
+        await (instance as Room).webSocketMessage(ws, new ArrayBuffer(4));
+      }
+    });
+    a.ws.close();
+    idle.close();
+  });
+});
