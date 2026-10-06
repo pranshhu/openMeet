@@ -240,9 +240,8 @@ export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: Room
  * don't follow when we should and the host records itself talking to an
  * unrecorded guest, which nobody notices until playback.
  *
- * Only the HOST's signal counts — a guest's own `recording-started` is relayed
- * too (it creates that guest's D1 row), and following it would have guests in a
- * mesh starting each other.
+ * An older tab may still send it; nothing here reacts to a message that is not
+ * from the host.
  */
 export function shouldFollowHostRecording(opts: {
   from: Role;
@@ -818,12 +817,6 @@ export function useRoom(slug: string) {
           localNameRef.current
         );
       }
-      signalRef.current?.send({
-        type: 'recording-started',
-        recordingId,
-        kind: 'camera',
-        filename: `guest_${recordingId}.mp4`,
-      });
       setState((s) => ({ ...s, phase: 'recording' }));
     } catch (e) {
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
@@ -1259,10 +1252,8 @@ export function useRoom(slug: string) {
       signal.on('webrtc-answer', relay);
       signal.on('ice-candidate', relay);
 
-      // Recording is room-wide and host-driven. Only the host's signal counts:
-      // a guest's own `recording-started` is relayed too (it creates that
-      // guest's D1 row), and reacting to it would have guests starting each
-      // other in a mesh.
+      // Recording is room-wide and host-driven. An older tab may still send it;
+      // nothing here reacts to a message that is not from the host.
       signal.on('recording-started', (m) => {
         if (m.from !== 'host') return;
         setState((s) => ({ ...s, peerRecording: true }));
@@ -1714,18 +1705,10 @@ export function useRoom(slug: string) {
         }
         if (roleRef.current === 'guest') {
           fatalCloseRef.current = false;
-          const { drained, sha256, backup, wavBackup } = await endGuestRecording(h);
+          const { drained, backup, wavBackup } = await endGuestRecording(h);
           // Never marked finalized: a guest can't know the host's file was
           // committed (a host tab that dies before End & save loses its copy), so
           // this backup stays until the guest deletes it.
-          const totalBytes = h.guestRecorder?.totalBytes ?? 0;
-          signalRef.current?.send({
-            type: 'recording-completed',
-            recordingId: h.recordingId,
-            lastIdx: h.sender?.lastAckedIdx ?? -1,
-            totalBytes,
-            sha256: sha256 || null,
-          });
           if (backupUrlRef.current) URL.revokeObjectURL(backupUrlRef.current);
           const backupBlobUrl = backup ? URL.createObjectURL(backup) : null;
           backupUrlRef.current = backupBlobUrl;

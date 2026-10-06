@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { startGuestRecording, startHostRecording, endHostRecording, startScreenRecording } from '@/hooks/recording-controller';
+import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording } from '@/hooks/recording-controller';
 import type { ServerMessage } from '@openmeet/protocol';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
@@ -104,7 +104,6 @@ vi.mock('@/hooks/recording-controller', async () => {
       endGuestRecordingCalled = true;
       return {
         drained: true,
-        sha256: 'mock-sha256',
         backup: new Blob(['backup-bytes']),
         wavBackup: new Blob(['wav-backup-bytes']),
       };
@@ -248,6 +247,26 @@ describe('guest recording lifecycle in useRoom', () => {
 
     expect(endGuestRecordingCalled).toBe(true);
     expect(result.current.state.phase).toBe('done');
+  });
+
+  it('a guest take driven to its end sends neither recording-started nor recording-completed', async () => {
+    const result = await recordingGuest();
+    vi.mocked(endGuestRecording).mockResolvedValueOnce({
+      drained: false,
+      backup: new Blob(['backup-bytes']),
+      wavBackup: new Blob(['wav-backup-bytes']),
+    });
+    await stopTake();
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.drained).toBe(false);
+    expect(result.current.state.backupBlobUrl).toBe('blob:mock-url');
+    expect(result.current.state.wavBackupBlobUrl).toBe('blob:mock-url');
+    expect(signalSent).not.toContainEqual(
+      expect.objectContaining({ type: 'recording-started' })
+    );
+    expect(signalSent).not.toContainEqual(
+      expect.objectContaining({ type: 'recording-completed' })
+    );
   });
 
   it('clears disconnect banner when peer rejoins', async () => {

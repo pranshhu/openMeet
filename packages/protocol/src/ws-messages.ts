@@ -39,6 +39,10 @@ export type ClientRecordingStarted = {
   kind: RecordingKind;
   filename: string;
 };
+/**
+ * Kept only so an older tab's message is still a known type: the server ignores
+ * it and current clients do not send it.
+ */
 export type ClientRecordingCompleted = {
   type: 'recording-completed';
   recordingId: string;
@@ -194,8 +198,8 @@ export type ServerPresence = {
 /**
  * Relayed so every peer learns the room is being recorded — consent notice for
  * guests, and the trigger that starts their own capture. The `recordingId` is
- * the HOST's; guests mint their own for their own bookkeeping, so nothing
- * collides in D1.
+ * the HOST's; guests have no database row; each mints its own id, used as the
+ * channel key.
  */
 export type ServerRecordingStarted = {
   type: 'recording-started';

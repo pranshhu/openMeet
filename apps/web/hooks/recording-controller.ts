@@ -781,7 +781,7 @@ export async function endHostRecording(
 
 export async function endGuestRecording(
   h: RecordingHandles
-): Promise<{ drained: boolean; sha256: string; backup: Blob | null; wavBackup?: Blob | null }> {
+): Promise<{ drained: boolean; backup: Blob | null; wavBackup?: Blob | null }> {
   // Same reason as the host path: drain() must not start until the last chunk
   // has actually been handed to the sender, or the tail is silently dropped.
   await stopScreenRecording(h);
@@ -819,7 +819,7 @@ export async function endGuestRecording(
     h.backup ? h.backup.stop() : Promise.resolve(null),
     h.wavBackup ? h.wavBackup.stop() : Promise.resolve(null),
   ]);
-  return { drained: drained && wavDrained, sha256, backup, wavBackup };
+  return { drained: drained && wavDrained, backup, wavBackup };
 }
 
 /** Tell the host this channel's file is complete, and hand over its digest. */
@@ -930,8 +930,8 @@ export async function startScreenRecording(
     h.screenChannel = channel;
     // Bounded. Unbounded, a channel whose SCTP negotiation stalled never
     // settled — and this is awaited from beginGuestRecording, so the guest sat
-    // in the call with no recording, no `recording-started` sent, no phase
-    // change and no error: the catch could never run either.
+    // in the call with no recording, no phase change and no error: the catch
+    // could never run either.
     const opened = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), SCREEN_CHANNEL_OPEN_TIMEOUT_MS);
       channel.addEventListener(

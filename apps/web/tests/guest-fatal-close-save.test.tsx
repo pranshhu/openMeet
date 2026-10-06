@@ -100,7 +100,6 @@ vi.mock('@/hooks/recording-controller', async () => {
       endGuestRecordingCalled = true;
       return {
         drained: true,
-        sha256: 'mock-sha256',
         backup: new Blob(['backup-bytes']),
       };
     }),

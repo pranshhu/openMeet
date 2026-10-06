@@ -8,8 +8,8 @@ describe('shouldFollowHostRecording', () => {
     expect(shouldFollowHostRecording(base)).toBe(true);
   });
 
-  // The DO broadcasts to everyone else, so the host hears the guest's own
-  // recording-started echoed back. Following it would restart the host.
+  // An older tab may still send recording-started, which is ignored.
+  // Following it would restart the host.
   it('ignores anything not stamped from the host', () => {
     expect(shouldFollowHostRecording({ ...base, from: 'guest' })).toBe(false);
     expect(shouldFollowHostRecording({ ...base, from: 'producer' })).toBe(false);

@@ -9,6 +9,26 @@ describe('ws-messages type guards', () => {
     expect(isClientMessage({ type: 'ping' })).toBe(true);
   });
 
+  it('still accepts the recording messages an older tab sends', () => {
+    expect(
+      isClientMessage({
+        type: 'recording-started',
+        recordingId: 'rec-1',
+        kind: 'camera',
+        filename: 'guest_rec-1.mp4',
+      })
+    ).toBe(true);
+    expect(
+      isClientMessage({
+        type: 'recording-completed',
+        recordingId: 'rec-1',
+        lastIdx: 0,
+        totalBytes: 100,
+        sha256: null,
+      })
+    ).toBe(true);
+  });
+
   it('rejects unknown message types', () => {
     expect(isClientMessage({ type: 'nope' })).toBe(false);
     expect(isClientMessage({})).toBe(false);
