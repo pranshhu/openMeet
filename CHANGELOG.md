@@ -12,6 +12,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Opening the room in a second tab of the host's browser while a recording is
+  running asks before that tab takes the call over, instead of ending the first
+  tab's files.
 - A sound and a system notification when a recording problem appears during a take.
 - Keep the screen awake during a take via Screen Wake Lock, prefix the document
   title with `● REC ` while hidden, and warn when the tab was in the background

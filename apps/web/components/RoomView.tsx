@@ -6,6 +6,7 @@ import { detectBrowserDevice } from '@/lib/browser-guidance';
 import { isFsAccessSupported } from '@/lib/fs-writer';
 import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
+import { holdTakeLock } from '@/lib/take-lock';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -100,6 +101,13 @@ export function RoomView({ slug }: { slug: string }) {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [unsaved]);
+
+  // A second tab in this browser would take the host seat from under a live
+  // take. This tab holds the room's take lock for as long as its take is, so
+  // that tab's lobby can ask first.
+  const hostTakeLive =
+    state.role === 'host' && (state.phase === 'recording' || state.phase === 'finalizing');
+  useEffect(() => (hostTakeLive ? holdTakeLock(slug) : undefined), [hostTakeLive, slug]);
 
   if (state.phase === 'checking') {
     return <StatusScreen spinner>Checking room…</StatusScreen>;

@@ -457,10 +457,11 @@ Known gaps, listed below:
   chunk, into the same files on the host's disk. A screen share comes back for everyone and
   recording continues in a new numbered segment; the interrupted segment's tail is only in
   the sharer's screen backup, and the session summary marks that segment "ended early".
-- **Opening the room as host in a second tab during a take hands the call to the new
-  tab.** The first tab's files end at the takeover (it shows "Press End & save to keep
-  this recording"), and the rest of each guest's part exists only in that guest's
-  in-browser backup. The new tab records only from its own new take.
+- **Taking the call over in a second tab during a take ends the first tab's files.**
+  A second tab in the host's browser asks before it joins while a recording is running.
+  If you join there anyway, the first tab's files end at the takeover (it shows "Press
+  End & save to keep this recording"), and the rest of each guest's part exists only in
+  that guest's in-browser backup. The new tab records only from its own new take.
 - **The media board, if first opened during a take, isn't in that take's MP4.** A
   running recorder can't swap its audio track, so pads still play live and drop chapter
   markers, but their audio reaches the MP4 only from the next take. The WAV master is

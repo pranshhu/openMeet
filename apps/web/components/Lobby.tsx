@@ -27,6 +27,7 @@ import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
 import type { CheckLevel } from '@/lib/preflight';
+import { isTakeLockHeld } from '@/lib/take-lock';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -96,6 +97,12 @@ function formatSize(bytes: number): string {
 const focusRing = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]';
 const primaryBtn = `rounded-full bg-[#0b57d0] px-6 py-3 text-[15px] font-medium text-white shadow-sm transition-colors enabled:hover:bg-[#0842a0] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 
+const TAKEOVER_PROMPT =
+  'Another tab in this browser is recording this room.\n\n' +
+  'Joining here takes over as host, and that recording’s files end at this point. ' +
+  'To keep the recording whole, cancel, press End & save in the other tab, then join here.\n\n' +
+  'Join here anyway?';
+
 export function Lobby({
   slug,
   onJoin,
@@ -145,6 +152,9 @@ export function Lobby({
   // must not stop it on unmount (the lobby unmounts the instant we enter the
   // call), or the call would receive dead tracks.
   const handedOffRef = useRef(false);
+  // A press that is being answered, or that already handed the stream over.
+  // The check below is awaited, so a second press could otherwise join twice.
+  const joiningRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -274,10 +284,29 @@ export function Lobby({
     setTimeout(() => setCopied(false), 1500);
   }
 
+  /**
+   * Joining from this tab takes the host seat, and a take that another tab of
+   * this browser is recording ends where it is. Asked right before the stream
+   * is handed over, so the answer is about this moment and not about page load.
+   */
+  async function okToTakeSeat(): Promise<boolean> {
+    if (joiningRef.current) return false;
+    joiningRef.current = true;
+    // A no clears it and leaves the lobby as it was. A yes is the hand-over.
+    joiningRef.current = !(await isTakeLockHeld(slug)) || window.confirm(TAKEOVER_PROMPT);
+    return joiningRef.current;
+  }
+
   async function handlePresentOnly() {
     if (!name.trim()) return;
     try {
       const screenStream = await getScreenStream();
+      // After the picker, not before it: the picker needs the click's user
+      // activation, and a dialog left open outlasts that.
+      if (!(await okToTakeSeat())) {
+        screenStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       handedOffRef.current = true;
       mmRef.current?.stop();
       stream?.getTracks().forEach((t) => t.stop());
@@ -513,9 +542,10 @@ export function Lobby({
           <h1 className="text-[28px] font-normal leading-tight tracking-tight">Ready to join?</h1>
           <form
             className="flex w-full flex-col gap-6"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
               if (!stream || !name.trim()) return;
+              if (!(await okToTakeSeat())) return;
               handedOffRef.current = true;
               onJoin(stream, name.trim());
             }}

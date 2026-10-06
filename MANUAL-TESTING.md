@@ -153,6 +153,8 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.5 | ICE failure | Join from two networks with no TURN configured | A clear "could not connect" message, not an endless spinner | ☐ | |
 | 7.6 | Host opens a second tab | Not recording, open the room again in a second tab of the host's profile | The first tab shows "You joined from another tab or device" with **Use this tab instead** | ☐ | |
 | 7.7 | Leaving | After a take, host clicks **Leave call** | "You left the call" with **Rejoin**, **Back to home** and download links for sync.json, chapters and backups; closing the tab asks first | ☐ | |
+| 7.8 | Host opens a second tab mid-take | Recording, open the room again in a second tab of the host's profile and press **Join now** | A dialog says another tab is recording this room. **Cancel** leaves the first tab recording; after **End & save** there, **Join now** goes straight in. (**OK** takes the call over: the first tab shows the End & save banner) | ☐ | |
+| 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
 
 ## 8 — Extras
 
@@ -204,8 +206,9 @@ Also not covered automatically. Needs 3 browser profiles.
 - **A screen share across a full WebSocket reconnect continues in a new numbered
   segment.** Camera and WAV resume into the same files; the interrupted segment's
   tail is only in the sharer's screen backup, and the summary marks it "ended early".
-- **A second host tab mid-take takes the call over.** The first tab's files end
-  there; the rest of each guest's part is only in that guest's backup.
+- **A second host tab mid-take asks before it takes the call over.** If the host
+  joins there anyway, the first tab's files end there; the rest of each guest's
+  part is only in that guest's backup.
 - **The media board, if first opened during a take, isn't in that take's MP4.**
   Pads still play live and drop markers; the next take includes them.
 - **Clock sync needs the host recording within ~8 s of the guest.** Otherwise

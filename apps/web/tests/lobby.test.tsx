@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
@@ -66,7 +66,7 @@ describe('Lobby', () => {
     expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
     fireEvent.click(screen.getByRole('button', { name: /join/i }));
-    expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice');
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
   });
 
   // On a phone the page is one column in DOM order. With the device pickers
@@ -634,7 +634,143 @@ describe('Lobby', () => {
     expect(onJoin).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: 'Alice' } });
     fireEvent.submit(input.closest('form')!);
-    expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice');
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+  });
+
+  /** A browser where another tab holds this room's take lock. */
+  function takeHeldElsewhere() {
+    const stream = fakeStream();
+    const request = vi.fn(async (name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+      cb(name === 'openmeet-take:xyz-abcd-pqr' ? null : {})
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+      locks: { request },
+    });
+    return { stream, request };
+  }
+  const settle = () => act(async () => {});
+
+  it('asks before joining while another tab records this room, and stays in the lobby on a no', async () => {
+    const { stream } = takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(confirm.mock.calls[0]![0]).toMatch(/^Another tab in this browser is recording this room\./);
+      expect(confirm.mock.calls[0]![0]).toMatch(/press End & save in the other tab/);
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      for (const t of stream.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+      fireEvent.click(join);
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      // Still the lobby's stream: leaving the page turns the camera off.
+      unmount();
+      for (const t of stream.getTracks()) expect(t.stop).toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('joins when the person answers yes', async () => {
+    const { stream } = takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+      await waitFor(() => expect(onJoin).toHaveBeenCalled());
+      expect(onJoin.mock.calls[0]!.slice(0, 2)).toEqual([stream, 'Alice']);
+      // The stream is handed over once, however often Join is pressed after that.
+      fireEvent.click(join);
+      await settle();
+      expect(onJoin).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('Present only asks after the screen picker, and gives the screen back on a no', async () => {
+    const { stream } = takeHeldElsewhere();
+    const track = { kind: 'video', stop: vi.fn() };
+    const getDisplayMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    });
+    navigator.mediaDevices.getDisplayMedia = getDisplayMedia;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Bob' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /join now/i })).not.toBeDisabled());
+      fireEvent.click(screen.getByRole('button', { name: /present only/i }));
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(getDisplayMedia.mock.invocationCallOrder[0]!).toBeLessThan(confirm.mock.invocationCallOrder[0]!);
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalled();
+      // The camera preview is still live, and still the lobby's to turn off.
+      for (const t of stream.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+      unmount();
+      for (const t of stream.getTracks()) expect(t.stop).toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('does not ask a producer', async () => {
+    takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} producer />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Pat' } });
+      fireEvent.click(screen.getByRole('button', { name: /join now/i }));
+      await settle();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(onJoin).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('joins once when Join is pressed twice before the check answers', async () => {
+    const { request } = takeHeldElsewhere();
+    // Every check stays open until the test answers it: "not held".
+    const answers: (() => void)[] = [];
+    request.mockImplementation(
+      (_name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+        new Promise((resolve) => {
+          answers.push(() => resolve(cb({})));
+        })
+    );
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    const join = screen.getByRole('button', { name: /join now/i });
+    await waitFor(() => expect(join).not.toBeDisabled());
+    fireEvent.click(join);
+    fireEvent.click(join);
+    for (const answer of answers) answer();
+    await settle();
+    expect(onJoin).toHaveBeenCalledTimes(1);
   });
 
   it('mirrors the self-preview, but not a rear camera', async () => {

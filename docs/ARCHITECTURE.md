@@ -428,7 +428,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   first, and every other peer whose role is host is closed with `4006` (`WS_CLOSE_REPLACED`,
   `'replaced'`). This lets a reconnecting host or second tab take over. A take running in the
   replaced tab is not torn down (`phaseOnFatalClose` holds the phase and asks for End & save), but
-  its files end there — see Known gaps.
+  its files end there — see Known gaps. The Room itself never refuses a host. A second tab
+  is asked earlier, in its own lobby: while a host's take is live its tab holds a Web Lock
+  (`lib/take-lock.ts`), and `Lobby` asks before it hands the stream to `join` while another tab
+  holds it. The host token exists only in the browser that created the room, so the tabs that
+  can take the seat are the tabs that share that lock. Only a join through the lobby is asked:
+  a tab already in the call that reconnects is not, and neither is a producer link.
 - **Negotiation is presence-gated and joiner-offers** (`useRoom`): exactly one side offers first per
   pair — the joiner. On `role-assigned` when peers are present (`peerCount>=2`), the joiner adds its tracks
   (or recvonly audio/video transceivers if joining as a producer) and triggers the initial offer.
@@ -501,10 +506,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
   connection, with each segment backed up locally in OPFS.
-- **A second host tab mid-take ends the first tab's files.** The new tab takes the host
-  seat (4006 to the old one); the old tab keeps its phase and shows "Press End & save to
-  keep this recording", but its files stop at the takeover, and the rest of each guest's
-  part exists only in that guest's backup. The new tab records only from its own new take.
+- **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
+  host's browser asks before it joins while a take is live. If the host joins there anyway,
+  the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
+  shows "Press End & save to keep this recording", but its files stop at the takeover, and
+  the rest of each guest's part exists only in that guest's backup. The new tab records
+  only from its own new take.
 - **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
   running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
   markers; takes started later include them. The WAV master is mic-only by design.
