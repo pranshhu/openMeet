@@ -254,4 +254,19 @@ describe('PcmRecorder', () => {
     expect(allPcm.slice(0, 1440).some((b) => b !== 0)).toBe(true);
     expect(allPcm.slice(1440 + 2880).some((b) => b !== 0)).toBe(true);
   });
+
+  it('counts the audio it had to pad with silence', async () => {
+    // 20 ms frames: the second is 5 ms late (jitter, nothing padded), the
+    // third leaves a 37 ms hole, which is two whole frames of silence.
+    const f1 = frame(new Array(960).fill(0.5), 48000, 1, 0);
+    const f2 = frame(new Array(960).fill(0.5), 48000, 1, 25_000);
+    const f3 = frame(new Array(960).fill(0.5), 48000, 1, 82_000);
+
+    const { rec } = mkRecorder([f1, f2, f3]);
+    rec.start();
+    await rec.whenDrained();
+    await rec.stopAndFlush();
+
+    expect(rec.droppedMs).toBe(40);
+  });
 });

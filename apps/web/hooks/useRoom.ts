@@ -188,6 +188,14 @@ export interface RoomState {
   finalizingGuests: string[];
 }
 
+/** One reading of how this device is coping with the take it is recording. */
+export interface LoadSample {
+  /** Audio the WAV master had to pad with silence so far in this take, in ms. */
+  audioDroppedMs: number;
+  /** The browser reports a live video encoder as limited by the processor. */
+  cpuLimited: boolean;
+}
+
 export type PresentSource = File | 'rear-camera';
 
 /**
@@ -1496,6 +1504,20 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * Read once how this device is coping. Both figures exist already: the WAV
+   * recorder counts the audio it had to pad, and the browser says when a live
+   * encoder is limited by the processor. Meant to be polled every few seconds.
+   */
+  const readLoad = useCallback(async (): Promise<LoadSample> => {
+    const h = recordingRef.current;
+    const limited = await Promise.all([...peersRef.current.values()].map((p) => p.cpuLimited()));
+    return {
+      audioDroppedMs: (h?.hostPcm ?? h?.guestPcm)?.droppedMs ?? 0,
+      cpuLimited: limited.includes(true),
+    };
+  }, []);
+
+  /**
    * Build the soundboard on first use and route its mix to every peer.
    *
    * From here on the mix replaces the raw mic on every connection, now and later
@@ -2023,5 +2045,6 @@ export function useRoom(slug: string) {
     openMediaBoard,
     newTake,
     discardTake,
+    readLoad,
   };
 }

@@ -64,6 +64,7 @@ export class PcmRecorder {
   private reader: ReadableStreamDefaultReader<PcmFrame> | null = null;
   private done: Promise<void> = Promise.resolve();
   private stopped = false;
+  private _droppedMs = 0;
 
   constructor(opts: PcmRecorderOpts) {
     this.opts = opts;
@@ -72,6 +73,11 @@ export class PcmRecorder {
   /** Total WAV file size so far, header included. */
   get totalBytes(): number {
     return this._offset;
+  }
+
+  /** Audio that never reached this recorder, in ms: the gaps padded with silence so far. */
+  get droppedMs(): number {
+    return this._droppedMs;
   }
 
   get format(): WavFormat | null {
@@ -127,6 +133,7 @@ export class PcmRecorder {
       // real drops when the reader falls behind are whole frames.
       const missing = Math.round(gapUs / durationUs);
       if (missing >= 1) {
+        this._droppedMs += (missing * durationUs) / 1000;
         const bytesPerSample = WAV_BIT_DEPTH / 8;
         const silenceBytes = missing * frame.numberOfFrames * frame.numberOfChannels * bytesPerSample;
         const silence = new Uint8Array(silenceBytes);

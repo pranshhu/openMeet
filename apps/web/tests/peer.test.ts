@@ -43,6 +43,8 @@ class FakePC {
   async createOffer() { return { type: 'offer', sdp: 'offer-sdp' }; }
   async createAnswer() { return { type: 'answer', sdp: 'answer-sdp' }; }
   async addIceCandidate(_c: unknown) {}
+  stats = new Map<string, unknown>();
+  async getStats() { return this.stats; }
   close() {}
 }
 
@@ -273,5 +275,37 @@ describe('PeerConnection.replaceAudioTrack', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('PeerConnection.cpuLimited', () => {
+  it('is true when the browser reports the video encoder limited by the processor', async () => {
+    const { peer, pc } = setup(false);
+    peer.start();
+    pc.stats.set('audio', { type: 'outbound-rtp', kind: 'audio' });
+    pc.stats.set('video', { type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'cpu' });
+    expect(await peer.cpuLimited()).toBe(true);
+  });
+
+  it('is false for a bandwidth limit and for an unlimited encoder', async () => {
+    const { peer, pc } = setup(false);
+    peer.start();
+    pc.stats.set('video1', { type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'bandwidth' });
+    pc.stats.set('video2', { type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'none' });
+    pc.stats.set('video3', { type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'other' });
+    expect(await peer.cpuLimited()).toBe(false);
+  });
+
+  it('reads as not limited when stats fail, before start and after close', async () => {
+    const { peer, pc } = setup(false);
+    expect(await peer.cpuLimited()).toBe(false);
+
+    peer.start();
+    pc.stats.set('video', { type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'cpu' });
+    pc.getStats = () => Promise.reject(new Error('gone'));
+    expect(await peer.cpuLimited()).toBe(false);
+
+    peer.close();
+    expect(await peer.cpuLimited()).toBe(false);
   });
 });

@@ -185,6 +185,28 @@ export class PeerConnection {
   }
 
   /**
+   * Whether the browser reports an outbound video encoder on this connection as
+   * held back by the processor. `qualityLimitationReason` is the browser's own
+   * overuse verdict, and only outbound video carries it, so nothing here models
+   * encode time or filters by stream. Reads the whole connection's report;
+   * narrow it to the video sender if it shows in a profile.
+   * Never rejects: a closed or failing connection reads as not limited.
+   */
+  async cpuLimited(): Promise<boolean> {
+    const pc = this.pc;
+    if (!pc) return false;
+    try {
+      let limited = false;
+      (await pc.getStats()).forEach((s) => {
+        if (s.qualityLimitationReason === 'cpu') limited = true;
+      });
+      return limited;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Resolves once this connection first reaches 'connected' — immediately if
    * it already has. Rejects with ConnectionTimeoutError if timeoutMs elapses
    * before reaching 'connected'.
