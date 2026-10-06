@@ -29,7 +29,8 @@ why the project costs nothing to run.
 **The server sees metadata only.** The Cloudflare Worker and its Durable Object
 handle REST and WebSocket signaling. The Durable Object is a dumb relay: it
 forwards SDP and ICE between peers and never inspects them. D1 stores
-room, session, participant and recording metadata — never media.
+room, session, participant and recording metadata (one row per take, written
+only by the authenticated host) — never media.
 
 **TURN relay traffic is opaque to the operator.** When symmetric NAT forces a
 relay, the bytes crossing it are SRTP/SCTP-encrypted end to end. A TURN operator

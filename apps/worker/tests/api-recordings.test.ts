@@ -78,4 +78,219 @@ describe('PATCH /api/recordings/:id', () => {
       .first<{ last_offset: number }>();
     expect(row?.last_offset).toBe(1024);
   });
+
+  it('rejects PATCH without host token with 401 and leaves the row unchanged', async () => {
+    const slug = 'no-tok-pat';
+    const tok = 'tok-no-patch';
+    const recId = await seedRecording(slug, tok);
+
+    const checkRow = async () =>
+      (await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+        .bind(recId)
+        .first())!;
+    const initial = await checkRow();
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ last_offset: 1024, total_bytes: 1024, status: 'finalized' }),
+    });
+    expect(res.status).toBe(401);
+    expect(await checkRow()).toEqual(initial);
+  });
+
+  it('rejects PATCH with wrong token with 401 and leaves the row unchanged', async () => {
+    const slug = 'wrg-tok-pat';
+    const tok = 'tok-wrg-patch';
+    const recId = await seedRecording(slug, tok);
+
+    const checkRow = async () =>
+      (await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+        .bind(recId)
+        .first())!;
+    const initial = await checkRow();
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: 'Bearer wrong-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ last_offset: 1024, total_bytes: 1024, status: 'finalized' }),
+    });
+    expect(res.status).toBe(401);
+    expect(await checkRow()).toEqual(initial);
+  });
+
+  it('rejects invalid fields with 400 and leaves the row unchanged', async () => {
+    const slug = 'val-fail-xxx';
+    const tok = 'tok-val-fail';
+    const recId = await seedRecording(slug, tok);
+
+    const checkRow = async () =>
+      (await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+        .bind(recId)
+        .first<{
+          total_bytes: number;
+          last_offset: number;
+          sha256: string | null;
+          status: string;
+          finalized_at: number | null;
+        }>())!;
+
+    const initial = await checkRow();
+    expect(initial).toMatchObject({
+      total_bytes: 0,
+      last_offset: 0,
+      sha256: null,
+      status: 'recording',
+      finalized_at: null,
+    });
+
+    const invalidBodies = [
+      { total_bytes: -1 },
+      { total_bytes: 1.5 },
+      { last_offset: -1 },
+      { last_offset: 2.5 },
+      { sha256: 'a'.repeat(65) },
+      { sha256: 123 },
+      { status: 'unknown' },
+      { total_bytes: 10, last_offset: 10, sha256: 'a'.repeat(65) },
+      { total_bytes: 10, status: 'unknown' },
+    ];
+
+    for (const body of invalidBodies) {
+      const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+        method: 'PATCH',
+        headers: {
+          Cookie: `host_token__${slug}=${tok}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: string };
+      expect(json.error).toBe('invalid_field');
+      expect(await checkRow()).toEqual(initial);
+    }
+  });
+
+  it('stamps finalized_at with Date.now() when status is set to finalized', async () => {
+    const slug = 'fin-stam-xxx';
+    const tok = 'tok-fin-stamp';
+    const recId = await seedRecording(slug, tok);
+    const before = Date.now();
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Cookie: `host_token__${slug}=${tok}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'finalized', finalized_at: 123456789 }),
+    });
+    expect(res.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first<{ status: string; finalized_at: number }>();
+    expect(row?.status).toBe('finalized');
+    expect(typeof row?.finalized_at).toBe('number');
+    expect(row!.finalized_at).not.toBe(123456789);
+    expect(row!.finalized_at).toBeGreaterThanOrEqual(before);
+    expect(row!.finalized_at).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('leaves finalized_at null when status is recording', async () => {
+    const slug = 'rec-fina-xxx';
+    const tok = 'tok-rec-final';
+    const recId = await seedRecording(slug, tok);
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Cookie: `host_token__${slug}=${tok}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'recording' }),
+    });
+    expect(res.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first<{ status: string; finalized_at: number | null }>();
+    expect(row?.status).toBe('recording');
+    expect(row?.finalized_at).toBeNull();
+  });
+
+  it('does not store client-supplied finalized_at', async () => {
+    const slug = 'ign-fina-xxx';
+    const tok = 'tok-ign-final';
+    const recId = await seedRecording(slug, tok);
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Cookie: `host_token__${slug}=${tok}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ finalized_at: 123456789 }),
+    });
+    expect(res.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first<{ finalized_at: number | null }>();
+    expect(row?.finalized_at).toBeNull();
+  });
+
+  it('returns 200 and changes nothing when request has no recognised fields', async () => {
+    const slug = 'no-reco-xxx';
+    const tok = 'tok-no-reco';
+    const recId = await seedRecording(slug, tok);
+
+    const before = await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first();
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Cookie: `host_token__${slug}=${tok}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ unrecognised: 'foo', another: 123 }),
+    });
+    expect(res.status).toBe(200);
+
+    const after = await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first();
+    expect(after).toEqual(before);
+  });
+
+  it('returns 200 and changes nothing when body is null', async () => {
+    const slug = 'nul-body-xxx';
+    const tok = 'tok-null-body';
+    const recId = await seedRecording(slug, tok);
+
+    const before = await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first();
+
+    const res = await SELF.fetch(`https://test/api/recordings/${recId}`, {
+      method: 'PATCH',
+      headers: {
+        Cookie: `host_token__${slug}=${tok}`,
+        'content-type': 'application/json',
+      },
+      body: 'null',
+    });
+    expect(res.status).toBe(200);
+
+    const after = await env.DB.prepare('SELECT total_bytes, last_offset, sha256, status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first();
+    expect(after).toEqual(before);
+  });
 });

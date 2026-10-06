@@ -72,13 +72,37 @@ export async function patchRecording(c: Context<{ Bindings: Env }>): Promise<Res
   } catch {
     return c.json({ error: 'invalid_json' }, 400);
   }
-  const b = body as Record<string, unknown>;
+  const b = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
   const update: Parameters<typeof updateRecordingProgress>[2] = {};
-  if (typeof b.last_offset === 'number') update.last_offset = b.last_offset;
-  if (typeof b.total_bytes === 'number') update.total_bytes = b.total_bytes;
-  if (typeof b.sha256 === 'string') update.sha256 = b.sha256;
-  if (typeof b.status === 'string') update.status = b.status;
-  if (typeof b.finalized_at === 'number') update.finalized_at = b.finalized_at;
+
+  if (b.total_bytes !== undefined) {
+    if (typeof b.total_bytes !== 'number' || !Number.isSafeInteger(b.total_bytes) || b.total_bytes < 0) {
+      return c.json({ error: 'invalid_field' }, 400);
+    }
+    update.total_bytes = b.total_bytes;
+  }
+  if (b.last_offset !== undefined) {
+    if (typeof b.last_offset !== 'number' || !Number.isSafeInteger(b.last_offset) || b.last_offset < 0) {
+      return c.json({ error: 'invalid_field' }, 400);
+    }
+    update.last_offset = b.last_offset;
+  }
+  if (b.sha256 !== undefined) {
+    if (typeof b.sha256 !== 'string' || b.sha256.length > 64) {
+      return c.json({ error: 'invalid_field' }, 400);
+    }
+    update.sha256 = b.sha256;
+  }
+  if (b.status !== undefined) {
+    if (b.status !== 'recording' && b.status !== 'finalized') {
+      return c.json({ error: 'invalid_field' }, 400);
+    }
+    update.status = b.status;
+    if (b.status === 'finalized') {
+      update.finalized_at = Date.now();
+    }
+  }
+
   await updateRecordingProgress(c.env.DB, auth.row.id, update);
 
   const requestOrigin = c.req.header('Origin') ?? null;

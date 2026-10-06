@@ -24,7 +24,6 @@ import {
   markParticipantLeft,
   markRoomConsumed,
   touchRoom,
-  updateRecordingProgress,
 } from '../db/queries.js';
 
 /**
@@ -55,8 +54,6 @@ interface PeerAttachment {
   left?: boolean;
   clientId?: string;
   companion?: boolean;
-  /** Recordings rows this socket has been granted, against MAX_RECORDINGS_PER_SOCKET. */
-  recordings?: number;
 }
 
 interface RoomRow {
@@ -67,6 +64,7 @@ interface RoomRow {
 interface SessionRow {
   sessionId: string | null;
   recording: boolean;
+  recordingCount?: number;
 }
 
 /**
@@ -81,14 +79,14 @@ const MAX_PRODUCERS = 2;
  * truncated rather than refused, so a browser with a long user agent still
  * joins; both also sit in the socket attachment, which is limited to 2048
  * bytes at two bytes a character outside Latin-1. A recording id is a UUID
- * and a filename `guest_<uuid>.mp4`, and a take is one row, so no honest
+ * and a filename `host_<uuid>.mp4`, and a take is one row, so no honest
  * session comes near the other three.
  */
 const MAX_DISPLAY_NAME_LENGTH = 64;
 const MAX_USER_AGENT_LENGTH = 512;
 const MAX_RECORDING_ID_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 255;
-const MAX_RECORDINGS_PER_SOCKET = 64;
+const MAX_RECORDINGS_PER_SESSION = 256;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -107,6 +105,7 @@ export class Room implements DurableObject {
   // role-assigned so a peer that joins mid-recording is told, and starts its
   // own capture, exactly like one that was here when Record was pressed.
   private recording = false;
+  private recordingCount = 0;
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -130,6 +129,7 @@ export class Room implements DurableObject {
       if (session) {
         this.sessionId = session.sessionId;
         this.recording = session.recording;
+        this.recordingCount = session.recordingCount ?? 0;
       }
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
@@ -171,7 +171,11 @@ export class Room implements DurableObject {
   }
 
   private async saveSession(): Promise<void> {
-    await this.state.storage.put('session', { sessionId: this.sessionId, recording: this.recording });
+    await this.state.storage.put('session', {
+      sessionId: this.sessionId,
+      recording: this.recording,
+      recordingCount: this.recordingCount,
+    } satisfies SessionRow);
   }
 
   /**
@@ -201,6 +205,7 @@ export class Room implements DurableObject {
       );
       this.sessionId = null;
       this.recording = false;
+      this.recordingCount = 0;
       await this.saveSession();
     }
   }
@@ -384,6 +389,7 @@ export class Room implements DurableObject {
             started_at: Date.now(),
           });
           this.sessionId = id;
+          this.recordingCount = 0;
           await this.saveSession();
           await markRoomConsumed(this.env.DB, this.slug);
         }
@@ -500,10 +506,10 @@ export class Room implements DurableObject {
         }
         break;
       case 'recording-started':
-        // Relayed as well as persisted. Recording is room-wide: guests are
-        // entitled to know they are being recorded, and the relay is what
-        // starts their own capture. (Chunk ACKs still flow over DataChannel —
-        // this is a control signal, not an ack.)
+        // Relayed for every peer, but persisted only for the host. Recording
+        // is room-wide: guests are entitled to know they are being recorded,
+        // and the relay is what starts their own capture. (Chunk ACKs still flow
+        // over DataChannel — this is a control signal, not an ack.)
         if (p.role === 'host') {
           this.recording = true;
           await this.saveSession();
@@ -514,20 +520,23 @@ export class Room implements DurableObject {
           from: p.role,
         });
         // Persist a recordings row so D1 reflects the in-progress capture.
-        // Guests send their own, so this can't be host-only; what is bounded
-        // is the row itself and how many of them one socket gets.
+        // Only the host writes rows — guests write nothing to D1. What is
+        // bounded is the row itself and how many of them a session gets.
         if (
+          p.role === 'host' &&
           this.sessionId &&
           p.participantId &&
-          (p.recordings ?? 0) < MAX_RECORDINGS_PER_SOCKET &&
+          this.recordingCount < MAX_RECORDINGS_PER_SESSION &&
           typeof parsed.recordingId === 'string' &&
+          parsed.recordingId.length > 0 &&
           parsed.recordingId.length <= MAX_RECORDING_ID_LENGTH &&
           typeof parsed.filename === 'string' &&
+          parsed.filename.length > 0 &&
           parsed.filename.length <= MAX_FILENAME_LENGTH &&
           (parsed.kind === 'camera' || parsed.kind === 'screen')
         ) {
-          p.recordings = (p.recordings ?? 0) + 1;
-          this.save(ws, p);
+          this.recordingCount++;
+          await this.saveSession();
           await insertRecording(this.env.DB, {
             id: parsed.recordingId,
             session_id: this.sessionId,
@@ -569,45 +578,6 @@ export class Room implements DurableObject {
           fromPeerId: p.peerId,
         });
         break;
-      case 'recording-completed': {
-        // The id is CLIENT-SUPPLIED, so it must be proved to belong to this
-        // session before anything is written. Without this check any peer in
-        // any room could overwrite any recording's sha256 and status — forging
-        // the one record that claims the bytes arrived intact, including for a
-        // room they were never in.
-        //
-        // What is written is bounded like the row itself: a byte count, and a
-        // hash no longer than a SHA-256 in hex. A row is finalized once, so a
-        // peer can't keep rewriting one either.
-        if (
-          !this.sessionId ||
-          !p.joined ||
-          typeof parsed.recordingId !== 'string' ||
-          parsed.recordingId.length > MAX_RECORDING_ID_LENGTH ||
-          !Number.isSafeInteger(parsed.totalBytes) ||
-          parsed.totalBytes < 0 ||
-          (parsed.sha256 != null && (typeof parsed.sha256 !== 'string' || parsed.sha256.length > 64))
-        ) {
-          break;
-        }
-        const owned = await this.env.DB.prepare(
-          "SELECT 1 FROM recordings WHERE id = ? AND session_id = ? AND status = 'recording'"
-        )
-          .bind(parsed.recordingId, this.sessionId)
-          .first<{ 1: number }>()
-          .catch((e) => {
-            console.error('room:recordingOwnership', e);
-            return null;
-          });
-        if (!owned) break;
-        await updateRecordingProgress(this.env.DB, parsed.recordingId, {
-          total_bytes: parsed.totalBytes,
-          ...(parsed.sha256 != null ? { sha256: parsed.sha256 } : {}),
-          status: 'finalized',
-          finalized_at: Date.now(),
-        }).catch((e) => console.error('room:updateRecordingProgress', e));
-        break;
-      }
     }
   }
 
@@ -693,6 +663,7 @@ export class Room implements DurableObject {
       // session that just ended.
       this.sessionId = null;
       this.recording = false;
+      this.recordingCount = 0;
       await this.saveSession();
     }
   }

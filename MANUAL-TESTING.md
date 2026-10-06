@@ -185,9 +185,9 @@ Also not covered automatically. Needs 3 browser profiles.
 
 | # | Test | How | Expect | ✅ | Notes |
 |---|---|---|---|:--:|---|
-| 10.1 | Guest cannot forge integrity | From the guest console, send `recording-completed` with a made-up `recordingId` | D1 row unchanged | ☐ | |
+| 10.1 | Guest cannot forge integrity | From the guest console, send `recording-completed` for the host's `recordingId` | D1 row unchanged (message is ignored; guests write nothing to D1) | ☐ | |
 | 10.2 | Malformed slug | `curl -i "$WORKER/ws/r/NOT_A_SLUG" -H "Upgrade: websocket"` | 400, no Durable Object created | ☐ | |
-| 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth | 401 | ☐ | |
+| 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 
 ---

@@ -121,7 +121,8 @@ DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each opti
   (`TURN_CRED_LIMITER`, same shape as `ROOM_CREATE_LIMITER`). Mint failure → 502 (`turn_unavailable`).
 - `GET|PATCH /api/recordings/:id` → host-token auth, cookie or `Authorization: Bearer` (does
   **not** check room expiry).
-  PATCH always returns 200 even on no-op; no field validation.
+  PATCH validates field values (400 `invalid_field` on bad fields, 200 on no-op);
+  setting status to `finalized` stamps `finalized_at` with server time.
 - `GET /api/sponsors` → 200 JSON sponsor wall data read from Polar (`POLAR_ACCESS_TOKEN`,
   `POLAR_PRODUCT_ID`, `SPONSOR_CHECKOUT_URL`, optional `POLAR_API_BASE`). Filtered to customers
   with `metadata.sponsor_approved` (`true` or `"true"`) and total ≥ 2500 cents ($25). Returns
@@ -166,11 +167,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
-- `recording-started` is **persisted to D1 AND relayed** — it is what starts every guest's capture.
+- `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture),
+  but **persisted to D1 only by the host** (`insertRecording`, capped at 256 rows per session).
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
-  **persisted, not relayed**. The DO tracks `recording: boolean` and reports it in `role-assigned`
-  so a peer joining mid-recording catches up. (`insertRecording`
-  / `updateRecordingProgress`, best-effort `.catch(()=>{})`).
+  **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
+  `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -400,8 +401,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
 - Chunk header is **JSON-over-string**, not binary; a chunk header must never contain a `type` key
   (receiver distinguishes control vs header by `type` presence).
 - Two ack systems: DataChannel `ack` (`uptoIdx/uptoOffset`) vs WS `recording-ack` — the WS one and
-  `recording-completed.lastIdx` are defined in protocol but **the DO never produces/consumes them**;
-  real acks are DataChannel-side.
+  `recording-completed` (kept in protocol only for older tabs) are defined in protocol but **the DO
+  never produces/consumes them**; real acks are DataChannel-side.
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every

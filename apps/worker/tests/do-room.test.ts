@@ -1435,11 +1435,8 @@ describe('Room DO — hardening', () => {
   });
 });
 
-describe('Room DO — recording-completed ownership', () => {
-  // The recordingId is client-supplied. Without an ownership check any peer in
-  // any room could overwrite any recording's sha256 and status — forging the
-  // one record that claims the bytes arrived intact.
-  it('refuses to finalize a recording belonging to another session', async () => {
+describe('Room DO — recording-completed is ignored', () => {
+  it('changes nothing, whoever sends recording-completed', async () => {
     // A recording that belongs to somebody else's session.
     await seedRoom('vic-timr-oma', 'tok-victim');
     await env.DB.prepare(
@@ -1454,7 +1451,7 @@ describe('Room DO — recording-completed ownership', () => {
        VALUES (?, ?, ?, 'camera', 'host_v.mp4', 999, 0, 'REALHASH', 'recording', 1, NULL)`
     ).bind('victim-recording', 'victim-session', 'victim-participant').run();
 
-    // An unrelated attacker room.
+    // An unrelated room.
     const slug = 'atk-acke-aaa';
     await seedRoom(slug, 'tok-attacker');
     const ws = await openWs(slug);
@@ -1475,13 +1472,13 @@ describe('Room DO — recording-completed ownership', () => {
     const row = await env.DB.prepare('SELECT sha256, status, total_bytes FROM recordings WHERE id = ?')
       .bind('victim-recording')
       .first<{ sha256: string; status: string; total_bytes: number }>();
-    expect(row?.sha256, 'attacker forged another session’s integrity hash').toBe('REALHASH');
+    expect(row?.sha256).toBe('REALHASH');
     expect(row?.status).toBe('recording');
     expect(row?.total_bytes).toBe(999);
     ws.close();
   });
 
-  it('still finalizes a recording that does belong to the session', async () => {
+  it('leaves the row recording when the host sends recording-completed', async () => {
     const slug = 'own-eron-aaa';
     await seedRoom(slug, 'tok-owner');
     const ws = await openWs(slug, `host_token__${slug}=tok-owner`);
@@ -1490,24 +1487,36 @@ describe('Room DO — recording-completed ownership', () => {
 
     const recId = 'owned-recording';
     ws.send(JSON.stringify({ type: 'recording-started', recordingId: recId, kind: 'camera', filename: 'h.mp4' }));
-    let row: { status: string } | null = null;
+    let row: { status: string; finalized_at: number | null } | null = null;
     for (let i = 0; i < 20 && !row; i++) {
-      row = await env.DB.prepare('SELECT status FROM recordings WHERE id = ?').bind(recId).first();
+      row = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?').bind(recId).first();
       if (!row) await new Promise((r) => setTimeout(r, 25));
     }
     expect(row?.status).toBe('recording');
 
     ws.send(JSON.stringify({ type: 'recording-completed', recordingId: recId, lastIdx: 1, totalBytes: 42, sha256: 'MINE' }));
-    let finalRow: { status: string; finalized_at: number } | null = null;
-    for (let i = 0; i < 20; i++) {
-      finalRow = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?')
-        .bind(recId)
-        .first<{ status: string; finalized_at: number }>();
-      if (finalRow?.status === 'finalized') break;
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(finalRow?.status, 'the legitimate owner was blocked too').toBe('finalized');
-    expect(finalRow?.finalized_at).toBeGreaterThan(1e12);
+    await new Promise((r) => setTimeout(r, 150));
+
+    const finalRow = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first<{ status: string; finalized_at: number | null }>();
+    expect(finalRow?.status).toBe('recording');
+    expect(finalRow?.finalized_at).toBeNull();
+
+    const guestWs = await openWs(slug);
+    guestWs.send(JSON.stringify({ type: 'join', displayName: 'G', userAgent: 'ua' }));
+    await waitForMessage(guestWs);
+
+    guestWs.send(JSON.stringify({ type: 'recording-completed', recordingId: recId, lastIdx: 1, totalBytes: 99, sha256: 'GUEST' }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    const afterGuest = await env.DB.prepare('SELECT status, finalized_at FROM recordings WHERE id = ?')
+      .bind(recId)
+      .first<{ status: string; finalized_at: number | null }>();
+    expect(afterGuest?.status).toBe('recording');
+    expect(afterGuest?.finalized_at).toBeNull();
+
+    guestWs.close();
     ws.close();
   });
 });
@@ -1544,6 +1553,11 @@ describe('Room DO — hibernation wake', () => {
 
     const id = env.ROOM_DO.idFromName(slug);
     const stub = env.ROOM_DO.get(id);
+
+    const storedSession = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ sessionId: string | null; recording: boolean; recordingCount?: number }>('session')
+    );
+    expect(storedSession?.recordingCount).toBe(1);
 
     const late = await runInDurableObject(stub, async (_instance, state) => {
       const fresh = new Room(state, env);
@@ -1586,6 +1600,25 @@ describe('Room DO — hibernation wake', () => {
     expect(late.recording, 'recording flag must survive from DO storage, not an instance field').toBe(true);
     expect(late.peers).toHaveLength(2);
     expect(late.peers.map((p) => p.role).sort()).toEqual(['guest', 'host']);
+
+    const capRecId = 'r-hib-capped';
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sess = (await state.storage.get<{ sessionId: string | null; recording: boolean; recordingCount?: number }>('session'))!;
+      await state.storage.put('session', { ...sess, recordingCount: 256 });
+      const freshAtCap = new Room(state, env);
+      await new Promise((r) => setTimeout(r, 50));
+      const hostWs = state.getWebSockets().find((s) => {
+        const att = s.deserializeAttachment() as { role?: string };
+        return att?.role === 'host';
+      })!;
+      await freshAtCap.webSocketMessage(
+        hostWs,
+        JSON.stringify({ type: 'recording-started', recordingId: capRecId, kind: 'camera', filename: 'h-cap.mp4' })
+      );
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    const cappedRow = await env.DB.prepare('SELECT id FROM recordings WHERE id = ?').bind(capRecId).first();
+    expect(cappedRow).toBeNull();
 
     host.close();
     guest.close();
@@ -1888,16 +1921,22 @@ describe('Room DO — only a joined socket is in the room', () => {
     await seedRoom(slug, 'tok-rec-valid');
     const host = await enter(slug, 'H', { hostToken: 'tok-rec-valid' });
     const guest = await enter(slug, 'G');
+    const producer = await enter(slug, 'P', { producer: true });
     const hostRec = crypto.randomUUID();
-    const honest = crypto.randomUUID();
+    const guestRec = crypto.randomUUID();
+    const prodRec = crypto.randomUUID();
+
+    host.ws.send(started(crypto.randomUUID(), { filename: 'f'.repeat(3000) }));
+    host.ws.send(started('i'.repeat(3000)));
+    host.ws.send(started('', { filename: 'host_empty_id.mp4' }));
+    host.ws.send(started(crypto.randomUUID(), { filename: '' }));
+    host.ws.send(started(crypto.randomUUID(), { kind: 'audio' }));
+    host.ws.send(started(crypto.randomUUID(), { kind: undefined }));
+    host.ws.send(started(crypto.randomUUID(), { filename: { nested: true } }));
     host.ws.send(started(hostRec, { filename: `host_${hostRec}.mp4` }));
-    guest.ws.send(started(crypto.randomUUID(), { filename: 'f'.repeat(3000) }));
-    guest.ws.send(started('i'.repeat(3000)));
-    guest.ws.send(started(crypto.randomUUID(), { kind: 'audio' }));
-    guest.ws.send(started(crypto.randomUUID(), { kind: undefined }));
-    guest.ws.send(started(crypto.randomUUID(), { filename: { nested: true } }));
-    // What a real guest sends once the host's recording-started reaches it.
-    guest.ws.send(started(honest));
+
+    guest.ws.send(started(guestRec));
+    producer.ws.send(started(prodRec));
 
     const session = await sessionOf(slug);
     const rows = () =>
@@ -1907,37 +1946,71 @@ describe('Room DO — only a joined socket is in the room', () => {
       )
         .bind(session!.id)
         .all<{ id: string; kind: string; filename: string; role: string }>();
-    await until(async () => (await rows()).results.some((r) => r.id === honest));
+
+    await until(async () => (await rows()).results.some((r) => r.id === hostRec));
     await settle();
 
     const written = (await rows()).results;
-    expect(written.map((r) => r.id).sort()).toEqual([hostRec, honest].sort());
-    expect(written.find((r) => r.id === honest)).toMatchObject({
+    expect(written.map((r) => r.id)).toEqual([hostRec]);
+    expect(written.find((r) => r.id === hostRec)).toMatchObject({
       kind: 'camera',
-      filename: `guest_${honest}.mp4`,
-      role: 'guest',
+      filename: `host_${hostRec}.mp4`,
+      role: 'host',
     });
-    // Only persistence is gated: the relay to the room is unchanged.
-    expect(ofType(host.heard, 'recording-started')).toHaveLength(6);
+
+    const hostRelayed = ofType(guest.heard, 'recording-started').filter((m) => m.from === 'host');
+    expect(hostRelayed).toHaveLength(8);
+
+    const guestRelayed = ofType(host.heard, 'recording-started').find((m) => m.recordingId === guestRec);
+    expect(guestRelayed).toBeDefined();
+    expect(guestRelayed?.from).toBe('guest');
+
+    const prodRelayed = ofType(host.heard, 'recording-started').find((m) => m.recordingId === prodRec);
+    expect(prodRelayed).toBeDefined();
+    expect(prodRelayed?.from).toBe('producer');
+
     host.ws.close();
     guest.ws.close();
+    producer.ws.close();
   });
 
-  it('bounds the recordings rows one socket can create', async () => {
+  it('bounds the recordings rows per session', async () => {
     const slug = 'rec-boun-daa';
     await seedRoom(slug, 'tok-rec-bound');
     const host = await enter(slug, 'H', { hostToken: 'tok-rec-bound' });
-    for (let i = 0; i < 70; i++) host.ws.send(started(crypto.randomUUID()));
+    for (let i = 0; i < 260; i++) host.ws.send(started(crypto.randomUUID()));
 
     const session = await sessionOf(slug);
-    const count = async () =>
+    const count = async (sessId: string) =>
       (await env.DB.prepare('SELECT COUNT(*) AS n FROM recordings WHERE session_id = ?')
-        .bind(session!.id)
+        .bind(sessId)
         .first<{ n: number }>())!.n;
-    await until(async () => (await count()) >= 64);
+    await until(async () => (await count(session!.id)) >= 256);
     await settle();
-    expect(await count()).toBe(64);
+    expect(await count(session!.id)).toBe(256);
+
+    // A host that reconnects in the same session does not get a fresh allowance.
+    const host2 = await openWs(slug, `host_token__${slug}=tok-rec-bound`);
+    host2.send(JSON.stringify({ type: 'join', displayName: 'H2', userAgent: 'ua' }));
+    await waitForRoleAssigned(host2);
+    host2.send(started(crypto.randomUUID()));
+    await settle();
+    expect(await count(session!.id)).toBe(256);
+
+    // End the session by closing all sockets.
     host.ws.close();
+    host2.close();
+    await until(async () => (await sessionOf(slug))?.ended_at != null);
+
+    // A new session starts at zero.
+    const host3 = await enter(slug, 'H3', { hostToken: 'tok-rec-bound' });
+    const newSession = await sessionOf(slug);
+    expect(newSession!.id).not.toBe(session!.id);
+    const newRec = crypto.randomUUID();
+    host3.ws.send(started(newRec));
+    await until(async () => (await count(newSession!.id)) >= 1);
+    expect(await count(newSession!.id)).toBe(1);
+    host3.ws.close();
   });
 
   it('truncates an over-long displayName and userAgent in D1 and in peer-joined', async () => {
@@ -1986,15 +2059,6 @@ describe('Room DO — only a joined socket is in the room', () => {
       companion: true,
     });
     expect(wide.me.role).toBe('producer');
-    // One more write to the attachment after join: the recordings counter.
-    const rec = crypto.randomUUID();
-    wide.ws.send(started(rec));
-    let row: { id: string } | null = null;
-    await until(async () => {
-      row = await env.DB.prepare('SELECT id FROM recordings WHERE id = ?').bind(rec).first<{ id: string }>();
-      return row !== null;
-    });
-    expect(row).not.toBeNull();
     wide.ws.close();
   });
 
@@ -2021,11 +2085,17 @@ describe('Room DO — only a joined socket is in the room', () => {
     const slug = 'ses-ends-aaa';
     await seedRoom(slug, 'tok-session-ends');
     const idle = await openWs(slug);
-    const a = await enter(slug, 'A');
+    const a = await enter(slug, 'A', {}, `host_token__${slug}=tok-session-ends`);
+    a.ws.send(started('r-ses-ends'));
+    await until(async () => (await env.DB.prepare('SELECT 1 FROM recordings WHERE id = ?').bind('r-ses-ends').first()) !== null);
     expect((await sessionOf(slug))?.ended_at).toBeNull();
     a.ws.close();
     await until(async () => (await sessionOf(slug))?.ended_at != null);
     expect((await sessionOf(slug))?.ended_at).not.toBeNull();
+    const stored = await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (_instance, state) =>
+      state.storage.get<{ recordingCount?: number }>('session')
+    );
+    expect(stored?.recordingCount).toBe(0);
     idle.close();
   });
 
@@ -2044,12 +2114,18 @@ describe('Room DO — only a joined socket is in the room', () => {
   it('still closes an un-joined socket with 4003 when the room expires mid-call', async () => {
     const slug = 'alm-unjo-ina';
     await seedRoom(slug, 'tok-alarm-unjoined');
-    const a = await enter(slug, 'A'); // join arms the alarm
+    const a = await enter(slug, 'A', {}, `host_token__${slug}=tok-alarm-unjoined`); // join arms the alarm
+    a.ws.send(started('r-alm-unjo'));
+    await until(async () => (await env.DB.prepare('SELECT 1 FROM recordings WHERE id = ?').bind('r-alm-unjo').first()) !== null);
     const idle = await openWs(slug);
     const closes = [waitForClose(a.ws), waitForClose(idle)];
     await env.DB.prepare('UPDATE rooms SET expires_at = ? WHERE slug = ?').bind(Date.now() - 1000, slug).run();
     await runDurableObjectAlarm(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)));
     expect((await Promise.all(closes)).map((c) => c.code)).toEqual([4003, 4003]);
+    const stored = await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (_instance, state) =>
+      state.storage.get<{ recordingCount?: number }>('session')
+    );
+    expect(stored?.recordingCount).toBe(0);
   });
 
   // The cookie path replaces the old host at connect, before the new socket
@@ -2092,39 +2168,66 @@ describe('Room DO — only a joined socket is in the room', () => {
     expect((await sessionOf(slug))?.ended_at).not.toBeNull();
   });
 
-  it('finalizes a recording once, and only with an integer size and a hash no longer than a SHA-256', async () => {
-    const slug = 'rec-comp-let';
-    await seedRoom(slug, 'tok-rec-complete');
-    const host = await enter(slug, 'H', { hostToken: 'tok-rec-complete' });
+  it('leaves the socket open and sends no error after ignored messages', async () => {
+    const slug = 'rco-open-aaa';
+    await seedRoom(slug, 'tok-rc-open');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rc-open' });
     const guest = await enter(slug, 'G');
-    const rec = crypto.randomUUID();
-    host.ws.send(started(rec));
-    const row = () =>
-      env.DB.prepare('SELECT status, sha256, total_bytes FROM recordings WHERE id = ?')
-        .bind(rec)
-        .first<{ status: string; sha256: string | null; total_bytes: number }>();
-    await until(async () => (await row()) !== null);
-    const completed = (over: Record<string, unknown>) =>
-      guest.ws.send(
-        JSON.stringify({ type: 'recording-completed', recordingId: rec, lastIdx: 0, totalBytes: 1, sha256: null, ...over })
-      );
+    const producer = await enter(slug, 'P', { producer: true });
+    const speaker = await enter(slug, 'S');
 
-    completed({ sha256: 'f'.repeat(100_000) });
-    completed({ sha256: { nested: true } });
-    completed({ totalBytes: 't'.repeat(100_000) });
-    completed({ totalBytes: -1 });
-    completed({ totalBytes: 1.5 });
-    completed({ recordingId: { nested: true } });
-    await settle();
-    expect(await row()).toEqual({ status: 'recording', sha256: null, total_bytes: 0 });
+    host.ws.send(JSON.stringify({ type: 'recording-completed', recordingId: 'rec-1', lastIdx: 0, totalBytes: 1 }));
+    guest.ws.send(JSON.stringify({ type: 'recording-completed', recordingId: 'rec-1', lastIdx: 0, totalBytes: 1 }));
+    guest.ws.send(started(crypto.randomUUID()));
+    producer.ws.send(started(crypto.randomUUID()));
 
-    completed({ totalBytes: 42, sha256: 'a'.repeat(64) });
-    await until(async () => (await row())?.status === 'finalized');
-    completed({ totalBytes: 43, sha256: 'b'.repeat(64) });
-    await settle();
-    expect(await row()).toEqual({ status: 'finalized', sha256: 'a'.repeat(64), total_bytes: 42 });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(ofType(host.heard, 'error')).toHaveLength(0);
+    expect(ofType(guest.heard, 'error')).toHaveLength(0);
+    expect(ofType(producer.heard, 'error')).toHaveLength(0);
+
+    speaker.ws.send(JSON.stringify({ type: 'chat', text: 'check-open', ts: 1 }));
+    await until(() => ofType(host.heard, 'chat').some((m) => m.text === 'check-open'));
+    await until(() => ofType(guest.heard, 'chat').some((m) => m.text === 'check-open'));
+    await until(() => ofType(producer.heard, 'chat').some((m) => m.text === 'check-open'));
+
+    expect(ofType(host.heard, 'chat').some((m) => m.text === 'check-open')).toBe(true);
+    expect(ofType(guest.heard, 'chat').some((m) => m.text === 'check-open')).toBe(true);
+    expect(ofType(producer.heard, 'chat').some((m) => m.text === 'check-open')).toBe(true);
+
     host.ws.close();
     guest.ws.close();
+    producer.ws.close();
+    speaker.ws.close();
+  });
+
+  it('relays recording-stop from a guest without clearing the recording flag', async () => {
+    const slug = 'rec-stop-gst';
+    await seedRoom(slug, 'tok-rec-stop');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-stop' });
+    const guest = await enter(slug, 'G');
+
+    const recId = crypto.randomUUID();
+    host.ws.send(started(recId));
+    await until(() => ofType(guest.heard, 'recording-started').length > 0);
+
+    guest.ws.send(JSON.stringify({ type: 'recording-stop', recordingId: recId }));
+    await until(() => ofType(host.heard, 'recording-stop').length > 0);
+
+    const relayed = ofType(host.heard, 'recording-stop')[0];
+    expect(relayed).toMatchObject({
+      type: 'recording-stop',
+      recordingId: recId,
+      from: 'guest',
+    });
+
+    const late = await enter(slug, 'L');
+    expect(late.me.recording).toBe(true);
+
+    host.ws.close();
+    guest.ws.close();
+    late.ws.close();
   });
 
   // Called on the instance, since over the wire a throw is only a log line.
