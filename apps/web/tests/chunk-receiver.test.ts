@@ -149,6 +149,92 @@ describe('ChunkReceiver', () => {
     expect(r3.senderSha256).toBe('a'.repeat(64));
   });
 
+  it('keeps a sane rate a guest reports', async () => {
+    const r1 = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    expect(r1.senderFrameRate).toBeNull();
+    await r1.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r1',
+        frameRate: 25,
+      })
+    );
+    expect(r1.senderFrameRate).toBe(25);
+
+    const r2 = new ChunkReceiver({
+      recordingId: 'r2',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r2.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r2',
+        frameRate: 29.970029830932617,
+      })
+    );
+    expect(r2.senderFrameRate).toBe(29.97);
+  });
+
+  it('ignores a rate that is not a number from 1 to 120, and still finalizes', async () => {
+    const invalidRates = ['30', { toString: 0 }, null, 0, -30, 0.5, 121];
+    for (const frameRate of invalidRates) {
+      const r = new ChunkReceiver({
+        recordingId: 'r',
+        writer: fakeWriter() as never,
+        sendControl: vi.fn(),
+      });
+      await r.handleMessage(
+        JSON.stringify({
+          type: 'recording-finalized',
+          recordingId: 'r',
+          frameRate,
+        })
+      );
+      expect(r.senderFrameRate).toBeNull();
+      expect(r.receivedFinalized).toBe(true);
+      await r.whenFinalized(50);
+      expect(r.isTimedOut).toBe(false);
+    }
+
+    const rRaw = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await rRaw.handleMessage('{"type":"recording-finalized","recordingId":"r1","frameRate":1e999}');
+    expect(rRaw.senderFrameRate).toBeNull();
+    expect(rRaw.receivedFinalized).toBe(true);
+    await rRaw.whenFinalized(50);
+    expect(rRaw.isTimedOut).toBe(false);
+
+    const rOverwrite = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await rOverwrite.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r1',
+        frameRate: 25,
+      })
+    );
+    expect(rOverwrite.senderFrameRate).toBe(25);
+    await rOverwrite.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r1',
+        frameRate: 5000,
+      })
+    );
+    expect(rOverwrite.senderFrameRate).toBe(25);
+  });
+
   it('answers resume_query with resume_offset of last written position', async () => {
     const writer = fakeWriter();
     const sent: string[] = [];

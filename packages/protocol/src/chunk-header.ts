@@ -65,6 +65,12 @@ export interface ChunkRecordingFinalized {
    * Without this the host only ever had one side of it.
    */
   sha256?: string;
+  /**
+   * What the sender's camera track reported as its frame rate when the recorder
+   * started. Camera files only. A figure from the sender's browser: the
+   * receiver bounds it before using it.
+   */
+  frameRate?: number;
 }
 
 // Clock-sync (guest <-> host) over the recording DataChannel. The two peers each

@@ -681,6 +681,7 @@ describe('host backup after a take in useRoom', () => {
       receiver: {
         digestHex: async () => 'abc',
         senderSha256: 'abc',
+        senderFrameRate: 24,
         guestStartHostMs: 10_500,
         syncRttMs: 10,
         bytesWritten: 1,
@@ -740,6 +741,11 @@ describe('host backup after a take in useRoom', () => {
     });
     expect(parsedSync.frameRate.files[0].conform).toContain('host_rec-host-sidecars_cfr.mp4');
     expect(parsedSync.frameRate.files[0].conform).toContain('-vf fps=25 ');
+    expect(parsedSync.frameRate.files[1]).toMatchObject({
+      file: 'guest_rec-host-sidecars.mp4',
+      trackFps: 24,
+    });
+    expect(parsedSync.frameRate.files[1].conform).toContain('-vf fps=24 ');
 
     expect(writtenFiles.has('chat_rec-host-sidecars.txt')).toBe(true);
     const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-sidecars.txt')?.data);

@@ -476,6 +476,86 @@ describe('endGuestRecording — never sends finalized while chunks are still que
   });
 });
 
+describe('endGuestRecording — sends frame rate on camera channel only when known', () => {
+  it('sends frameRate on the camera channel and omits it on the WAV channel or when unset', async () => {
+    const channel = { readyState: 'open', send: vi.fn() };
+    const wavChannel = { readyState: 'open', send: vi.fn() };
+    const screenChannel = { readyState: 'open', send: vi.fn(), close: vi.fn() };
+    const sender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const wavSender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const screenSender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const screenRecorder = { stopAndFlush: async () => {} };
+
+    const handles = {
+      recordingId: 'r',
+      videoFps: 25,
+      channel,
+      sender,
+      wavChannel,
+      wavSender,
+      screenChannel,
+      screenSender,
+      screenRecorder,
+    } as never;
+
+    await endGuestRecording(handles);
+
+    const camSent = JSON.parse(channel.send.mock.calls.at(-1)?.[0]);
+    expect(camSent).toMatchObject({ type: 'recording-finalized', frameRate: 25 });
+
+    const wavSent = JSON.parse(wavChannel.send.mock.calls.at(-1)?.[0]);
+    expect(wavSent.type).toBe('recording-finalized');
+    expect('frameRate' in wavSent).toBe(false);
+
+    const screenSent = JSON.parse(screenChannel.send.mock.calls.at(-1)?.[0]);
+    expect(screenSent.type).toBe('recording-finalized');
+    expect('frameRate' in screenSent).toBe(false);
+
+    const channelNoFps = { readyState: 'open', send: vi.fn() };
+    const handlesNoFps = {
+      recordingId: 'r',
+      channel: channelNoFps,
+      sender,
+    } as never;
+
+    await endGuestRecording(handlesNoFps);
+    const camNoFpsSent = JSON.parse(channelNoFps.send.mock.calls.at(-1)?.[0]);
+    expect(camNoFpsSent.type).toBe('recording-finalized');
+    expect('frameRate' in camNoFpsSent).toBe(false);
+
+    const channelZeroFps = { readyState: 'open', send: vi.fn() };
+    const handlesZeroFps = {
+      recordingId: 'r',
+      videoFps: 0,
+      channel: channelZeroFps,
+      sender,
+    } as never;
+
+    await endGuestRecording(handlesZeroFps);
+    const camZeroFpsSent = JSON.parse(channelZeroFps.send.mock.calls.at(-1)?.[0]);
+    expect(camZeroFpsSent.type).toBe('recording-finalized');
+    expect('frameRate' in camZeroFpsSent).toBe(false);
+  });
+});
+
 describe('endHostRecording — patches WAV header on incomplete or abandoned take', () => {
   it('patches offset 4 and 40 with correct sizes computed from bytes written', async () => {
     const writes: { offset: number; data: ArrayBuffer | ArrayBufferView }[] = [];

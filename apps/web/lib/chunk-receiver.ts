@@ -12,6 +12,7 @@ import {
 } from '@openmeet/protocol';
 import type { FileWriter } from './fs-writer';
 import { StreamingSha256 } from './sha256';
+import { cleanFps } from './quality';
 
 export interface ChunkReceiverOpts {
   recordingId: string;
@@ -37,6 +38,7 @@ export class ChunkReceiver {
   private _guestStartHostMs: number | null = null;
   private _syncRttMs: number | null = null;
   private _senderSha256: string | null = null;
+  private _senderFrameRate: number | null = null;
   private _abandoned = false;
   private _timedOut = false;
   private _receivedFinalHeader = false;
@@ -96,6 +98,11 @@ export class ChunkReceiver {
   /** Digest the sender reported for what it sent, once it finalizes. */
   get senderSha256(): string | null {
     return this._senderSha256;
+  }
+
+  /** Frame rate the sender's camera reported, once it finalizes; null if it never said or said nonsense. */
+  get senderFrameRate(): number | null {
+    return this._senderFrameRate;
   }
 
   /**
@@ -162,6 +169,8 @@ export class ChunkReceiver {
           if (typeof sha === 'string' && sha.length <= 64) {
             this._senderSha256 = sha;
           }
+          const fps = cleanFps((parsed as ChunkRecordingFinalized).frameRate);
+          if (fps !== null) this._senderFrameRate = fps;
           this.finalizeResolve?.();
         } else if (t === 'stream-abandoned') {
           this._abandoned = true;

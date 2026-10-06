@@ -532,6 +532,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
     ...(wavSender ? { wavSender } : {}),
     ...(args.audioChannel ? { wavChannel: args.audioChannel } : {}),
     ...(args.room ? { room: args.room } : {}),
+    videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
   };
 }
 
@@ -827,7 +828,7 @@ export async function endGuestRecording(
   // chunk had landed on the audio channel.
   const canFinalizeMain = h.sender ? (!h.sender.isAbandoned && !h.sender.hasQueuedChunks) : true;
   if (canFinalizeMain) {
-    finalizeChannel(h.channel, h.recordingId, h.sender?.lastAckedIdx ?? 0, sha256);
+    finalizeChannel(h.channel, h.recordingId, h.sender?.lastAckedIdx ?? 0, sha256, h.videoFps);
   }
   const canFinalizeWav = h.wavSender ? (!h.wavSender.isAbandoned && !h.wavSender.hasQueuedChunks) : true;
   if (canFinalizeWav) {
@@ -850,11 +851,20 @@ function finalizeChannel(
   channel: RTCDataChannel | undefined,
   recordingId: string,
   totalBytes: number,
-  sha256: string
+  sha256: string,
+  frameRate?: number
 ): void {
   if (channel?.readyState !== 'open') return;
   try {
-    channel.send(JSON.stringify({ type: 'recording-finalized', recordingId, totalBytes, sha256 }));
+    channel.send(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId,
+        totalBytes,
+        sha256,
+        ...(frameRate ? { frameRate } : {}),
+      })
+    );
   } catch {
     // The host bounds its own wait, so a channel that died here costs it the
     // timeout rather than hanging finalize on this side.
@@ -1119,6 +1129,7 @@ export async function collectGuestReports(
       ...(wavWritten0 && h.guestWavWriter?.fileName ? { wavFile: h.guestWavWriter.fileName } : {}),
       startHostMs: h.receiver.guestStartHostMs,
       rttMs: h.receiver.syncRttMs,
+      trackFps: h.receiver.senderFrameRate,
       ...(h.receiver.senderSha256 ? { sha256Sent: h.receiver.senderSha256 } : {}),
       ...(writtenSha0 ? { sha256Written: writtenSha0 } : {}),
       noWav: !h.guestWavWriter || !wavWritten0,
@@ -1154,6 +1165,7 @@ export async function collectGuestReports(
       ...(wavFile ? { wavFile } : {}),
       startHostMs: mp4Entry?.receiver.guestStartHostMs ?? null,
       rttMs: mp4Entry?.receiver.syncRttMs ?? null,
+      trackFps: mp4Entry?.receiver.senderFrameRate ?? null,
       ...(mp4Entry?.receiver.senderSha256 ? { sha256Sent: mp4Entry.receiver.senderSha256 } : {}),
       ...(writtenSha ? { sha256Written: writtenSha } : {}),
       noWav: !wavEntry || !wavWritten,

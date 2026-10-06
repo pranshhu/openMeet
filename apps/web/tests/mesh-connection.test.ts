@@ -439,6 +439,70 @@ describe('Guest recording timeout and backup resilience', () => {
     }
   });
 
+  it('startGuestRecording keeps the rate the camera reported when it started', () => {
+    class FakeMediaRecorder {
+      static isTypeSupported = () => true;
+      ondataavailable: (() => void) | null = null;
+      onstop: (() => void) | null = null;
+      state = 'inactive';
+      start() {
+        this.state = 'recording';
+      }
+      stop() {
+        this.state = 'inactive';
+      }
+    }
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+
+    try {
+      const channel = {
+        readyState: 'open',
+        addEventListener: vi.fn(),
+        send: vi.fn(),
+      } as unknown as RTCDataChannel;
+
+      const videoTrack = {
+        id: 'v-fps',
+        kind: 'video',
+        getSettings: () => ({ frameRate: 24 }),
+      } as unknown as MediaStreamTrack;
+      const streamWithFps = {
+        getTracks: () => [videoTrack],
+        getVideoTracks: () => [videoTrack],
+        getAudioTracks: () => [],
+      } as unknown as MediaStream;
+
+      const handlesWithFps = startGuestRecording({
+        recordingId: 'rec-fps',
+        localStream: streamWithFps,
+        channel,
+      });
+      expect(handlesWithFps.videoFps).toBe(24);
+
+      const handlesNoFps = startGuestRecording({
+        recordingId: 'rec-no-fps',
+        localStream: fakeStream(),
+        channel,
+      });
+      expect(handlesNoFps.videoFps).toBeUndefined();
+
+      const streamNoVideo = {
+        getTracks: () => [],
+        getVideoTracks: () => [],
+        getAudioTracks: () => [],
+      } as unknown as MediaStream;
+
+      const handlesNoVideo = startGuestRecording({
+        recordingId: 'rec-no-video',
+        localStream: streamNoVideo,
+        channel,
+      });
+      expect(handlesNoVideo.videoFps).toBeUndefined();
+    } finally {
+      delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    }
+  });
+
   it('sender never pauses the recorder on backpressure or closed channel', () => {
     class FakeMediaRecorder {
       static instances: FakeMediaRecorder[] = [];

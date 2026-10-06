@@ -3,6 +3,7 @@ import { encodeChunkHeader } from '@openmeet/protocol';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
+  collectGuestReports,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 
@@ -206,6 +207,39 @@ describe('host ingest keys guest slots by the channel-label key when present, no
     await bindHostGuestChannel(fakeChannel('recording#R2'), h, 'peer-b');
 
     expect(opened).toEqual(['guest2_rec.mp4']); // R2 is a new key => its own slot/file
+  });
+
+  it("each guest's rate lands on that guest's entry, not a neighbour's", async () => {
+    const h = await hostHandles([], [], []);
+    const a = fakeChannel();
+    const b = fakeChannel();
+    const c = fakeChannel();
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await bindHostGuestChannel(c, h, 'peer-c');
+    await a.deliver(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'rec',
+        totalBytes: 0,
+        sha256: 'a',
+        frameRate: 25,
+      })
+    );
+    await b.deliver(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'rec',
+        totalBytes: 0,
+        sha256: 'b',
+        frameRate: 50,
+      })
+    );
+    expect((await collectGuestReports(h)).map((g) => [g.slot, g.trackFps])).toEqual([
+      [0, 25],
+      [1, 50],
+      [2, null],
+    ]);
   });
 });
 
