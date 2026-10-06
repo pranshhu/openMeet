@@ -89,10 +89,11 @@ export function RoomView({ slug }: { slug: string }) {
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
   // the next lobby. Rejoin reloads, so ask before any way out of the page.
+  const unsavedSidecars = !state.sidecarsSaved && (state.syncReportUrl || state.chaptersUrl);
   const unsaved =
     state.phase === 'left' &&
     state.role === 'host' &&
-    !!(state.syncReportUrl || state.chaptersUrl || state.backupBlobUrl || state.wavBackupBlobUrl);
+    !!(unsavedSidecars || state.backupBlobUrl || state.wavBackupBlobUrl);
   useEffect(() => {
     if (!unsaved) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -265,6 +266,7 @@ export function RoomView({ slug }: { slug: string }) {
       wavBackupUrl={state.wavBackupBlobUrl}
       recordingError={state.recordingError ?? state.connectionWarning}
       syncReportUrl={state.syncReportUrl}
+      sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
       onToggleMic={setMic}
       onToggleCam={setCam}

@@ -28,6 +28,7 @@ export function SessionSummary({
   wavBackupUrl,
   downloadNames,
   takes,
+  sidecarsSaved = false,
   onNewTake,
   nextTakeLabel = 'Record another take',
   onDiscardTake,
@@ -46,6 +47,7 @@ export function SessionSummary({
   /** The download= names, so a take's files can be told apart once saved. */
   downloadNames: { sync: string; chapters: string; backup: string; wav: string };
   takes: { take: number; durationMs: number; discarded: boolean }[];
+  sidecarsSaved?: boolean | undefined;
   onNewTake: () => void;
   nextTakeLabel?: string;
   onDiscardTake: (take: number) => void;
@@ -93,8 +95,14 @@ export function SessionSummary({
         </div>
         <p className="mt-2 text-white/70">
           {files.length} {files.length === 1 ? 'file is' : 'files are'} in the folder you chose. Nothing was uploaded.{' '}
-          {chaptersUrl ? 'sync.json and the chapters exist' : 'sync.json exists'} only in this tab — download{' '}
-          {chaptersUrl ? 'them' : 'it'} before you close the tab or record again.
+          {sidecarsSaved ? (
+            'The sync file and any chapters or chat for this take are saved there too.'
+          ) : (
+            <>
+              {chaptersUrl ? 'sync.json and the chapters exist' : 'sync.json exists'} only in this tab — download{' '}
+              {chaptersUrl ? 'them' : 'it'} before you close the tab or record again.
+            </>
+          )}
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
           <button

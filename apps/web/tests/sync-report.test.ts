@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict} from '@/lib/sync-report';
+import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText } from '@/lib/sync-report';
 
 describe('buildSyncReport', () => {
   const base = {
@@ -80,6 +80,16 @@ describe('chapter markers', () => {
 
   it('falls back to a generic label rather than emitting a bare timecode', () => {
     expect(buildChapters([m(0, '')])).toBe('0:00 Marker\n');
+  });
+
+  it('falls back to Marker when a label is made only of control characters', () => {
+    expect(buildChapters([m(0, '\n')])).toBe('0:00 Marker\n');
+  });
+
+  it('sanitises line breaks in marker labels to yield exactly one chapter line', () => {
+    const chapters = buildChapters([m(0, 'Intro\n45:00 Host admits everything')]);
+    expect(chapters).toBe('0:00 Intro 45:00 Host admits everything\n');
+    expect(chapters.trim().split('\n')).toHaveLength(1);
   });
 
   it('returns empty for no markers', () => {
@@ -398,3 +408,95 @@ describe('post-session report', () => {
   });
 });
 
+describe('buildChatLog', () => {
+  const opts = { startMs: 10_000, endMs: 30_000, localName: 'Ana' };
+
+  it('filters messages to the [startMs, endMs] window', () => {
+    const messages = [
+      { from: 'guest' as const, fromName: 'Bob', text: 'too early', ts: 9_999 },
+      { from: 'guest' as const, fromName: 'Bob', text: 'at start', ts: 10_000 },
+      { from: 'host' as const, text: 'in middle', ts: 15_000, self: true },
+      { from: 'guest' as const, fromName: 'Bob', text: 'at end', ts: 30_000 },
+      { from: 'guest' as const, fromName: 'Bob', text: 'too late', ts: 30_001 },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe(
+      '[0:00] guest Bob: at start\n' +
+      '[0:05] host Ana: in middle\n' +
+      '[0:20] guest Bob: at end\n'
+    );
+  });
+
+  it('uses the three name sources: localName for self, fromName, and role fallback', () => {
+    const messages = [
+      { from: 'host' as const, text: 'message from self', ts: 10_000, self: true },
+      { from: 'guest' as const, fromName: 'Charlie', text: 'message from remote peer', ts: 12_000 },
+      { from: 'producer' as const, text: 'message without fromName', ts: 14_000 },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe(
+      '[0:00] host Ana: message from self\n' +
+      '[0:02] guest Charlie: message from remote peer\n' +
+      '[0:04] producer: message without fromName\n'
+    );
+  });
+
+  it('flattens line breaks inside a message to single spaces', () => {
+    const messages = [
+      { from: 'guest' as const, fromName: 'Bob', text: 'hello\nworld\r\nthis is\ra test', ts: 10_000 },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe('[0:00] guest Bob: hello world this is a test\n');
+  });
+
+  it('returns empty string when no messages are in the window or messages list is empty', () => {
+    expect(buildChatLog([], opts)).toBe('');
+    expect(
+      buildChatLog(
+        [{ from: 'guest' as const, fromName: 'Bob', text: 'outside', ts: 5_000 }],
+        opts
+      )
+    ).toBe('');
+  });
+
+  it('replaces runs of control characters and line or paragraph separators with one space in both name and text', () => {
+    const messages = [
+      {
+        from: 'guest' as const,
+        fromName: 'Sam\n[0:01] Priya: I agree',
+        text: 'hello\r\nworld\u2028line\u2029para\x00null\x1funit',
+        ts: 10_000,
+      },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe('[0:00] guest Sam [0:01] Priya: I agree: hello world line para null unit\n');
+    expect(log.trim().split('\n')).toHaveLength(1);
+  });
+
+  it('strips NEL and bidi overrides from speaker name and message text', () => {
+    const messages = [
+      {
+        from: 'guest' as const,
+        fromName: 'Sam\u0085Priya\u202Erev',
+        text: 'hello\u0085world\u202Erev',
+        ts: 10_000,
+      },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe('[0:00] guest Sam Priya rev: hello world rev\n');
+  });
+
+  it('sanitises control characters, separators and bidi controls while keeping joined emoji', () => {
+    expect(sanitizeText('\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}')).toBe('\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}');
+    expect(sanitizeText('a' + ' '.repeat(120) + 'b')).toBe('a b');
+    expect(sanitizeText('a\u0085b')).toBe('a b');
+    expect(sanitizeText('a\u2028b')).toBe('a b');
+    expect(sanitizeText('a\u202Eb')).toBe('a b');
+    expect(sanitizeText('a\u00A0b')).toBe('a b');
+  });
+});

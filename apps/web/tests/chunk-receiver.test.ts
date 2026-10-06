@@ -81,6 +81,74 @@ describe('ChunkReceiver', () => {
     expect(r.syncRttMs).toBe(42);
   });
 
+  it('leaves numeric fields unset when recording_meta contains non-finite or non-numeric values', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r.handleMessage(
+      JSON.stringify({
+        type: 'recording_meta',
+        recordingId: 'r1',
+        guestStartHostMs: { toString: 0 },
+        rttMs: 'not-a-number',
+      })
+    );
+    expect(r.guestStartHostMs).toBeNull();
+    expect(r.syncRttMs).toBeNull();
+
+    await r.handleMessage(
+      '{"type":"recording_meta","recordingId":"r1","guestStartHostMs":1e999,"rttMs":-1e999}'
+    );
+    expect(r.guestStartHostMs).toBeNull();
+    expect(r.syncRttMs).toBeNull();
+  });
+
+  it('leaves senderSha256 unset when recording-finalized sha256 is not a string or exceeds 64 characters', async () => {
+    const r1 = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r1.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r1',
+        sha256: { toString: 0 },
+      })
+    );
+    expect(r1.senderSha256).toBeNull();
+
+    const r2 = new ChunkReceiver({
+      recordingId: 'r2',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r2.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r2',
+        sha256: 'a'.repeat(65),
+      })
+    );
+    expect(r2.senderSha256).toBeNull();
+
+    const r3 = new ChunkReceiver({
+      recordingId: 'r3',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r3.handleMessage(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'r3',
+        sha256: 'a'.repeat(64),
+      })
+    );
+    expect(r3.senderSha256).toBe('a'.repeat(64));
+  });
+
   it('answers resume_query with resume_offset of last written position', async () => {
     const writer = fakeWriter();
     const sent: string[] = [];

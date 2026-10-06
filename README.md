@@ -343,12 +343,14 @@ All in the one folder the host picks, per take:
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
 | `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
+| `sync_<id>.json` | Start-time offsets, integrity verdicts, and remux commands |
+| `chapters_<id>.txt` | Chapter markers (when marked) |
+| `chat_<id>.txt` | Chat log from the take window (when messages sent) |
 
-`<id>` is new for every take, and camera and WAV files from the second take on also
-end in `_take<n>` (`host_<id>_take2.mp4`). `sync.json` names whose screen each
+`<id>` is new for every take, and files from the second take on also
+end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
 screen file is. The MP4's audio track is the convenience copy;
-the WAV is the master. `sync.json` and `chapters.txt` are **not** in the folder — see
-[After the session](#after-the-session).
+the WAV is the master.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
@@ -361,20 +363,20 @@ to `avc1` by the remux commands below, which is what editors expect.
 ## Recording and consent
 
 The host starts recording for everyone. Participants see a pre-join disclosure
-plus an on-screen notice and REC pill. Files land only on the host's disk, plus a
-backup in each participant's own browser storage; nothing is uploaded. **The host
-is responsible for getting consent where the law requires it**
+plus an on-screen notice and REC pill. Files (including in-call chat) land only on the
+host's disk, plus a backup in each participant's own browser storage; nothing is
+uploaded. **The host is responsible for getting consent where the law requires it**
 (all-party-consent jurisdictions, GDPR).
 
 ---
 
 ## After the session
 
-`sync.json` and `chapters.txt` are not written to the recording folder. They exist
-only in the host's tab: download them from the session summary beside the stage
-(**Download sync.json**, **Download chapters**, saved as
-`openmeet-<room>-take<n>-sync.json` and `…-chapters.txt`) before you close the tab or
-record again. If the host leaves the call, the screen that follows offers them too.
+`sync_<id>.json`, `chapters_<id>.txt` and `chat_<id>.txt` are saved in the recording
+folder next to the recordings. The session summary beside the stage also provides
+download links (**Download sync.json**, **Download chapters**, saved as
+`openmeet-<room>-take<n>-sync.json` and `…-chapters.txt`). If the host leaves the call,
+the screen that follows offers them too.
 
 1. **Remux:** Run the `+faststart` remux commands in `sync.json` (`seekability`) so clips are seekable:
    `ffmpeg -i "<file>.mp4" -c copy -tag:v avc1 -movflags +faststart "<file>_seekable.mp4"`

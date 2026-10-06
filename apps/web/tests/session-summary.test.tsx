@@ -122,6 +122,32 @@ describe('SessionSummary', () => {
     expect(screen.getByText(/sync\.json and the chapters exist only in this tab — download them/)).toBeInTheDocument();
   });
 
+  it('shows the saved line when sidecarsSaved is true (without chapters)', () => {
+    render(<SessionSummary {...baseProps} sidecarsSaved />);
+    expect(
+      screen.getByText(/The sync file and any chapters or chat for this take are saved there too\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/only in this tab/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download sync.json' })).toBeInTheDocument();
+  });
+
+  it('shows the saved line when sidecarsSaved is true (with chapters)', () => {
+    render(<SessionSummary {...baseProps} sidecarsSaved chaptersUrl="blob:chapters" />);
+    expect(
+      screen.getByText(/The sync file and any chapters or chat for this take are saved there too\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/only in this tab/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download sync.json' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download chapters' })).toBeInTheDocument();
+  });
+
+  it('shows the old warning when sidecarsSaved is false', () => {
+    render(<SessionSummary {...baseProps} sidecarsSaved={false} />);
+    expect(
+      screen.getByText(/sync\.json exists only in this tab — download it before you close the tab or record again\./)
+    ).toBeInTheDocument();
+  });
+
   // opacity on the row took Keep, the one way to undo a discard, to 2.7:1.
   it('dims only the label of a discarded take, not its Keep button', () => {
     render(<SessionSummary {...baseProps} takes={[{ take: 1, durationMs: 60_000, discarded: true }]} />);

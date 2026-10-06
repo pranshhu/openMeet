@@ -26,7 +26,15 @@ import { MediaBoard } from '@/lib/media-board';
 import { getHostToken } from '@/lib/host-token';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
-import { buildSyncReport, type ChapterMarker, type SyncReportData } from '@/lib/sync-report';
+import {
+  buildSyncReport,
+  buildChatLog,
+  MAX_CHAT_MESSAGE_LENGTH,
+  type ChapterMarker,
+  type SyncReport,
+  type SyncReportData,
+  type ChatMessage,
+} from '@/lib/sync-report';
 import {
   startHostRecording,
   startGuestRecording,
@@ -43,6 +51,8 @@ import {
   rebindGuestRecordingWhenConnected,
   collectGuestReports,
   collectScreenSegments,
+  takeName,
+  writeTakeSidecars,
   type RecordingHandles,
 } from './recording-controller';
 
@@ -68,14 +78,7 @@ export type RoomPhase =
   | 'replaced'
   | 'error';
 
-export interface ChatMessage {
-  from: Role;
-  text: string;
-  ts: number;
-  fromPeerId?: string;
-  fromName?: string;
-  self?: boolean;
-}
+export type { ChatMessage };
 
 export interface PeerPresence {
   micOn: boolean;
@@ -162,6 +165,7 @@ export interface RoomState {
   drained: boolean;
   // Host-only: editor alignment + seekability companion for the finished pair.
   syncReportUrl: string | null;
+  sidecarsSaved: boolean;
   markers: ChapterMarker[];
   chaptersUrl: string | null;
   summary: SyncReportData | null;
@@ -475,6 +479,9 @@ export function startConnectWatchdog(
   }, timeoutMs);
 }
 
+export const MAX_RELAYED_MARKERS = 1000;
+export const MAX_MARKER_LABEL_LENGTH = 200;
+
 export function useRoom(slug: string) {
   const [state, setState] = useState<RoomState>({
     phase: 'checking',
@@ -494,6 +501,7 @@ export function useRoom(slug: string) {
     wavBackupBlobUrl: null,
     drained: true,
     syncReportUrl: null,
+    sidecarsSaved: false,
     markers: [],
     chaptersUrl: null,
     summary: null,
@@ -539,6 +547,8 @@ export function useRoom(slug: string) {
   const syncReportUrlRef = useRef<string | null>(null);
   const chaptersUrlRef = useRef<string | null>(null);
   const markersRef = useRef<ChapterMarker[]>([]);
+  const relayedMarkersCountRef = useRef(0);
+  const messagesRef = useRef<ChatMessage[]>([]);
   // Host's recording start, mirrored here so a marker can be positioned the
   // instant it arrives rather than at finalize.
   const hostStartRef = useRef<number | null>(null);
@@ -640,9 +650,9 @@ export function useRoom(slug: string) {
    * is irrelevant, and stamping locally avoids depending on a peer clock that
    * may be arbitrarily wrong.
    */
-  const recordMarker = useCallback((label: string, from: Role, name?: string) => {
+  const recordMarker = useCallback((label: string, from: Role, name?: string): boolean => {
     const start = hostStartRef.current;
-    if (start === null) return; // not recording; nothing to anchor to
+    if (start === null) return false; // not recording; nothing to anchor to
     const marker: ChapterMarker = {
       atMs: Date.now() - start,
       label,
@@ -651,6 +661,7 @@ export function useRoom(slug: string) {
     };
     markersRef.current = [...markersRef.current, marker];
     setState((s) => ({ ...s, markers: markersRef.current }));
+    return true;
   }, []);
 
   // endRecording is defined below and closes over nothing but refs, but the
@@ -1279,7 +1290,13 @@ export function useRoom(slug: string) {
         );
       });
 
-      signal.on('marker', (m) => recordMarker(m.label, m.from, m.fromName));
+      signal.on('marker', (m) => {
+        if (relayedMarkersCountRef.current >= MAX_RELAYED_MARKERS) return;
+        const label = typeof m.label === 'string' && m.label.length <= MAX_MARKER_LABEL_LENGTH ? m.label : '';
+        if (recordMarker(label, m.from, m.fromName)) {
+          relayedMarkersCountRef.current += 1;
+        }
+      });
       signal.on('recording-capability', (m) =>
         setState((s) => ({
           ...s,
@@ -1289,21 +1306,23 @@ export function useRoom(slug: string) {
           },
         }))
       );
-      signal.on('chat', (m) =>
+      signal.on('chat', (m) => {
+        if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
+        const msg: ChatMessage = {
+          from: m.from,
+          text: m.text,
+          // Stamped on the local clock so a skewed or malicious peer clock cannot
+          // misorder chat lines or push them outside the take window.
+          ts: Date.now(),
+          ...(m.fromPeerId ? { fromPeerId: m.fromPeerId } : {}),
+          ...(m.fromName ? { fromName: m.fromName } : {}),
+        };
+        messagesRef.current = [...messagesRef.current, msg];
         setState((s) => ({
           ...s,
-          messages: [
-            ...s.messages,
-            {
-              from: m.from,
-              text: m.text,
-              ts: m.ts,
-              ...(m.fromPeerId ? { fromPeerId: m.fromPeerId } : {}),
-              ...(m.fromName ? { fromName: m.fromName } : {}),
-            },
-          ],
-        }))
-      );
+          messages: messagesRef.current,
+        }));
+      });
       signal.on('presence', (m) =>
         setState((s) => {
           const remotePeers = applyRemotePeerPresence(s.remotePeers, m);
@@ -1444,6 +1463,7 @@ export function useRoom(slug: string) {
     recordingRef.current = null;
     hostStartRef.current = null;
     markersRef.current = [];
+    relayedMarkersCountRef.current = 0;
     // A guest mints a new recordingId (channel-label key) per take. Without
     // this, a dead take-1 audio channel left in the map claims slot 0 in take
     // 2 before the real take-2 channel arrives.
@@ -1506,18 +1526,17 @@ export function useRoom(slug: string) {
     const ts = Date.now();
     signalRef.current?.send({ type: 'chat', text, ts });
     const from: Role = roleRef.current ?? 'host';
+    const msg: ChatMessage = {
+      from,
+      text,
+      ts,
+      self: true,
+      ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
+    };
+    messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({
       ...s,
-      messages: [
-        ...s.messages,
-        {
-          from,
-          text,
-          ts,
-          self: true,
-          ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
-        },
-      ],
+      messages: messagesRef.current,
     }));
   }, []);
 
@@ -1636,6 +1655,7 @@ export function useRoom(slug: string) {
       // a previous host connection or take.
       forgetPreTakeGuestChannels(hostChannelRef, audioChannelsRef);
       markersRef.current = [];
+      relayedMarkersCountRef.current = 0;
       setState((s) => ({ ...s, markers: [] }));
       takeRef.current += 1;
       recordingRef.current = await startHostRecording({
@@ -1757,16 +1777,28 @@ export function useRoom(slug: string) {
           const guestReports = await collectGuestReports(h, (peerId) => peerNameMap.get(peerId));
 
           // Editor companion: start-offset alignment + lossless faststart remux commands.
-          const report = buildSyncReport({
+          const syncInput = {
             recordingId: h.recordingId,
             ...(h.hostWriter?.fileName ? { hostFile: h.hostWriter.fileName } : {}),
             guests: guestReports,
             hostStartMs: h.hostStartMs ?? Date.now(),
-            markers: markersRef.current,
             hostWavFile:
               (h.hostPcm?.totalBytes ?? 1) > 0 ? h.hostWavWriter?.fileName : undefined,
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
-          });
+          };
+          let report: SyncReport;
+          try {
+            report = buildSyncReport({
+              ...syncInput,
+              markers: markersRef.current,
+            });
+          } catch (e) {
+            console.warn('openMeet: buildSyncReport with markers failed, retrying without markers', e);
+            report = buildSyncReport({
+              ...syncInput,
+              markers: [],
+            });
+          }
           if (syncReportUrlRef.current) URL.revokeObjectURL(syncReportUrlRef.current);
           const syncReportUrl = URL.createObjectURL(
             new Blob([report.json], { type: 'application/json' })
@@ -1778,7 +1810,7 @@ export function useRoom(slug: string) {
             ? URL.createObjectURL(new Blob([report.chapters], { type: 'text/plain' }))
             : null;
           chaptersUrlRef.current = chaptersUrl;
-          await patchRecording(
+          const patchPromise = patchRecording(
             h.recordingId,
             { total_bytes: totalBytes, sha256, status: 'finalized' },
             getHostToken(slug) ?? undefined
@@ -1787,6 +1819,28 @@ export function useRoom(slug: string) {
             // PATCH failed. Don't fail the UI, but don't swallow it silently either.
             console.warn('openMeet: recording metadata save failed', e);
           });
+
+          let sidecarsSaved = false;
+          if (h.dir) {
+            const take = h.take ?? 1;
+            let chatLog = '';
+            try {
+              chatLog = buildChatLog(messagesRef.current, {
+                startMs: h.hostStartMs ?? Date.now(),
+                endMs: Date.now(),
+                localName: localNameRef.current,
+              });
+            } catch (e) {
+              console.warn('openMeet: building chat log failed', e);
+            }
+            sidecarsSaved = await writeTakeSidecars(h.dir, [
+              { name: takeName('sync', h.recordingId, take, 'json'), content: report.json },
+              { name: takeName('chapters', h.recordingId, take, 'txt'), content: report.chapters },
+              { name: takeName('chat', h.recordingId, take, 'txt'), content: chatLog },
+            ]);
+          }
+
+          await patchPromise;
           recordingRef.current = null;
           setState((s) => ({
             ...s,
@@ -1800,6 +1854,7 @@ export function useRoom(slug: string) {
             wavBackupBlobUrl,
             syncReportUrl,
             chaptersUrl,
+            sidecarsSaved,
             summary: report.data,
             takes: [
               ...s.takes,

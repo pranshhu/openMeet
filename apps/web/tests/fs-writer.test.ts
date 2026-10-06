@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FileWriter, isFsAccessSupported } from '@/lib/fs-writer';
+import { writeTakeSidecars } from '@/hooks/recording-controller';
 
 function fakeWritable() {
   return { write: vi.fn().mockResolvedValue(undefined), close: vi.fn().mockResolvedValue(undefined) };
@@ -82,5 +83,79 @@ describe('FileWriter', () => {
     const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
     await fw.openFile('h.mp4');
     await expect(fw.write(0, new ArrayBuffer(4))).rejects.toBeInstanceOf(DiskFullError);
+  });
+});
+
+describe('writeTakeSidecars', () => {
+  it('writes expected names and contents, skips empty content, and returns true', async () => {
+    const writtenFiles = new Map<string, { data: Uint8Array; closed: boolean }>();
+    const dir = {
+      getFileHandle: vi.fn().mockImplementation((name: string) => {
+        let writtenData: Uint8Array = new Uint8Array(0);
+        let closed = false;
+        const writable = {
+          write: vi.fn().mockImplementation(({ position, data }: { position: number; data: Uint8Array }) => {
+            writtenData = data;
+            return Promise.resolve();
+          }),
+          close: vi.fn().mockImplementation(() => {
+            closed = true;
+            writtenFiles.set(name, { data: writtenData, closed });
+            return Promise.resolve();
+          }),
+        };
+        return Promise.resolve({ name, createWritable: vi.fn().mockResolvedValue(writable) });
+      }),
+    };
+
+    const ok = await writeTakeSidecars(dir, [
+      { name: 'sync_abc.json', content: '{"ok":true}' },
+      { name: 'chapters_abc.txt', content: '' },
+      { name: 'chat_abc.txt', content: '[0:00] Ana: hi\n' },
+    ]);
+
+    expect(ok).toBe(true);
+    expect(dir.getFileHandle).toHaveBeenCalledTimes(2);
+    expect(dir.getFileHandle).toHaveBeenCalledWith('sync_abc.json', { create: true });
+    expect(dir.getFileHandle).toHaveBeenCalledWith('chat_abc.txt', { create: true });
+    expect(new TextDecoder().decode(writtenFiles.get('sync_abc.json')?.data)).toBe('{"ok":true}');
+    expect(writtenFiles.get('sync_abc.json')?.closed).toBe(true);
+    expect(new TextDecoder().decode(writtenFiles.get('chat_abc.txt')?.data)).toBe('[0:00] Ana: hi\n');
+    expect(writtenFiles.get('chat_abc.txt')?.closed).toBe(true);
+  });
+
+  it('returns false without throwing when createWritable rejects', async () => {
+    const dir = {
+      getFileHandle: vi.fn().mockResolvedValue({
+        name: 'sync_abc.json',
+        createWritable: vi.fn().mockRejectedValue(new Error('permission denied')),
+      }),
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const ok = await writeTakeSidecars(dir, [{ name: 'sync_abc.json', content: '{}' }]);
+
+    expect(ok).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('returns false without throwing when write rejects', async () => {
+    const dir = {
+      getFileHandle: vi.fn().mockResolvedValue({
+        name: 'sync_abc.json',
+        createWritable: vi.fn().mockResolvedValue({
+          write: vi.fn().mockRejectedValue(new Error('disk write error')),
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+      }),
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const ok = await writeTakeSidecars(dir, [{ name: 'sync_abc.json', content: '{}' }]);
+
+    expect(ok).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

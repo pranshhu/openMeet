@@ -50,7 +50,7 @@ export function RecordingNotice({
           className="h-2.5 w-2.5 shrink-0 rounded-full bg-white"
           style={{ animation: 'om-rec-pulse 1.4s ease-in-out infinite' }}
         />
-        {host ? 'Recording started' : 'This call is now being recorded'}
+        {host ? 'Recording started' : 'This call and chat are now being recorded'}
       </div>
     </div>
   );

@@ -62,6 +62,15 @@ describe('left', () => {
     expect(free.defaultPrevented).toBe(false);
   });
 
+  it('does not ask before unload when sidecars were saved on disk and no backups remain', () => {
+    state.syncReportUrl = 'blob:sync';
+    state.sidecarsSaved = true;
+    render(<RoomView slug="abc-defg-hij" />);
+    const free = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(free);
+    expect(free.defaultPrevented).toBe(false);
+  });
+
   // A guest's backups live on in this browser and are listed in every lobby.
   it('tells a guest the backups stay in this browser, and does not hold the page', () => {
     Object.assign(state, { role: 'guest', backupBlobUrl: 'blob:backup' });

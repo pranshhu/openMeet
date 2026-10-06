@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ChatPanel } from '@/components/ChatPanel';
+import { MAX_CHAT_MESSAGE_LENGTH } from '@/lib/sync-report';
 
 describe('ChatPanel', () => {
   it('renders messages and sends composer text', () => {
@@ -13,6 +14,7 @@ describe('ChatPanel', () => {
       />
     );
     expect(screen.getByText('hi')).toBeInTheDocument();
+    expect(screen.getByLabelText('Message')).toHaveAttribute('maxlength', String(MAX_CHAT_MESSAGE_LENGTH));
     fireEvent.change(screen.getByPlaceholderText(/message/i), { target: { value: 'yo' } });
     fireEvent.submit(screen.getByTestId('chat-form'));
     expect(onSend).toHaveBeenCalledWith('yo');

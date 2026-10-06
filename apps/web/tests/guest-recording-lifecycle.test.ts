@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording } from '@/hooks/recording-controller';
+import { buildSyncReport } from '@/lib/sync-report';
 import type { ServerMessage } from '@openmeet/protocol';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
@@ -121,6 +122,37 @@ vi.mock('@/hooks/recording-controller', async () => {
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+vi.mock('@/lib/sync-report', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/sync-report')>('@/lib/sync-report');
+  return {
+    ...actual,
+    buildSyncReport: vi.fn(actual.buildSyncReport),
+  };
+});
+
+function fakeDirectory() {
+  const writtenFiles = new Map<string, { data: Uint8Array; closed: boolean }>();
+  const dir = {
+    getFileHandle: vi.fn().mockImplementation((name: string) => {
+      let writtenData = new Uint8Array(0);
+      let closed = false;
+      const writable = {
+        write: vi.fn().mockImplementation(({ data }: { data: any }) => {
+          writtenData = new Uint8Array(data);
+          return Promise.resolve();
+        }),
+        close: vi.fn().mockImplementation(() => {
+          closed = true;
+          writtenFiles.set(name, { data: writtenData, closed });
+          return Promise.resolve();
+        }),
+      };
+      return Promise.resolve({ name, createWritable: vi.fn().mockResolvedValue(writable) });
+    }),
+  };
+  return { dir, writtenFiles };
+}
 
 function emitSignal(type: string, payload: any) {
   for (const handler of signalHandlers[type] ?? []) {
@@ -632,5 +664,625 @@ describe('host backup after a take in useRoom', () => {
     expect(startGuestRecording).not.toHaveBeenCalled();
     expect(startScreenRecording).toHaveBeenCalled();
     expect(result.current.state.phase).toBe('recording');
+  });
+
+  it('drives a host take to its end with a fake directory, writing sync and chat sidecars and setting sidecarsSaved: true', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-host-sidecars',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-host-sidecars.mp4' },
+      guestWriter: { fileName: 'guest_rec-host-sidecars.mp4' },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      result.current.sendChat('hello from host during take');
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.sidecarsSaved).toBe(true);
+    expect(result.current.state.recordingError).toBeNull();
+
+    expect(writtenFiles.has('sync_rec-host-sidecars.json')).toBe(true);
+    const syncJson = new TextDecoder().decode(writtenFiles.get('sync_rec-host-sidecars.json')?.data);
+    expect(JSON.parse(syncJson)).toMatchObject({ generatedBy: 'openMeet' });
+
+    expect(writtenFiles.has('chat_rec-host-sidecars.txt')).toBe(true);
+    const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-sidecars.txt')?.data);
+    expect(chatContent).toContain('hello from host during take');
+    expect(chatContent).toContain('Host Ana');
+  });
+
+  it('leaves sidecarsSaved: false, phase: "done" and no recordingError when sidecar write fails', async () => {
+    const rejectingDir = {
+      getFileHandle: vi.fn().mockResolvedValue({
+        name: 'sync_rec-host-fail.json',
+        createWritable: vi.fn().mockRejectedValue(new Error('disk write failed')),
+      }),
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-host-fail',
+      take: 1,
+      dir: rejectingDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-host-fail.mp4' },
+      guestWriter: { fileName: 'guest_rec-host-fail.mp4' },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.sidecarsSaved).toBe(false);
+    expect(result.current.state.recordingError).toBeNull();
+    warnSpy.mockRestore();
+  });
+
+  it('completes take and writes sync sidecar when a malformed chat message is received during the take', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-host-malformed',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-host-malformed.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      guestWriter: { fileName: 'guest_rec-host-malformed.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        fromName: 'Bob',
+        text: 123 as any,
+        ts: 11_000,
+      });
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBeNull();
+    expect(result.current.state.messages).toEqual([]);
+    expect(writtenFiles.has('sync_rec-host-malformed.json')).toBe(true);
+    expect(writtenFiles.has('chat_rec-host-malformed.txt')).toBe(false);
+  });
+
+  it('stamps received chat messages with local clock so sender clock cannot skew or omit lines', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    try {
+      vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+        recordingId: 'rec-host-clock',
+        take: 1,
+        dir: fakeDir as never,
+        hostStartMs: 10_000,
+        hostWriter: { fileName: 'host_rec-host-clock.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        guestWriter: { fileName: 'guest_rec-host-clock.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        slotPeerIds: new Map([[0, 'p-guest']]),
+        receiver: {
+          digestHex: async () => 'abc',
+          senderSha256: 'abc',
+          guestStartHostMs: 10_500,
+          syncRttMs: 10,
+          bytesWritten: 1,
+        },
+      } as never));
+
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      const fakeStream = {
+        getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+        getAudioTracks: () => [{ kind: 'audio' }],
+        getVideoTracks: () => [{ kind: 'video' }],
+      } as unknown as MediaStream;
+
+      await act(async () => {
+        await result.current.join(fakeStream, 'Host Ana');
+      });
+
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+          recording: false,
+        });
+      });
+
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(result.current.state.phase).toBe('recording');
+
+      // Message arriving at 12_000 local time (offset 0:02) with ts far in the past
+      nowSpy.mockReturnValue(12_000);
+      act(() => {
+        emitSignal('chat', {
+          type: 'chat',
+          from: 'guest',
+          fromName: 'Bob',
+          text: 'past message',
+          ts: 0,
+        });
+      });
+
+      // Message arriving at 15_000 local time (offset 0:05) with ts far in the future
+      nowSpy.mockReturnValue(15_000);
+      act(() => {
+        emitSignal('chat', {
+          type: 'chat',
+          from: 'guest',
+          fromName: 'Bob',
+          text: 'future message',
+          ts: 9_999_999_999,
+        });
+      });
+
+      nowSpy.mockReturnValue(20_000);
+      await act(async () => {
+        await result.current.endRecording();
+      });
+
+      expect(result.current.state.phase).toBe('done');
+      expect(writtenFiles.has('chat_rec-host-clock.txt')).toBe(true);
+      const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-clock.txt')?.data);
+      expect(chatContent).toBe(
+        '[0:02] guest Bob: past message\n' +
+        '[0:05] guest Bob: future message\n'
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('drops messages longer than 4000 characters and keeps messages of up to 4000 characters', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [],
+      getAudioTracks: () => [],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'User');
+    });
+
+    act(() => {
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        text: 'a'.repeat(4001),
+        ts: 1000,
+      });
+    });
+    expect(result.current.state.messages).toHaveLength(0);
+
+    act(() => {
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        text: 'b'.repeat(4000),
+        ts: 2000,
+      });
+    });
+    expect(result.current.state.messages).toHaveLength(1);
+    expect(result.current.state.messages[0]?.text).toHaveLength(4000);
+  });
+
+  it('completes take and writes sync sidecar when chat building encounters non-string fromName', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+        recordingId: 'rec-host-chat-err',
+        take: 1,
+        dir: fakeDir as never,
+        hostStartMs: 10_000,
+        hostWriter: { fileName: 'host_rec-host-chat-err.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        guestWriter: { fileName: 'guest_rec-host-chat-err.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        slotPeerIds: new Map([[0, 'p-guest']]),
+        receiver: {
+          digestHex: async () => 'abc',
+          senderSha256: 'abc',
+          guestStartHostMs: 10_500,
+          syncRttMs: 10,
+          bytesWritten: 1,
+        },
+      } as never));
+
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      const fakeStream = {
+        getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+        getAudioTracks: () => [{ kind: 'audio' }],
+        getVideoTracks: () => [{ kind: 'video' }],
+      } as unknown as MediaStream;
+
+      await act(async () => {
+        await result.current.join(fakeStream, 'Host Ana');
+      });
+
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+          recording: false,
+        });
+      });
+
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(result.current.state.phase).toBe('recording');
+
+      act(() => {
+        emitSignal('chat', {
+          type: 'chat',
+          from: 'guest',
+          fromName: 123 as any,
+          text: 'ok',
+          ts: 11_000,
+        });
+      });
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+
+      expect(result.current.state.phase).toBe('done');
+      expect(result.current.state.recordingError).toBeNull();
+      expect(writtenFiles.has('sync_rec-host-chat-err.json')).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('completes take and writes sync sidecar when malformed marker labels are received', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-host-bad-marker',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-host-bad-marker.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      guestWriter: { fileName: 'guest_rec-host-bad-marker.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      emitSignal('marker', {
+        type: 'marker',
+        label: { toString: 0 } as any,
+        from: 'guest',
+      });
+      emitSignal('marker', {
+        type: 'marker',
+        label: { a: 1 } as any,
+        from: 'guest',
+      });
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'x'.repeat(201),
+        from: 'guest',
+      });
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'y'.repeat(200),
+        from: 'guest',
+      });
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBeNull();
+    expect(result.current.state.markers.map((m) => m.label)).toEqual(['', '', '', 'y'.repeat(200)]);
+    expect(writtenFiles.has('sync_rec-host-bad-marker.json')).toBe(true);
+  });
+
+  it('allows host own markers after 1000 relayed markers while dropping the 1001st relayed marker', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-host-1000-markers',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-host-1000-markers.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      guestWriter: { fileName: 'guest_rec-host-1000-markers.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      for (let i = 1; i <= 1001; i++) {
+        emitSignal('marker', {
+          type: 'marker',
+          label: `m-${i}`,
+          from: 'guest',
+        });
+      }
+      result.current.addMarker('Host own marker');
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.markers).toHaveLength(1001);
+    expect(result.current.state.markers.some((m) => m.label === 'm-1001')).toBe(false);
+    expect(result.current.state.markers.some((m) => m.label === 'Host own marker')).toBe(true);
+
+    const chapters = new TextDecoder().decode(writtenFiles.get('chapters_rec-host-1000-markers.txt')?.data);
+    expect(chapters).toContain('Host own marker');
+    expect(chapters).not.toContain('m-1001');
+  });
+
+  it('retries buildSyncReport without markers if the first call throws', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+        recordingId: 'rec-host-retry-markers',
+        take: 1,
+        dir: fakeDir as never,
+        hostStartMs: 10_000,
+        hostWriter: { fileName: 'host_rec-host-retry-markers.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        guestWriter: { fileName: 'guest_rec-host-retry-markers.mp4', close: vi.fn().mockResolvedValue(undefined) },
+        slotPeerIds: new Map([[0, 'p-guest']]),
+        receiver: {
+          digestHex: async () => 'abc',
+          senderSha256: 'abc',
+          guestStartHostMs: 10_500,
+          syncRttMs: 10,
+          bytesWritten: 1,
+        },
+      } as never));
+
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      const fakeStream = {
+        getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+        getAudioTracks: () => [{ kind: 'audio' }],
+        getVideoTracks: () => [{ kind: 'video' }],
+      } as unknown as MediaStream;
+
+      await act(async () => {
+        await result.current.join(fakeStream, 'Host Ana');
+      });
+
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+          recording: false,
+        });
+      });
+
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(result.current.state.phase).toBe('recording');
+
+      act(() => {
+        emitSignal('marker', {
+          type: 'marker',
+          label: 'marker-to-fail',
+          from: 'guest',
+        });
+      });
+
+      vi.mocked(buildSyncReport).mockImplementationOnce(() => {
+        throw new Error('first call with markers threw');
+      });
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+
+      expect(result.current.state.phase).toBe('done');
+      expect(result.current.state.recordingError).toBeNull();
+      expect(vi.mocked(buildSyncReport)).toHaveBeenLastCalledWith(
+        expect.objectContaining({ markers: [] })
+      );
+      expect(writtenFiles.has('sync_rec-host-retry-markers.json')).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

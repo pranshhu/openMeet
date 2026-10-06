@@ -8,6 +8,15 @@ export interface ChapterMarker {
   name?: string;
 }
 
+export interface ChatMessage {
+  from: Role;
+  text: string;
+  ts: number;
+  fromPeerId?: string;
+  fromName?: string;
+  self?: boolean;
+}
+
 export interface GuestSyncInput {
   /** 0 writes `guest_*`, n writes `guest<n+1>_*`. */
   slot: number;
@@ -99,6 +108,12 @@ export function formatTimecode(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
+// Names, chapter labels and chat text originate from other participants and
+// are written directly to the host's disk. Every run of control characters,
+// separators and bidirectional controls becomes one space; joiners are kept
+// so joined emoji and scripts that need them survive.
+export const sanitizeText = (s: string) => s.replace(/[\p{Cc}\p{Z}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]+/gu, ' ');
+
 /**
  * Chapter list in description format.
  *
@@ -108,9 +123,31 @@ export function formatTimecode(ms: number): string {
  */
 export function buildChapters(markers: ChapterMarker[]): string {
   const sorted = [...markers].sort((a, b) => a.atMs - b.atMs);
-  const lines = sorted.map((m) => `${formatTimecode(m.atMs)} ${m.label || 'Marker'}`);
+  const lines = sorted.map((m) => {
+    const clean = sanitizeText(m.label || '').trim();
+    return `${formatTimecode(m.atMs)} ${clean || 'Marker'}`;
+  });
   if (sorted.length === 0) return '';
   if ((sorted[0] as ChapterMarker).atMs >= 1000) lines.unshift('0:00 Start');
+  return lines.join('\n') + '\n';
+}
+
+export const MAX_CHAT_MESSAGE_LENGTH = 4000;
+
+/** Plain chat log of the take: [m:ss] role Name: text. */
+export function buildChatLog(
+  messages: ChatMessage[],
+  opts: { startMs: number; endMs: number; localName: string }
+): string {
+  const inWindow = messages.filter((m) => m.ts >= opts.startMs && m.ts <= opts.endMs);
+  if (inWindow.length === 0) return '';
+  const lines = inWindow.map((m) => {
+    const time = formatTimecode(m.ts - opts.startMs);
+    const rawName = m.self ? (opts.localName || m.fromName) : m.fromName;
+    const speaker = rawName ? `${m.from} ${sanitizeText(rawName)}` : m.from;
+    const text = sanitizeText(m.text);
+    return `[${time}] ${speaker}: ${text}`;
+  });
   return lines.join('\n') + '\n';
 }
 

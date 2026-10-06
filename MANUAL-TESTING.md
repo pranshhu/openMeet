@@ -76,7 +76,7 @@ EOF
 | # | Test | How | Expect | ✅ | Notes |
 |---|---|---|---|:--:|---|
 | 2.1 | Only the host can start | Look at the guest's control bar | **No** Record button; a line saying the host starts recording | ☐ | |
-| 2.2 | Consent notice | Host clicks **Record** | Guest sees "This call is now being recorded" toast **and** a persistent REC pill | ☐ | |
+| 2.2 | Consent notice | Host clicks **Record** | Guest sees "This call and chat are now being recorded" toast **and** a persistent REC pill | ☐ | |
 | 2.3 | Guest auto-starts | Watch the guest after 2.2 | Guest's own bar shows recording controls — nobody clicked anything there | ☐ | |
 | 2.4 | One folder prompt | Watch the host | Exactly **one** folder picker, not two | ☐ | |
 | 2.5 | Files appear | Record ~60 s, click **End & save** | 4 files: `host_*.mp4`, `host_*.wav`, `guest_*.mp4`, `guest_*.wav` | ☐ | |

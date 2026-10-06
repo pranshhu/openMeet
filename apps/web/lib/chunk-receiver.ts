@@ -158,7 +158,10 @@ export class ChunkReceiver {
         else if (t === 'recording_meta') this.captureMeta(parsed as RecordingMeta);
         else if (t === 'recording-finalized') {
           this._receivedFinalized = true;
-          this._senderSha256 = (parsed as ChunkRecordingFinalized).sha256 ?? null;
+          const sha = (parsed as ChunkRecordingFinalized).sha256;
+          if (typeof sha === 'string' && sha.length <= 64) {
+            this._senderSha256 = sha;
+          }
           this.finalizeResolve?.();
         } else if (t === 'stream-abandoned') {
           this._abandoned = true;
@@ -212,8 +215,12 @@ export class ChunkReceiver {
   }
 
   private captureMeta(m: RecordingMeta): void {
-    this._guestStartHostMs = m.guestStartHostMs;
-    this._syncRttMs = m.rttMs;
+    if (Number.isFinite(m.guestStartHostMs)) {
+      this._guestStartHostMs = m.guestStartHostMs;
+    }
+    if (Number.isFinite(m.rttMs)) {
+      this._syncRttMs = m.rttMs;
+    }
   }
 
   private answerResume(): void {

@@ -85,6 +85,7 @@ export function CallStage({
   recordingError,
   recordUnavailableReason,
   syncReportUrl,
+  sidecarsSaved,
   drained = true,
   onToggleMic,
   onToggleCam,
@@ -138,6 +139,7 @@ export function CallStage({
   backupUrl: string | null;
   wavBackupUrl: string | null;
   syncReportUrl: string | null;
+  sidecarsSaved?: boolean;
   /** Guest: every chunk of the last take reached the host before the drain cap. */
   drained?: boolean;
   // Non-fatal: shown as a banner without ending the call.
@@ -1064,6 +1066,7 @@ export function CallStage({
                 wavBackupUrl={wavBackupUrl}
                 downloadNames={downloadNames}
                 takes={takes}
+                sidecarsSaved={sidecarsSaved ?? false}
                 // Nobody left to record: invite someone and keep the summary.
                 // newTake would drop to the waiting room and lose it, sync.json
                 // with it. Once a guest is back, the button records again.

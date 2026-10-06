@@ -86,7 +86,7 @@ describe('CallStage layout', () => {
   // still keeps it off the Recording pill in the status bar.
   it('shows the consent toast over the stage column, below the status bar and its Recording pill', () => {
     render(<CallStage {...baseProps} role="guest" roomRecording />);
-    const toast = screen.getByText('This call is now being recorded');
+    const toast = screen.getByText('This call and chat are now being recorded');
     const pill = screen.getByText('Recording');
     const column = screen.getByTestId('stage-column');
     expect(pill.compareDocumentPosition(toast) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

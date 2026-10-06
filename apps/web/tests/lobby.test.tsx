@@ -242,6 +242,7 @@ describe('Lobby', () => {
   it('shows guest recording disclosure when viewer is not host', async () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     expect(screen.getByText(/The host can record this call/i)).toBeInTheDocument();
+    expect(screen.getByText(/camera, mic and chat are/i)).toBeInTheDocument();
     expect(screen.queryByText(/You can record this call/i)).not.toBeInTheDocument();
     // Let the in-flight getUserMedia/enumerateDevices chain settle so it
     // doesn't update state after the test (and its act() scope) has returned.

@@ -99,12 +99,32 @@ export interface RecordingHandles {
  * 1 unsuffixed means the common single-take session has clean filenames.
  */
 export function takeName(
-  role: 'host' | 'guest',
+  prefix: string,
   recordingId: string,
   take: number,
   ext: string
 ): string {
-  return take <= 1 ? `${role}_${recordingId}.${ext}` : `${role}_${recordingId}_take${take}.${ext}`;
+  return take <= 1 ? `${prefix}_${recordingId}.${ext}` : `${prefix}_${recordingId}_take${take}.${ext}`;
+}
+
+export async function writeTakeSidecars(
+  dir: FsDirectoryHandle,
+  files: { name: string; content: string }[]
+): Promise<boolean> {
+  try {
+    const encoder = new TextEncoder();
+    for (const f of files) {
+      if (!f.content) continue;
+      const fw = new FileWriter();
+      await fw.openIn(dir, f.name);
+      await fw.write(0, encoder.encode(f.content));
+      await fw.close();
+    }
+    return true;
+  } catch (e) {
+    console.warn('openMeet: failed to write take sidecars', e);
+    return false;
+  }
 }
 
 /** Stable per-source slot: first guest unsuffixed, later ones numbered. */

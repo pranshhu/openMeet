@@ -38,7 +38,7 @@ export function RecordingDisclosure({ isHost, presenting = false }: { isHost: bo
         </>
       ) : (
         <>
-          The host can record this call. If they do, your {presenting ? 'shared screen is' : 'camera and mic are'} written
+          The host can record this call. If they do, your {presenting ? 'shared screen and chat are' : 'camera, mic and chat are'} written
           straight to <strong>their computer</strong>&nbsp;— nothing is uploaded to a server,
           and you’ll be told on screen the moment it starts.
         </>

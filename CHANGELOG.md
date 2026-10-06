@@ -19,9 +19,14 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A public demo environment: `[env.demo]` in `apps/worker/wrangler.toml`, deployed with
   `pnpm --filter @openmeet/worker run deploy:demo` (migrations with `db:migrate:demo`).
   Self-host installs never read it.
+- Take session files saved directly into the recording folder next to recordings:
+  sync JSON (start-time offsets and remux commands), chapter markers (if marked), and
+  in-call chat from the take window.
 
 ### Security
 
+- Malformed markers, chat or guest metadata can no longer make the host's take
+  end in failure.
 - Security headers on every page Cloudflare Pages serves (`apps/web/public/_headers`):
   a Content-Security-Policy, `X-Frame-Options: DENY`, `Referrer-Policy`,
   `X-Content-Type-Options` and a Permissions-Policy limiting camera, microphone, screen
