@@ -22,6 +22,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Take session files saved directly into the recording folder next to recordings:
   sync JSON (start-time offsets and remux commands), chapter markers (if marked), and
   in-call chat from the take window.
+- `sync.json` gains a `frameRate` section: the frame rate cameras are asked for
+  and, where known, the rate each one reported, plus two `ffmpeg` commands per
+  video file, one that measures how variable its frame rate is and one that
+  re-encodes it to a constant frame rate.
 
 ### Security
 

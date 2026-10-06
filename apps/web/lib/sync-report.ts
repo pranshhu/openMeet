@@ -1,4 +1,5 @@
-import type { Role } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, type Role } from '@openmeet/protocol';
+import { cleanFps } from './quality';
 
 export interface ChapterMarker {
   /** Milliseconds from the host's recording start. */
@@ -35,6 +36,8 @@ export interface GuestSyncInput {
   abandoned?: boolean | undefined;
   timedOut?: boolean | undefined;
   endedEarly?: boolean | undefined;
+  /** What this guest's camera track reported when its recorder started, if the host knows. */
+  trackFps?: number | null | undefined;
 }
 
 export interface ScreenSegmentInput {
@@ -56,6 +59,8 @@ export interface SyncReportInput {
   guests: GuestSyncInput[];
   /** Screen-share segments, in order. */
   screenSegments?: ScreenSegmentInput[] | undefined;
+  /** What the host's camera track reported when the take started. */
+  hostTrackFps?: number | null | undefined;
 }
 
 export interface SummaryFile {
@@ -170,6 +175,56 @@ function remuxCmd(file: string): string {
 function muxWavCmd(video: string, wav: string): string {
   const out = video.replace(/\.[^.]+$/, '') + '_master.mov';
   return `ffmpeg -i "${video}" -i "${wav}" -map 0:v -map 1:a -c:v copy -c:a copy -tag:v avc1 "${out}"`;
+}
+
+const FRAME_RATE_NOTE =
+  "MediaRecorder has no constant-frame-rate setting, so the frame rate inside these files can vary. requestedFps is the rate a camera is asked for by default. trackFps is what the browser reported that camera running at when its recording started, or null when that was not reported; a screen is only captured when it changes, so screen files have none. Neither is a count of the frames in a file. For that, run the file's measure command: it decodes the file with your own ffmpeg, and its last VFR line reads 0.000000 when every frame interval is the same.";
+
+const CONFORM_NOTE =
+  'Each conform command re-encodes the video to a constant frame rate: trackFps when it is known, requestedFps otherwise. That is not lossless and it is slow; the audio is copied untouched. Run it only when an editor drifts or refuses a file. The result is seekable, so it replaces the remux for that file; for every other file the lossless remux under seekability is still the one to run.';
+
+/**
+ * ffmpeg's spelling of a frame rate: the NTSC rates as the exact fractions
+ * editors use, the rest as reported.
+ */
+function ffmpegRate(fps: number): string {
+  for (const n of [24000, 30000, 60000]) {
+    if (Math.abs(fps - n / 1001) < 0.01) return `${n}/1001`;
+  }
+  return String(fps);
+}
+
+// Runs on the user's machine: vfrdet counts the frame intervals that differ.
+// The tab writes the encoder's bytes without reading them back, so it has no
+// such count to offer.
+function measureFpsCmd(file: string): string {
+  return `ffmpeg -hide_banner -i "${file}" -an -vf vfrdet -f null -`;
+}
+
+/**
+ * Re-encode to a constant frame rate. Unlike remuxCmd this is not lossless: a
+ * frame rate cannot be changed by copying the stream. The fps filter rather
+ * than -fps_mode or -vsync, because -fps_mode is missing before ffmpeg 5.1 and
+ * -vsync is deprecated after it; the filter works in both. Audio is copied.
+ */
+function conformCmd(file: string, fps: number): string {
+  const out = file.replace(/\.[^.]+$/, '') + '_cfr.mp4';
+  return `ffmpeg -i "${file}" -vf fps=${ffmpegRate(fps)} -c:v libx264 -crf 18 -c:a copy -movflags +faststart "${out}"`;
+}
+
+/**
+ * One video file's frame-rate entry. The reported rate is bounded here, where
+ * it becomes part of a command, whatever the caller was handed.
+ */
+function frameRateEntry(file: string, kind: 'camera' | 'screen', reported?: number | null) {
+  const trackFps = kind === 'camera' ? cleanFps(reported) : null;
+  return {
+    file,
+    kind,
+    trackFps,
+    measure: measureFpsCmd(file),
+    conform: conformCmd(file, trackFps ?? RECORDING_FRAME_RATE),
+  };
 }
 
 /** Integrity verdict for the transferred guest track. */
@@ -441,6 +496,16 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     combine: {
       note: 'Pairs each camera file with its uncompressed audio master, losslessly. Output is .mov because MP4 cannot carry linear PCM without re-encoding.',
       ...combineMap,
+    },
+    frameRate: {
+      note: FRAME_RATE_NOTE,
+      requestedFps: RECORDING_FRAME_RATE,
+      conformNote: CONFORM_NOTE,
+      files: [
+        ...(hostFile ? [frameRateEntry(hostFile, 'camera', input.hostTrackFps)] : []),
+        ...guests.map((g) => frameRateEntry(g.file, 'camera', g.trackFps)),
+        ...screenFiles.map((f) => frameRateEntry(f, 'screen')),
+      ],
     },
     generatedBy: 'openMeet',
   };

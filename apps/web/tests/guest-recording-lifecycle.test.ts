@@ -727,7 +727,13 @@ describe('host backup after a take in useRoom', () => {
 
     expect(writtenFiles.has('sync_rec-host-sidecars.json')).toBe(true);
     const syncJson = new TextDecoder().decode(writtenFiles.get('sync_rec-host-sidecars.json')?.data);
-    expect(JSON.parse(syncJson)).toMatchObject({ generatedBy: 'openMeet' });
+    const parsedSync = JSON.parse(syncJson);
+    expect(parsedSync).toMatchObject({ generatedBy: 'openMeet' });
+    expect(parsedSync.frameRate.files.map((f: { file: string }) => f.file)).toEqual([
+      'host_rec-host-sidecars.mp4',
+      'guest_rec-host-sidecars.mp4',
+    ]);
+    expect(parsedSync.frameRate.files[0].conform).toContain('host_rec-host-sidecars_cfr.mp4');
 
     expect(writtenFiles.has('chat_rec-host-sidecars.txt')).toBe(true);
     const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-sidecars.txt')?.data);

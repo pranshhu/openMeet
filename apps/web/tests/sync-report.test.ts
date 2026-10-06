@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
 import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText } from '@/lib/sync-report';
 
 describe('buildSyncReport', () => {
@@ -498,5 +499,124 @@ describe('buildChatLog', () => {
     expect(sanitizeText('a\u2028b')).toBe('a b');
     expect(sanitizeText('a\u202Eb')).toBe('a b');
     expect(sanitizeText('a\u00A0b')).toBe('a b');
+  });
+});
+
+describe('frame rate section', () => {
+  const base = { recordingId: 'r', hostFile: 'host_r.mp4', hostStartMs: 0 };
+  const guest = { slot: 0, file: 'guest_r.mp4', startHostMs: 0, rttMs: 10 };
+  const section = (input: Parameters<typeof buildSyncReport>[0]) => JSON.parse(buildSyncReport(input).json).frameRate;
+
+  it('lists every video file once, in order host, guests, screens, with its kind', () => {
+    const inputWithHost = {
+      ...base,
+      guests: [guest, { slot: 1, file: 'guest2_r.mp4', startHostMs: 0, rttMs: 10 }],
+      screenSegments: [
+        { file: 'host_screen_r.mp4', offsetMs: 0 },
+        { file: 'guest_screen_r.mp4', offsetMs: 100 },
+      ],
+    };
+    const s = section(inputWithHost);
+    expect(s.files.map((f: { file: string; kind: string }) => [f.file, f.kind])).toEqual([
+      ['host_r.mp4', 'camera'],
+      ['guest_r.mp4', 'camera'],
+      ['guest2_r.mp4', 'camera'],
+      ['host_screen_r.mp4', 'screen'],
+      ['guest_screen_r.mp4', 'screen'],
+    ]);
+
+    const { hostFile: _, ...inputWithoutHost } = inputWithHost;
+    const sNoHost = section(inputWithoutHost);
+    expect(sNoHost.files.map((f: { file: string; kind: string }) => [f.file, f.kind])).toEqual([
+      ['guest_r.mp4', 'camera'],
+      ['guest2_r.mp4', 'camera'],
+      ['host_screen_r.mp4', 'screen'],
+      ['guest_screen_r.mp4', 'screen'],
+    ]);
+  });
+
+  it('preserves the contract keys', () => {
+    const s = section({ ...base, guests: [guest] });
+    expect(Object.keys(s)).toEqual(['note', 'requestedFps', 'conformNote', 'files']);
+    expect(Object.keys(s.files[0])).toEqual(['file', 'kind', 'trackFps', 'measure', 'conform']);
+  });
+
+  it('reports the requested rate and a known track rate', () => {
+    const s = section({
+      ...base,
+      hostTrackFps: 30,
+      guests: [{ ...guest, trackFps: 25 }],
+    });
+    expect(s.requestedFps).toBe(RECORDING_FRAME_RATE);
+    expect(s.files[0].trackFps).toBe(30);
+    expect(s.files[1].trackFps).toBe(25);
+  });
+
+  it('keeps unknown figures as null, never guessed', () => {
+    const s1 = section({ ...base, guests: [guest] });
+    expect(s1.files.every((f: { trackFps: number | null }) => f.trackFps === null)).toBe(true);
+
+    const s2 = section({
+      ...base,
+      hostTrackFps: 25,
+      guests: [guest],
+      screenSegments: [{ file: 'host_screen_r.mp4', offsetMs: 0 }],
+    });
+    const screenEntry = s2.files.find((f: { kind: string }) => f.kind === 'screen');
+    expect(screenEntry.trackFps).toBeNull();
+    expect(screenEntry.conform).toContain(`-vf fps=${RECORDING_FRAME_RATE} `);
+  });
+
+  it('targets the file own rate in conform and falls back to the requested one', () => {
+    const s = section({
+      ...base,
+      guests: [{ ...guest, trackFps: 25 }, { slot: 1, file: 'guest2_r.mp4', startHostMs: 0, rttMs: 10, trackFps: null }],
+    });
+    expect(s.files[1].conform).toContain('-vf fps=25 ');
+    expect(s.files[2].conform).toContain(`-vf fps=${RECORDING_FRAME_RATE} `);
+  });
+
+  it('formats NTSC rates as exact fractions and other rates as reported', () => {
+    const check = (hostTrackFps: number) => section({ ...base, hostTrackFps, guests: [] }).files[0];
+    expect(check(29.97).conform).toContain('fps=30000/1001 ');
+    expect(check(23.976).conform).toContain('fps=24000/1001 ');
+    expect(check(59.94).conform).toContain('fps=60000/1001 ');
+    expect(check(30).conform).toContain('fps=30 ');
+    expect(check(12.5).conform).toContain('fps=12.5 ');
+
+    const roundedNtsc = check(29.970029830932617);
+    expect(roundedNtsc.trackFps).toBe(29.97);
+    expect(roundedNtsc.conform).toContain('fps=30000/1001 ');
+  });
+
+  it('never lets a nonsense rate reach the JSON or a command', () => {
+    const nonsenseValues = [NaN, -30, 0, 1000, Infinity, '25' as never];
+    for (const val of nonsenseValues) {
+      const s = section({ ...base, hostTrackFps: val as number, guests: [{ ...guest, trackFps: val as number }] });
+      expect(s.files[0].trackFps).toBeNull();
+      expect(s.files[0].conform).toContain(`-vf fps=${RECORDING_FRAME_RATE} `);
+      expect(s.files[1].trackFps).toBeNull();
+      expect(s.files[1].conform).toContain(`-vf fps=${RECORDING_FRAME_RATE} `);
+    }
+  });
+
+  it('matches the two commands character for character', () => {
+    const s = section({ ...base, guests: [guest] });
+    expect(s.files[0].conform).toBe('ffmpeg -i "host_r.mp4" -vf fps=30 -c:v libx264 -crf 18 -c:a copy -movflags +faststart "host_r_cfr.mp4"');
+    expect(s.files[0].measure).toBe('ffmpeg -hide_banner -i "host_r.mp4" -an -vf vfrdet -f null -');
+  });
+
+  it('keeps the lossless remux as default', () => {
+    const r = buildSyncReport({ ...base, guests: [guest] });
+    const j = JSON.parse(r.json);
+    expect(j.seekability.remuxHost).toContain('-c copy');
+    expect(r.data.commands.some((c) => c.cmd.includes('libx264'))).toBe(false);
+  });
+
+  it('says the conform is not lossless in the report notes', () => {
+    const s = section({ ...base, guests: [guest] });
+    expect(s.conformNote).toContain('re-encodes');
+    expect(s.conformNote).toContain('not lossless');
+    expect(s.note).toContain('Neither is a count of the frames');
   });
 });

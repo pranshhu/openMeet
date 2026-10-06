@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   QUALITY_PRESETS, presetById, presetForTrack, supportedPresets,
   bytesPerHour, formatPerHour, describeTrack, DEFAULT_QUALITY_ID,
+  cleanFps,
 } from '@/lib/quality';
 
 const track = (caps?: Partial<MediaTrackCapabilities>, settings?: Partial<MediaTrackSettings>) =>
@@ -71,5 +72,29 @@ describe('describeTrack', () => {
   });
   it('returns null when there is nothing to report', () => {
     expect(describeTrack(track(undefined, {}))).toBeNull();
+  });
+});
+
+describe('cleanFps', () => {
+  it('keeps a sane rate and rounds it to three decimals', () => {
+    expect(cleanFps(30)).toBe(30);
+    expect(cleanFps(29.970029830932617)).toBe(29.97);
+    expect(cleanFps(30.000030517578125)).toBe(30);
+    expect(cleanFps(1)).toBe(1);
+    expect(cleanFps(120)).toBe(120);
+  });
+
+  it('turns everything else into null', () => {
+    expect(cleanFps(undefined)).toBeNull();
+    expect(cleanFps(null)).toBeNull();
+    expect(cleanFps('30')).toBeNull();
+    expect(cleanFps({ toString: 0 })).toBeNull();
+    expect(cleanFps(NaN)).toBeNull();
+    expect(cleanFps(Infinity)).toBeNull();
+    expect(cleanFps(0)).toBeNull();
+    expect(cleanFps(0.5)).toBeNull();
+    expect(cleanFps(-30)).toBeNull();
+    expect(cleanFps(120.5)).toBeNull();
+    expect(cleanFps(100000)).toBeNull();
   });
 });
