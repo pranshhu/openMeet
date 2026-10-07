@@ -408,11 +408,11 @@ the screen that follows offers them too.
 ### If the host's browser crashes
 
 Chrome keeps File System Access writes in a temporary file until the file is closed, so
-after a crash the host's files are missing or empty; each participant's camera MP4 and
-WAV master are in their own browser's backup, listed in the openMeet lobby with
-Download. The last few seconds before a crash may be missing, because backups are
-saved every couple of seconds. A guest should keep the tab open: when the host
-resumes, the bytes the guest still holds are sent again and its file continues.
+after a crash the host's files are missing or empty. The lobby then lists the take as
+**Unsaved recording**: **Save to folder** rebuilds the guests' files from this browser's
+crash copy, copies in the host's own camera file and WAV master from its backups, and
+writes `sync_<id>.json` and the chapters beside them. The last couple of seconds before
+the crash may be missing, and a guest's own backup still holds the rest.
 
 ---
 

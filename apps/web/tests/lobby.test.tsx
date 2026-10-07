@@ -4,6 +4,7 @@ import { Lobby } from '@/components/Lobby';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
 import type { TakeJournal } from '@/lib/take-journal';
+import type { FsDirectoryHandle } from '@/lib/fs-writer';
 
 const JOURNAL_A = 'openmeet-take-1759824000000-xyz-abcd-pqr';
 const JOURNAL_B = 'openmeet-take-1759800000000-klm-nopq-rst';
@@ -255,6 +256,22 @@ describe('Lobby', () => {
     return { dirName, notes, notesOk, bytes } as unknown as TakeJournal;
   }
 
+  /** A lobby holding one unsaved recording of this room, with the journal listing mocked. */
+  async function renderUnsaved() {
+    const hostStartMs = 1759824000000;
+    const when = new Date(hostStartMs).toLocaleString();
+    const journal = fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs }, 2_500_000_000);
+    const findJournalsSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'findTakeJournals')
+      .mockResolvedValue([journal]);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByText(`Recording from ${when}`);
+    return { journal, when, findJournalsSpy };
+  }
+
+  const saveButton = (when: string) =>
+    screen.getByRole('button', { name: `Save the unsaved recording from ${when} to a folder` });
+
   it('lists this room’s unfinished recording and hides another room’s', async () => {
     const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
       fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
@@ -452,6 +469,135 @@ describe('Lobby', () => {
       findJournalsSpy.mockRestore();
       deleteJournalSpy.mockRestore();
       confirm.mockRestore();
+    }
+  });
+
+  it('asks for a folder once and reports the files it saved', async () => {
+    // Removal that must fail this test: the save handler, or the setJournals filter.
+    const { journal, when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [{ name: 'guest_r.mp4', bytes: 1024, source: 'journal' }],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+      expect(pickSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledWith(journal, folder);
+      expect(screen.getByRole('status').textContent).toBe('Saved 1 file(s) to your folder.');
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('changes nothing when the folder prompt is cancelled', async () => {
+    // Removal that must fail this test: the if (!folder) return.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const abort = Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockRejectedValue(abort);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      await waitFor(() => expect(pickSpy).toHaveBeenCalledTimes(1));
+      await settle();
+
+      expect(saveSpy).not.toHaveBeenCalled();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('does not start a second save while one is running', async () => {
+    // Removal that must fail this test: the savingRef guard.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    let answer!: (dir: FsDirectoryHandle) => void;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      fireEvent.click(saveButton(when));
+      answer(folder);
+      await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+      await settle();
+
+      expect(pickSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('keeps the row and says so when the sync file could not be written', async () => {
+    // Removal that must fail this test: the result.json === null branch.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [{ name: 'guest_r.mp4', bytes: 1024, source: 'journal' }],
+      json: null,
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+      expect(screen.getByRole('status').textContent).toBe(
+        'Saved 1 file(s) to your folder. The sync file could not be written.'
+      );
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('still deletes an unsaved recording beside Save', async () => {
+    // Removal that must fail this test: the Delete button's onClick.
+    const { journal, when, findJournalsSpy } = await renderUnsaved();
+    const deleteSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+      .mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: `Delete unsaved recording from ${when}` }));
+      await waitFor(() => expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument());
+
+      expect(deleteSpy).toHaveBeenCalledWith(journal.dirName);
+    } finally {
+      deleteSpy.mockRestore();
+      confirm.mockRestore();
+      findJournalsSpy.mockRestore();
     }
   });
 

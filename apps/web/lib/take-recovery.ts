@@ -2,6 +2,8 @@ import { FileWriter, type FsDirectoryHandle } from './fs-writer';
 import { assembleBackupFromDir } from './backup-recorder';
 import { patchWavHeader, WAV_HEADER_BYTES } from './wav';
 import { isJournalFileName, type TakeJournal } from './take-journal';
+import { buildSyncReport, type GuestSyncInput, type ScreenSegmentInput } from './sync-report';
+import { takeName, writeTakeSidecars } from '../hooks/recording-controller';
 
 export interface RecoveredFile {
   /** The file's name in the recording folder. */
@@ -109,5 +111,93 @@ export async function copyBackupInto(
     return { name: entry.file, bytes: file.size, source: 'backup' };
   } catch {
     return { name: entry.file, bytes: 0, source: 'failed', reason: 'backup unavailable' };
+  }
+}
+
+export interface SaveResult {
+  files: RecoveredFile[];
+  /** The folder's sync sidecar name, or null when it could not be written. */
+  json: string | null;
+  /** True when the chapters sidecar was written. */
+  chapters: boolean;
+}
+
+/** Rebuild a journal into `folder`, write its sidecars, and remove the journal. Never rejects. */
+export async function saveRecoveredTake(journal: TakeJournal, folder: FsDirectoryHandle): Promise<SaveResult> {
+  const files = await recoverTake(journal, folder);
+  try {
+    const notes = journal.notes;
+    // Every file the journal holds parts for came from a guest; the host's own
+    // files are only in notes.backups. A rebuilt file has no sender digest, so
+    // only the guests' checks are marked recovered.
+    const guestFiles = new Set(notes.files.map((f) => f.file));
+    const byName = new Map(files.map((f) => [f.name, f.bytes] as const));
+    const checks = new Map(
+      [...byName].map(
+        ([name, bytes]) => [name, { bytes, ...(guestFiles.has(name) ? { recovered: true } : {}) }] as const
+      )
+    );
+
+    const guests: GuestSyncInput[] = [];
+    for (const note of notes.files) {
+      if (note.kind !== 'camera') continue;
+      const slot = note.slot ?? 0;
+      // The live path names a WAV master only when its receiver wrote bytes; a
+      // note whose file got nothing must not claim one was saved.
+      const wav = notes.files.find(
+        (f) => f.kind === 'wav' && (f.slot ?? 0) === slot && (byName.get(f.file) ?? 0) > 0
+      );
+      guests.push({
+        slot,
+        name: note.who,
+        file: note.file,
+        ...(wav ? { wavFile: wav.file } : {}),
+        noWav: !wav,
+        startHostMs: note.guestStartHostMs ?? null,
+        rttMs: note.rttMs ?? null,
+        // The stream never reached recording-finalized, so the file cannot be
+        // known to be whole.
+        endedEarly: true,
+      });
+    }
+
+    const hostCam = notes.backups.find((b) => b.kind === 'camera');
+    const hostWav = notes.backups.find((b) => b.kind === 'wav');
+    const screenSegments: ScreenSegmentInput[] = notes.files
+      .filter((f) => f.kind === 'screen')
+      .map((note) => ({
+        file: note.file,
+        offsetMs: Math.max(0, (note.startedAtMs ?? notes.hostStartMs) - notes.hostStartMs),
+        endedEarly: true,
+        ...(note.who ? { sharer: note.who } : {}),
+      }));
+
+    const report = buildSyncReport({
+      recordingId: notes.recordingId,
+      ...(hostCam ? { hostFile: hostCam.file } : {}),
+      ...(hostWav ? { hostWavFile: hostWav.file } : {}),
+      hostStartMs: notes.hostStartMs,
+      markers: notes.markers,
+      guests,
+      screenSegments,
+      checks,
+      interrupted: true,
+    });
+
+    const syncName = takeName('sync', notes.recordingId, notes.take, 'json');
+    const chaptersName = takeName('chapters', notes.recordingId, notes.take, 'txt');
+    // Two calls: a chapters failure must not be reported as a sync failure.
+    const jsonOk = await writeTakeSidecars(folder, [{ name: syncName, content: report.json }]);
+    const chaptersOk = await writeTakeSidecars(folder, [{ name: chaptersName, content: report.chapters }]);
+    if (jsonOk) {
+      try {
+        await journal.finish();
+      } catch {
+        // The row stays; a later save can finish the job.
+      }
+    }
+    return { files, json: jsonOk ? syncName : null, chapters: chaptersOk && Boolean(report.chapters) };
+  } catch {
+    return { files, json: null, chapters: false };
   }
 }

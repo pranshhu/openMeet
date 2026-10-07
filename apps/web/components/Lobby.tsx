@@ -25,6 +25,8 @@ import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
+import { pickRecordingDirectory } from '@/lib/fs-writer';
+import { saveRecoveredTake, type SaveResult } from '@/lib/take-recovery';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
@@ -157,6 +159,10 @@ export function Lobby({
   // A press that is being answered, or that already handed the stream over.
   // The check below is awaited, so a second press could otherwise join twice.
   const joiningRef = useRef(false);
+  // Same shape as joiningRef: opening the folder prompt is awaited, so a second
+  // press could otherwise start a second save over the same journal.
+  const savingRef = useRef(false);
+  const [savedLine, setSavedLine] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +225,28 @@ export function Lobby({
     if (!window.confirm('Delete this unsaved recording? It can’t be recovered.')) return;
     await deleteTakeJournal(j.dirName);
     setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
+  }
+
+  async function saveUnsaved(j: TakeJournal) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      // A cancelled prompt is a no-op, not a failure: the journal stays.
+      const folder = await pickRecordingDirectory().catch(() => null);
+      if (!folder) return;
+      const result: SaveResult = await saveRecoveredTake(j, folder);
+      const saved = result.files.filter((f) => f.source !== 'failed').length;
+      if (result.json === null) {
+        // The take is only saved once its sync file is: the row stays so the
+        // host can try the folder again.
+        setSavedLine(`Saved ${saved} file(s) to your folder. The sync file could not be written.`);
+      } else {
+        setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
+        setSavedLine(`Saved ${saved} file(s) to your folder.`);
+      }
+    } finally {
+      savingRef.current = false;
+    }
   }
 
   function startPreview(mm: MediaManager, quality: string) {
@@ -695,6 +723,14 @@ export function Lobby({
                     <div className="-ml-4 flex shrink-0 items-center gap-1">
                       <button
                         type="button"
+                        onClick={() => void saveUnsaved(j)}
+                        aria-label={`Save the unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()} to a folder`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 sm:min-h-9 ${focusRing}`}
+                      >
+                        Save to folder
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void removeUnsaved(j)}
                         aria-label={`Delete unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()}`}
                         className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#b3261e] transition-colors hover:bg-[#b3261e]/10 sm:min-h-9 ${focusRing}`}
@@ -706,6 +742,13 @@ export function Lobby({
                 ))}
               </ul>
             </section>
+          )}
+          {/* Outside the section: a successful save removes the last row, and the
+              line it leaves behind has to outlive it. */}
+          {savedLine && (
+            <p role="status" className="w-full text-left text-[13px] leading-relaxed text-[#5f6368]">
+              {savedLine}
+            </p>
           )}
         </div>
 

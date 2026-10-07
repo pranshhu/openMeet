@@ -57,6 +57,8 @@ export interface CallCopyInput {
 export interface FileCheck {
   /** Size on the host's disk. */
   bytes: number;
+  /** Rebuilt from the crash journal, so no digest of what the sender sent can exist. */
+  recovered?: boolean | undefined;
   /** Only for a file that arrived from another participant. */
   received?:
     | {
@@ -96,6 +98,8 @@ export interface SyncReportInput {
   callCopies?: CallCopyInput[] | undefined;
   /** Set when the take's call-copy file limit was reached, so later stretches have none. */
   callCopiesCapped?: boolean | undefined;
+  /** The take was rebuilt from the browser's crash copy, not closed by a live End & save. */
+  interrupted?: boolean | undefined;
 }
 
 export interface SummaryFile {
@@ -343,6 +347,12 @@ export function fileVerdict(
           : "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call."
     );
   }
+  if (c.recovered) {
+    return {
+      status: 'unverified',
+      text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
+    };
+  }
   if (!r) return { status: 'complete', text: 'Complete. Recorded on this computer.' };
   if (r.abandoned) {
     return incomplete(
@@ -397,6 +407,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     : [];
 
   const warnings: string[] = [];
+  if (input.interrupted) {
+    warnings.push('This recording was interrupted — the files were rebuilt from the browser’s copy after it closed.');
+  }
   const guestReports: NonNullable<SyncReportData['guests']> = [];
   const timelineGuests: {
     slot: number;

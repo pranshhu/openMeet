@@ -55,6 +55,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   recording folder (`call<n>_<id>.m4a`): a call-quality fallback for a guest
   track that stops arriving or ends short, listed in the session summary and in
   `sync_<id>.json`.
+- After the browser closes on a take, the lobby lists it as **Unsaved recording** and
+  **Save to folder** rebuilds the files and their sync file from the browser’s copy.
 
 ### Changed
 

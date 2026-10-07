@@ -627,6 +627,27 @@ describe('post-session report', () => {
     expect(files[2]).not.toHaveProperty('name');
     expect(copies[2]?.detail).toBe('+0ms');
   });
+
+  it('leads the warnings with the interrupted notice, leaving the others alone', () => {
+    // Removal that must fail this test: pushing the notice anywhere but as the
+    // first warning, or pushing it when the input does not ask for it.
+    const notice =
+      'This recording was interrupted — the files were rebuilt from the browser’s copy after it closed.';
+    const input = {
+      ...base,
+      guests: [
+        { slot: 0, name: 'Bob', file: 'guest_rec1.mp4', startHostMs: 1_000_000, rttMs: 5, noWav: true, endedEarly: true },
+      ],
+    };
+    const plain = buildSyncReport(input);
+    const rebuilt = buildSyncReport({ ...input, interrupted: true });
+
+    expect(plain.data.warnings).toContain('no WAV master for Bob');
+    expect(plain.data.warnings.some((w) => w === notice)).toBe(false);
+    expect(rebuilt.data.warnings[0]).toBe(notice);
+    expect(rebuilt.data.warnings.slice(1)).toEqual(plain.data.warnings);
+    expect((JSON.parse(rebuilt.json) as { warnings: string[] }).warnings[0]).toBe(notice);
+  });
 });
 
 describe('buildChatLog', () => {
@@ -983,6 +1004,30 @@ describe('verification and file sizes', () => {
       {
         status: 'incomplete',
         text: 'Incomplete. No finish signal arrived from Priya, so this file may end early. Ask Priya for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ],
+    [
+      'rebuilt from the crash copy',
+      { bytes: 10, recovered: true },
+      {
+        status: 'unverified',
+        text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
+      },
+    ],
+    [
+      'rebuilt from the crash copy and empty',
+      { bytes: 0, recovered: true },
+      {
+        status: 'incomplete',
+        text: "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call.",
+      },
+    ],
+    [
+      'rebuilt from the crash copy and reported by the guest',
+      { bytes: 10, recovered: true, received: received({ sha256Sent: 'sent', sha256Written: 'written' }) },
+      {
+        status: 'unverified',
+        text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
       },
     ],
   ];

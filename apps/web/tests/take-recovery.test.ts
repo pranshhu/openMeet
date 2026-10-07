@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { copyBackupInto, recoverTake } from '@/lib/take-recovery';
+import { copyBackupInto, recoverTake, saveRecoveredTake } from '@/lib/take-recovery';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
 import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 
@@ -20,13 +20,16 @@ interface SeedFile {
   getFile?: boolean;
 }
 
-/** A recording folder: seeded names, or a created one when `create` is set. */
-function fakeFolder(seed: Record<string, SeedFile> = {}) {
+/** A recording folder: seeded names, or a created one when `create` is set. A name in `refuse` cannot be opened for writing. */
+function fakeFolder(seed: Record<string, SeedFile> = {}, refuse: string[] = []) {
   const files = new Map<string, Required<SeedFile>>(
     Object.entries(seed).map(([name, f]) => [name, { size: f.size, getFile: f.getFile !== false }])
   );
   // One entry per createWritable() call: the folder was opened for writing.
   const opened: { name: string; writable: FakeWritable }[] = [];
+  // What each closed writable left in its file, keyed by name: a name that is
+  // absent was never closed, so it was never written.
+  const written = new Map<string, { data: Uint8Array; closed: boolean }>();
   const getFileHandle = vi.fn(async (name: string, opts?: { create?: boolean }) => {
     let record = files.get(name);
     if (!record) {
@@ -39,17 +42,28 @@ function fakeFolder(seed: Record<string, SeedFile> = {}) {
       files.set(name, record);
     }
     const held = record;
+    let data: Uint8Array = new Uint8Array(0);
     return {
       name,
       getFile: held.getFile ? async () => ({ size: held.size }) : undefined,
       createWritable: async () => {
+        if (refuse.includes(name)) throw new Error('permission denied');
         const writable = fakeWritable();
         opened.push({ name, writable });
-        return writable;
+        return {
+          write: (arg: { position: number; data: unknown }) => {
+            data = arg.data as Uint8Array;
+            return writable.write(arg);
+          },
+          close: async () => {
+            await writable.close();
+            written.set(name, { data, closed: true });
+          },
+        };
       },
     };
   });
-  return { getFileHandle, opened };
+  return { getFileHandle, opened, written };
 }
 
 /** The journal directory the host's own backups live under. */
@@ -132,7 +146,8 @@ function fakeJournal(
   const replay = vi.fn((name: string, into: { write(position: number, data: Blob): Promise<void> }) =>
     file(name).replay(into)
   );
-  return { journal: { notes, root, file, replay } as unknown as TakeJournal, file };
+  const finish = vi.fn().mockResolvedValue(undefined);
+  return { journal: { notes, root, file, replay, finish } as unknown as TakeJournal, file, finish };
 }
 
 function notesWith(over: Partial<TakeNotes> = {}): TakeNotes {
@@ -425,5 +440,268 @@ describe('recoverTake', () => {
     expect(root.getDirectoryHandle).not.toHaveBeenCalled();
     expect(folder.getFileHandle).not.toHaveBeenCalled();
     expect(folder.opened).toEqual([]);
+  });
+});
+
+const HOST_CAM = 'openmeet-backup-host-1-abc-defg-hij';
+const HOST_WAV = 'openmeet-backup-host-audio-1-abc-defg-hij';
+const INTERRUPTED =
+  'This recording was interrupted — the files were rebuilt from the browser’s copy after it closed.';
+
+describe('saveRecoveredTake', () => {
+  /** The file a closed writable left in the folder, parsed as JSON. */
+  const savedJson = (folder: ReturnType<typeof fakeFolder>, name: string) =>
+    JSON.parse(new TextDecoder().decode(folder.written.get(name)!.data));
+
+  it('writes the sync sidecar, names the host files from the notes, and removes the journal', async () => {
+    // Removal that must fail this test: the sync writeTakeSidecars call, the
+    // journal.finish call, the hostFile or hostWavFile spread, or the screen mapping.
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0 },
+        { file: 'guest_screen_r.mp4', kind: 'screen', segment: 1, startedAtMs: start + 4000, who: 'Bob' },
+      ],
+      backups: [
+        { dir: HOST_CAM, file: 'host_r.mp4', kind: 'camera' },
+        { dir: HOST_WAV, file: 'host_r.wav', kind: 'wav' },
+      ],
+    });
+    // The root holds no backup directory: the report must name the host's files
+    // from the notes, not from a copy it could assemble.
+    const { journal, finish } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = savedJson(folder, 'sync_rec-1.json');
+    expect(json.warnings[0]).toBe(INTERRUPTED);
+    expect(json.files.host).toBe('host_r.mp4');
+    expect(json.audioMasters.host).toBe('host_r.wav');
+    expect(json.timeline.screenSegments[0]).toEqual({
+      file: 'guest_screen_r.mp4',
+      offsetMs: 4000,
+      endedEarly: true,
+      sharer: 'Bob',
+    });
+    expect(finish).toHaveBeenCalledOnce();
+    expect(result.json).toBe('sync_rec-1.json');
+  });
+
+  it('writes no chapters file when nothing was marked, and says so', async () => {
+    // Removal that must fail this test: dropping && Boolean(report.chapters)
+    // from the result, or writing the chapters content regardless of empty,
+    // past the skip writeTakeSidecars does.
+    const notes = notesWith({ files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0 }] });
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(folder.getFileHandle).not.toHaveBeenCalledWith('chapters_rec-1.txt', { create: true });
+    expect(folder.written.has('chapters_rec-1.txt')).toBe(false);
+    expect(result.chapters).toBe(false);
+  });
+
+  it('writes the chapters file and keeps the markers when something was marked', async () => {
+    // Removal that must fail this test: the chapters writeTakeSidecars call, or
+    // handing the notes' markers to the report.
+    const notes = notesWith({
+      files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0 }],
+      markers: [{ atMs: 5000, label: 'Intro', from: 'host' }],
+    });
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(new TextDecoder().decode(folder.written.get('chapters_rec-1.txt')!.data)).toBe(
+      '0:00 Start\n0:05 Intro\n'
+    );
+    expect(result.chapters).toBe(true);
+    expect(savedJson(folder, 'sync_rec-1.json').markers[0]).toMatchObject({
+      atMs: 5000,
+      label: 'Intro',
+      from: 'host',
+    });
+  });
+
+  it('keeps the sync file when only the chapters write fails', async () => {
+    // Removal that must fail this test: merging the two writeTakeSidecars calls
+    // into one, so a chapters failure nulls the sync file.
+    const notes = notesWith({
+      files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0 }],
+      markers: [{ atMs: 5000, label: 'Intro', from: 'host' }],
+    });
+    const { journal, finish } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder({}, ['chapters_rec-1.txt']);
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(result.json).toBe('sync_rec-1.json');
+    expect(result.chapters).toBe(false);
+    expect(folder.written.has('sync_rec-1.json')).toBe(true);
+    expect(finish).toHaveBeenCalledOnce();
+  });
+
+  it('maps the journal notes to guests without inventing a digest', async () => {
+    // Removal that must fail this test: sha256Sent on the guest mapping (the
+    // integrity text becomes a mismatch), recovered: true in checks (the row
+    // becomes complete), endedEarly: true, or taking the WAV note without
+    // checking what its file got.
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0, who: 'Bob', guestStartHostMs: start + 1500, rttMs: 42 },
+        { file: 'guest_r.wav', kind: 'wav', slot: 0 },
+      ],
+    });
+    const { journal } = fakeJournal(notes, {
+      'guest_r.mp4': { parts: [part(0, 3)] },
+      'guest_r.wav': { parts: [part(0, 44)] },
+    });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = savedJson(folder, 'sync_rec-1.json');
+    expect(json.guests[0]).toMatchObject({
+      slot: 0,
+      name: 'Bob',
+      file: 'guest_r.mp4',
+      wavFile: 'guest_r.wav',
+      offsetMs: 1500,
+      endedEarly: true,
+    });
+    expect(json.guests[0].integrity.text).toContain('Not verified');
+    expect(json.timeline.clockSyncRttMs).toBe(42);
+    expect(json.verification).toContainEqual(
+      expect.objectContaining({ file: 'guest_r.mp4', status: 'unverified', bytes: 3 })
+    );
+  });
+
+  it('leaves out a WAV note whose file got no bytes, and warns', async () => {
+    // Removal that must fail this test: taking the WAV note without asking
+    // byName what its file got.
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0, who: 'Bob', guestStartHostMs: start + 1500, rttMs: 42 },
+        { file: 'guest_r.wav', kind: 'wav', slot: 0 },
+      ],
+    });
+    const { journal } = fakeJournal(notes, {
+      'guest_r.mp4': { parts: [part(0, 3)] },
+      'guest_r.wav': { parts: [] },
+    });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = savedJson(folder, 'sync_rec-1.json');
+    expect(json.guests[0].wavFile).toBeNull();
+    expect(json.warnings).toContain('no WAV master for Bob');
+  });
+
+  it('keeps the journal when the sync file cannot be written, and never rejects', async () => {
+    // Removal that must fail this test: the if (jsonOk) guard around finish.
+    const notes = notesWith({ files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0 }] });
+    const { journal, finish } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder({}, ['sync_rec-1.json']);
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(result).toEqual({
+      files: [{ name: 'guest_r.mp4', bytes: 3, source: 'journal' }],
+      json: null,
+      chapters: false,
+    });
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it('resolves when building the report throws', async () => {
+    // Removal that must fail this test: the try around the report and the
+    // sidecar writes, which turns a throw into a result.
+    const buildSpy = vi
+      .spyOn(await import('@/lib/sync-report'), 'buildSyncReport')
+      .mockImplementationOnce(() => {
+        throw new Error('boom');
+      });
+    const notes = notesWith({ files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0 }] });
+    const { journal, finish } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+    try {
+      const result = await saveRecoveredTake(journal, folderOf(folder));
+
+      expect(result).toEqual({
+        files: [{ name: 'guest_r.mp4', bytes: 3, source: 'journal' }],
+        json: null,
+        chapters: false,
+      });
+      expect(finish).not.toHaveBeenCalled();
+    } finally {
+      buildSpy.mockRestore();
+    }
+  });
+
+  it('never gives a screen segment a negative offset', async () => {
+    // Removal that must fail this test: dropping Math.max(0, …) from the offset.
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0 },
+        { file: 'guest_screen_r.mp4', kind: 'screen', segment: 1, startedAtMs: start - 5000, who: 'Bob' },
+      ],
+    });
+    const { journal } = fakeJournal(notes, {
+      'guest_r.mp4': { parts: [part(0, 3)] },
+      'guest_screen_r.mp4': { parts: [part(0, 3)] },
+    });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = savedJson(folder, 'sync_rec-1.json');
+    expect(json.timeline.screenSegments[0].offsetMs).toBe(0);
+  });
+
+  it('gives a guest note with no slot the first slot', async () => {
+    // Removal that must fail this test: dropping the ?? 0 default on the slot.
+    const notes = notesWith({ files: [{ file: 'guest_r.mp4', kind: 'camera', who: 'Bob' }] });
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(savedJson(folder, 'sync_rec-1.json').guests[0].slot).toBe(0);
+  });
+
+  it('keeps the host files copied from the backups out of the rebuilt verdict', async () => {
+    // Removal that must fail this test: marking every check recovered instead
+    // of only the guests' files.
+    const notes = notesWith({
+      files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0, who: 'Bob' }],
+      backups: [{ dir: HOST_CAM, file: 'host_r.mp4', kind: 'camera' }],
+    });
+    const root = new FakeDir('root');
+    root.entries.set(HOST_CAM, backupDir(HOST_CAM, [new Uint8Array(10)]));
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } }, root);
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = savedJson(folder, 'sync_rec-1.json');
+    expect(json.verification).toContainEqual(
+      expect.objectContaining({
+        file: 'host_r.mp4',
+        status: 'complete',
+        detail: 'Complete. Recorded on this computer.',
+      })
+    );
+    expect(json.verification).toContainEqual(expect.objectContaining({ file: 'guest_r.mp4', status: 'unverified' }));
   });
 });
