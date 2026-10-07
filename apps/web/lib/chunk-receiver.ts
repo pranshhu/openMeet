@@ -28,6 +28,12 @@ export interface ChunkReceiverOpts {
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
 
+/** How far past the end of what arrived a fragment may start. */
+export const MAX_OFFSET_JUMP_BYTES = 64 * 1024 * 1024;
+
+/** Gap answers in a row that left the expected index where it was. */
+const GAP_ASKS_BEFORE_GIVING_UP = 5;
+
 export class ChunkReceiver {
   private readonly recordingId: string;
   private readonly writer: FileWriter;
@@ -38,6 +44,12 @@ export class ChunkReceiver {
   private nextIdx = 0;
   /** When a gap was last answered with resume_offset, so one lost fragment cannot become a message per frame. */
   private lastResumeAskAt = 0;
+  /** Gap answers in a row with the expected index still missing; a sender that cannot fill it is asked no further. */
+  private gapAsks = 0;
+  /** A fragment far past the end was reported; one report per receiver is enough. */
+  private jumpReported = false;
+  /** A gap was reported as uncontinuable; one report per receiver is enough. */
+  private gapReported = false;
   /** Bounded mode: where the next chunk must start. Claimed before the write, since the next chunk can arrive while it is pending. */
   private nextOffset = 0;
   /** Bounded mode: a chunk was refused, so no more data is taken. */
@@ -214,13 +226,37 @@ export class ChunkReceiver {
       // and it must not be read as a duplicate.
       if (header.idx < this.nextIdx) return;
       if (header.idx > this.nextIdx) {
+        // A sender that cannot fill the gap would be asked for it forever, and
+        // every ask makes it replay its whole backlog. Five answers that left
+        // the expected index where it was mean this file cannot be continued
+        // here, and the sender's own backup is the only copy of the hole.
+        if (this.gapAsks >= GAP_ASKS_BEFORE_GIVING_UP) return;
         const now = Date.now();
         if (now - this.lastResumeAskAt >= RESUME_ASK_INTERVAL_MS) {
-          this.lastResumeAskAt = now;
           this.answerResume();
+          this.gapAsks += 1;
+          if (this.gapAsks >= GAP_ASKS_BEFORE_GIVING_UP && !this.gapReported) {
+            this.gapReported = true;
+            this.onError?.(
+              new Error("A guest's recording could not be continued here. Their own backup has it.")
+            );
+          }
         }
         return;
       }
+      // A guest names its own offsets. One far past the bytes that arrived
+      // would make the folder writer create a sparse file, so it is refused.
+      // Measured from those bytes, not the file's end, one byte cannot buy
+      // another 64 MiB of file. The bound is loose on purpose: a reconnect or
+      // a WAV header rewritten at offset 0 both move by more than a fragment.
+      if (header.offset > this._bytesWritten + MAX_OFFSET_JUMP_BYTES) {
+        if (!this.jumpReported) {
+          this.jumpReported = true;
+          this.onError?.(new Error('A fragment arrived far past the end of the file.'));
+        }
+        return;
+      }
+      this.gapAsks = 0;
       this.nextIdx = header.idx + 1;
     }
     // The recorder never sends an empty blob, and an empty frame would count
@@ -270,7 +306,7 @@ export class ChunkReceiver {
     this.hash.update(data);
     this._bytesWritten += data.byteLength;
     this.lastIdx = header.idx;
-    this.lastOffset = header.offset + header.size;
+    this.lastOffset = header.offset + data.byteLength;
     this.chunksSinceAck += 1;
     this.maybeAck();
   }
@@ -305,7 +341,9 @@ export class ChunkReceiver {
     }
   }
 
-  private answerResume(): void {
+  /** Tell the other side where this file ends, so it can replay exactly what is missing. */
+  answerResume(): void {
+    this.lastResumeAskAt = Date.now();
     const ro: ChunkResumeOffset = {
       type: 'resume_offset',
       recordingId: this.recordingId,

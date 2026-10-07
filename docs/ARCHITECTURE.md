@@ -306,11 +306,16 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once
-  every 2 s — while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
+  every 2 s, and after five such answers leave the gap unfilled the asking stops and the gap is
+  reported once; the extents are the frame that arrived, not the size its header claims, and a
+  fragment starting more than 64 MiB past the bytes the guest actually sent is refused and reported
+  once, so the file cannot run more than that past what really arrived —
+  while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
   `writer.write(offset, data)`; `maxBytes` holds a sender to a size it declared; a bounded receiver
   also refuses a chunk whose declared size is not its payload's length, takes chunks only in order
   and stops at its first refusal; acks every 5 chunks / 10s; `answerResume` replies
-  `resume_offset{lastByte,lastIdx}`.
+  `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
+  where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).

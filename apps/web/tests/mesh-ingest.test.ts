@@ -407,6 +407,11 @@ describe('host ingest keys guest slots by the channel-label key when present, no
 
     const a = fakeChannel('recording#R1');
     await bindHostGuestChannel(a, h, 'peer-a');
+    // The first attach announces too: the guest learns where the file ends
+    // without racing a query against the host's own open.
+    expect(a.sent).toEqual([
+      JSON.stringify({ type: 'resume_offset', recordingId: 'rec', lastByte: 0, lastIdx: -1 }),
+    ]);
     await sendChunk(a, 0, 0, 100);
 
     // Reconnect: a NEW peerId, but the SAME label key.
@@ -415,7 +420,11 @@ describe('host ingest keys guest slots by the channel-label key when present, no
 
     expect(opened).toEqual([]); // slot 0's file was already open; no second file
     expect(h.receiver).toBe(receiver); // same receiver instance, not a fresh one
+    expect(b.sent).toEqual([
+      JSON.stringify({ type: 'resume_offset', recordingId: 'rec', lastByte: 100, lastIdx: 0 }),
+    ]);
 
+    b.sent.length = 0;
     await b.deliver(JSON.stringify({ type: 'resume_query', recordingId: 'rec' }));
     expect(b.sent).toEqual([
       JSON.stringify({ type: 'resume_offset', recordingId: 'rec', lastByte: 100, lastIdx: 0 }),

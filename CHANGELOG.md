@@ -80,6 +80,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   reads the host's own rows from what was written, keeps a red alert readable
   above the open list, ages a stalled reading into **Check tracks**, names a
   blank guest row, and refuses an oversized channel label from a guest.
+- After a reconnect the host tells the guest where its file ends as soon as the
+  channel is attached, and counts only the bytes that actually arrived.
 
 ### Security
 

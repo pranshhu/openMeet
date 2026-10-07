@@ -181,7 +181,7 @@ describe('rebindGuestRecording', () => {
     } as MessageEvent);
     expect(resumeSpy).toHaveBeenCalledWith(-1);
 
-    for (const lastIdx of ['1', 1.5, -2]) {
+    for (const lastIdx of ['1', 1.5, -2, 1000, Number.MAX_SAFE_INTEGER]) {
       ch.onmessage!({
         data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 0, lastIdx }),
       } as MessageEvent);
@@ -223,5 +223,12 @@ describe('rebindGuestRecording', () => {
     } as MessageEvent);
     expect(resumeSpy).toHaveBeenCalledWith(5);
     expect(sender.hasQueuedChunks).toBe(true);
+
+    // A lastIdx equal to sender.lastSentIdx is accepted when the host has written
+    // every fragment the sender put on the wire.
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 28, lastIdx: 6 }),
+    } as MessageEvent);
+    expect(resumeSpy).toHaveBeenCalledWith(6);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ChunkReceiver, RESUME_ASK_INTERVAL_MS } from '@/lib/chunk-receiver';
+import { ChunkReceiver, MAX_OFFSET_JUMP_BYTES, RESUME_ASK_INTERVAL_MS } from '@/lib/chunk-receiver';
 import { encodeChunkHeader } from '@openmeet/protocol';
 
 function fakeWriter() {
@@ -880,7 +880,7 @@ describe('ChunkReceiver', () => {
     expect(r.bytesWritten).toBe(10);
   });
 
-  it('drops an empty payload on an unbounded receiver too, leaving a far offset unwritten', async () => {
+  it('drops an empty payload on an unbounded receiver too, leaving its offset unwritten', async () => {
     const writer = fakeWriter();
     const onError = vi.fn();
     const sent: string[] = [];
@@ -891,7 +891,7 @@ describe('ChunkReceiver', () => {
       onError,
     });
 
-    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000_000_000, size: 0, ts: 1 }));
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000, size: 0, ts: 1 }));
     await r.handleMessage(new ArrayBuffer(0));
     expect(writer.write).not.toHaveBeenCalled();
     expect(r.bytesWritten).toBe(0);
@@ -901,10 +901,34 @@ describe('ChunkReceiver', () => {
 
     // The dropped frame was not counted as progress, so the sender's next
     // chunk is still taken.
-    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 1_000_000_000, size: 10, ts: 2 }));
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 1_000, size: 10, ts: 2 }));
     await r.handleMessage(new Uint8Array(10).buffer);
-    expect(writer.write).toHaveBeenCalledWith(1_000_000_000, expect.any(ArrayBuffer));
+    expect(writer.write).toHaveBeenCalledWith(1_000, expect.any(ArrayBuffer));
     expect(r.bytesWritten).toBe(10);
+  });
+
+  // The far-offset rule runs before a frame is dropped for carrying nothing:
+  // a frame that arrived must not move a file's size off zero.
+  it('refuses an empty payload at a far offset instead of dropping it', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000_000_000, size: 0, ts: 1 }));
+    await r.handleMessage(new ArrayBuffer(0));
+
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(0);
+    expect(r.lastOffsetValue).toBe(0);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe(
+      'A fragment arrived far past the end of the file.'
+    );
   });
 
   it('reports size error when a chunk is both past the bound and out of order', async () => {
@@ -991,8 +1015,8 @@ describe('ChunkReceiver', () => {
     expect(onError).not.toHaveBeenCalled();
     expect(r.bytesWritten).toBe(10);
 
-    // Without a bound, the resume answer still reports the declared size.
-    expect(r.lastOffsetValue).toBe(5);
+    // The declared size is not an extent: the ten bytes that arrived are.
+    expect(r.lastOffsetValue).toBe(10);
   });
 
   it('counts a queued second chunk after a write failure when unbounded', async () => {
@@ -1205,6 +1229,401 @@ describe('ChunkReceiver — live take order', () => {
     expect(writer.write).toHaveBeenCalledTimes(1);
     expect((onError.mock.calls[0]![0] as Error).message).toBe('Received data out of order.');
     expect(sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset')).toEqual([]);
+  });
+
+  // The header's `size` is the guest's claim about its own frame. Only the
+  // bytes in the frame arrived, so only they can say where the file ends.
+  it('measures the end of a live file by the payload that arrived, not the declared size', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 10, size: 999_999, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(r.lastOffsetValue).toBe(14);
+
+    sent.length = 0;
+    r.flushAck();
+    expect(sent.map((m) => JSON.parse(m))).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 14 },
+    ]);
+  });
+
+  // A live file is written front to back, so an offset far past its end would
+  // only make the folder writer create a sparse file.
+  it('refuses a fragment far past the end of a live file and reports it', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 10, size: 999_999, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: MAX_OFFSET_JUMP_BYTES + 100, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: MAX_OFFSET_JUMP_BYTES + 200, size: 4, ts: 3 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(4);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe('A fragment arrived far past the end of the file.');
+  });
+
+  // One report per receiver: a guest that keeps naming absurd offsets must not
+  // become an error per frame in the host's UI.
+  it('reports the far-past-the-end fragment once, however many arrive', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    // Both jumps carry the index the receiver expects, so both reach the
+    // offset rule rather than the gap rule.
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: MAX_OFFSET_JUMP_BYTES + 100, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: MAX_OFFSET_JUMP_BYTES + 200, size: 4, ts: 3 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(4);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  // The refused fragment must not be claimed: if it advanced the expected
+  // index, the honest fragment that follows would be dropped as a replay.
+  it('takes the honest fragment after a refused jump instead of calling it a gap', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError: vi.fn(),
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 10, size: 999_999, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: MAX_OFFSET_JUMP_BYTES + 100, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    sent.length = 0;
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 14, size: 4, ts: 3 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(2, 14, expect.any(ArrayBuffer));
+    expect(sent.filter((m) => JSON.parse(m).type === 'resume_offset')).toEqual([]);
+  });
+
+  // The bound is on how far past the end a fragment may start, not on whether
+  // it moves forward: a replay after a lost ack and a WAV header rewritten at
+  // offset 0 both start before the end and must still be written.
+  it('still takes a live fragment that starts before the end of the file', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: MAX_OFFSET_JUMP_BYTES, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 0, size: 4, ts: 3 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(3);
+    expect(writer.write).toHaveBeenNthCalledWith(2, MAX_OFFSET_JUMP_BYTES, expect.any(ArrayBuffer));
+    expect(writer.write).toHaveBeenNthCalledWith(3, 0, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  // A file that has already received more than 64 MiB of data can still receive
+  // fragments starting before the end (such as a WAV header rewritten at offset 0).
+  // A symmetric bound (|offset - bytesWritten| > MAX_OFFSET_JUMP_BYTES) would reject
+  // the offset-0 rewrite once bytesWritten exceeds 64 MiB.
+  it('allows rewriting at offset 0 after more than 64 MiB has arrived', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: MAX_OFFSET_JUMP_BYTES + 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(MAX_OFFSET_JUMP_BYTES + 1).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(MAX_OFFSET_JUMP_BYTES + 1);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 44, ts: 2 }));
+    await r.handleMessage(new Uint8Array(44).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(2, 0, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  // A fragment starting at exactly bytesWritten + MAX_OFFSET_JUMP_BYTES is
+  // within the bound and must be written, and a file past 64 MiB continues
+  // taking chunks.
+  it('allows a fragment starting at the exact maximum jump boundary beyond current extents', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    await r.handleMessage(
+      encodeChunkHeader({ idx: 1, offset: 4 + MAX_OFFSET_JUMP_BYTES, size: 4, ts: 2 })
+    );
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(2, 4 + MAX_OFFSET_JUMP_BYTES, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(8);
+    expect(onError).not.toHaveBeenCalled();
+
+    await r.handleMessage(
+      encodeChunkHeader({ idx: 2, offset: 8 + MAX_OFFSET_JUMP_BYTES, size: 4, ts: 3 })
+    );
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(3);
+    expect(writer.write).toHaveBeenNthCalledWith(3, 8 + MAX_OFFSET_JUMP_BYTES, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(12);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  // Each fragment starts 64 MiB past the last while carrying one byte.
+  // Measured from the file's end, every step is allowed and one byte buys
+  // another 64 MiB of file; measured from the bytes that arrived, the file
+  // cannot run more than the bound past what the guest really sent.
+  it('measures the jump allowance from the bytes that arrived, not the file end', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: MAX_OFFSET_JUMP_BYTES, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    // The same index each time, so every jump reaches the offset rule rather
+    // than the gap rule.
+    for (let i = 2; i <= 5; i++) {
+      await r.handleMessage(
+        encodeChunkHeader({ idx: 1, offset: i * MAX_OFFSET_JUMP_BYTES + i - 1, size: 1, ts: i })
+      );
+      await r.handleMessage(new Uint8Array(1).buffer);
+    }
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(writer.write).toHaveBeenCalledWith(MAX_OFFSET_JUMP_BYTES, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(1);
+    expect(r.lastOffsetValue).toBe(MAX_OFFSET_JUMP_BYTES + 1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe(
+      'A fragment arrived far past the end of the file.'
+    );
+  });
+
+  // A returned file is read front to back against the size its sender declared,
+  // so a jump there is the size rule's refusal, and that refusal latches.
+  it('leaves a bounded receiver refusing a jump by its own size rule', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: MAX_OFFSET_JUMP_BYTES + 100, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 1, ts: 2 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe('Received more data than the sender declared.');
+  });
+
+  // A guest asks on its channel's open, the host binds when its own file is
+  // ready. Answering a query must count as the answer, or the gap that follows
+  // the query sends a second one at the same instant.
+  it('answers a resume_query and the gap after it with one resume_offset', async () => {
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: (m) => sent.push(m),
+    });
+
+    await r.handleMessage(JSON.stringify({ type: 'resume_query', recordingId: 'r1' }));
+    await r.handleMessage(encodeChunkHeader({ idx: 3, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    const asks = sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+    expect(asks).toEqual([{ type: 'resume_offset', recordingId: 'r1', lastByte: 0, lastIdx: -1 }]);
+  });
+
+  // A receiver that is new while the sender is not would ask forever, and every
+  // ask makes the guest replay its whole backlog. Five fruitless asks is enough
+  // to tell the host this file cannot be continued here.
+  it('stops asking for a gap after five fruitless asks and reports it once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const writer = fakeWriter();
+      const sent: string[] = [];
+      const onError = vi.fn();
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: writer as never,
+        sendControl: (m) => sent.push(m),
+        onError,
+      });
+      const asks = () => sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+      const gap = async (idx: number) => {
+        await r.handleMessage(encodeChunkHeader({ idx, offset: 0, size: 4, ts: 1 }));
+        await r.handleMessage(new Uint8Array(4).buffer);
+      };
+
+      for (let i = 0; i < 5; i++) {
+        await gap(i + 1);
+        vi.advanceTimersByTime(RESUME_ASK_INTERVAL_MS);
+      }
+      expect(asks()).toHaveLength(5);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect((onError.mock.calls[0]![0] as Error).message).toBe(
+        "A guest's recording could not be continued here. Their own backup has it."
+      );
+
+      await gap(9);
+      await gap(10);
+      expect(asks()).toHaveLength(5);
+      expect(onError).toHaveBeenCalledTimes(1);
+
+      // The fragment the asks were for is still taken when it finally arrives.
+      await gap(0);
+      expect(writer.write).toHaveBeenCalledTimes(1);
+      expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The count belongs to a gap, not to the receiver: an ask that gets its
+  // fragment answers the question, and the next gap starts over.
+  it('asks for a later gap again once a fragment fills the one before it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const writer = fakeWriter();
+      const sent: string[] = [];
+      const onError = vi.fn();
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: writer as never,
+        sendControl: (m) => sent.push(m),
+        onError,
+      });
+      const asks = () => sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+
+      for (let i = 0; i < 4; i++) {
+        await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 4, ts: 1 }));
+        await r.handleMessage(new Uint8Array(4).buffer);
+        vi.advanceTimersByTime(RESUME_ASK_INTERVAL_MS);
+      }
+      expect(asks()).toHaveLength(4);
+      expect(onError).not.toHaveBeenCalled();
+
+      await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array(4).buffer);
+      expect(writer.write).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(RESUME_ASK_INTERVAL_MS);
+      await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 4, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array(4).buffer);
+
+      expect(asks()).toHaveLength(5);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // One report per receiver: a guest that gives up on a later gap must not
+  // keep replacing whatever the host is being told.
+  it('reports the gap once however many times the asking gives up', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const writer = fakeWriter();
+      const sent: string[] = [];
+      const onError = vi.fn();
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: writer as never,
+        sendControl: (m) => sent.push(m),
+        onError,
+      });
+      const asks = () => sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+      const gap = async (idx: number) => {
+        await r.handleMessage(encodeChunkHeader({ idx, offset: 0, size: 4, ts: 1 }));
+        await r.handleMessage(new Uint8Array(4).buffer);
+      };
+
+      for (let i = 0; i < 5; i++) {
+        await gap(1);
+        vi.advanceTimersByTime(RESUME_ASK_INTERVAL_MS);
+      }
+      expect(asks()).toHaveLength(5);
+      expect(onError).toHaveBeenCalledTimes(1);
+
+      // The fragment the asks were for arrives, so a later gap is asked for
+      // again from scratch.
+      await gap(0);
+      expect(writer.write).toHaveBeenCalledTimes(1);
+
+      for (let i = 0; i < 5; i++) {
+        await gap(2);
+        vi.advanceTimersByTime(RESUME_ASK_INTERVAL_MS);
+      }
+      expect(asks()).toHaveLength(10);
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

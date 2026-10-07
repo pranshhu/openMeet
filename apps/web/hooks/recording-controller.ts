@@ -483,6 +483,10 @@ export function bindHostChannel(
   channel.binaryType = 'arraybuffer';
   if (channelRef) channelRef.current = channel;
   channel.onmessage = (ev: MessageEvent) => { void receiver.handleMessage(ev.data as string | ArrayBuffer); };
+  // A guest asks on its channel's open, which races this bind when the host is
+  // still opening the file. Announcing here lets it replay exactly what is
+  // missing instead of racing its own query.
+  receiver.answerResume();
 }
 
 export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
@@ -588,8 +592,15 @@ export function bindGuestChannel(
       if (msg.type === 'ack') sender.handleControl(msg);
       else if (msg.type === 'resume_offset') {
         // The host's own number, so it can be nonsense or out of range. `resume`
-        // rebuilds the whole queue from it, so a bad value would empty it.
-        if (Number.isSafeInteger(msg.lastIdx) && msg.lastIdx >= -1) sender.resume(msg.lastIdx);
+        // rebuilds the whole queue from it, so a bad value would empty it, and
+        // an index this sender never put on the wire cannot have been received.
+        if (
+          Number.isSafeInteger(msg.lastIdx) &&
+          msg.lastIdx >= -1 &&
+          msg.lastIdx <= sender.lastSentIdx
+        ) {
+          sender.resume(msg.lastIdx);
+        }
       } else if (msg.type === 'clock_pong') clockSync?.handlePong(msg);
     } catch { /* ignore */ }
   };
