@@ -764,7 +764,9 @@ export function syncCallCopies(
  * Every writer this session has open. The last-resort commit paths need all of
  * them: a live recording can hold both WAV masters, one writer per screen-share
  * segment and one per guest 2+, and a FileSystemWritableFileStream only writes
- * through on close().
+ * through on close(). A call copy is here while it runs and not once it was told
+ * to finish: it closes its own file, and listing it again would let its close
+ * failure be thrown by endHostRecording.
  */
 export function allWriters(h: RecordingHandles): FileWriter[] {
   return [
@@ -774,6 +776,7 @@ export function allWriters(h: RecordingHandles): FileWriter[] {
     h.guestWavWriter,
     ...(h.screenWriters ?? []),
     ...(h.extraWriters ?? []),
+    ...(h.callCopies ?? []).filter((c) => !c.finished).map((c) => c.writer),
   ].filter((w): w is FileWriter => !!w);
 }
 
@@ -831,6 +834,10 @@ export async function endHostRecording(
     getPeerName?: (peerId: string) => string | undefined;
   }
 ): Promise<{ backup: Blob | null; wavBackup?: Blob | null }> {
+  // Copies for streams that arrive from here on would never be closed.
+  h.callCopiesClosed = true;
+  // Begun before the screen stop, so a failure there cannot leave them running.
+  const callCopies = Promise.all((h.callCopies ?? []).map((c) => finishCallCopy(h, c)));
   await stopScreenRecording(h);
   // Stop host capture first so End & save halts the host's own capture
   // immediately without waiting for guests' tails (up to 45s).
@@ -839,6 +846,7 @@ export async function endHostRecording(
     h.hostPcm?.stopAndFlush(),
     h.backup ? h.backup.stop() : Promise.resolve(null),
     h.wavBackup ? h.wavBackup.stop() : Promise.resolve(null),
+    callCopies,
   ]);
 
   const pReceivers = pendingReceivers(h);

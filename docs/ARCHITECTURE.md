@@ -363,6 +363,15 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
   `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  While a take runs the host also keeps a **call-audio copy** of every guest who is being recorded
+  (`syncCallCopies`, driven by one effect in `useRoom`): an audio-only `MediaRecorder` on the guest's
+  incoming live track (`pickCallAudioMime`: AAC or Opus in MP4, else WebM/Opus), written to
+  `call<n>_<id>.m4a`, one file per stretch of one guest's stream (a reconnect starts the next), at
+  most `CALL_COPY_MAX_FILES` per take, never for a producer, a companion or a guest whose browser
+  cannot record. A guest's copy starts when that guest's camera recording channel arrives for the
+  take, because a guest opens that channel from the handler that shows it the recording notice: the
+  channel arriving is the proof the guest was told, and there is no second notice. It adds no video
+  encoder, and its failures are logged, never raised as a recording error.
   Sender↔recorder backpressure cycle broken via `recorderRef` box. `rolePicker` defaults unknown
   role → `host`.
 - `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the

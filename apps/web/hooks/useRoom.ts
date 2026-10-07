@@ -56,6 +56,7 @@ import {
   collectTrackHealth,
   takeName,
   writeTakeSidecars,
+  syncCallCopies,
   type RecordingHandles,
   type TrackReading,
 } from './recording-controller';
@@ -531,6 +532,10 @@ export function useRoom(slug: string) {
     capabilities: {},
     finalizingGuests: [],
   });
+  // Peer ids whose camera recording channel has arrived for the take in
+  // progress: a guest opens that channel from the handler that shows it the
+  // recording notice, so its arrival is the proof the guest was told.
+  const [toldPeers, setToldPeers] = useState<string[]>([]);
 
   const signalRef = useRef<SignalClient | null>(null);
   // One PeerConnection per REMOTE peer (full mesh). peerRef stays as "the
@@ -640,6 +645,24 @@ export function useRoom(slug: string) {
   useEffect(() => {
     remotePeersRef.current = state.remotePeers;
   }, [state.remotePeers]);
+
+  // Host only (a guest's handles have no folder): keep a call-audio copy of every
+  // guest who is being recorded, for as long as the take runs. A producer or a
+  // companion is never recorded, so neither is copied. A guest's copy starts
+  // only once its camera recording channel arrives: a guest opens that channel
+  // from the handler that shows it the recording notice, so its arrival is the
+  // proof the guest was told. A guest whose browser cannot record never opens
+  // the channel, so it is never copied.
+  useEffect(() => {
+    const rec = recordingRef.current;
+    if (state.phase !== 'recording' || !rec) return;
+    syncCallCopies(
+      rec,
+      state.remotePeers.filter(
+        (p) => p.role !== 'producer' && !p.companion && toldPeers.includes(p.peerId)
+      )
+    );
+  }, [state.phase, state.remotePeers, toldPeers]);
 
   useEffect(() => {
     capabilitiesRef.current = state.capabilities;
@@ -1138,7 +1161,17 @@ export function useRoom(slug: string) {
             // binding when the host started recording before the guest opened
             // this channel at all.
             const rec = recordingRef.current;
-            if (rec) void bindHostGuestChannel(channel, rec, remotePeerId, fail).catch(fail);
+            if (rec) {
+              setToldPeers((p) =>
+                p.includes(remotePeerId)
+                  ? p
+                  : // An id whose connection is gone can never be handed over
+                    // again; if the room hands it back, the guest must not look
+                    // told without a camera channel of its own.
+                    [...p.filter((id) => peersRef.current.has(id)), remotePeerId]
+              );
+              void bindHostGuestChannel(channel, rec, remotePeerId, fail).catch(fail);
+            }
           },
         });
         peer.start();
@@ -1732,6 +1765,8 @@ export function useRoom(slug: string) {
       relayedMarkersCountRef.current = 0;
       setState((s) => ({ ...s, markers: [] }));
       takeRef.current += 1;
+      // Nobody is proven told for this take until its recording channel arrives.
+      setToldPeers([]);
       recordingRef.current = await startHostRecording({
         recordingId,
         localStream: withBoardAudio(localStream, boardRef.current),

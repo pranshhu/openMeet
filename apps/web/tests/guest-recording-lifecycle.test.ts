@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { PeerConnection } from '@/lib/peer';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks } from '@/hooks/recording-controller';
+import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies } from '@/hooks/recording-controller';
 import { patchRecording } from '@/lib/api';
 import { buildSyncReport } from '@/lib/sync-report';
 import type { ServerMessage } from '@openmeet/protocol';
@@ -146,6 +146,7 @@ vi.mock('@/hooks/recording-controller', async () => {
     endHostRecording: vi.fn().mockResolvedValue({ backup: null }),
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
     collectFileChecks: vi.fn(actual.collectFileChecks),
+    syncCallCopies: vi.fn(actual.syncCallCopies),
   };
 });
 
@@ -1825,6 +1826,250 @@ describe('host backup after a take in useRoom', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe('call-audio copies', () => {
+    const stream = () => ({ id: 'remote' }) as unknown as MediaStream;
+    const remoteStreamFrom = (peerId: string) =>
+      vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+        .onRemoteStream;
+    const recordingChannelFrom = (peerId: string) =>
+      vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+        .onDataChannel;
+    const channel = (label: string) =>
+      Object.assign(new EventTarget(), { label, readyState: 'open' }) as unknown as RTCDataChannel;
+    const lastPeers = () => vi.mocked(syncCallCopies).mock.calls.at(-1)![1];
+
+    /** A host in a room with a guest, a second guest, a producer and a companion. */
+    async function hostInRoom() {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(
+          { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+          'Host Hana'
+        );
+      });
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [
+            { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' },
+            { peerId: 'p-firefox', ordinal: 3, role: 'guest', displayName: 'Fay' },
+            { peerId: 'p-prod', ordinal: 4, role: 'producer', displayName: 'Pat' },
+            { peerId: 'p-comp', ordinal: 5, role: 'guest', displayName: 'Cam', companion: true },
+          ],
+          recording: false,
+        });
+      });
+      return result;
+    }
+
+    it('hands a guest to the copies only once its camera recording channel arrives', async () => {
+      const result = await hostInRoom();
+      const bob = stream();
+      act(() => {
+        remoteStreamFrom('p-guest')?.(bob);
+      });
+      await act(async () => {
+        await result.current.startRecording();
+      });
+
+      expect(result.current.state.phase).toBe('recording');
+      expect(lastPeers()).toEqual([]);
+      expect(syncCallCopies).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording'));
+      });
+
+      expect(vi.mocked(syncCallCopies).mock.calls.at(-1)![0]).toMatchObject({ recordingId: 'rec-host-1' });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest']);
+      expect(lastPeers()[0]).toMatchObject({ name: 'Bob', stream: bob });
+
+      let finish: (v: Awaited<ReturnType<typeof endHostRecording>>) => void = () => {};
+      vi.mocked(endHostRecording).mockReturnValueOnce(new Promise((r) => { finish = r; }));
+      let ending: Promise<void> = Promise.resolve();
+      act(() => {
+        ending = result.current.endRecording();
+      });
+      expect(result.current.state.phase).toBe('finalizing');
+      const callsBefore = vi.mocked(syncCallCopies).mock.calls.length;
+      act(() => {
+        recordingChannelFrom('p-firefox')?.(channel('recording'));
+      });
+      expect(vi.mocked(syncCallCopies).mock.calls.length).toBe(callsBefore);
+      await act(async () => {
+        finish({ backup: null });
+        await ending;
+      });
+      expect(result.current.state.phase).toBe('done');
+    });
+
+    it('an audio-master or screen channel alone does not hand a guest over', async () => {
+      const result = await hostInRoom();
+      await act(async () => {
+        await result.current.startRecording();
+      });
+
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording-audio'));
+        recordingChannelFrom('p-guest')?.(channel('recording-screen-1'));
+      });
+
+      expect(lastPeers()).toEqual([]);
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    });
+
+    it('a second take starts with nobody handed over until that take’s channel arrives', async () => {
+      const result = await hostInRoom();
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording'));
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest']);
+      await act(async () => {
+        await result.current.endRecording();
+      });
+
+      const callsBeforeNewTake = vi.mocked(syncCallCopies).mock.calls.length;
+      act(() => {
+        result.current.newTake();
+      });
+      expect(vi.mocked(syncCallCopies).mock.calls.length).toBe(callsBeforeNewTake);
+
+      vi.mocked(startHostRecording).mockResolvedValueOnce({
+        recordingId: 'rec-host-2',
+        extraWriters: [],
+      } as never);
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(lastPeers()).toEqual([]);
+
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording'));
+      });
+      expect(vi.mocked(syncCallCopies).mock.calls.at(-1)![0]).toMatchObject({ recordingId: 'rec-host-2' });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest']);
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    });
+
+    it('follows a rebuilt connection to its new peer id and drops the old one', async () => {
+      const result = await hostInRoom();
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording'));
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest']);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-guest', role: 'guest' });
+        emitSignal('peer-joined', {
+          type: 'peer-joined',
+          peerId: 'p-guest-2',
+          displayName: 'Bob',
+          ordinal: 6,
+          role: 'guest',
+        });
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual([]);
+
+      act(() => {
+        recordingChannelFrom('p-guest-2')?.(channel('recording'));
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest-2']);
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    });
+
+    it('a camera channel that arrives before the take’s files are open hands nobody over', async () => {
+      const result = await hostInRoom();
+      let open: (h: Awaited<ReturnType<typeof startHostRecording>>) => void = () => {};
+      vi.mocked(startHostRecording).mockImplementationOnce(() => new Promise((r) => { open = r; }));
+      let starting: Promise<void> = Promise.resolve();
+      act(() => { starting = result.current.startRecording(); });
+      act(() => { recordingChannelFrom('p-guest')?.(channel('recording')); });
+      await act(async () => {
+        open({ recordingId: 'rec-host-1' } as never);
+        await starting;
+      });
+      expect(result.current.state.phase).toBe('recording');
+      expect(lastPeers()).toEqual([]);
+      await act(async () => { await result.current.endRecording(); });
+    });
+
+    it('a second camera channel from the same guest changes nothing', async () => {
+      const result = await hostInRoom();
+      await act(async () => { await result.current.startRecording(); });
+      act(() => { recordingChannelFrom('p-guest')?.(channel('recording')); });
+      const calls = vi.mocked(syncCallCopies).mock.calls.length;
+      act(() => { recordingChannelFrom('p-guest')?.(channel('recording')); });
+      expect(vi.mocked(syncCallCopies).mock.calls.length).toBe(calls);
+      await act(async () => { await result.current.endRecording(); });
+    });
+
+    it('forgets a guest that left, so its id is not handed over if it comes back', async () => {
+      const result = await hostInRoom();
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      act(() => {
+        recordingChannelFrom('p-guest')?.(channel('recording'));
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-guest']);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-guest', role: 'guest' });
+      });
+      act(() => {
+        recordingChannelFrom('p-firefox')?.(channel('recording'));
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-firefox']);
+
+      // A room can hand the same id back without a fresh camera channel.
+      act(() => {
+        emitSignal('peer-joined', {
+          type: 'peer-joined',
+          peerId: 'p-guest',
+          displayName: 'Bob',
+          ordinal: 6,
+          role: 'guest',
+        });
+      });
+      expect(lastPeers().map((p) => p.peerId)).toEqual(['p-firefox']);
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    });
+
+    it('never hands a producer or a companion over', async () => {
+      const result = await hostInRoom();
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      act(() => {
+        recordingChannelFrom('p-prod')?.(channel('recording'));
+        recordingChannelFrom('p-comp')?.(channel('recording'));
+      });
+      expect(lastPeers()).toEqual([]);
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    });
   });
 });
 

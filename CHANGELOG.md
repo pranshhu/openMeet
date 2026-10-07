@@ -50,6 +50,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much
   is still waiting to be sent.
+  data, and each guest sees their own.
+- The host keeps a call-audio copy of each recorded guest's live audio in the
+  recording folder (`call<n>_<id>.m4a`): a call-quality fallback for a guest
+  track that never arrives.
 
 ### Changed
 

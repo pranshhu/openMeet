@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { syncCallCopies, CALL_COPY_MAX_FILES, type RecordingHandles } from '@/hooks/recording-controller';
+import {
+  syncCallCopies,
+  CALL_COPY_MAX_FILES,
+  allWriters,
+  endHostRecording,
+  type RecordingHandles,
+} from '@/hooks/recording-controller';
 
 class FakeMediaRecorder {
   static instances: FakeMediaRecorder[] = [];
@@ -484,5 +490,159 @@ describe('syncCallCopies', () => {
     await finished(h);
 
     expect(removeEntry).toHaveBeenCalledWith('call1_rec.m4a');
+  });
+});
+
+describe('call-audio copies at the end of a take', () => {
+  beforeEach(() => {
+    FakeMediaRecorder.instances = [];
+    FakeMediaRecorder.supported = () => true;
+    FakeMediaRecorder.tailBytes = 0;
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    vi.restoreAllMocks();
+  });
+
+  it('endHostRecording stops every running copy and closes its file', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1'), peer('p2')]);
+    await opened(h);
+    FakeMediaRecorder.instances.forEach((mr) => mr.emit(10));
+    await tick();
+
+    await endHostRecording(h);
+    expect(FakeMediaRecorder.instances.every((mr) => mr.state === 'inactive')).toBe(true);
+    expect(files.get('call1_rec.m4a')!.close).toHaveBeenCalledTimes(1);
+    expect(files.get('call2_rec.m4a')!.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('endHostRecording does not resolve until a copy’s file is closed', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    FakeMediaRecorder.instances[0]!.emit(10);
+    await tick();
+
+    let resolveClose: () => void = () => {};
+    const closePromise = new Promise<void>((r) => {
+      resolveClose = r;
+    });
+    const file = files.get('call1_rec.m4a')!;
+    file.close.mockReturnValue(closePromise);
+
+    let resolved = false;
+    const ending = endHostRecording(h).then(() => {
+      resolved = true;
+    });
+    await tick();
+    expect(resolved).toBe(false);
+    resolveClose();
+    await ending;
+    expect(resolved).toBe(true);
+  });
+
+  it('endHostRecording resolves when a call copy’s close() rejects', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    FakeMediaRecorder.instances[0]!.emit(10);
+    await tick();
+
+    const file = files.get('call1_rec.m4a')!;
+    file.close.mockRejectedValue(new Error('copy close failed'));
+    await expect(endHostRecording(h)).resolves.toBeDefined();
+  });
+
+  it('after endHostRecording has been called, syncCallCopies opens nothing', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    await endHostRecording(h);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    expect(files.size).toBe(0);
+    expect(FakeMediaRecorder.instances.length).toBe(0);
+  });
+
+  it('the copies are stopped even when the screen recording cannot be stopped', async () => {
+    const { dir } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    h.screenRecorder = {
+      stopAndFlush: async () => {
+        throw new Error('screen');
+      },
+    } as never;
+
+    await expect(endHostRecording(h)).rejects.toThrow('screen');
+    await finished(h);
+    expect(FakeMediaRecorder.instances[0]!.state).toBe('inactive');
+    expect(allWriters(h)).toEqual([]);
+    expect(h.callCopiesClosed).toBe(true);
+    syncCallCopies(h, [peer('p2')]);
+    await opened(h);
+    expect(FakeMediaRecorder.instances.length).toBe(1);
+  });
+
+  it('allWriters returns the writer of a running copy and not the writer of a finished one', async () => {
+    const { dir } = fakeDir();
+    const h = handles(dir);
+    const hostWriter = { fileName: 'host.mp4' } as never;
+    const extraWriter = { fileName: 'extra.mp4' } as never;
+    h.hostWriter = hostWriter;
+    h.extraWriters = [extraWriter];
+    const p1 = peer('p1');
+    const p2 = peer('p2');
+    syncCallCopies(h, [p1, p2]);
+    await opened(h);
+
+    syncCallCopies(h, [p2]);
+    await finished(h);
+    expect(allWriters(h)).toEqual([hostWriter, extraWriter, h.callCopies![1]!.writer]);
+  });
+
+  it('a copy whose file is still opening when the take ends starts no recorder and is closed', async () => {
+    const { dir, files, removeEntry } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+
+    await endHostRecording(h);
+    await opened(h);
+    await finished(h);
+    expect(FakeMediaRecorder.instances.length).toBe(0);
+    expect(allWriters(h)).toEqual([]);
+    expect(files.get('call1_rec.m4a')!.close).toHaveBeenCalledTimes(1);
+    expect(removeEntry).toHaveBeenCalledWith('call1_rec.m4a');
+  });
+
+  it('a copy that is slow to close does not hold up the stop of the host’s own capture', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    FakeMediaRecorder.instances[0]!.emit(10);
+    await tick();
+
+    let release: () => void = () => {};
+    files.get('call1_rec.m4a')!.close.mockReturnValue(
+      new Promise<void>((r) => {
+        release = r;
+      })
+    );
+    const stopAndFlush = vi.fn().mockResolvedValue(undefined);
+    h.hostRecorder = { stopAndFlush } as never;
+
+    const ending = endHostRecording(h);
+    await tick();
+    expect(stopAndFlush).toHaveBeenCalledTimes(1);
+    release();
+    await ending;
   });
 });

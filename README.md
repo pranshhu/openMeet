@@ -351,6 +351,7 @@ All in the one folder the host picks, per take:
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
 | `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
+| `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that never arrives. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
 | `chat_<id>.txt` | Chat log from the take window (when messages sent) |
