@@ -184,6 +184,19 @@ describe('ChunkSender', () => {
     expect(hex).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('keeps what was acknowledged across a rebind to a new channel', () => {
+    const chA = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: chA as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
+    s.sendChunk(chunk(1, 8, 8));
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+    s.rebind(new FakeChannel() as unknown as RTCDataChannel);
+    expect(s.ackedBytes).toBe(8);
+    s.resume(0);
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 16 });
+    expect(s.ackedBytes).toBe(16);
+  });
+
   it('rebinds to a new channel, replaying unacked chunks and un-pausing when bufferedAmount is low', () => {
     const chA = new FakeChannel();
     const chB = new FakeChannel();

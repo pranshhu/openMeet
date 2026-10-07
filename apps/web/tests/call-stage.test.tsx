@@ -1701,6 +1701,11 @@ describe('CallStage track panel', () => {
     expect(screen.getByText('2 markers').nextElementSibling).toBe(screen.getByTestId('track-health'));
   });
 
+  it('mounts the track panel for a guest whose own capture is running', () => {
+    render(<CallStage {...baseProps} role="guest" phase="recording" readTrackHealth={read} />);
+    expect(screen.getByTestId('track-health')).toBeTruthy();
+  });
+
   it('leaves the track panel unmounted while the room records and this browser does not', () => {
     render(<CallStage {...baseProps} phase="in-call" roomRecording readTrackHealth={read} />);
     expect(screen.queryByTestId('track-health')).toBeNull();

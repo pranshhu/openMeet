@@ -11,7 +11,7 @@ import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { ClockSync } from '@/lib/clock-sync';
 import { presetForTrack } from '@/lib/quality';
-import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind, MAX_RECORDED_PEERS } from '@openmeet/protocol';
+import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
@@ -1410,9 +1410,6 @@ export interface HealthPeer {
 /** Rows from one peer's channels: camera, WAV and live screens, with headroom.
  *  One guest opening many channels must not push another guest's rows out. */
 const MAX_ROWS_PER_PEER = 4;
-
-/** The most channel rows a full room of recorded guests can show. */
-export const MAX_GUEST_TRACK_ROWS = MAX_RECORDED_PEERS * MAX_ROWS_PER_PEER;
 
 export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): TrackReading[] {
   const own: TrackReading[] = [];

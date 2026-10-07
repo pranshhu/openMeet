@@ -240,6 +240,16 @@ describe('classifyTracks', () => {
     const stopped = classifyTracks(abandoned, stalled.seen, TRACK_STALL_MS + 1000);
     expect(stopped.rows[0]?.state).toBe('stopped');
   });
+
+  it('judges a guest’s own WAV on the host’s acknowledgements too', () => {
+    const first = classifyTracks([{ key: 'own:wav', track: 'wav', bytes: 1000, acked: 0 }], new Map(), 0);
+    const later = classifyTracks(
+      [{ key: 'own:wav', track: 'wav', bytes: 9000, acked: 0 }],
+      first.seen,
+      TRACK_STALL_MS
+    );
+    expect(later.rows[0]?.state).toBe('quiet');
+  });
 });
 
 describe('RecordingHealth', () => {
@@ -628,21 +638,6 @@ describe('RecordingHealth', () => {
     expect(screen.getByText('OK')).toBeInTheDocument();
     expect(screen.getByText('Tracks OK')).toBeInTheDocument();
     expect(screen.queryByText('Reaching the host')).toBeNull();
-  });
-
-  it('keeps a named row’s quiet wording even when it carries acknowledgements', () => {
-    vi.useFakeTimers();
-    const read = vi.fn<() => TrackReading[]>(() => [
-      { key: 'g0:mp4', who: 'Bob', track: 'camera', bytes: 1_000_000, acked: 0 },
-    ]);
-
-    render(<RecordingHealth read={read} />);
-    act(() => {
-      vi.advanceTimersByTime(TRACK_STALL_MS);
-    });
-
-    expect(screen.getByText('No data for 15 s')).toBeInTheDocument();
-    expect(screen.queryByText('Not reaching the host for 15 s')).toBeNull();
   });
 
   it('subtracts acknowledged bytes from total bytes when reporting backlog', () => {

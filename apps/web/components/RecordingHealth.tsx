@@ -16,7 +16,7 @@ export const BACKLOG_WARN_BYTES = DC_BUFFERED_HIGH_WATERMARK;
 export type TrackState = 'starting' | 'ok' | 'quiet' | 'behind' | 'stopped';
 export interface TrackRow extends TrackReading {
   state: TrackState;
-  /** Since this track's byte count last changed, or since it was first seen. */
+  /** Since the count watched for this track last changed, or since it was first seen. */
   idleMs: number;
 }
 /** Per track key: the last count watched, when it last changed, and whether it ever has. */
@@ -76,9 +76,6 @@ function size(bytes: number): string {
   return `${(bytes / 1e9).toFixed(2)} GB`;
 }
 
-/** A guest's own streamed track, whose progress the host's acknowledgements carry. */
-const reaching = (row: TrackRow): boolean => row.who === undefined && byAcks(row);
-
 function status(row: TrackRow): string {
   if (row.state === 'stopped') {
     return row.who !== undefined
@@ -86,7 +83,7 @@ function status(row: TrackRow): string {
       : 'Stopped. Your backup has the rest.';
   }
   if (row.state === 'quiet') {
-    return reaching(row)
+    return byAcks(row)
       ? `Not reaching the host for ${formatHiddenDuration(row.idleMs)}`
       : `No data for ${formatHiddenDuration(row.idleMs)}`;
   }
@@ -97,7 +94,7 @@ function status(row: TrackRow): string {
     if (row.who !== undefined) {
       return 'Receiving';
     }
-    return reaching(row) ? 'Reaching the host' : 'OK';
+    return byAcks(row) ? 'Reaching the host' : 'OK';
   }
   return 'Starting…';
 }

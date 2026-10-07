@@ -2252,4 +2252,51 @@ describe('track panel readings in useRoom', () => {
     });
     expect(result.current.readTrackHealth).toBe(read);
   });
+
+  it('reads a guest’s own files with what the host has acknowledged', async () => {
+    handlesWithBackup({ ackedBytes: 40, isAbandoned: false });
+    const result = await recordingGuest();
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.readTrackHealth()).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 100, acked: 40 },
+    ]);
+  });
+
+  it('lists a present-only device’s screen, which only the whole roster can name', async () => {
+    const result = await hostTakeWith(
+      {
+        hostStartMs: 1,
+        dir: {},
+        screenReceivers: new Map([[1, { bytesWritten: 64, isAbandoned: false }]]),
+        screenLive: new Map([[1, 'p-deck']]),
+      },
+      [{ peerId: 'p-deck', ordinal: 4, role: 'guest', displayName: 'Deck', companion: true }]
+    );
+    expect(result.current.readTrackHealth()).toEqual([
+      { key: 's1', who: 'Deck', track: 'screen', bytes: 64 },
+    ]);
+  });
+
+  it('names a guest’s screen share that arrives through the call', async () => {
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+      }),
+      removeEntry: async () => {},
+    };
+    const result = await hostTakeWith({ hostStartMs: 1, dir });
+    const channel = Object.assign(new EventTarget(), { label: 'recording-screen-1', readyState: 'open' });
+    act(() => {
+      vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel as unknown as RTCDataChannel);
+    });
+    await vi.waitFor(() =>
+      expect(result.current.readTrackHealth()).toContainEqual({
+        key: 's1',
+        who: 'Bob',
+        track: 'screen',
+        bytes: 0,
+      })
+    );
+  });
 });

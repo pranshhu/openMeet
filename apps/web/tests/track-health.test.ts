@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { encodeChunkHeader, MAX_RECORDED_PEERS, type ChunkHeader } from '@openmeet/protocol';
+import { encodeChunkHeader, type ChunkHeader } from '@openmeet/protocol';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
   bindHostScreenChannel,
   bindGuestChannel,
   collectTrackHealth,
-  MAX_GUEST_TRACK_ROWS,
   type RecordingHandles,
   type HealthPeer,
 } from '@/hooks/recording-controller';
@@ -550,9 +549,5 @@ describe('collectTrackHealth', () => {
 
     channel.onmessage!({ data: '{"type":"ack","uptoIdx":1}' } as MessageEvent);
     expect(sender.ackedBytes).toBe(16);
-  });
-
-  it('exports MAX_GUEST_TRACK_ROWS as the maximum channel rows for a full room', () => {
-    expect(MAX_GUEST_TRACK_ROWS).toBe(MAX_RECORDED_PEERS * 4);
   });
 });
