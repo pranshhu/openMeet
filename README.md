@@ -411,7 +411,8 @@ Chrome keeps File System Access writes in a temporary file until the file is clo
 after a crash the host's files are missing or empty; each participant's camera MP4 and
 WAV master are in their own browser's backup, listed in the openMeet lobby with
 Download. The last few seconds before a crash may be missing, because backups are
-saved every couple of seconds.
+saved every couple of seconds. A guest should keep the tab open: when the host
+resumes, the bytes the guest still holds are sent again and its file continues.
 
 ---
 

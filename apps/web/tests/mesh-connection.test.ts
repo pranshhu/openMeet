@@ -503,6 +503,65 @@ describe('Guest recording timeout and backup resilience', () => {
     }
   });
 
+  it('startGuestRecording forwards the host take id from acks on both channels', () => {
+    class FakeMediaRecorder {
+      static isTypeSupported = () => true;
+      ondataavailable: (() => void) | null = null;
+      onstop: (() => void) | null = null;
+      state = 'inactive';
+      start() {
+        this.state = 'recording';
+      }
+      stop() {
+        this.state = 'inactive';
+      }
+    }
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+    class FakeTrackProcessor {
+      readable = new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      });
+    }
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor =
+      FakeTrackProcessor;
+
+    try {
+      const makeChannel = () =>
+        ({
+          readyState: 'open',
+          bufferedAmount: 0,
+          addEventListener: vi.fn(),
+          send: vi.fn(),
+          onmessage: null,
+        }) as unknown as RTCDataChannel & { onmessage: ((ev: MessageEvent) => void) | null };
+      const channel = makeChannel();
+      const audioChannel = makeChannel();
+      const seen: string[] = [];
+      const handles = startGuestRecording({
+        recordingId: 'rec-forward-id',
+        localStream: fakeStream(),
+        channel,
+        audioChannel,
+        onHostTakeId: (id) => seen.push(id),
+      });
+
+      expect(handles.onHostTakeId).toBeTypeOf('function');
+      channel.onmessage!({
+        data: JSON.stringify({ type: 'ack', recordingId: 'cam-take', uptoIdx: 0, uptoOffset: 0 }),
+      } as MessageEvent);
+      expect(seen).toEqual(['cam-take']);
+      audioChannel.onmessage!({
+        data: JSON.stringify({ type: 'ack', recordingId: 'wav-take', uptoIdx: 0, uptoOffset: 0 }),
+      } as MessageEvent);
+      expect(seen).toEqual(['cam-take', 'wav-take']);
+    } finally {
+      delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
   it('sender never pauses the recorder on backpressure or closed channel', () => {
     class FakeMediaRecorder {
       static instances: FakeMediaRecorder[] = [];
@@ -592,4 +651,3 @@ describe('Per-peer presence in mesh calls', () => {
     expect(remaining.some((p) => p.peerId === 'p-carol')).toBe(false);
   });
 });
-

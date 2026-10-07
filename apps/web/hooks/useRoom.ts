@@ -553,6 +553,9 @@ export function useRoom(slug: string) {
   // peer. Binding needs the peerId to pick the right file.
   const audioChannelsRef = useRef<Map<string, RTCDataChannel>>(new Map());
   const recordingRef = useRef<RecordingHandles | null>(null);
+  // The host take this guest is following, learned from `recording-started` or
+  // from the host's acks. A host that resumes re-announces the same take.
+  const hostTakeIdRef = useRef<string | null>(null);
   const phaseRef = useRef<RoomPhase>('checking');
   // endRecording is memoised per room, so it reads peer names through this
   // rather than a stale `state` closure.
@@ -856,6 +859,9 @@ export function useRoom(slug: string) {
         onError: (e) => setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) })),
         room: slug,
         onWarn,
+        onHostTakeId: (id) => {
+          hostTakeIdRef.current = id;
+        },
       });
       recordingRef.current = handles;
       if (canCapturePcm && !audioReady) {
@@ -1334,6 +1340,12 @@ export function useRoom(slug: string) {
         if (m.from !== 'host') return;
         setState((s) => ({ ...s, peerRecording: true }));
         if (roleRef.current !== 'guest' || asProducer) return;
+        const id =
+          typeof m.recordingId === 'string' && m.recordingId.length <= 64 ? m.recordingId : null;
+        // A resumed host announces the same take again. Ending the file here and
+        // starting another would split one guest into two files with a gap.
+        if (id && recordingRef.current && hostTakeIdRef.current === id) return;
+        if (id) hostTakeIdRef.current = id;
         void handleGuestRecordingStarted({
           recordingRef,
           // Internal: a guest may not end a take on its own, but a new host's
@@ -1444,7 +1456,12 @@ export function useRoom(slug: string) {
             // next person to join with "Having trouble connecting".
             connectionWarning: null,
             ...(recording
-              ? { recordingError: 'The other person disconnected. Press End & save to keep this recording.' }
+              ? {
+                  recordingError:
+                    roleRef.current === 'guest'
+                      ? 'The host disconnected. Keep this tab open — they can resume this recording when they come back.'
+                      : 'The other person disconnected. Press End & save to keep this recording.',
+                }
               : {}),
             remoteStream: null,
             remoteScreenStream: null,

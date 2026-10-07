@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { rebindGuestRecording, type RecordingHandles } from '@/hooks/recording-controller';
+import {
+  bindGuestChannel,
+  rebindGuestRecording,
+  type RecordingHandles,
+} from '@/hooks/recording-controller';
 import { ChunkSender } from '@/lib/chunk-sender';
 import type { PeerConnection } from '@/lib/peer';
 
@@ -230,5 +234,74 @@ describe('rebindGuestRecording', () => {
       data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 28, lastIdx: 6 }),
     } as MessageEvent);
     expect(resumeSpy).toHaveBeenCalledWith(6);
+  });
+
+  // Every ack carries the host's take id. Reading it is what lets a repeat of
+  // that take be told apart from a new one.
+  it('follows the ack recording id and ignores anything that is not a short string', () => {
+    const sender = new ChunkSender({
+      recordingId: 'rec-take-id',
+      channel: new FakeChannel() as unknown as RTCDataChannel,
+    });
+    const ch = new FakeChannel();
+    const seen: string[] = [];
+    bindGuestChannel(ch as unknown as RTCDataChannel, sender, undefined, (id) => seen.push(id));
+
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'ack', recordingId: 'host-take-1', uptoIdx: 0, uptoOffset: 0 }),
+    } as MessageEvent);
+    const id64 = 'x'.repeat(64);
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'ack', recordingId: id64, uptoIdx: 0, uptoOffset: 0 }),
+    } as MessageEvent);
+    expect(seen).toEqual(['host-take-1', id64]);
+
+    for (const recordingId of [true, ['bad'], null, undefined, 1e308, NaN, -999, {}, 7, 'x'.repeat(65)]) {
+      ch.onmessage!({
+        data: JSON.stringify({ type: 'ack', recordingId, uptoIdx: 0, uptoOffset: 0 }),
+      } as MessageEvent);
+    }
+    ch.onmessage!({ data: JSON.stringify({ type: 'ack', uptoIdx: 0, uptoOffset: 0 }) } as MessageEvent);
+    expect(seen).toEqual(['host-take-1', id64]);
+
+    // An ack the sender itself rejects (an index it never sent) still carries
+    // the host's take: observing the id is not part of the sender's handling.
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'ack', recordingId: 'stale-take', uptoIdx: 9999, uptoOffset: 0 }),
+    } as MessageEvent);
+    expect(seen).toEqual(['host-take-1', id64, 'stale-take']);
+  });
+
+  it('keeps following the ack id on both channels after a rebind', () => {
+    const peer = new FakePeer();
+    const oldCam = new FakeChannel();
+    const oldWav = new FakeChannel();
+    const sender = new ChunkSender({
+      recordingId: 'rec-rebind-id',
+      channel: oldCam as unknown as RTCDataChannel,
+    });
+    const wavSender = new ChunkSender({
+      recordingId: 'rec-rebind-id',
+      channel: oldWav as unknown as RTCDataChannel,
+    });
+    const seen: string[] = [];
+    const h: RecordingHandles = {
+      recordingId: 'rec-rebind-id',
+      sender,
+      channel: oldCam as unknown as RTCDataChannel,
+      wavSender,
+      wavChannel: oldWav as unknown as RTCDataChannel,
+      onHostTakeId: (id) => seen.push(id),
+    };
+
+    rebindGuestRecording(h, peer as unknown as PeerConnection);
+
+    peer.cameraChannel!.onmessage!({
+      data: JSON.stringify({ type: 'ack', recordingId: 'cam-take', uptoIdx: 0, uptoOffset: 0 }),
+    } as MessageEvent);
+    peer.audioChannel!.onmessage!({
+      data: JSON.stringify({ type: 'ack', recordingId: 'wav-take', uptoIdx: 0, uptoOffset: 0 }),
+    } as MessageEvent);
+    expect(seen).toEqual(['cam-take', 'wav-take']);
   });
 });

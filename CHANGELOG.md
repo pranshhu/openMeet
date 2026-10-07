@@ -85,6 +85,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A guest who left before the take ended is still named on their files and in
   the sync file, and a guest WAV master that was opened but received nothing is
   listed with its size and verdict like every other file.
+- A guest whose host drops is told to keep the tab open and that the host can
+  resume this recording, instead of being told to press a button guests do not
+  have; when the host does resume, the guest's file continues instead of
+  splitting in two.
 
 ### Security
 

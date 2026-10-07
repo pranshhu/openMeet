@@ -381,8 +381,9 @@ describe('guest recording lifecycle in useRoom', () => {
     });
 
     expect(result.current.state.recordingError).toBe(
-      'The other person disconnected. Press End & save to keep this recording.'
+      'The host disconnected. Keep this tab open — they can resume this recording when they come back.'
     );
+    expect(result.current.state.recordingError).not.toContain('End & save');
 
     // Host rejoins
     act(() => {
@@ -488,6 +489,281 @@ describe('guest recording lifecycle in useRoom', () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(endGuestRecordingCalled).toBe(true);
+    // A resumed host announces the SAME take again. The guest is already in it,
+    // so the id it remembered suppresses a restart that would split its file.
+    await act(async () => {
+      emitSignal('recording-started', started('take-2'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(endGuestRecording)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a repeat of the host take it is already following', async () => {
+    const result = await recordingGuest();
+    expect(result.current.state.phase).toBe('recording');
+
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId: 'rec-x', kind: 'camera', filename: 'host_rec-x.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Still the same take: no end-of-take (which would put the guest on 'done')
+    // and no second start.
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.backupBlobUrl).toBeNull();
+    expect(vi.mocked(endGuestRecording)).not.toHaveBeenCalled();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+  });
+
+  it('a guest that joined mid-take learns the host id from the acks and ignores its repeat', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Alice');
+    });
+
+    let onHostTakeId: ((id: string) => void) | undefined;
+    vi.mocked(startGuestRecording).mockImplementationOnce((args) => {
+      onHostTakeId = args.onHostTakeId;
+      return {
+        recordingId: 'rec-x',
+        guestRecorder: { totalBytes: 100, stopAndFlush: vi.fn() },
+        sender: { lastAckedIdx: 5, drain: vi.fn().mockResolvedValue(true), rebind: vi.fn() },
+      } as never;
+    });
+
+    // Joined mid-take: no recording-started ever reached this socket, so the
+    // catch-up path begins the take and the host's id has to come from an ack.
+    await act(async () => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: true,
+      });
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+    expect(onHostTakeId).toBeTypeOf('function');
+
+    onHostTakeId!('host-take-9');
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId: 'host-take-9', kind: 'camera', filename: 'host_host-take-9.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(result.current.state.phase).toBe('recording');
+    expect(vi.mocked(endGuestRecording)).not.toHaveBeenCalled();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows the take when the host id is not a short string, so its repeat still follows', async () => {
+    await recordingGuest();
+    // Neither a non-string nor an over-long id is remembered, so a repeat of it
+    // restarts the guest exactly as the take did the first time.
+    for (const recordingId of [7, 'x'.repeat(65)]) {
+      for (let i = 0; i < 2; i++) {
+        await act(async () => {
+          emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId, kind: 'camera', filename: 'host_x.mp4' });
+          await new Promise((r) => setTimeout(r, 0));
+        });
+      }
+    }
+    expect(vi.mocked(endGuestRecording)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(5);
+  });
+
+  it('ignores a repeat of a host take whose id is exactly 64 characters', async () => {
+    await recordingGuest();
+    const id64 = 'r'.repeat(64);
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: id64,
+        kind: 'camera',
+        filename: 'host_64.mp4',
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(2);
+
+    // Repeat of the 64-character id: suppressed while in the take
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: id64,
+        kind: 'camera',
+        filename: 'host_64.mp4',
+      });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles hostile recordingId inputs from recording-started without throwing or corrupting state', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Alice');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+
+    const hostileValues = [
+      true,
+      ['bad-array'],
+      null,
+      undefined,
+      1e308,
+      NaN,
+      -999,
+      '',
+      { obj: 1 },
+      'bad\nid\n"quotes"\'more\'',
+    ];
+
+    for (const val of hostileValues) {
+      await act(async () => {
+        emitSignal('recording-started', {
+          type: 'recording-started',
+          from: 'host',
+          recordingId: val,
+          kind: 'camera',
+          filename: 'host.mp4',
+        });
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(result.current.state.phase).toBe('recording');
+    }
+  });
+
+  it('a malformed host id does not suppress a take when no id is remembered yet', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Alice');
+    });
+    await act(async () => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: true,
+      });
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+
+    // Nothing is remembered yet, so a malformed id must not match the empty
+    // memory and pass itself off as the take already in progress.
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId: 7, kind: 'camera', filename: 'host_x.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(2);
+    expect(result.current.state.phase).toBe('recording');
+  });
+
+  it('a recording guest ignores a recording-started that is not stamped from the host', async () => {
+    await recordingGuest();
+
+    // A different id, so the repeat guard cannot answer for the sender gate.
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'guest', recordingId: 'rec-injected', kind: 'camera', filename: 'host_rec-injected.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(vi.mocked(endGuestRecording)).not.toHaveBeenCalled();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts a new take for a repeated id once the guest is no longer in that take', async () => {
+    const result = await recordingGuest();
+    await stopTake();
+    expect(result.current.state.phase).toBe('done');
+
+    // The guest stopped, so the remembered id protects nothing: a host that
+    // announces the same take again is starting capture, and the guest follows.
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId: 'rec-x', kind: 'camera', filename: 'host_rec-x.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(2);
+    expect(result.current.state.phase).toBe('recording');
+  });
+
+  it('a recording host whose guest leaves is still told to press End & save', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Hana');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [],
+        recording: false,
+      });
+    });
+    act(() => {
+      emitSignal('peer-joined', { type: 'peer-joined', peerId: 'p-bob', displayName: 'Bob', ordinal: 2, role: 'guest' });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    // A host never follows its own broadcast; recording-started is for guests.
+    await act(async () => {
+      emitSignal('recording-started', { type: 'recording-started', from: 'host', recordingId: 'rec-host-1', kind: 'camera', filename: 'host_rec-host-1.mp4' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+
+    act(() => {
+      emitSignal('peer-left', { type: 'peer-left', peerId: 'p-bob', role: 'guest' });
+    });
+
+    expect(result.current.state.recordingError).toBe(
+      'The other person disconnected. Press End & save to keep this recording.'
+    );
+
+    // End the take so unmounting does not close the mocked writers.
+    await act(async () => {
+      await result.current.endRecording();
+    });
   });
 
   it('counts a guest’s own markers, so pressing M visibly lands', async () => {

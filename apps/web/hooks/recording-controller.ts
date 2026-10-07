@@ -58,6 +58,13 @@ export interface RecordingHandles {
   videoFps?: number | undefined;
   /** Room slug, carried so backups know which room they came from. */
   room?: string;
+  /**
+   * The host's take id, learned from the acks arriving on this side's channels.
+   * The two sides mint different ids for one take, so a guest that joined
+   * mid-take only learns the host's from here. Used to recognise a repeat of
+   * the take already in progress, never as a file name or a channel key.
+   */
+  onHostTakeId?: (id: string) => void;
 
   // --- Uncompressed WAV master, captured in parallel with the MP4 ---
   // Held so the guest's .wav can be opened lazily, only once its audio channel
@@ -267,6 +274,8 @@ export interface StartGuestArgs {
   /** Room slug, so guest backups know which room they came from. */
   room?: string;
   wavBackup?: BackupRecorder;
+  /** Called with the host's take id whenever an ack carries one. */
+  onHostTakeId?: (id: string) => void;
 }
 
 export async function startHostRecording(args: StartHostArgs): Promise<RecordingHandles> {
@@ -587,10 +596,10 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
       onChunk: (c) => s2.sendChunk(c),
       ...(args.onError ? { onError: args.onError } : {}),
     });
-    bindGuestChannel(ac, s2);
+    bindGuestChannel(ac, s2, undefined, args.onHostTakeId);
   }
 
-  bindGuestChannel(args.channel, sender, clockSync);
+  bindGuestChannel(args.channel, sender, clockSync, args.onHostTakeId);
   guestRecorder.start();
   guestPcm?.start();
   if (!args.backup) backup.start();
@@ -608,6 +617,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
     ...(wavSender ? { wavSender } : {}),
     ...(args.audioChannel ? { wavChannel: args.audioChannel } : {}),
     ...(args.room ? { room: args.room } : {}),
+    ...(args.onHostTakeId ? { onHostTakeId: args.onHostTakeId } : {}),
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
   };
 }
@@ -615,14 +625,23 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
 export function bindGuestChannel(
   channel: RTCDataChannel,
   sender: ChunkSender,
-  clockSync?: ClockSync
+  clockSync?: ClockSync,
+  onHostTakeId?: (id: string) => void
 ): void {
   channel.onmessage = (ev: MessageEvent) => {
     if (typeof ev.data !== 'string') return;
     try {
       const msg = JSON.parse(ev.data) as ChunkAck | ChunkResumeOffset | ClockPong;
-      if (msg.type === 'ack') sender.handleControl(msg);
-      else if (msg.type === 'resume_offset') {
+      if (msg.type === 'ack') {
+        // The host mints its own id for the take, so this is the only place a
+        // guest that joined mid-take can learn it. Observed, not authenticated:
+        // anything that is not a short string is left to the sender's own ack
+        // handling, which ignores the id for correlation.
+        if (typeof msg.recordingId === 'string' && msg.recordingId.length <= 64) {
+          onHostTakeId?.(msg.recordingId);
+        }
+        sender.handleControl(msg);
+      } else if (msg.type === 'resume_offset') {
         // The host's own number, so it can be nonsense or out of range. `resume`
         // rebuilds the whole queue from it, so a bad value would empty it, and
         // an index this sender never put on the wire cannot have been received.
@@ -661,7 +680,7 @@ export function rebindGuestRecording(h: RecordingHandles, peer: PeerConnection):
     h.channel = ch;
     ch.addEventListener('open', () => requestResume(h));
     h.sender.rebind(ch);
-    bindGuestChannel(ch, h.sender, h.clockSync);
+    bindGuestChannel(ch, h.sender, h.clockSync, h.onHostTakeId);
   }
 
   if (h.wavSender) {
@@ -673,7 +692,7 @@ export function rebindGuestRecording(h: RecordingHandles, peer: PeerConnection):
       }
     });
     h.wavSender.rebind(wch);
-    bindGuestChannel(wch, h.wavSender);
+    bindGuestChannel(wch, h.wavSender, undefined, h.onHostTakeId);
   }
 }
 
