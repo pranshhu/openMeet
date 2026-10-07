@@ -122,7 +122,7 @@ await host.page.waitForSelector('text=/Saved|files on the/', { timeout: 60000 })
 log('host', 'finalized');
 await host.page.waitForTimeout(3000);
 
-// --- The sync sidecar carries the sent-vs-written digests ---
+// --- The sync sidecar carries each file's verdict ---
 const sync = await host.page.evaluate(async () => {
   const a = [...document.querySelectorAll('a')].find((x) => x.download.endsWith('sync.json'));
   if (!a) return null;

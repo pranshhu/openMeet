@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
-import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, fileVerdict, type FileCheck, type FileVerdict } from '@/lib/sync-report';
+import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, fileVerdict, type FileCheck, type FileVerdict, type SummaryFile } from '@/lib/sync-report';
 
 describe('buildSyncReport', () => {
   const base = {
@@ -231,6 +231,17 @@ describe('post-session report', () => {
       .guests[0]?.integrity;
     expect(integrity?.ok).toBe(false);
     expect(integrity?.text).toContain('fell too far behind');
+  });
+
+  it('does not call a camera file ok when it was not verified', () => {
+    const integrityOf = (checks?: Map<string, FileCheck>) =>
+      (JSON.parse(buildSyncReport({ ...base, guests: [{ ...guest, name: 'Bob' }], ...(checks ? { checks } : {}) }).json) as {
+        guests: { integrity: { ok: boolean; text: string } }[];
+      }).guests[0]?.integrity;
+    expect(integrityOf()).toEqual({ ok: false, text: 'Not verified. This file was not checked.' });
+    expect(
+      integrityOf(new Map([['guest_r.mp4', { bytes: 10, received: { finalized: true, abandoned: false, sha256Written: 'a' } }]]))
+    ).toEqual({ ok: false, text: 'Complete, not verified. No checksum arrived from Bob to compare.' });
   });
 
   it('safely handles hostile participant names in guest camera integrity', () => {
@@ -812,6 +823,27 @@ describe('verification and file sizes', () => {
     );
   });
 
+  it("tells a host screen file that recorded nothing apart from the host's other empty files", () => {
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 10_000,
+      guests: [],
+      screenSegments: [{ file: 'host_screen_rec.mp4', offsetMs: 0 }],
+      checks: new Map<string, FileCheck>([
+        ['host_rec.mp4', { bytes: 0 }],
+        ['host_screen_rec.mp4', { bytes: 0 }],
+      ]),
+    });
+
+    const verdictOf = (name: string) => r.data.fileList.find((f) => f.name === name)?.verdict;
+    expect(verdictOf('host_screen_rec.mp4')).toEqual({
+      status: 'incomplete',
+      text: 'Empty. Nothing was recorded.',
+    });
+    expect(verdictOf('host_rec.mp4')?.text).toContain("Your browser's backup");
+  });
+
   const received = (
     over: Partial<NonNullable<FileCheck['received']>> = {}
   ): NonNullable<FileCheck['received']> => ({
@@ -823,7 +855,7 @@ describe('verification and file sizes', () => {
 
   // Each row is one outcome of the state machine: which facts put a file in
   // which of the three states, and the words a host acts on.
-  const verdicts: [string, FileCheck | undefined, FileVerdict][] = [
+  const verdicts: [string, FileCheck | undefined, FileVerdict, SummaryFile['kind']?][] = [
     ['no check at all', undefined, { status: 'unverified', text: 'Not verified. This file was not checked.' }],
     [
       'empty and arrived from a guest',
@@ -840,6 +872,12 @@ describe('verification and file sizes', () => {
         status: 'incomplete',
         text: "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call.",
       },
+    ],
+    [
+      "empty and the host's own screen file",
+      { bytes: 0 },
+      { status: 'incomplete', text: 'Empty. Nothing was recorded.' },
+      'screen',
     ],
     [
       "the host's own with bytes",
@@ -887,8 +925,8 @@ describe('verification and file sizes', () => {
     ],
   ];
 
-  it.each(verdicts)('gives a file %s its verdict', (_row, check, expected) => {
-    expect(fileVerdict(check, 'Priya')).toEqual(expected);
+  it.each(verdicts)('gives a file %s its verdict', (_row, check, expected, kind) => {
+    expect(fileVerdict(check, 'Priya', kind)).toEqual(expected);
   });
 
   it('names each file by who sent it, falling back to the guest or the sharer', () => {
@@ -958,6 +996,26 @@ describe('verification and file sizes', () => {
     const text = (name: string) => r.data.fileList.find((f) => f.name === name)?.verdict?.text ?? '';
     expect(text('guest_padded.mp4')).toContain('from Sam, so this file may end early.');
     expect(text('guest_blank.mp4')).toContain('from the guest, so this file may end early.');
+  });
+
+  it('falls back when a name holds no character a reader can see', () => {
+    const check: FileCheck = { bytes: 10, received: received({ finalized: false }) };
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostStartMs: 10_000,
+      guests: [
+        { slot: 0, name: '\u200B\u2060', file: 'guest_invisible.mp4', startHostMs: 10_500, rttMs: 10 },
+        { slot: 1, name: '42 \u266A', file: 'guest_symbols.mp4', startHostMs: 10_500, rttMs: 10 },
+      ],
+      checks: new Map<string, FileCheck>([
+        ['guest_invisible.mp4', check],
+        ['guest_symbols.mp4', check],
+      ]),
+    });
+    const text = (name: string) => r.data.fileList.find((f) => f.name === name)?.verdict?.text ?? '';
+    expect(text('guest_invisible.mp4')).toContain('from the guest, so this file may end early.');
+    // A name a reader can see is kept even when it holds no letter.
+    expect(text('guest_symbols.mp4')).toContain('from 42 \u266A, so this file may end early.');
   });
 
   it('calls a file it has no check for unverified, with or without a checks map', () => {

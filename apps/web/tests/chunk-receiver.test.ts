@@ -880,6 +880,33 @@ describe('ChunkReceiver', () => {
     expect(r.bytesWritten).toBe(10);
   });
 
+  it('drops an empty payload on an unbounded receiver too, leaving a far offset unwritten', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000_000_000, size: 0, ts: 1 }));
+    await r.handleMessage(new ArrayBuffer(0));
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(0);
+    expect(r.lastOffsetValue).toBe(0);
+    expect(sent).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+
+    // The dropped frame was not counted as progress, so the sender's next
+    // chunk is still taken.
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 1_000_000_000, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledWith(1_000_000_000, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(10);
+  });
+
   it('reports size error when a chunk is both past the bound and out of order', async () => {
     const writer = fakeWriter();
     const onError = vi.fn();

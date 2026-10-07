@@ -62,7 +62,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.
 - After a take, one warning says how many files are not complete, replacing the
-  single integrity line about the first guest's camera file and the "ended early"
+  single integrity line about the guests' camera files and the "ended early"
   notes. In the sync file, `integrity` and `guests[].integrity` carry the new
   wording; the `endedEarly` flags are unchanged.
 
@@ -71,6 +71,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A lost fragment no longer leaves a silent hole in a live recording: the host
   asks the guest to resend from the last fragment it has.
 - Two screen shares starting at the same moment no longer write into one file.
+- A file that received nothing is no longer shown as complete: an empty frame
+  from a guest no longer moves a file's size, so its verdict reads Empty.
 - After a take, the recording's metadata row holds the size of the host's own
   file instead of the first guest file's size and checksum, and the host's
   backups are kept when its own camera file or WAV master came out empty.

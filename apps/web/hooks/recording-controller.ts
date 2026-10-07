@@ -1238,8 +1238,8 @@ export async function bindHostScreenChannel(
 }
 
 /**
- * Gather guest report data for all guest slots (slot 0 and extra slots),
- * calculating digests and matching display names.
+ * Gather guest report data for all guest slots (slot 0 and extra slots) and
+ * match display names.
  */
 export async function collectGuestReports(
   h: RecordingHandles,

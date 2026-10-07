@@ -223,10 +223,14 @@ export class ChunkReceiver {
       }
       this.nextIdx = header.idx + 1;
     }
+    // The recorder never sends an empty blob, and an empty frame would count
+    // for acks and the finalize wait without moving the transfer forward.
+    // Dropped for every receiver once its index is accounted for: a sender's
+    // empty frame must not move a file's size off zero, or the sync report
+    // reads it as written.
+    if (data.byteLength === 0) return;
     if (this.maxBytes !== undefined) {
-      // The recorder never sends an empty blob, and an empty frame would count
-      // for acks and the finalize wait without moving the transfer forward.
-      if (this.refused || data.byteLength === 0) return;
+      if (this.refused) return;
       // A returned file is read front to back. Holding the sender to that
       // keeps the digest of what arrived equal to the digest of the file,
       // and what is taken within the size it declared. A size that is not a

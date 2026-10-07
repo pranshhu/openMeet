@@ -163,8 +163,12 @@ export function formatBytes(n: number): string {
 export const sanitizeText = (s: string) => s.replace(/[\p{Cc}\p{Z}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]+/gu, ' ');
 
 // A name comes from another participant and ends up in text on the host's disk.
-const whoOf = (name: unknown, fallback: string): string =>
-  (typeof name === 'string' ? sanitizeText(name).trim() : '') || fallback;
+// A name with no letter, digit, punctuation or symbol left after cleaning has
+// nothing a reader could use to tell who is meant, so it is not shown.
+const whoOf = (name: unknown, fallback: string): string => {
+  const clean = typeof name === 'string' ? sanitizeText(name).trim() : '';
+  return /[\p{L}\p{N}\p{P}\p{S}]/u.test(clean) ? clean : fallback;
+};
 
 /**
  * Chapter list in description format.
@@ -317,7 +321,11 @@ export function integrityVerdict(sent?: string, written?: string): { ok: boolean
  * travelled, so there is nothing to compare: they are complete once they
  * hold bytes.
  */
-export function fileVerdict(c: FileCheck | undefined, who: string): FileVerdict {
+export function fileVerdict(
+  c: FileCheck | undefined,
+  who: string,
+  kind: SummaryFile['kind'] = 'video'
+): FileVerdict {
   if (!c) return { status: 'unverified', text: 'Not verified. This file was not checked.' };
   const r = c.received;
   const ask = `Ask ${who} for the backup their browser kept; it is listed in the lobby on their device.`;
@@ -326,7 +334,11 @@ export function fileVerdict(c: FileCheck | undefined, who: string): FileVerdict 
     return incomplete(
       r
         ? `Empty. Nothing arrived from ${who}. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.`
-        : "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call."
+        : // A screen segment has no downloaded backup in the summary, so its
+          // sentence names none.
+          kind === 'screen'
+          ? 'Empty. Nothing was recorded.'
+          : "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call."
     );
   }
   if (!r) return { status: 'complete', text: 'Complete. Recorded on this computer.' };
@@ -474,7 +486,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     }
 
     // Integrity: the camera file's verdict, under the key scripts already read.
-    const camera = fileVerdict(input.checks?.get(g.file), whoOf(g.name, 'the guest'));
+    const camera = fileVerdict(input.checks?.get(g.file), whoOf(g.name, 'the guest'), 'video');
     const integrity = { ok: camera.status === 'complete', text: camera.text };
 
     if (g.drained === false) {
@@ -554,7 +566,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   ].map((f: SummaryFile) => {
     const c = input.checks?.get(f.name);
     const who = whoOf(f.participant, f.kind === 'screen' ? 'the sharer' : 'the guest');
-    return { ...f, ...(c ? { bytes: c.bytes } : {}), verdict: fileVerdict(c, who) };
+    return { ...f, ...(c ? { bytes: c.bytes } : {}), verdict: fileVerdict(c, who, f.kind) };
   });
 
   const flagged = fileList.filter((f) => f.verdict?.status !== 'complete').length;

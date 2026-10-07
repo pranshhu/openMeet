@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { encodeChunkHeader } from '@openmeet/protocol';
+import { fileVerdict } from '@/lib/sync-report';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
@@ -172,6 +173,37 @@ describe('host ingest routes by source peer', () => {
     expect(checks.get('guest2_rec.mp4')?.bytes).toBe(250);
     expect(checks.get('guest_rec.wav')?.bytes).toBe(40);
     expect(checks.size).toBe(2);
+  });
+
+  it('reports a WAV whose header is sent twice by its length, not by the bytes written', async () => {
+    const h = await hostHandles([], [], []);
+    const w = fakeChannel();
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-b');
+    await bindHostAudioChannel(w, h, 'peer-b');
+    await sendChunk(w, 0, 0, 44);
+    await sendChunk(w, 1, 44, 100);
+    await sendChunk(w, 2, 0, 44);
+    await new Promise((r) => setTimeout(r));
+    expect(h.guestReceivers!.get('peer-b:wav')!.receiver.bytesWritten).toBe(188);
+    expect((await collectFileChecks(h)).get('guest2_rec.wav')?.bytes).toBe(144);
+  });
+
+  it('ignores an empty frame at a huge offset and reads the file as empty', async () => {
+    const h = await hostHandles([], [], []);
+
+    const b = fakeChannel();
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await sendChunk(b, 0, 1_000_000_000, 0);
+    await new Promise((r) => setTimeout(r));
+
+    const check = (await collectFileChecks(h)).get('guest2_rec.mp4');
+    expect(check?.bytes).toBe(0);
+    expect(fileVerdict(check, 'Bob')).toEqual({
+      status: 'incomplete',
+      text: 'Empty. Nothing arrived from Bob. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.',
+    });
   });
 
   it("reports the sender's claim against the host's own digest, and no sender digest when unfinalized", async () => {
@@ -400,6 +432,29 @@ describe('host ingest keys guest slots by the channel-label key when present, no
     await bindHostGuestChannel(fakeChannel('recording#R2'), h, 'peer-b');
 
     expect(opened).toEqual(['guest2_rec.mp4']); // R2 is a new key => its own slot/file
+  });
+
+  it("cannot select another guest's row with a channel-label key it guessed", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+
+    // peer-a's channel carries the key its recorder minted. peer-b guesses
+    // peer-a's peerId as a key, not the minted one, so it gets its own row:
+    // the signals it sends land there, not on peer-a's file.
+    const a = fakeChannel('recording#R1');
+    const b = fakeChannel('recording#peer-a');
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await sendChunk(a, 0, 0, 100);
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await new Promise((r) => setTimeout(r));
+    await b.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'rec', lastIdx: 0 }));
+
+    expect(opened).toEqual(['guest2_rec.mp4']);
+    expect(h.receiver?.isAbandoned).toBe(false);
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.received?.abandoned).toBe(true);
   });
 
   it("each guest's rate lands on that guest's entry, not a neighbour's", async () => {
