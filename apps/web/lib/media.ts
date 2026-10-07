@@ -54,6 +54,15 @@ export function micConstraints(micId?: string): MediaTrackConstraints {
   return micId ? { ...a, deviceId: { exact: micId } } : { ...a };
 }
 
+/**
+ * One channel unless stereo was asked for and the microphone can deliver it.
+ * A voice is one source, so the second channel of a stereo mic array only
+ * doubles the uncompressed master; the Web Audio destination mixes it down.
+ */
+export function recordedChannels(mic: MediaStreamTrack | null | undefined, stereo: boolean): 1 | 2 {
+  return stereo && (mic?.getSettings?.().channelCount ?? 0) >= 2 ? 2 : 1;
+}
+
 export function cameraConstraints(
   camIdOrFacing?: string,
   qualityId: string = DEFAULT_QUALITY_ID,

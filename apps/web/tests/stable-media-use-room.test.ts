@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import * as recordingController from '@/hooks/recording-controller';
+import { BackupRecorder } from '@/lib/backup-recorder';
+import { MediaBoard } from '@/lib/media-board';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let mockPeers: any[] = [];
@@ -38,6 +40,7 @@ vi.mock('@/lib/peer', () => ({
       close: vi.fn(),
       setLocalStream: vi.fn(),
       setLocalStreamAfterFirstOffer: vi.fn(),
+      replaceAudioTrack: vi.fn(),
       createControlChannel: vi.fn(),
       addTransceiver: vi.fn(),
       restartIce: vi.fn(),
@@ -85,6 +88,74 @@ vi.mock('@/lib/switchable-media', async (importOriginal) => {
     },
   };
 });
+
+// Join only builds the stable audio graph where the insertable-streams globals
+// exist; AudioContext stands in for the graph itself so the destination's
+// channel count can be read back.
+function installStableMediaGlobals() {
+  const destTrack = {
+    kind: 'audio',
+    id: 'stable-audio',
+    enabled: true,
+    stop: vi.fn(),
+  } as unknown as MediaStreamTrack;
+  const destination = {
+    stream: new MediaStream([destTrack]),
+    channelCount: 0,
+    channelCountMode: '',
+  };
+  const ctx = {
+    state: 'running',
+    createMediaStreamDestination: () => destination,
+    createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+  const audioContext = vi.fn().mockImplementation(() => ctx);
+  vi.stubGlobal('AudioContext', audioContext);
+  vi.stubGlobal(
+    'MediaStreamTrackGenerator',
+    vi.fn().mockImplementation(() => ({
+      kind: 'video',
+      id: 'stable-video',
+      enabled: true,
+      stop: vi.fn(),
+      writable: {
+        getWriter: () => ({
+          write: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    }))
+  );
+  vi.stubGlobal(
+    'MediaStreamTrackProcessor',
+    vi.fn().mockImplementation(() => ({
+      readable: {
+        getReader: () => ({
+          read: vi.fn().mockResolvedValue({ done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    }))
+  );
+  return { audioContext, destination, destTrack };
+}
+
+function twoChannelLobbyStream() {
+  const rawAudio = {
+    kind: 'audio',
+    id: 'raw-audio-id',
+    enabled: true,
+    stop: vi.fn(),
+    getSettings: () => ({ deviceId: 'mic-1', sampleRate: 44100, channelCount: 2 }),
+  } as any;
+  const rawVideo = { kind: 'video', id: 'raw-video-id', enabled: true, stop: vi.fn() } as any;
+  return {
+    getTracks: () => [rawAudio, rawVideo],
+    getAudioTracks: () => [rawAudio],
+    getVideoTracks: () => [rawVideo],
+  } as any;
+}
 
 describe('useRoom stable media integration', () => {
   beforeEach(() => {
@@ -330,5 +401,108 @@ describe('useRoom stable media integration', () => {
 
     expect(result.current.state.localStream).toBe(lobbyStream);
     expect(result.current.state.isFallbackMedia).toBeUndefined();
+  });
+
+  it('records the stable stream in mono by default', async () => {
+    const { audioContext, destination, destTrack } = installStableMediaGlobals();
+    try {
+      const lobbyStream = twoChannelLobbyStream();
+      const { result } = renderHook(() => useRoom('test-room'));
+
+      await act(async () => {
+        await result.current.join(lobbyStream, 'Alice');
+      });
+
+      expect(destination.channelCount).toBe(1);
+      expect(audioContext).toHaveBeenCalledWith({ sampleRate: 48000 });
+      expect(result.current.state.localStream!.getAudioTracks()[0]).toBe(destTrack);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('records the stable stream in stereo when join was asked for it', async () => {
+    const { destination } = installStableMediaGlobals();
+    try {
+      const lobbyStream = twoChannelLobbyStream();
+      const { result } = renderHook(() => useRoom('test-room'));
+
+      await act(async () => {
+        await result.current.join(lobbyStream, 'Alice', false, false, undefined, true);
+      });
+
+      expect(destination.channelCount).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // The board mix replaces the mic in what the take sends and records, but the
+  // uncompressed master stays the microphone alone.
+  it('gives the WAV backup the microphone stream, not the board mix', async () => {
+    installStableMediaGlobals();
+    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true });
+    try {
+      const lobbyStream = twoChannelLobbyStream();
+      const { result } = renderHook(() => useRoom('test-room'));
+
+      await act(async () => {
+        await result.current.join(lobbyStream, 'Alice');
+      });
+      await act(async () => {
+        signalHandlers['role-assigned']?.[0]?.({
+          type: 'role-assigned',
+          role: 'guest',
+          peerId: 'guest-peer',
+          ordinal: 2,
+          peers: [{ peerId: 'host-peer', ordinal: 1, role: 'host' }],
+        });
+      });
+      act(() => {
+        result.current.openMediaBoard();
+      });
+      await act(async () => {
+        await signalHandlers['recording-started']?.[0]?.({
+          type: 'recording-started',
+          recordingId: 'take-1',
+          from: 'host',
+        });
+      });
+
+      const options = vi.mocked(BackupRecorder).mock.calls.map(([opts]) => opts as any);
+      const wav = options.find((o) => o.mimeType === 'audio/wav');
+      const mp4 = options.find((o) => o.mimeType !== 'audio/wav');
+      expect(wav).toBeDefined();
+      expect(mp4).toBeDefined();
+      expect(wav!.stream).toBe(result.current.state.localStream);
+      expect(mp4!.stream).not.toBe(wav!.stream);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('closes the media board when the call is released', async () => {
+    installStableMediaGlobals();
+    const close = vi.spyOn(MediaBoard.prototype, 'close');
+    try {
+      const lobbyStream = twoChannelLobbyStream();
+      const { result } = renderHook(() => useRoom('test-room'));
+
+      await act(async () => {
+        await result.current.join(lobbyStream, 'Alice');
+      });
+      act(() => {
+        result.current.openMediaBoard();
+      });
+      expect(close).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await result.current.leave();
+      });
+      expect(close).toHaveBeenCalled();
+    } finally {
+      close.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });
