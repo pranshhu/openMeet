@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup } from '@/lib/backup-recorder';
+import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName } from '@/lib/backup-recorder';
 import { wavHeader } from '@/lib/wav';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
 
@@ -647,6 +647,54 @@ describe('backup room labels', () => {
     expect(backupRoom('openmeet-backup-1790381338441.mp4')).toBeNull();
     expect(backupRoom('openmeet-backup-host-1790381338441.mp4')).toBeNull();
     expect(backupRoom('openmeet-backup-screen-1790381338441.mp4')).toBeNull();
+  });
+
+  it('parseBackupName reads kind, start, room and extension from the three name shapes', () => {
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.mp4')).toEqual({
+      kind: 'camera',
+      startedMs: 1700000000000,
+      room: 'abc-defg-hij',
+      ext: 'mp4',
+    });
+    expect(parseBackupName('openmeet-backup-audio-1700000000000-abc-defg-hij.wav')).toEqual({
+      kind: 'audio',
+      startedMs: 1700000000000,
+      room: 'abc-defg-hij',
+      ext: 'wav',
+    });
+    expect(parseBackupName('openmeet-backup-screen-1700000000000-abc-defg-hij.mp4')).toEqual({
+      kind: 'screen',
+      startedMs: 1700000000000,
+      room: 'abc-defg-hij',
+      ext: 'mp4',
+    });
+  });
+
+  it('parseBackupName returns null for host backups, missing rooms, malformed timestamps, mismatched kinds/extensions, uppercase, and path traversal', () => {
+    // host camera backup
+    expect(parseBackupName('openmeet-backup-host-1700000000000-abc-defg-hij.mp4')).toBeNull();
+    // name with no room
+    expect(parseBackupName('openmeet-backup-1700000000000.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-audio-1700000000000.wav')).toBeNull();
+    // 12- or 14-digit timestamp
+    expect(parseBackupName('openmeet-backup-170000000000-abc-defg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-17000000000000-abc-defg-hij.mp4')).toBeNull();
+    // kind and extension disagree
+    expect(parseBackupName('openmeet-backup-audio-1700000000000-abc-defg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.wav')).toBeNull();
+    expect(parseBackupName('openmeet-backup-screen-1700000000000-abc-defg-hij.wav')).toBeNull();
+    // malformed room shape
+    expect(parseBackupName('openmeet-backup-1700000000000-abc.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij-x.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abcd-efg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-../../etc.mp4')).toBeNull();
+    // upper case
+    expect(parseBackupName('openMeet-backup-1700000000000-abc-defg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-ABC-DEFG-HIJ.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.MP4')).toBeNull();
+    // path traversal
+    expect(parseBackupName('../openmeet-backup-1700000000000-abc-defg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.mp4/../x')).toBeNull();
   });
 
   it('distinguishes screen backups from camera backups', () => {

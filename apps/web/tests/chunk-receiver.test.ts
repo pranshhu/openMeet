@@ -303,6 +303,70 @@ describe('ChunkReceiver', () => {
     const ack = sent.map((s) => JSON.parse(s)).find((m) => m.type === 'ack');
     expect(ack).toMatchObject({ type: 'ack', uptoIdx: 0, uptoOffset: 4 });
   });
+
+  it('writes a chunk that ends exactly at maxBytes and refuses one that ends past it, measuring payload even if header.size claims less', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 10,
+    });
+
+    // Chunk 1: ends exactly at bound
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    expect(r.bytesWritten).toBe(10);
+    expect(onError).not.toHaveBeenCalled();
+
+    // Chunk 2: ends one byte past bound (offset 10 + 1 > 10), header claims size 0
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 0, ts: 2 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(10);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+  });
+
+  it('refuses a small chunk whose offset is past maxBytes', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 10,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000_000, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('enforces maxBytes of 0', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 0,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(0);
+  });
 });
 
 describe('ChunkReceiver — host-driven stop', () => {

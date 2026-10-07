@@ -106,6 +106,14 @@ export interface StreamAbandoned {
   lastIdx: number;
 }
 
+// First message on a `backup#<name>` channel: how big the file is. The host
+// answers `resume_offset` once it has a file open, and the bytes follow as
+// ordinary chunks.
+export interface BackupOffer {
+  type: 'backup_offer';
+  size: number;
+}
+
 export type DataChannelControlMessage =
   | ChunkAck
   | ChunkResumeQuery
@@ -114,4 +122,5 @@ export type DataChannelControlMessage =
   | ClockPing
   | ClockPong
   | RecordingMeta
-  | StreamAbandoned;
+  | StreamAbandoned
+  | BackupOffer;

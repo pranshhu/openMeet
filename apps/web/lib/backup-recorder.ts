@@ -47,6 +47,32 @@ export function isScreenBackup(name: string): boolean {
   return /^openmeet-backup-(?:host-)?screen/.test(name);
 }
 
+export interface BackupName {
+  kind: 'camera' | 'audio' | 'screen';
+  /** When the backup's recorder started, on the clock of the device that made it. */
+  startedMs: number;
+  room: string;
+  ext: 'mp4' | 'wav';
+}
+
+/**
+ * The parts of a backup's file name, or null for anything else: a host's
+ * camera or WAV backup, an older name with no room, a name this app never
+ * wrote.
+ */
+export function parseBackupName(name: string): BackupName | null {
+  const m = /^openmeet-backup-(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
+  if (!m) return null;
+  const prefix = m[1];
+  const startedMs = Number(m[2]);
+  const room = m[3]!;
+  const ext = m[4] as 'mp4' | 'wav';
+  const kind: BackupName['kind'] = prefix === 'audio-' ? 'audio' : prefix === 'screen-' ? 'screen' : 'camera';
+  if (kind === 'audio' && ext !== 'wav') return null;
+  if ((kind === 'camera' || kind === 'screen') && ext !== 'mp4') return null;
+  return { kind, startedMs, room, ext };
+}
+
 function chunkFileName(idx: number): string {
   return `${String(idx).padStart(6, '0')}.part`;
 }

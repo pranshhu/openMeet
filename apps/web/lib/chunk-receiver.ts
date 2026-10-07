@@ -22,6 +22,8 @@ export interface ChunkReceiverOpts {
   // rejection would be swallowed by the `void receiver.handleMessage(...)`
   // call site and never reach the UI.
   onError?: (err: unknown) => void;
+  /** Largest end offset this file may reach, for a sender that declared its size up front. */
+  maxBytes?: number;
 }
 
 export class ChunkReceiver {
@@ -29,6 +31,7 @@ export class ChunkReceiver {
   private readonly writer: FileWriter;
   private readonly sendControl: (json: string) => void;
   private readonly onError: ((err: unknown) => void) | undefined;
+  private readonly maxBytes: number | undefined;
   private pendingHeader: ChunkHeader | null = null;
   private lastIdx = -1;
   private lastOffset = 0;
@@ -59,6 +62,7 @@ export class ChunkReceiver {
     this.writer = opts.writer;
     this.sendControl = opts.sendControl;
     this.onError = opts.onError;
+    this.maxBytes = opts.maxBytes;
   }
 
   get bytesWritten(): number {
@@ -185,6 +189,10 @@ export class ChunkReceiver {
     this.pendingHeader = null;
     if (!header) return;
     if (header.idx <= this.lastIdx) return;
+    if (this.maxBytes !== undefined && header.offset + data.byteLength > this.maxBytes) {
+      this.onError?.(new Error('Received more data than the sender declared.'));
+      return;
+    }
     try {
       await this.writer.write(header.offset, data);
     } catch (err) {

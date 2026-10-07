@@ -72,7 +72,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `type` discriminant**, not payload shape.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
-  `recording_meta` (last three = recording clock-sync). Recording acks flow here, **not** over WS.
+  `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
+  channel and carries the file size). Recording acks flow here, **not** over WS.
 - `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
@@ -99,7 +100,8 @@ defaults, and the 1080p entry of `lib/quality.ts` `QUALITY_PRESETS` (720p–4K),
 `lib/media.ts` `RECORDING_CONSTRAINTS`).
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
-`recording-screen-<n>` (the host matches the prefix). WS close codes: `4001` capacity-full,
+`recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
+going back to the host). WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over).
 
@@ -301,8 +303,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
   `drain()` polls 100ms until empty or 30s cap.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; **drops
-  `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; acks every 5
-  chunks / 10s; `answerResume` replies `resume_offset{lastByte,lastIdx}`.
+  `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; `maxBytes` holds
+  a sender to a size it declared; acks every 5 chunks / 10s; `answerResume` replies
+  `resume_offset{lastByte,lastIdx}`.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
