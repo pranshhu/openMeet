@@ -14,13 +14,13 @@ interface OpfsWritable {
   write(data: Blob | BufferSource): Promise<void>;
   close(): Promise<void>;
 }
-interface OpfsFileHandle {
+export interface OpfsFileHandle {
   createWritable(opts?: { keepExistingData?: boolean }): Promise<OpfsWritable>;
   getFile(): Promise<File>;
   name?: string;
   kind?: string;
 }
-interface OpfsDir {
+export interface OpfsDir {
   getFileHandle(name: string, opts?: { create?: boolean }): Promise<OpfsFileHandle>;
   getDirectoryHandle?(name: string, opts?: { create?: boolean }): Promise<OpfsDir>;
   removeEntry?(name: string, opts?: { recursive?: boolean }): Promise<void>;
@@ -88,7 +88,7 @@ function getUniqueBackupDirName(prefix: string): string {
   return `${prefix}-${now}`;
 }
 
-async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsDir>> {
+export async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsDir>> {
   const entries: Array<OpfsFileHandle | OpfsDir> = [];
   const iterable = typeof dir.values === 'function'
     ? dir.values()
@@ -112,7 +112,7 @@ async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsD
   return entries;
 }
 
-function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is OpfsDir {
+export function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is OpfsDir {
   if (handle.kind === 'directory') return true;
   if (handle.kind === 'file') return false;
   return typeof (handle as OpfsDir).getDirectoryHandle === 'function' ||
@@ -309,7 +309,7 @@ export interface BackupRecorderOpts {
   onError?: (err: unknown) => void;
 }
 
-function defaultOpfsRoot(): OpfsRootGetter | null {
+export function defaultOpfsRoot(): OpfsRootGetter | null {
   const storage = (globalThis.navigator as { storage?: { getDirectory?: () => Promise<OpfsDir> } })
     ?.storage;
   return storage?.getDirectory ? () => storage.getDirectory!() : null;

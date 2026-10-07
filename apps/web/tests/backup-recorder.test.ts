@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName } from '@/lib/backup-recorder';
+import { openTakeJournal } from '@/lib/take-journal';
 import { wavHeader } from '@/lib/wav';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
 
@@ -855,4 +856,489 @@ describe('BackupRecorder — WAV backup and crash safety', () => {
   });
 });
 
+describe('take journal — small closed parts in browser storage', () => {
+  const INIT = { room: 'abc-defg-hij', recordingId: 'r1', take: 1, hostStartMs: 1759824000000 };
+  const TAKE_DIR = 'openmeet-take-1759824000000-abc-defg-hij';
+
+  function ab(n: number, fill = 7): ArrayBuffer {
+    return new Uint8Array(n).fill(fill).buffer;
+  }
+
+  function takeDirOf(root: FakeDirectoryHandle): FakeDirectoryHandle {
+    return root.entries.get(TAKE_DIR) as FakeDirectoryHandle;
+  }
+
+  function fileDirOf(root: FakeDirectoryHandle, name: string): FakeDirectoryHandle {
+    return takeDirOf(root).entries.get(name) as FakeDirectoryHandle;
+  }
+
+  function open(root: FakeDirectoryHandle) {
+    return openTakeJournal(INIT, async () => root as never);
+  }
+
+  async function putPart(dir: FakeDirectoryHandle, name: string, bytes: Uint8Array<ArrayBuffer>) {
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    if (bytes.length > 0) await writable.write(bytes);
+    await writable.close();
+    return handle;
+  }
+
+  it('a part survives a dropped journal and the next session continues it', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const first = await open(root);
+    expect(first).not.toBeNull();
+    expect(first!.dirName).toBe(TAKE_DIR);
+    expect(first!.root).toBe(root);
+
+    const file = first!.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+
+    const second = await open(root);
+    expect(await second!.file('guest_r.mp4').position()).toEqual({ nextIdx: 1, end: 4 });
+    expect(second!.bytes).toBe(4);
+
+    second!.file('guest_r.mp4').append(4, ab(4));
+    await second!.file('guest_r.mp4').commit(2);
+
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual([
+      '000000-0-1.part',
+      '000001-4-2.part',
+    ]);
+  });
+
+  it('bytes appended but never committed are gone, and the journal is no backup', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const first = await open(root);
+    first!.file('guest_r.mp4').append(0, ab(4));
+    await first!.file('guest_r.mp4').commit(1);
+    first!.file('guest_r.mp4').append(4, ab(4));
+    await first!.file('guest_r.mp4').commit(2);
+    first!.file('guest_r.mp4').append(8, ab(4)); // never committed
+
+    const second = await open(root);
+    expect(await second!.file('guest_r.mp4').position()).toEqual({ nextIdx: 2, end: 8 });
+    expect(second!.bytes).toBe(8);
+
+    expect(await findBackups(async () => root as never)).toEqual([]);
+    expect(root.entries.has(TAKE_DIR)).toBe(true);
+  });
+
+  it('an empty part changes nothing', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+    await putPart(fileDirOf(root, 'guest_r.mp4'), '000001-4-2.part', new Uint8Array());
+    await putPart(fileDirOf(root, 'guest_r.mp4'), '000002-99999999999999999999-3.part', new Uint8Array(4));
+
+    expect(await file.position()).toEqual({ nextIdx: 1, end: 4 });
+    expect(await file.parts()).toEqual([{ offset: 0, size: 4 }]);
+  });
+
+  it('a missing seq or an unreadable part ends the file', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = await takeDirOf(root).getDirectoryHandle('guest_r.mp4', { create: true });
+    await putPart(dir, '000000-0-1.part', new Uint8Array(4));
+    await putPart(dir, '000002-4-3.part', new Uint8Array(8));
+
+    expect(await journal.file('guest_r.mp4').position()).toEqual({ nextIdx: 1, end: 4 });
+
+    const unreadable = await takeDirOf(root).getDirectoryHandle('guest_u.mp4', { create: true });
+    await putPart(unreadable, '000000-0-1.part', new Uint8Array(4));
+    const gone = await putPart(unreadable, '000001-4-2.part', new Uint8Array(8));
+    gone.getFile = async () => {
+      throw new Error('gone');
+    };
+    await putPart(unreadable, '000002-12-3.part', new Uint8Array(8));
+
+    expect(await journal.file('guest_u.mp4').position()).toEqual({ nextIdx: 1, end: 4 });
+  });
+
+  it('a refused append and a commit with no runs write nothing', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(-1, ab(4));
+    file.append(1.5, ab(4));
+    file.append(0, new ArrayBuffer(0));
+    await expect(file.commit(1)).resolves.toBeUndefined();
+
+    expect(await file.position()).toBeNull();
+    expect(file.dead).toBe(false);
+    expect(takeDirOf(root).entries.has('guest_r.mp4')).toBe(false);
+
+    await expect(journal.file('guest_c.mp4').commit(1)).resolves.toBeUndefined();
+    expect(takeDirOf(root).entries.has('guest_c.mp4')).toBe(false);
+  });
+
+  it('a write that does not continue the last one starts a new part, and replay walks them', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4, 1));
+    file.append(1000, ab(44, 2));
+    await file.commit(2);
+
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual([
+      '000000-0-2.part',
+      '000001-1000-2.part',
+    ]);
+    expect(await file.position()).toEqual({ nextIdx: 2, end: 1044 });
+    expect(await file.parts()).toEqual([
+      { offset: 0, size: 4 },
+      { offset: 1000, size: 44 },
+    ]);
+
+    const written: { position: number; first: number; size: number }[] = [];
+    const end = await journal.replay('guest_r.mp4', {
+      write: async (position, data) => {
+        const bytes = new Uint8Array(await data.arrayBuffer());
+        written.push({ position, first: bytes[0]!, size: bytes.byteLength });
+      },
+    });
+    expect(end).toBe(1044);
+    expect(written).toEqual([
+      { position: 0, first: 1, size: 4 },
+      { position: 1000, first: 2, size: 44 },
+    ]);
+  });
+
+  it('a failed part is retried once, and a part that fails twice kills the whole journal', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = await takeDirOf(root).getDirectoryHandle('guest_r.mp4', { create: true });
+    const part = await dir.getFileHandle('000000-0-1.part', { create: true });
+    const realCreate = part.createWritable.bind(part);
+    let attempts = 0;
+    part.createWritable = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('transient disk error');
+      return realCreate();
+    };
+
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+    expect(attempts).toBe(2);
+    expect(await file.position()).toEqual({ nextIdx: 1, end: 4 });
+    expect(file.dead).toBe(false);
+
+    const brokenRoot = new FakeDirectoryHandle('root');
+    const broken = (await open(brokenRoot))!;
+    const brokenDir = await takeDirOf(brokenRoot).getDirectoryHandle('guest_r.mp4', { create: true });
+    brokenDir.getFileHandle = async (name) =>
+      ({
+        kind: 'file',
+        name,
+        createWritable: async () => {
+          throw new Error('disk full');
+        },
+        getFile: async () => {
+          throw new Error('unreadable');
+        },
+      }) as never;
+
+    const dead = broken.file('guest_r.mp4');
+    dead.append(0, ab(4));
+    await expect(dead.commit(1)).resolves.toBeUndefined();
+    expect(broken.bytes).toBe(0);
+    expect(dead.dead).toBe(true);
+    expect(broken.dead).toBe(true);
+    expect(await dead.position()).toBeNull();
+
+    dead.append(0, ab(4));
+    await expect(dead.commit(1)).resolves.toBeUndefined();
+    const other = broken.file('guest_c.mp4');
+    other.append(0, ab(4));
+    await expect(other.commit(1)).resolves.toBeUndefined();
+    expect(broken.bytes).toBe(0);
+    expect(takeDirOf(brokenRoot).entries.has('guest_c.mp4')).toBe(false);
+  });
+
+  it('a double failure drops the waiting commit without writing its runs', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = await takeDirOf(root).getDirectoryHandle('guest_r.mp4', { create: true });
+    const realGetFile = dir.getFileHandle.bind(dir);
+    dir.getFileHandle = async (name, opts) => {
+      if (name === '000000-0-1.part') {
+        return {
+          kind: 'file',
+          name,
+          createWritable: async () => {
+            throw new Error('disk full');
+          },
+        } as never;
+      }
+      return realGetFile(name, opts);
+    };
+
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    const first = file.commit(1);
+    file.append(4, ab(4));
+    const second = file.commit(2);
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+
+    expect(journal.dead).toBe(true);
+    expect(file.dead).toBe(true);
+    expect(journal.bytes).toBe(0);
+    expect([...dir.entries.keys()]).toEqual([]);
+    expect(await file.position()).toBeNull();
+  });
+
+  it('a run flood is bounded to eight parts and the journal stays alive', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    for (let i = 0; i < 9; i++) file.append(i * 100, ab(4));
+
+    await file.commit(1);
+    expect(file.dead).toBe(false);
+    expect(fileDirOf(root, 'guest_r.mp4').entries.size).toBe(8);
+
+    file.append(900, ab(4));
+    await file.commit(2);
+    expect(fileDirOf(root, 'guest_r.mp4').entries.size).toBe(9);
+  });
+
+  it('a commit in flight is not shared', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    const first = file.commit(1);
+    file.append(4, ab(4));
+    const second = file.commit(2);
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual([
+      '000000-0-1.part',
+      '000001-4-2.part',
+    ]);
+    expect(await file.position()).toEqual({ nextIdx: 2, end: 8 });
+  });
+
+  it('openTakeJournal returns null and never rejects on unusable input', async () => {
+    await expect(
+      openTakeJournal(INIT, async () => {
+        throw new Error('no storage');
+      }),
+    ).resolves.toBeNull();
+    await expect(openTakeJournal(INIT, async () => ({}) as never)).resolves.toBeNull();
+
+    const noWritable = {
+      kind: 'directory',
+      name: 'root',
+      getDirectoryHandle: async () => noWritable,
+      getFileHandle: async (name: string) => ({ kind: 'file', name }),
+      removeEntry: async () => {},
+    };
+    await expect(openTakeJournal(INIT, async () => noWritable as never)).resolves.toBeNull();
+
+    const root = new FakeDirectoryHandle('root');
+    await expect(openTakeJournal({ ...INIT, room: '' }, async () => root as never)).resolves.toBeNull();
+    await expect(openTakeJournal({ ...INIT, hostStartMs: NaN }, async () => root as never)).resolves.toBeNull();
+    expect(root.entries.size).toBe(0);
+  });
+
+  it('openTakeJournal asks for persistent storage', async () => {
+    const persist = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal('navigator', { storage: { persist } });
+    try {
+      const root = new FakeDirectoryHandle('root');
+      const journal = await open(root);
+      expect(journal).not.toBeNull();
+      expect(persist).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('note() changes the notes object in place', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const notes = journal.notes;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+
+    expect(journal.notes).toBe(notes);
+    expect(notes.files).toEqual([{ file: 'guest_r.mp4', kind: 'camera' }]);
+  });
+
+  it('file() is memoised and refuses anything that is not a plain file name', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    expect(journal.file('guest_r.mp4')).toBe(journal.file('guest_r.mp4'));
+    expect(journal.file('guest_r.mp4').dead).toBe(false);
+
+    const escaped = journal.file('../guest_r.mp4');
+    expect(escaped.dead).toBe(true);
+    expect(await escaped.position()).toBeNull();
+    expect(await escaped.parts()).toEqual([]);
+    await expect(escaped.commit(1)).resolves.toBeUndefined();
+
+    const dotdot = journal.file('..');
+    expect(dotdot.dead).toBe(true);
+    expect(await dotdot.position()).toBeNull();
+    await expect(dotdot.commit(1)).resolves.toBeUndefined();
+    expect(takeDirOf(root).entries.has('../guest_r.mp4')).toBe(false);
+    expect(takeDirOf(root).entries.has('..')).toBe(false);
+  });
+
+  it('finish() removes the directory, and a failed removal leaves the finished marker', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.file('guest_r.mp4').append(0, ab(4));
+    await journal.file('guest_r.mp4').commit(1);
+
+    await expect(journal.finish()).resolves.toBeUndefined();
+    expect(root.entries.has(TAKE_DIR)).toBe(false);
+
+    const reopen = (await open(root))!;
+    expect(reopen.bytes).toBe(0);
+    expect(await reopen.file('guest_r.mp4').position()).toBeNull();
+
+    const locked = new FakeDirectoryHandle('root');
+    const lockedJournal = (await open(locked))!;
+    locked.removeEntry = async () => {
+      throw new Error('locked');
+    };
+    await expect(lockedJournal.finish()).resolves.toBeUndefined();
+    expect(takeDirOf(locked).entries.has('finished')).toBe(true);
+  });
+
+  it('hostile input does not throw or break later steps', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+
+    const hostileValues = [
+      'wrong',
+      1e25,
+      Infinity,
+      -1e25,
+      NaN,
+      -5,
+      '',
+      null,
+      undefined,
+      {},
+      [],
+      'text\nwith\nnewlines',
+      'text"with\'quotes',
+      '../traversal',
+    ];
+
+    for (const val of hostileValues) {
+      // commit(nextIdx)
+      await expect(file.commit(val as never)).resolves.toBeUndefined();
+      // append(offset, data)
+      expect(() => file.append(val as never, val as never)).not.toThrow();
+      expect(() => file.append(val as never, ab(4))).not.toThrow();
+      expect(() => file.append(0, val as never)).not.toThrow();
+      // file(name)
+      const f = journal.file(val as never);
+      expect(f.dead).toBe(true);
+      await expect(f.commit(1)).resolves.toBeUndefined();
+      await expect(f.position()).resolves.toBeNull();
+      await expect(f.parts()).resolves.toEqual([]);
+    }
+  });
+
+  it('a waiting commit is named with the largest nextIdx among the calls it resolves', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+
+    file.append(0, ab(4));
+    const first = file.commit(1);
+
+    file.append(4, ab(4));
+    const second = file.commit(5);
+    const third = file.commit(10);
+    const fourth = file.commit(3);
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    await expect(third).resolves.toBeUndefined();
+    await expect(fourth).resolves.toBeUndefined();
+
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual([
+      '000000-0-1.part',
+      '000001-4-10.part',
+    ]);
+    expect(await file.position()).toEqual({ nextIdx: 10, end: 8 });
+  });
+
+  it('contiguous appends in one commit coalesce into a single part', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4, 1));
+    file.append(4, ab(4, 2));
+    await file.commit(1);
+
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual(['000000-0-1.part']);
+    expect(await file.position()).toEqual({ nextIdx: 1, end: 8 });
+    expect(await file.parts()).toEqual([{ offset: 0, size: 8 }]);
+  });
+
+  it('a later part rewriting an earlier offset does not shrink position().end', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(1000, ab(50));
+    await file.commit(1);
+    file.append(0, ab(44));
+    await file.commit(2);
+
+    expect(await file.position()).toEqual({ nextIdx: 2, end: 1050 });
+  });
+
+  it('replay stops at an unreadable part or failed write and resolves without rejecting', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+    file.append(4, ab(4));
+    await file.commit(2);
+
+    const dir = fileDirOf(root, 'guest_r.mp4');
+    const part2 = (await dir.getFileHandle('000001-4-2.part')) as FakeFileHandle;
+    const realGetFile = part2.getFile.bind(part2);
+    let calls = 0;
+    part2.getFile = async () => {
+      calls += 1;
+      if (calls > 1) throw new Error('corrupt part during replay');
+      return realGetFile();
+    };
+
+    const written: number[] = [];
+    const end = await journal.replay('guest_r.mp4', {
+      write: async (pos) => {
+        written.push(pos);
+      },
+    });
+    expect(end).toBe(4);
+    expect(written).toEqual([0]);
+
+    // Also test into.write throwing
+    file.append(8, ab(4));
+    await file.commit(3);
+    const end2 = await journal.replay('guest_r.mp4', {
+      write: async (pos) => {
+        if (pos > 0) throw new Error('write failed');
+      },
+    });
+    expect(end2).toBe(4);
+  });
+});
 
