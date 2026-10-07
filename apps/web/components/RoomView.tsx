@@ -273,6 +273,7 @@ export function RoomView({ slug }: { slug: string }) {
       backupUrl={state.backupBlobUrl}
       wavBackupUrl={state.wavBackupBlobUrl}
       recordingError={state.recordingError ?? state.connectionWarning}
+      micWarning={state.micWarning}
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}

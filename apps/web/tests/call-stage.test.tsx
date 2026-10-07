@@ -1,6 +1,8 @@
+import { Profiler } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
+import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
 
 const baseProps = {
   role: 'host' as const,
@@ -1302,4 +1304,183 @@ describe('CallStage keep-up notice', () => {
       }
     }
   );
+});
+
+describe('CallStage mic warning', () => {
+  it('shows above the stage as an alert, in a call and in a take, and only when there is a warning', () => {
+    const { unmount } = render(<CallStage {...baseProps} phase="in-call" micWarning="silent" />);
+    const alertInCall = screen.getByRole('alert');
+    expect(alertInCall.tagName).toBe('SPAN');
+    expect(alertInCall).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    const dismissBtn = screen.getByRole('button', { name: 'Dismiss microphone warning' });
+    expect(dismissBtn).toHaveAttribute('type', 'button');
+    expect(dismissBtn).toHaveTextContent('Dismiss');
+    expect(alertInCall.contains(dismissBtn)).toBe(false);
+    const pill = alertInCall.closest('div');
+    expect(pill?.className).toContain('max-w-[92vw]');
+    expect(pill?.className).toContain('text-[#fdd663]');
+    const stageColInCall = screen.getByTestId('stage-column');
+    expect(stageColInCall.contains(alertInCall)).toBe(false);
+    expect(alertInCall.compareDocumentPosition(stageColInCall) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+
+    const { unmount: unmountRec } = render(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    const alertRec = screen.getByRole('alert');
+    expect(alertRec.tagName).toBe('SPAN');
+    expect(alertRec).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    const stageColRec = screen.getByTestId('stage-column');
+    expect(stageColRec.contains(alertRec)).toBe(false);
+    expect(alertRec.compareDocumentPosition(stageColRec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmountRec();
+
+    render(<CallStage {...baseProps} phase="recording" />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Dismiss microphone warning' })).toBeNull();
+  });
+
+  it('dismiss outlasts the moment', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+  });
+
+  it('arms again when a new take starts, and shows beside a recording problem', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="in-call" micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning="silent" recordingError="Disk is full" />);
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    expect(alerts[1]).toHaveTextContent('Disk is full');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="finalizing" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="done" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="in-call" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+  });
+
+  it('does not gate the warning on role, micOn state, or phase', () => {
+    const { unmount: unmountGuest } = render(
+      <CallStage {...baseProps} role="guest" phase="in-call" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountGuest();
+
+    const disabledTrack = { kind: 'audio', enabled: false } as any;
+    const stream = {
+      getAudioTracks: () => [disabledTrack],
+      getVideoTracks: () => [],
+    } as any;
+    const { unmount: unmountMuted } = render(
+      <CallStage {...baseProps} localStream={stream} phase="in-call" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountMuted();
+
+    const { unmount: unmountFinalizing } = render(
+      <CallStage {...baseProps} phase="finalizing" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountFinalizing();
+
+    const { unmount: unmountDone } = render(
+      <CallStage {...baseProps} phase="done" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountDone();
+  });
+
+  it('holds dismissal through a mic switch', async () => {
+    const mockDevices: MediaDeviceInfo[] = [
+      {
+        deviceId: 'mic-default',
+        kind: 'audioinput',
+        label: 'Default Microphone',
+        groupId: 'g1',
+        toJSON: () => ({}),
+      },
+      {
+        deviceId: 'mic-usb',
+        kind: 'audioinput',
+        label: 'USB Podcast Mic',
+        groupId: 'g2',
+        toJSON: () => ({}),
+      },
+    ];
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        enumerateDevices: vi.fn().mockResolvedValue(mockDevices),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+
+    const onSwitchMic = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        micWarning="silent"
+        onSwitchMic={onSwitchMic}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const micArrow = screen.getByLabelText(/select microphone/i);
+    await act(async () => {
+      fireEvent.click(micArrow);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('USB Podcast Mic')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('USB Podcast Mic'));
+    });
+    expect(onSwitchMic).toHaveBeenCalledWith('mic-usb');
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('causes no extra render when a take starts with nothing dismissed', async () => {
+    let commits = 0;
+    const { rerender } = await act(async () =>
+      render(
+        <Profiler id="cs" onRender={() => { commits += 1; }}>
+          <CallStage {...baseProps} phase="in-call" />
+        </Profiler>
+      )
+    );
+    commits = 0;
+    await act(async () => {
+      rerender(
+        <Profiler id="cs" onRender={() => { commits += 1; }}>
+          <CallStage {...baseProps} phase="recording" />
+        </Profiler>
+      );
+    });
+    expect(commits).toBe(1);
+  });
 });

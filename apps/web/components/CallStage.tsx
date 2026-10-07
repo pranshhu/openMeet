@@ -20,6 +20,7 @@ import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
+import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -84,6 +85,7 @@ export function CallStage({
   backupUrl,
   wavBackupUrl,
   recordingError,
+  micWarning = null,
   recordUnavailableReason,
   syncReportUrl,
   sidecarsSaved,
@@ -146,6 +148,7 @@ export function CallStage({
   drained?: boolean;
   // Non-fatal: shown as a banner without ending the call.
   recordingError: string | null;
+  micWarning?: MicWarning | null;
   // Why Record is disabled, if it is. Computed by the caller so the capability
   // rules live in one place — and so the message names the ACTUAL cause rather
   // than always blaming the File System Access API.
@@ -188,6 +191,16 @@ export function CallStage({
   const [camMenuOpen, setCamMenuOpen] = useState(false);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  // A mic that gates to silence makes this note wrong for a setup that is
+  // fine, so each kind can be sent away.
+  const [micDismissed, setMicDismissed] = useState<MicWarning[]>([]);
+  // A take is where a dead mic costs the most, so each take starts with the note
+  // armed. The updater hands back the same array when nothing was dismissed, so
+  // starting a take costs no extra render.
+  useEffect(() => {
+    if (phase === 'recording') setMicDismissed((d) => (d.length ? [] : d));
+  }, [phase]);
+  const micNote = micWarning && !micDismissed.includes(micWarning) ? micWarning : null;
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   const isTakeActive = phase === 'recording' || phase === 'finalizing';
   const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
@@ -613,6 +626,19 @@ export function CallStage({
         >
           {batteryNote}
         </p>
+      )}
+      {micNote && (
+        <div className="mb-1 flex max-w-[92vw] items-center gap-2 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          <span role="alert">{MIC_WARNING_TEXT[micNote]}</span>
+          <button
+            type="button"
+            aria-label="Dismiss microphone warning"
+            onClick={() => setMicDismissed((d) => [...d, micNote])}
+            className="rounded-full px-2 py-0.5 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {overloaded && (
         <p

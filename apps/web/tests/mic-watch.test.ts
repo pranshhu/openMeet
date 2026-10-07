@@ -5,8 +5,17 @@ import {
   MIC_DEAD_PEAK,
   MIC_SILENT_AFTER_MS,
   MIC_POLL_MS,
+  MIC_WARNING_TEXT,
   type LevelTap,
 } from '@/lib/mic-watch';
+
+describe('MIC_WARNING_TEXT', () => {
+  it('defines UI copy for silent warning matching the exact template with 10 seconds', () => {
+    expect(MIC_WARNING_TEXT.silent).toBe(
+      'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.'
+    );
+  });
+});
 
 describe('createMicVerdict', () => {
   it('reports silence only once dead input has lasted MIC_SILENT_AFTER_MS', () => {

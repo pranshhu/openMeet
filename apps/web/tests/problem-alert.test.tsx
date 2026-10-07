@@ -325,6 +325,19 @@ describe('useProblemAlert and requestProblemNotifications', () => {
       expect(FakeNotification.instances[0]?.options?.body).toBe('Disk is full');
     });
 
+    it('does not sound or raise system notification for silent mic', () => {
+      FakeNotification.permission = 'granted';
+      render(
+        <CallStage
+          {...baseCallStageProps}
+          phase="recording"
+          micWarning="silent"
+          recordingError={null}
+        />
+      );
+      expect(FakeNotification.instances).toHaveLength(0);
+    });
+
     it('still starts recording when requestPermission throws synchronously', () => {
       FakeNotification.permission = 'default';
       FakeNotification.requestPermission = vi.fn().mockImplementation(() => {

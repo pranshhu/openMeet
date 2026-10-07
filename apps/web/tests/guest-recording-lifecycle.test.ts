@@ -72,6 +72,20 @@ vi.mock('@/lib/peer', () => ({
   })),
 }));
 
+let mediaOptions: any;
+vi.mock('@/lib/switchable-media', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/switchable-media')>();
+  return {
+    ...real,
+    SwitchableMedia: class extends real.SwitchableMedia {
+      constructor(stream: MediaStream, options: any) {
+        super(stream, options);
+        mediaOptions = options;
+      }
+    },
+  };
+});
+
 // jsdom has no MediaRecorder: pretend the codec probe succeeds and stub the
 // backup recorder the guest now starts before waiting for the connection.
 vi.mock('@/lib/recorder', async () => {
@@ -615,6 +629,14 @@ describe('host backup after a take in useRoom', () => {
     expect(backup.markFinalized).not.toHaveBeenCalled();
     expect(wavBackup.markFinalized).not.toHaveBeenCalled();
     expect(screenBackup.markFinalized).not.toHaveBeenCalled();
+  });
+
+  it('marks backups when a silent-mic warning was shown during the take', async () => {
+    const { backup, wavBackup, screenBackup, result } = await hostTake(() => mediaOptions.onMicWarning('silent'));
+    expect(result.current.state.micWarning).toBe('silent');
+    expect(backup.markFinalized).toHaveBeenCalled();
+    expect(wavBackup.markFinalized).toHaveBeenCalled();
+    expect(screenBackup.markFinalized).toHaveBeenCalled();
   });
 
   it('sets backupBlobUrl and wavBackupBlobUrl in state when host take finishes', async () => {

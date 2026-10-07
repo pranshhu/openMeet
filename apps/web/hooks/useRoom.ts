@@ -26,6 +26,7 @@ import { MediaBoard } from '@/lib/media-board';
 import { getHostToken } from '@/lib/host-token';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
+import type { MicWarning } from '@/lib/mic-watch';
 import {
   buildSyncReport,
   buildChatLog,
@@ -160,6 +161,8 @@ export interface RoomState {
   // Peer-connection health, surfaced non-fatally. Without this an ICE failure is
   // an eternal "Connecting…" with no explanation anywhere.
   connectionWarning: string | null;
+  // This participant's own mic, judged where it enters the recording; a note in the call.
+  micWarning: MicWarning | null;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -510,6 +513,7 @@ export function useRoom(slug: string) {
     error: null,
     recordingError: null,
     connectionWarning: null,
+    micWarning: null,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -866,6 +870,7 @@ export function useRoom(slug: string) {
         ? null
         : new SwitchableMedia(lobbyStream, {
             isRecording: () => phaseRef.current === 'recording',
+            onMicWarning: (micWarning) => setState((s) => ({ ...s, micWarning })),
             onTrackReplaced: (kind, newTrack, oldTrack) => {
               for (const p of peersRef.current.values()) {
                 if (kind === 'video') {

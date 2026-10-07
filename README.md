@@ -69,6 +69,8 @@ retention policy to trust, because there's nothing retained.
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - Sound and a system notification when a recording problem appears during a take
+- A note in the call when your own microphone has sent no sound for 10 seconds
+  (unplugged, muted on the device, wrong input)
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up

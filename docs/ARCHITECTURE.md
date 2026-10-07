@@ -264,7 +264,9 @@ State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
-`capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`.
+`capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`,
+`micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'` or
+null; `CallStage` shows it as a note that can be dismissed until the next take starts).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera

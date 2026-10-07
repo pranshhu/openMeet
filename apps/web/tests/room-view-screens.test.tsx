@@ -165,3 +165,61 @@ describe('recording', () => {
     }
   });
 });
+
+const inCall = {
+  phase: 'in-call',
+  role: 'guest',
+  remoteStream: null,
+  remotePeers: [],
+  remoteScreenStream: null,
+  localScreenStream: null,
+  screenSharing: false,
+  peerRecording: false,
+  capabilities: {},
+  finalizingGuests: [],
+  messages: [],
+  markers: [],
+  takes: [],
+  summary: null,
+  recordingError: null,
+};
+const copy =
+  'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.';
+
+describe('mic warning', () => {
+  it('hands the warning to the call screen for guest and host', () => {
+    Object.assign(state, inCall, { micWarning: 'silent' });
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText(copy)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss microphone warning' })).toBeInTheDocument();
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.tagName).toBe('SPAN');
+    unmount();
+
+    Object.assign(state, { role: 'host' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText(copy)).toBeInTheDocument();
+  });
+
+  it('shows no mic warning when state.micWarning is null', () => {
+    Object.assign(state, inCall, { micWarning: null });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(/No sound from your microphone for 10 seconds/)).toBeNull();
+  });
+
+  it('does not show the mic warning on other screens', () => {
+    for (const otherPhase of ['left', 'waiting', 'connecting', 'error', 'full'] as const) {
+      Object.assign(state, {
+        phase: otherPhase,
+        role: 'guest',
+        micWarning: 'silent',
+      });
+      const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+      expect(
+        screen.queryByText(/No sound from your microphone for 10 seconds/)
+      ).toBeNull();
+      unmount();
+    }
+  });
+});

@@ -36,6 +36,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   command per file that writes a copy starting at the host's start, so every
   track can be placed at 00:00. WAV copies get real silence; MP4 copies are
   not re-encoded.
+- A note during the call when your own microphone has sent no sound for 10
+  seconds (unplugged, muted on the device, wrong input). Turning the mic off
+  in the app does not count, and the note can be dismissed.
 
 ### Fixed
 

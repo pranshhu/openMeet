@@ -9,6 +9,11 @@ export const MIC_SILENT_AFTER_MS = 10_000;
 // Slow enough to cost nothing beside the encoder; shorter than the window, so no gap at 48 kHz.
 export const MIC_POLL_MS = 300;
 
+// What the participant sees above the stage when their own mic is in trouble.
+export const MIC_WARNING_TEXT: Record<MicWarning, string> = {
+  silent: `No sound from your microphone for ${MIC_SILENT_AFTER_MS / 1000} seconds. Check it’s plugged in and not muted, or select another microphone.`,
+};
+
 // Window size in samples (341 ms at 48 kHz), ensuring consecutive polls overlap.
 const MIC_WINDOW_SAMPLES = 16384;
 
