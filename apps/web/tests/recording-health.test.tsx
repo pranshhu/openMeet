@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
+import { DC_BUFFERED_HIGH_WATERMARK } from '@openmeet/protocol';
 import {
   classifyTracks,
   RecordingHealth,
+  BACKLOG_WARN_BYTES,
   TRACK_STALL_MS,
   HEALTH_SAMPLE_MS,
   type TrackMemory,
@@ -140,6 +142,103 @@ describe('classifyTracks', () => {
     const prevSnapshot = structuredClone(prev);
     classifyTracks([{ key: 'k', track: 'camera', bytes: 2 }], prev, 500);
     expect(prev).toEqual(prevSnapshot);
+  });
+
+  it('judges a guest’s own camera on the host’s acknowledgements', () => {
+    const r1: TrackReading[] = [{ key: 'own:camera', track: 'camera', bytes: 1000, acked: 0 }];
+    const first = classifyTracks(r1, new Map(), 0);
+    expect(first.rows[0]?.state).toBe('starting');
+
+    const r2: TrackReading[] = [{ key: 'own:camera', track: 'camera', bytes: 9000, acked: 0 }];
+    const second = classifyTracks(r2, first.seen, 2000);
+    expect(second.rows[0]?.state).toBe('starting');
+    expect(second.rows[0]?.idleMs).toBe(2000);
+
+    const third = classifyTracks(r2, second.seen, TRACK_STALL_MS);
+    expect(third.rows[0]?.state).toBe('quiet');
+    expect(third.rows[0]?.idleMs).toBe(TRACK_STALL_MS);
+  });
+
+  it('marks a guest’s own camera ok on rising acknowledgements and quiet when they stop', () => {
+    const r1: TrackReading[] = [{ key: 'own:camera', track: 'camera', bytes: 1000, acked: 0 }];
+    const first = classifyTracks(r1, new Map(), 0);
+
+    const r2: TrackReading[] = [{ key: 'own:camera', track: 'camera', bytes: 9000, acked: 4000 }];
+    const grew = classifyTracks(r2, first.seen, 2000);
+    expect(grew.rows[0]?.state).toBe('ok');
+    expect(grew.rows[0]?.idleMs).toBe(0);
+
+    const r3: TrackReading[] = [{ key: 'own:camera', track: 'camera', bytes: 50_000, acked: 4000 }];
+    const stalled = classifyTracks(r3, grew.seen, 2000 + TRACK_STALL_MS);
+    expect(stalled.rows[0]?.state).toBe('quiet');
+    expect(stalled.rows[0]?.idleMs).toBe(TRACK_STALL_MS);
+  });
+
+  it('judges a guest’s own screen on its own bytes while acknowledgements stay at zero', () => {
+    const r1: TrackReading[] = [{ key: 'own:screen:1', track: 'screen', bytes: 1000, acked: 0 }];
+    const first = classifyTracks(r1, new Map(), 0);
+    expect(first.rows[0]?.state).toBe('starting');
+
+    const r2: TrackReading[] = [{ key: 'own:screen:1', track: 'screen', bytes: 2000, acked: 0 }];
+    const grew = classifyTracks(r2, first.seen, 1000);
+    expect(grew.rows[0]?.state).toBe('ok');
+
+    const silent = classifyTracks(r2, grew.seen, 1000 + 300_000);
+    expect(silent.rows[0]?.state).toBe('ok');
+    expect(silent.rows[0]?.idleMs).toBe(300_000);
+  });
+
+  it('marks a row behind at the backlog watermark and ok one byte below it', () => {
+    // Built from the protocol's own high mark, so the panel's copy of it is
+    // what the boundary is measured against.
+    const first = classifyTracks(
+      [{ key: 'own:camera', track: 'camera', bytes: DC_BUFFERED_HIGH_WATERMARK + 100, acked: 100 }],
+      new Map(),
+      0
+    );
+    const atMark = classifyTracks(
+      [{ key: 'own:camera', track: 'camera', bytes: DC_BUFFERED_HIGH_WATERMARK + 200, acked: 200 }],
+      first.seen,
+      1000
+    );
+    expect(atMark.rows[0]?.state).toBe('behind');
+
+    const below = classifyTracks(
+      [{ key: 'own:camera', track: 'camera', bytes: DC_BUFFERED_HIGH_WATERMARK + 200, acked: 201 }],
+      atMark.seen,
+      2000
+    );
+    expect(below.rows[0]?.state).toBe('ok');
+  });
+
+  it('warns about a screen’s backlog while the screen’s own bytes look fine', () => {
+    const first = classifyTracks(
+      [{ key: 'own:screen:1', track: 'screen', bytes: DC_BUFFERED_HIGH_WATERMARK + 100, acked: 100 }],
+      new Map(),
+      0
+    );
+    const atMark = classifyTracks(
+      [{ key: 'own:screen:1', track: 'screen', bytes: DC_BUFFERED_HIGH_WATERMARK + 200, acked: 200 }],
+      first.seen,
+      1000
+    );
+    expect(atMark.rows[0]?.state).toBe('behind');
+  });
+
+  it('ranks quiet over behind and stopped over both', () => {
+    const backlog: TrackReading[] = [
+      { key: 'own:camera', track: 'camera', bytes: BACKLOG_WARN_BYTES + 1000, acked: 1000 },
+    ];
+    const first = classifyTracks(backlog, new Map(), 0);
+
+    const stalled = classifyTracks(backlog, first.seen, TRACK_STALL_MS);
+    expect(stalled.rows[0]?.state).toBe('quiet');
+
+    const abandoned: TrackReading[] = [
+      { key: 'own:camera', track: 'camera', bytes: BACKLOG_WARN_BYTES + 1000, acked: 2000, stopped: true },
+    ];
+    const stopped = classifyTracks(abandoned, stalled.seen, TRACK_STALL_MS + 1000);
+    expect(stopped.rows[0]?.state).toBe('stopped');
   });
 });
 
@@ -426,5 +525,134 @@ describe('RecordingHealth', () => {
     fireEvent.keyDown(details, { key: 'Escape' });
     expect(details.open).toBe(false);
     expect(document.activeElement).toBe(summary);
+  });
+
+  it('says a guest’s own camera is reaching the host once acknowledgements rise', () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const read = vi.fn<() => TrackReading[]>(() => {
+      n++;
+      return [{ key: 'own:camera', track: 'camera', bytes: n * 1_000_000, acked: n * 500_000 }];
+    });
+
+    render(<RecordingHealth read={read} />);
+    expect(screen.getByText('Starting…')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(HEALTH_SAMPLE_MS);
+    });
+
+    expect(screen.getByText('Reaching the host')).toBeInTheDocument();
+    expect(screen.getByText('Tracks OK')).toBeInTheDocument();
+    expect(screen.getByText('✓')).toBeInTheDocument();
+  });
+
+  it('says a guest’s own camera is not reaching the host after a stall', () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const read = vi.fn<() => TrackReading[]>(() => {
+      n++;
+      return [{ key: 'own:camera', track: 'camera', bytes: n * 1_000_000, acked: 0 }];
+    });
+
+    render(<RecordingHealth read={read} />);
+
+    act(() => {
+      vi.advanceTimersByTime(TRACK_STALL_MS);
+    });
+
+    expect(screen.getByText('Not reaching the host for 15 s')).toBeInTheDocument();
+    expect(screen.getByText('Check tracks')).toBeInTheDocument();
+    expect(screen.queryByText('Reaching the host')).toBeNull();
+    expect(screen.queryByText('OK')).toBeNull();
+  });
+
+  it('warns how much is still waiting to be sent', () => {
+    let n = 0;
+    const read = vi.fn<() => TrackReading[]>(() => {
+      n++;
+      return [{ key: 'own:camera', track: 'camera', bytes: 18_200_000 + n * 1_000, acked: n * 1_000 }];
+    });
+
+    render(<RecordingHealth read={read} />);
+
+    expect(screen.getByText('18.2 MB still to send')).toBeInTheDocument();
+    expect(screen.getByText('Check tracks')).toBeInTheDocument();
+    expect(screen.getByText('!')).toBeInTheDocument();
+  });
+
+  it('paints the backlog warning like the other warnings', () => {
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'own:camera', track: 'camera', bytes: 18_200_000, acked: 0 },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+    expect(screen.getByText('18.2 MB still to send').className).toContain('text-[#fdd663]');
+  });
+
+  it('says a guest’s own abandoned track is in their backup', () => {
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'own:camera', track: 'camera', bytes: 1_000_000, acked: 0, stopped: true },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+
+    expect(screen.getByText('Stopped. Your backup has the rest.')).toBeInTheDocument();
+    expect(screen.queryByText('Stopped. Their backup has the rest.')).toBeNull();
+  });
+
+  it('still tells the host a guest’s abandoned track is in their backup', () => {
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'g0:mp4', who: 'Bob', track: 'camera', bytes: 500_000, stopped: true },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+
+    expect(screen.getByText('Stopped. Their backup has the rest.')).toBeInTheDocument();
+    expect(screen.queryByText('Stopped. Your backup has the rest.')).toBeNull();
+  });
+
+  it('keeps a guest’s own screen row saying OK while its bytes grow', () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const read = vi.fn<() => TrackReading[]>(() => {
+      n++;
+      return [{ key: 'own:screen:1', track: 'screen', bytes: n * 1_000_000, acked: 0 }];
+    });
+
+    render(<RecordingHealth read={read} />);
+    act(() => {
+      vi.advanceTimersByTime(HEALTH_SAMPLE_MS);
+    });
+
+    expect(screen.getByText('OK')).toBeInTheDocument();
+    expect(screen.getByText('Tracks OK')).toBeInTheDocument();
+    expect(screen.queryByText('Reaching the host')).toBeNull();
+  });
+
+  it('keeps a named row’s quiet wording even when it carries acknowledgements', () => {
+    vi.useFakeTimers();
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'g0:mp4', who: 'Bob', track: 'camera', bytes: 1_000_000, acked: 0 },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+    act(() => {
+      vi.advanceTimersByTime(TRACK_STALL_MS);
+    });
+
+    expect(screen.getByText('No data for 15 s')).toBeInTheDocument();
+    expect(screen.queryByText('Not reaching the host for 15 s')).toBeNull();
+  });
+
+  it('subtracts acknowledged bytes from total bytes when reporting backlog', () => {
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'own:camera', track: 'camera', bytes: 28_200_000, acked: 10_000_000 },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+
+    expect(screen.getByText('18.2 MB still to send')).toBeInTheDocument();
+    expect(screen.queryByText('28.2 MB still to send')).toBeNull();
   });
 });

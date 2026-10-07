@@ -174,6 +174,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.12 | Track panel stays quiet when nothing is wrong | During a take: mute the guest's mic for 30 s, turn the guest's camera off for 30 s, share a screen that does not change for 30 s | The indicator reads **Tracks starting** for a moment when the share begins and **Tracks OK** otherwise | ☐ | |
 | 8.13 | Track panel flags a stalled track | During a take, disable the guest's wifi for 30 s, then re-enable it | Within about 20 s the indicator reads **Check tracks** and the guest's rows read **No data for …** (or give way to one row at 0.0 MB while the guest reconnects); it returns to **Tracks OK** once the guest is back | ☐ | |
 | 8.14 | Track panel on a phone | Join as a guest from a phone about 360 px wide, get recorded, tap the mark beside the clock | The top bar stays on one line; the list opens under it, inside the screen | ☐ | |
+| 8.15 | Guest's track panel | As the guest in a take, open the indicator; then disable the guest's wifi for 30 s and re-enable it | Camera and WAV master read **Reaching the host**; within about 20 s of the drop they read **Not reaching the host for …**; once reconnected they return to **Reaching the host** | ☐ | |
 
 ## 9 — Deploy
 

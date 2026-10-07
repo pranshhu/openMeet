@@ -1,22 +1,30 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { DC_BUFFERED_HIGH_WATERMARK } from '@openmeet/protocol';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatHiddenDuration } from '@/hooks/use-take-guard';
 import { Icon } from '@/components/Icon';
 
-/** A recorder emits every two seconds, so this is seven missed chunks, not jitter. */
+/** A recorder emits every two seconds and the host acknowledges a slow track every ten, so this
+ *  long without either is not jitter. */
 export const TRACK_STALL_MS = 15_000;
 export const HEALTH_SAMPLE_MS = 1000;
+/** Above this a sender is behind by its own definition: it has started queueing. */
+export const BACKLOG_WARN_BYTES = DC_BUFFERED_HIGH_WATERMARK;
 
-export type TrackState = 'starting' | 'ok' | 'quiet' | 'stopped';
+export type TrackState = 'starting' | 'ok' | 'quiet' | 'behind' | 'stopped';
 export interface TrackRow extends TrackReading {
   state: TrackState;
   /** Since this track's byte count last changed, or since it was first seen. */
   idleMs: number;
 }
-/** Per track key: the last byte count, when it last changed, and whether it ever has. */
+/** Per track key: the last count watched, when it last changed, and whether it ever has. */
 export type TrackMemory = Map<string, { bytes: number; at: number; grew: boolean }>;
+
+/** A guest's own camera or WAV: the host's acknowledgements say whether it is arriving. */
+const byAcks = (r: TrackReading): r is TrackReading & { acked: number } =>
+  r.acked !== undefined && r.track !== 'screen';
 
 export function classifyTracks(
   readings: TrackReading[],
@@ -25,18 +33,31 @@ export function classifyTracks(
 ): { rows: TrackRow[]; seen: TrackMemory } {
   const seen: TrackMemory = new Map();
   const rows = readings.map((r): TrackRow => {
+    // A recorder keeps producing into a dead channel, so a track this browser
+    // streams is judged on what the host has confirmed. A still screen sends
+    // too little to be acknowledged, so a screen is judged on its own bytes.
+    const live = byAcks(r) ? r.acked : r.bytes;
     const was = prev.get(r.key);
     const m = !was
-      ? { bytes: r.bytes, at: now, grew: false }
-      : r.bytes !== was.bytes
-        ? { bytes: r.bytes, at: now, grew: true }
+      ? { bytes: live, at: now, grew: false }
+      : live !== was.bytes
+        ? { bytes: live, at: now, grew: true }
         : was;
     seen.set(r.key, m);
     const idleMs = now - m.at;
     // A screen that is not changing may produce no data, so once a screen
     // track has had some, silence is not counted against it.
     const quiet = idleMs >= TRACK_STALL_MS && (r.track !== 'screen' || !m.grew);
-    const state: TrackState = r.stopped ? 'stopped' : quiet ? 'quiet' : m.grew ? 'ok' : 'starting';
+    const behind = r.acked !== undefined && r.bytes - r.acked >= BACKLOG_WARN_BYTES;
+    const state: TrackState = r.stopped
+      ? 'stopped'
+      : quiet
+        ? 'quiet'
+        : behind
+          ? 'behind'
+          : m.grew
+            ? 'ok'
+            : 'starting';
     return { ...r, state, idleMs };
   });
   return { rows, seen };
@@ -55,21 +76,34 @@ function size(bytes: number): string {
   return `${(bytes / 1e9).toFixed(2)} GB`;
 }
 
+/** A guest's own streamed track, whose progress the host's acknowledgements carry. */
+const reaching = (row: TrackRow): boolean => row.who === undefined && byAcks(row);
+
 function status(row: TrackRow): string {
   if (row.state === 'stopped') {
-    return 'Stopped. Their backup has the rest.';
+    return row.who !== undefined
+      ? 'Stopped. Their backup has the rest.'
+      : 'Stopped. Your backup has the rest.';
   }
   if (row.state === 'quiet') {
-    return `No data for ${formatHiddenDuration(row.idleMs)}`;
+    return reaching(row)
+      ? `Not reaching the host for ${formatHiddenDuration(row.idleMs)}`
+      : `No data for ${formatHiddenDuration(row.idleMs)}`;
+  }
+  if (row.state === 'behind') {
+    return `${size(row.bytes - (row.acked ?? 0))} still to send`;
   }
   if (row.state === 'ok') {
-    return row.who !== undefined ? 'Receiving' : 'OK';
+    if (row.who !== undefined) {
+      return 'Receiving';
+    }
+    return reaching(row) ? 'Reaching the host' : 'OK';
   }
   return 'Starting…';
 }
 
 function indicator(rows: TrackRow[]): { text: string; mark: string; tone: string } {
-  if (rows.some((r) => r.state === 'quiet' || r.state === 'stopped')) {
+  if (rows.some((r) => r.state === 'quiet' || r.state === 'behind' || r.state === 'stopped')) {
     return { text: 'Check tracks', mark: '!', tone: 'text-[#fdd663]' };
   }
   if (rows.some((r) => r.state === 'starting')) {
@@ -139,7 +173,9 @@ export function RecordingHealth({ read }: { read: () => TrackReading[] }): React
               </div>
               <div
                 className={`truncate text-xs ${
-                  row.state === 'quiet' || row.state === 'stopped' ? 'text-[#fdd663]' : 'text-white/70'
+                  row.state === 'quiet' || row.state === 'behind' || row.state === 'stopped'
+                    ? 'text-[#fdd663]'
+                    : 'text-white/70'
                 }`}
               >
                 {status(row)}

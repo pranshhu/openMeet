@@ -48,7 +48,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   dismissed.
 - A live track panel during a take: beside the Recording pill, the host sees every
   participant's camera, WAV and screen file growing and which one has stopped getting
-  data, and each guest sees their own.
+  data, and each guest sees whether their own tracks are reaching the host or how much
+  is still waiting to be sent.
 
 ### Changed
 
