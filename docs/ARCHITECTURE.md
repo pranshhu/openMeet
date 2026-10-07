@@ -253,7 +253,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
   `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
-  tab was backgrounded or the battery drops to 10%.
+  tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
+  every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
+  reports a live encoder as limited by the CPU) and shows a notice for the rest of the take once
+  the device is not keeping up.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`

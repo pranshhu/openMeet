@@ -71,6 +71,7 @@ retention policy to trust, because there's nothing retained.
 - Sound and a system notification when a recording problem appears during a take
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
+- A notice during a take when this device is struggling to keep up
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**

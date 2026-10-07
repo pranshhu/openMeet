@@ -1259,3 +1259,47 @@ describe('CallStage media board', () => {
     expect(screen.queryByText(/This take keeps your mic only/)).toBeNull();
   });
 });
+
+describe('CallStage keep-up notice', () => {
+  it('says so when the device stops keeping up during a take', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      render(<CallStage {...baseProps} phase="recording" readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      const text = screen.getByText(
+        'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+      );
+      expect(text).toBeInTheDocument();
+      expect(text.closest('[role="status"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['in-call', 'finalizing'] as const)(
+    'does not read or warn outside a take (%s)',
+    async (phase) => {
+      vi.useFakeTimers();
+      try {
+        let lost = 0;
+        const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+        render(<CallStage {...baseProps} phase={phase} readLoad={readLoad} />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(readLoad).not.toHaveBeenCalled();
+        expect(
+          screen.queryByText(
+            'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+          )
+        ).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+});

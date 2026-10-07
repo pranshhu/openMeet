@@ -7,7 +7,7 @@ import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import type { MediaBoard } from '@/lib/media-board';
-import type { RemotePeer } from '@/hooks/useRoom';
+import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
 import { ChatPanel, chatSenderLabel, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
@@ -19,6 +19,7 @@ import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
+import { useOverloadWatch } from '@/hooks/use-overload-watch';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -111,6 +112,7 @@ export function CallStage({
   activeCamId,
   isFallbackMedia = false,
   presentingRearCamera = false,
+  readLoad,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -172,6 +174,8 @@ export function CallStage({
   activeCamId?: string | undefined;
   isFallbackMedia?: boolean;
   presentingRearCamera?: boolean;
+  /** One reading of how this device is coping; polled only while a take records. */
+  readLoad?: () => Promise<LoadSample>;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -187,6 +191,7 @@ export function CallStage({
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   const isTakeActive = phase === 'recording' || phase === 'finalizing';
   const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
+  const overloaded = useOverloadWatch(phase === 'recording', readLoad);
 
   // The invite link is only in the waiting room otherwise, and the host leaves
   // that as soon as the first guest arrives. origin+pathname drops ?producer=1
@@ -607,6 +612,14 @@ export function CallStage({
           className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
         >
           {batteryNote}
+        </p>
+      )}
+      {overloaded && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          This device is struggling to keep up, so the recording may skip. Close other apps and tabs.
         </p>
       )}
 

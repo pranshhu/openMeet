@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 
 /**
@@ -9,14 +9,16 @@ import { RoomView } from '@/components/RoomView';
  */
 
 let state: Record<string, unknown>;
+let hook: Record<string, unknown>;
 
 vi.mock('@/hooks/useRoom', () => ({
-  useRoom: () => ({ state, join: vi.fn(), leave: vi.fn(), setMic: vi.fn(), setCam: vi.fn() }),
+  useRoom: () => ({ state, join: vi.fn(), leave: vi.fn(), setMic: vi.fn(), setCam: vi.fn(), ...hook }),
 }));
 
 const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream;
 
 beforeEach(() => {
+  hook = {};
   state = {
     phase: 'left',
     role: 'host',
@@ -111,5 +113,55 @@ describe('present-only device', () => {
     expect(screen.getByText('Connection lost — retrying…')).toBeInTheDocument();
     expect(screen.queryByText(/You’re presenting from this device/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
+  });
+});
+
+describe('recording', () => {
+  it('hands the call the room’s load reading', async () => {
+    Object.assign(state, {
+      phase: 'recording',
+      role: 'host',
+      peerRecording: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    let lost = 0;
+    hook.readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7_000);
+      });
+      rerender(<RoomView slug="abc-defg-hij" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+      rerender(<RoomView slug="abc-defg-hij" />);
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -19,6 +19,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Keep the screen awake during a take via Screen Wake Lock, prefix the document
   title with `● REC ` while hidden, and warn when the tab was in the background
   or the battery is low.
+- A notice during a take when the device is not keeping up: audio was skipped, or
+  the browser reports its video encoder limited by the processor.
 - A public demo environment: `[env.demo]` in `apps/worker/wrangler.toml`, deployed with
   `pnpm --filter @openmeet/worker run deploy:demo` (migrations with `db:migrate:demo`).
   Self-host installs never read it.

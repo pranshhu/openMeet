@@ -82,7 +82,7 @@ function isPresentLink(): boolean {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
-    startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake,
+    startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -276,6 +276,7 @@ export function RoomView({ slug }: { slug: string }) {
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
+      readLoad={readLoad}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}
