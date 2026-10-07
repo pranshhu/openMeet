@@ -97,6 +97,21 @@ describe('FileWriter', () => {
     expect(fw.size).toBe(110);
   });
 
+  it('accepts a Blob and still tracks the furthest byte', async () => {
+    // Removal that must fail this test: computing end from data.byteLength,
+    // which is undefined for a Blob.
+    const writable = fakeWritable();
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'guest.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('guest.mp4');
+
+    const blob = new Blob([new Uint8Array(10)]);
+    await fw.write(5, blob);
+
+    expect(writable.write).toHaveBeenCalledWith({ type: 'write', position: 5, data: blob });
+    expect(fw.size).toBe(15);
+  });
+
   it('does not move size on rejected write, still rejects to caller, and subsequent write lands', async () => {
     const writable = {
       write: vi.fn().mockRejectedValueOnce(new Error('x')).mockResolvedValue(undefined),

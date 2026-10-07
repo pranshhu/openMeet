@@ -145,7 +145,7 @@ async function patchWavHeader(parts: Blob[]): Promise<BlobPart[] | null> {
   }
 }
 
-async function assembleBackupFromDir(
+export async function assembleBackupFromDir(
   dir: OpfsDir,
   dirName: string,
   preferredExt?: string,

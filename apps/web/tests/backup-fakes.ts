@@ -56,7 +56,7 @@ export function fakeFolder(opts?: {
             fileEntry.closed = false;
           }
           return {
-            async write(d: { type?: 'write'; position: number; data: ArrayBuffer | ArrayBufferView }) {
+            async write(d: { type?: 'write'; position: number; data: ArrayBuffer | ArrayBufferView | Blob }) {
               // A real writable settles off the current task, so a receiver that
               // reads its own state right after calling write() sees it stale.
               if (opts?.lateWrites) await new Promise((r) => setTimeout(r, 0));
@@ -68,7 +68,9 @@ export function fakeFolder(opts?: {
               const fileEntry = files.get(name);
               if (!fileEntry) throw new Error('File removed');
               const src =
-                d.data instanceof Uint8Array
+                d.data instanceof Blob
+                  ? new Uint8Array(await d.data.arrayBuffer())
+                  : d.data instanceof Uint8Array
                   ? d.data
                   : ArrayBuffer.isView(d.data)
                   ? new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength)

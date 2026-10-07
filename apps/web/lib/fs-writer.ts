@@ -1,10 +1,12 @@
 interface FsWritable {
-  write(data: { type: 'write'; position: number; data: ArrayBuffer | ArrayBufferView }): Promise<void>;
+  write(data: { type: 'write'; position: number; data: ArrayBuffer | ArrayBufferView | Blob }): Promise<void>;
   close(): Promise<void>;
 }
 interface FsFileHandle {
   name: string;
   createWritable(): Promise<FsWritable>;
+  /** The browser's own handle has one; absent on a handle a test hands in. */
+  getFile?(): Promise<{ size: number }>;
 }
 type SaveFilePicker = (opts: { suggestedName?: string }) => Promise<FsFileHandle>;
 
@@ -89,10 +91,11 @@ export class FileWriter {
     this.writable = await handle.createWritable();
   }
 
-  write(position: number, data: ArrayBuffer | ArrayBufferView): Promise<void> {
+  write(position: number, data: ArrayBuffer | ArrayBufferView | Blob): Promise<void> {
     if (!this.writable) return Promise.reject(new Error('FileWriter: write before openFile'));
     const writable = this.writable;
-    const end = position + data.byteLength;
+    // A Blob reaches the file by reference, so its length comes from size().
+    const end = position + (data instanceof Blob ? data.size : data.byteLength);
     const result = this.writeTail.then(() =>
       writable.write({ type: 'write', position, data }).then(
         () => {
