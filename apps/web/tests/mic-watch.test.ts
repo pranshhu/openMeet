@@ -5,6 +5,9 @@ import {
   MIC_DEAD_PEAK,
   MIC_SILENT_AFTER_MS,
   MIC_POLL_MS,
+  MIC_CLIP_PEAK,
+  MIC_CLIP_HITS,
+  MIC_CLIP_CLEAR_MS,
   MIC_WARNING_TEXT,
   type LevelTap,
 } from '@/lib/mic-watch';
@@ -13,6 +16,12 @@ describe('MIC_WARNING_TEXT', () => {
   it('defines UI copy for silent warning matching the exact template with 10 seconds', () => {
     expect(MIC_WARNING_TEXT.silent).toBe(
       'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.'
+    );
+  });
+
+  it('defines UI copy for clipping warning', () => {
+    expect(MIC_WARNING_TEXT.clipping).toBe(
+      'Your microphone is clipping. Lower the input gain or move back from it — the distortion goes into the recording.'
     );
   });
 });
@@ -72,6 +81,144 @@ describe('createMicVerdict', () => {
     for (; t < restartTime + nineSecondsMs; t += MIC_POLL_MS) {
       expect(verdict(0, t)).toBeNull();
     }
+  });
+
+  it('uses the documented levels', () => {
+    expect(MIC_CLIP_PEAK).toBe(0.98);
+    expect(MIC_CLIP_HITS).toBe(3);
+    expect(MIC_CLIP_CLEAR_MS).toBe(10_000);
+  });
+
+  it('does not report clipping for one loud moment or hits below threshold', () => {
+    const verdict = createMicVerdict();
+    // One clipped poll written out, then ordinary speech throughout
+    expect(verdict(1, 0)).toBeNull();
+    for (let t = MIC_POLL_MS; t <= MIC_CLIP_CLEAR_MS; t += MIC_POLL_MS) {
+      expect(verdict(0.3, t)).toBeNull();
+    }
+
+    // Fresh verdict fed MIC_CLIP_HITS - 1 clipped polls and then speech
+    const fresh = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(fresh(1, t)).toBeNull();
+      t += MIC_POLL_MS;
+    }
+    for (let speechT = t; speechT <= t + MIC_CLIP_CLEAR_MS; speechT += MIC_POLL_MS) {
+      expect(fresh(0.3, speechT)).toBeNull();
+    }
+  });
+
+  it('reports clipping on the threshold hit and clears after MIC_CLIP_CLEAR_MS', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(verdict(1, t)).toBeNull();
+      t += MIC_POLL_MS;
+    }
+    // The MIC_CLIP_HITS-th clipped poll returns 'clipping'
+    expect(verdict(1, t)).toBe('clipping');
+    const lastClippedMs = t;
+
+    // Ordinary polls keep returning 'clipping' until MIC_CLIP_CLEAR_MS has passed
+    for (let now = lastClippedMs + MIC_POLL_MS; now < lastClippedMs + MIC_CLIP_CLEAR_MS; now += MIC_POLL_MS) {
+      expect(verdict(0.3, now)).toBe('clipping');
+    }
+    // Exactly at MIC_CLIP_CLEAR_MS and after, returns null
+    expect(verdict(0.3, lastClippedMs + MIC_CLIP_CLEAR_MS)).toBeNull();
+    expect(verdict(0.3, lastClippedMs + MIC_CLIP_CLEAR_MS + MIC_POLL_MS)).toBeNull();
+  });
+
+  it('does not accumulate clipped polls spaced MIC_CLIP_CLEAR_MS apart', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let cycle = 0; cycle < 5; cycle++) {
+      expect(verdict(1, t)).toBeNull();
+      for (let step = 1; step * MIC_POLL_MS < MIC_CLIP_CLEAR_MS; step++) {
+        expect(verdict(0.3, t + step * MIC_POLL_MS)).toBeNull();
+      }
+      t += MIC_CLIP_CLEAR_MS;
+    }
+    expect(verdict(1, t)).toBeNull();
+  });
+
+  it('matches the lobby threshold: MIC_CLIP_PEAK is clean while MIC_CLIP_PEAK + 0.001 clips', () => {
+    const verdictExact = createMicVerdict();
+    for (let i = 0; i < MIC_CLIP_HITS; i++) {
+      expect(verdictExact(MIC_CLIP_PEAK, i * MIC_POLL_MS)).toBeNull();
+    }
+
+    const verdictAbove = createMicVerdict();
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(verdictAbove(MIC_CLIP_PEAK + 0.001, i * MIC_POLL_MS)).toBeNull();
+    }
+    expect(verdictAbove(MIC_CLIP_PEAK + 0.001, (MIC_CLIP_HITS - 1) * MIC_POLL_MS)).toBe('clipping');
+  });
+
+  it('resets the clipping hit count when mic is off in the app', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(verdict(1, t)).toBeNull();
+      t += MIC_POLL_MS;
+    }
+    expect(verdict(null, t)).toBeNull();
+    t += MIC_POLL_MS;
+    expect(verdict(1, t)).toBeNull();
+  });
+
+  it('extends the clear window on subsequent clipped polls', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS; i++) {
+      verdict(1, t);
+      t += MIC_POLL_MS;
+    }
+    t += MIC_CLIP_CLEAR_MS / 2;
+    expect(verdict(1, t)).toBe('clipping');
+    const extendedLastClip = t;
+
+    expect(verdict(0.3, extendedLastClip + MIC_CLIP_CLEAR_MS - MIC_POLL_MS)).toBe('clipping');
+    expect(verdict(0.3, extendedLastClip + MIC_CLIP_CLEAR_MS)).toBeNull();
+  });
+
+  it('keeps the clipping note through dead polls and still times silence from the first dead poll', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS; i++, t += MIC_POLL_MS) verdict(1, t);
+    const lastClip = t - MIC_POLL_MS;
+    const deadSince = t;
+    for (; t < lastClip + MIC_CLIP_CLEAR_MS; t += MIC_POLL_MS) {
+      expect(verdict(0, t)).toBe('clipping');
+    }
+    for (; t < deadSince + MIC_SILENT_AFTER_MS; t += MIC_POLL_MS) {
+      expect(verdict(0, t)).toBeNull();
+    }
+    expect(verdict(0, t)).toBe('silent');
+  });
+
+  it('does not forget the count over silence between clipped polls', () => {
+    const verdict = createMicVerdict();
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(verdict(1, t)).toBeNull();
+      t += MIC_POLL_MS;
+      expect(verdict(0, t)).toBeNull();
+      t += MIC_POLL_MS;
+    }
+    expect(verdict(1, t)).toBe('clipping');
+  });
+
+  it('adds up clipped polls less than MIC_CLIP_CLEAR_MS apart, however old the first is', () => {
+    const verdict = createMicVerdict();
+    const gap = 0.6 * MIC_CLIP_CLEAR_MS;
+    let t = 0;
+    for (let i = 0; i < MIC_CLIP_HITS - 1; i++) {
+      expect(verdict(1, t)).toBeNull();
+      for (let s = t + MIC_POLL_MS; s < t + gap; s += MIC_POLL_MS) expect(verdict(0.3, s)).toBeNull();
+      t += gap;
+    }
+    expect(verdict(1, t)).toBe('clipping');
   });
 });
 
@@ -256,6 +403,30 @@ describe('watchMic', () => {
     vi.advanceTimersByTime(MIC_POLL_MS);
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith('silent');
+    stop();
+  });
+
+  it('reports clipping through watchMic when only one channel is hot', () => {
+    const tap0: LevelTap = {
+      fftSize: 0,
+      context: { state: 'running' },
+      getFloatTimeDomainData: (b: Float32Array) => {
+        b.fill(1);
+      },
+    };
+    const tap1: LevelTap = {
+      fftSize: 0,
+      context: { state: 'running' },
+      getFloatTimeDomainData: (b: Float32Array) => {
+        b.fill(0);
+      },
+    };
+
+    const onChange = vi.fn();
+    const stop = watchMic([tap0, tap1], () => true, onChange);
+    vi.advanceTimersByTime(MIC_CLIP_HITS * MIC_POLL_MS);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('clipping');
     stop();
   });
 });

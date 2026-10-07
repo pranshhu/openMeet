@@ -1,5 +1,6 @@
 import { MAX_RECORDED_PEERS } from '@openmeet/protocol';
 import { bytesPerHour, recordingFolderBytesPerHour, type QualityPreset } from './quality';
+import { MIC_CLIP_PEAK } from './mic-watch';
 
 /**
  * Pre-join checks.
@@ -85,7 +86,7 @@ export function micCheck(peakLevel: number, elapsedMs: number): Check {
   if (peakLevel < 0.005) {
     return { id: 'mic', level: 'fail', message: 'No sound detected. Check the mic is not muted in your OS or hardware.' };
   }
-  if (peakLevel > 0.98) {
+  if (peakLevel > MIC_CLIP_PEAK) {
     return { id: 'mic', level: 'warn', message: 'Mic is clipping — lower the input gain, or you will bake distortion into the recording.' };
   }
   return { id: 'mic', level: 'ok', message: 'Mic is picking up sound.' };

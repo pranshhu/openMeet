@@ -270,7 +270,7 @@ present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remot
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
 `capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`,
-`micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'` or
+`micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
@@ -509,9 +509,11 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
     When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and
     one `AnalyserNode` per channel, beside the path to the destination node and never in it; `watchMic`
     (`lib/mic-watch.ts`) polls them every 300 ms and reports `'silent'` once no channel has carried a
-    sample above -80 dBFS for 10 s while the mic is on in the app (the raw track's `enabled`), and `null`
-    again when sound returns or the mic is turned off; and the tap reads the microphone as it arrives,
-    before the destination mixes channels.
+    sample above -80 dBFS for 10 s while the mic is on in the app (the raw track's `enabled`), reports
+    `'clipping'` once three polls have seen a sample above 0.98 on any channel with no clean 10 s between
+    them (0.98 is the level the lobby's `micCheck` uses, `MIC_CLIP_PEAK`), and `null` again when sound returns,
+    the clipping clears or the mic is turned off; and the tap reads the microphone as it arrives, before the
+    destination mixes channels.
   - **iOS Safari fallback**: where `MediaStreamTrackGenerator` is missing, raw tracks are kept directly,
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with

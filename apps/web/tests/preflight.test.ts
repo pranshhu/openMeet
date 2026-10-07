@@ -4,6 +4,7 @@ import {
 } from '@/lib/preflight';
 import { bytesPerHour, presetById, recordingFolderBytesPerHour } from '@/lib/quality';
 import { MAX_RECORDED_PEERS } from '@openmeet/protocol';
+import { MIC_CLIP_PEAK } from '@/lib/mic-watch';
 
 const p1080 = presetById('1080p');
 const GB = 1e9;
@@ -84,6 +85,9 @@ describe('micCheck', () => {
   });
   it('warns on clipping, which bakes distortion into the master', () => {
     expect(micCheck(0.99, 3000).level).toBe('warn');
+  });
+  it('does not warn at exactly MIC_CLIP_PEAK', () => {
+    expect(micCheck(MIC_CLIP_PEAK, 3000).level).toBe('ok');
   });
   it('passes on normal speech level', () => {
     expect(micCheck(0.3, 3000).level).toBe('ok');

@@ -1661,4 +1661,29 @@ describe('CallStage mic warning', () => {
     });
     expect(commits).toBe(1);
   });
+
+  it('renders clipping note inside the role="alert" element', () => {
+    render(<CallStage {...baseProps} micWarning="clipping" />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+  });
+
+  it('keeps dismissal per kind so dismissing silent leaves clipping visible', () => {
+    const { rerender } = render(<CallStage {...baseProps} micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    rerender(<CallStage {...baseProps} micWarning="clipping" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+  });
+
+  it('dismisses the clipping note and leaves the silent one armed', () => {
+    const { rerender } = render(<CallStage {...baseProps} micWarning="clipping" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    rerender(<CallStage {...baseProps} micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+  });
 });
