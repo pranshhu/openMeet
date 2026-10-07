@@ -375,6 +375,27 @@ describe('syncCallCopies', () => {
     expect(h.callCopiesCapped).toBe(true);
   });
 
+  it('a refusal at the take-wide limit is logged once for the take and sets callCopiesCapped', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // One copy each: no peer is anywhere near its own share.
+    const peers = Array.from({ length: CALL_COPY_MAX_FILES }, (_, i) => peer(`p${i}`));
+    syncCallCopies(h, peers);
+    await opened(h);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(h.callCopiesCapped).toBeUndefined();
+
+    syncCallCopies(h, [...peers, peer('late1')]);
+    syncCallCopies(h, [...peers, peer('late2')]);
+    await opened(h);
+
+    expect(files.size).toBe(CALL_COPY_MAX_FILES);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect((warnSpy.mock.calls[0]![1] as Error).message).toMatch(/limit/);
+    expect(h.callCopiesCapped).toBe(true);
+  });
+
   it('reconnects under a new peerId each time open no more than the cap', async () => {
     const { dir, files } = fakeDir();
     const h = handles(dir);
@@ -699,6 +720,28 @@ describe('call-audio copies at the end of a take', () => {
     await expect(endHostRecording(h)).resolves.toBeDefined();
     expect(file.close).toHaveBeenCalledTimes(1);
     expect(allWriters(h)).toEqual([]);
+  });
+
+  it('a copy whose recorder throws on stop is not listed, though its file was closed with bytes in it', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    FakeMediaRecorder.instances[0]!.emit(10);
+    await tick();
+    h.callCopies![0]!.recorder = {
+      stopAndFlush: async () => {
+        throw new Error('stop failed');
+      },
+    } as never;
+
+    await endHostRecording(h);
+
+    expect(files.get('call1_rec.m4a')!.close).toHaveBeenCalledTimes(1);
+    expect(h.callCopies![0]!.writer.size).toBe(10);
+    expect(collectCallCopies(h)).toEqual([]);
+    expect((await collectFileChecks(h)).has('call1_rec.m4a')).toBe(false);
   });
 
   it('after endHostRecording has been called, syncCallCopies opens nothing', async () => {
