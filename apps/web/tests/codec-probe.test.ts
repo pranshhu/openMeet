@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { pickRecordingMime, isRecordingSupported, UnsupportedCodecError } from '@/lib/recorder';
+import { pickRecordingMime, pickCallAudioMime, isRecordingSupported, UnsupportedCodecError } from '@/lib/recorder';
 import { RECORDING_MIME, RECORDING_MIME_CANDIDATES } from '@openmeet/protocol';
 
 /**
@@ -116,5 +116,36 @@ describe('UnsupportedCodecError', () => {
     expect(e.name).toBe('UnsupportedCodecError');
     expect(e).toBeInstanceOf(Error);
     expect(e.message).toMatch(/Chrome/i);
+  });
+});
+
+describe('pickCallAudioMime', () => {
+  it('returns AAC in MP4 under FULL', () => {
+    installMediaRecorder(FULL);
+    expect(pickCallAudioMime()).toBe('audio/mp4;codecs=mp4a.40.2');
+  });
+
+  it('returns Opus in MP4 under LINUX_CHROME', () => {
+    installMediaRecorder(LINUX_CHROME);
+    expect(pickCallAudioMime()).toBe('audio/mp4;codecs=opus');
+  });
+
+  it('returns Opus in WebM under NO_MP4', () => {
+    installMediaRecorder(NO_MP4);
+    expect(pickCallAudioMime()).toBe('audio/webm;codecs=opus');
+  });
+
+  it('returns null with no MediaRecorder', () => {
+    expect(pickCallAudioMime()).toBeNull();
+  });
+
+  it('returns null when MediaRecorder has no supported candidate', () => {
+    installMediaRecorder(() => false);
+    expect(pickCallAudioMime()).toBeNull();
+  });
+
+  it('returns null when MediaRecorder has no isTypeSupported method', () => {
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = {};
+    expect(pickCallAudioMime()).toBeNull();
   });
 });

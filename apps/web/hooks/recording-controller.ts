@@ -5,7 +5,7 @@ import {
   type DirectoryPicker,
   type FsDirectoryHandle,
 } from '@/lib/fs-writer';
-import { ChunkRecorder, pickRecordingMime, UnsupportedCodecError } from '@/lib/recorder';
+import { ChunkRecorder, pickRecordingMime, UnsupportedCodecError, pickCallAudioMime } from '@/lib/recorder';
 import { ChunkSender } from '@/lib/chunk-sender';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { BackupRecorder } from '@/lib/backup-recorder';
@@ -16,6 +16,25 @@ import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
 import type { FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
+
+/** Most files one take opens for call copies; a guest who keeps reconnecting gets no more. */
+export const CALL_COPY_MAX_FILES = 50;
+
+/** One stretch of one guest's live call audio, recorded by the host as a fallback. */
+export interface CallCopy {
+  peerId: string;
+  /** Display name when the copy started; the peer may be gone by the end of the take. */
+  name?: string;
+  track: MediaStreamTrack;
+  writer: FileWriter;
+  /** Settles once the file is open and the recorder running, or that was given up. */
+  opened: Promise<void>;
+  recorder?: ChunkRecorder;
+  /** Recorder start on the host clock, for the sync sidecar. */
+  startMs?: number;
+  /** Set once the copy has been told to stop; resolves when its file is closed. */
+  finished?: Promise<void>;
+}
 
 export interface RecordingHandles {
   recordingId: string;
@@ -96,6 +115,14 @@ export interface RecordingHandles {
   screenStartsByFile?: Map<string, number>;
   screenSharersByFile?: Map<string, string>;
   screenSharerPeerIdsByFile?: Map<string, string>;
+
+  // --- Call-audio copies ---
+  // The host's own recording of each guest's incoming live audio, as a fallback
+  // for a guest track that never arrives.
+  /** Every call copy this take has opened, in order. */
+  callCopies?: CallCopy[];
+  /** Set as the take starts ending: a stream arriving after that opens nothing. */
+  callCopiesClosed?: boolean;
 }
 
 /**
@@ -638,6 +665,94 @@ export const GUEST_TAIL_TIMEOUT_MS = 45_000;
 
 /** How long a screen-share channel gets to open before we give up on it. */
 export const SCREEN_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
+
+// A call copy is the lesser file: its failures are logged and never reach the
+// recording error banner, which would sound the problem alert for a take that is fine.
+const warnCallCopy = (e: unknown) => console.warn('openMeet: call audio copy', e);
+
+function finishCallCopy(h: RecordingHandles, c: CallCopy): Promise<void> {
+  return (c.finished ??= (async () => {
+    await c.opened;
+    await c.recorder?.stopAndFlush();
+    await c.writer.close();
+    // Nothing was recorded: leave no empty file behind.
+    if (!c.writer.size && c.writer.fileName) await h.dir?.removeEntry?.(c.writer.fileName);
+  })().catch(warnCallCopy));
+}
+
+async function openCallCopy(
+  h: RecordingHandles,
+  dir: FsDirectoryHandle,
+  c: CallCopy,
+  n: number,
+  mimeType: string
+): Promise<void> {
+  const ext = mimeType.startsWith('audio/mp4') ? 'm4a' : 'webm';
+  await c.writer.openIn(dir, takeName(`call${n}`, h.recordingId, h.take ?? 1, ext));
+  // The take ended, the guest left or the track died while the file was opening.
+  if (c.finished || c.track.readyState === 'ended') return;
+  const recorder = new ChunkRecorder({
+    mimeType,
+    stream: new MediaStream([c.track]),
+    onChunk: (chunk) => {
+      c.writer.write(chunk.header.offset, chunk.payload).catch((e: unknown) => {
+        warnCallCopy(e);
+        // A writer that failed once fails every later write: free the encoder.
+        void finishCallCopy(h, c);
+      });
+    },
+    onError: warnCallCopy,
+  });
+  recorder.start();
+  c.recorder = recorder;
+  c.startMs = Date.now();
+}
+
+/**
+ * Keep one call-audio copy running for each of `peers`, and end the copy of
+ * anyone who is not among them.
+ *
+ * The host's own recording of a guest's incoming live audio: call quality, but
+ * on the host's disk whatever happens to the guest's own track. One file per
+ * stretch of one guest's stream, because a running MediaRecorder cannot change
+ * tracks and a rebuilt connection brings a new one. Safe to call as often as
+ * the peer list changes; never throws.
+ */
+export function syncCallCopies(
+  h: RecordingHandles,
+  peers: { peerId: string; stream: MediaStream | null; name?: string | null }[]
+): void {
+  try {
+    const dir = h.dir;
+    // A guest's handles have no folder, so this is also the host-only guard.
+    if (!dir || h.callCopiesClosed) return;
+    const copies = (h.callCopies ??= []);
+    const live = new Set(peers.map((p) => p.stream?.getAudioTracks()[0]));
+    // Its guest left, or its stream is gone or was replaced by a rebuilt connection.
+    for (const c of copies) if (!live.has(c.track)) void finishCallCopy(h, c);
+    for (const p of peers) {
+      const track = p.stream?.getAudioTracks()[0];
+      // One copy per track, ever: the second ontrack call for a stream and every
+      // later change to the peer list end here.
+      if (!track || track.readyState === 'ended' || copies.some((c) => c.track === track)) continue;
+      if (copies.length >= CALL_COPY_MAX_FILES) return;
+      const mimeType = pickCallAudioMime();
+      if (!mimeType) return;
+      const copy: CallCopy = {
+        peerId: p.peerId,
+        ...(typeof p.name === 'string' && p.name ? { name: p.name } : {}),
+        track,
+        writer: new FileWriter(),
+        opened: Promise.resolve(),
+      };
+      // Listed before its file opens, so a second call cannot open a second file.
+      const n = copies.push(copy);
+      copy.opened = openCallCopy(h, dir, copy, n, mimeType).catch(warnCallCopy);
+    }
+  } catch (e) {
+    warnCallCopy(e);
+  }
+}
 
 /**
  * Every writer this session has open. The last-resort commit paths need all of
