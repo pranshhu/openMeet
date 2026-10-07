@@ -108,10 +108,14 @@ export interface StreamAbandoned {
 
 // First message on a `backup#<name>` channel: how big the file is. The host
 // answers `resume_offset` once it has a file open, and the bytes follow as
-// ordinary chunks.
+// ordinary chunks. `key` is a random value the sending tab makes once for this
+// backup and repeats on every channel it opens for it, so the host can tell
+// the same sender on a rebuilt connection from another participant using
+// the same name.
 export interface BackupOffer {
   type: 'backup_offer';
   size: number;
+  key: string;
 }
 
 export type DataChannelControlMessage =

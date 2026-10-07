@@ -1,5 +1,7 @@
+import { recordingChannelKind } from '@openmeet/protocol';
 import { integrityVerdict, sanitizeText } from '@/lib/sync-report';
-import type { BackupName } from '@/lib/backup-recorder';
+import { parseBackupName, type BackupName } from '@/lib/backup-recorder';
+import { FileWriter, type FsDirectoryHandle } from '@/lib/fs-writer';
 
 /** One backup on its way from a guest to the host, as either side shows it. */
 export interface BackupTransfer {
@@ -62,4 +64,325 @@ export function buildBackupNote(note: {
   };
 
   return JSON.stringify(obj, null, 2);
+}
+
+/** Offers one participant may have waiting for the host's answer at a time. */
+export const MAX_BACKUP_OFFERS_PER_PEER = 8;
+
+function say(channel: RTCDataChannel, json: string): void {
+  if (channel.readyState !== 'open') return;
+  try {
+    channel.send(json);
+  } catch {
+    // Channel closed or broke between ready check and send.
+  }
+}
+
+// "This tab holds none of it" — the answer to an offer this tab will not take
+// and to a resume query for a transfer it does not have.
+const NO_COPY = JSON.stringify({
+  type: 'recording-finalized',
+  recordingId: '',
+  totalBytes: 0,
+  sha256: '',
+});
+
+function turnAway(channel: RTCDataChannel): void {
+  say(channel, NO_COPY);
+  try {
+    channel.close();
+  } catch {
+    // Channel already closed.
+  }
+}
+
+// Returns the parsed control message when data is a string containing "type".
+// A chunk header never contains a "type" key, so this runs for every 64 KiB
+// fragment but parses only control frames.
+function control(data: unknown): Record<string, unknown> | null {
+  if (typeof data !== 'string' || !data.includes('"type"')) return null;
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (typeof parsed === 'object' && parsed !== null) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Plain text or corrupted frame.
+  }
+  return null;
+}
+
+/** Tell a sender this tab will not take its backup, so it stops waiting. */
+export function refuseBackup(channel: RTCDataChannel): void {
+  channel.onmessage = () => turnAway(channel);
+}
+
+interface BackupRecord {
+  item: BackupTransfer;
+  backup: BackupName;
+  peerId: string;
+  channel: RTCDataChannel;
+  key: string;
+  dir?: FsDirectoryHandle | undefined;
+  file?: string | undefined;
+  writer?: FileWriter | undefined;
+}
+
+// A guest's backup is never deleted automatically, so it comes back, and
+// opening a name that exists would replace a file the host already has.
+async function freeName(dir: FsDirectoryHandle, name: string): Promise<string> {
+  const dot = name.lastIndexOf('.');
+  const stem = dot === -1 ? name : name.slice(0, dot);
+  const ext = dot === -1 ? '' : name.slice(dot);
+  for (let i = 1; i <= 99; i++) {
+    const candidate = i === 1 ? name : `${stem}_${i}${ext}`;
+    try {
+      await dir.getFileHandle(candidate);
+    } catch (e) {
+      if ((e as { name?: string }).name === 'NotFoundError') return candidate;
+      throw e;
+    }
+  }
+  throw new Error('Too many copies of this backup in the folder.');
+}
+
+/** Host side: every backup offered to this tab, from the offer to the verdict. */
+export class BackupIntake {
+  private readonly room: string;
+  private readonly onChange: (items: BackupTransfer[]) => void;
+  private readonly records = new Map<string, BackupRecord>();
+  // The tail of the file-opening work of every Save so far: one Save's probes
+  // must finish before the next one chooses names.
+  private opening: Promise<void> = Promise.resolve();
+
+  constructor(opts: { room: string; onChange: (items: BackupTransfer[]) => void }) {
+    this.room = opts.room;
+    this.onChange = opts.onChange;
+  }
+
+  private emit(): void {
+    this.onChange(Array.from(this.records.values(), (r) => r.item));
+  }
+
+  /** A `backup#<name>` channel arrived from a participant. */
+  offer(channel: RTCDataChannel, from: { peerId: string; name: string | null }): void {
+    const id = recordingChannelKind(channel.label).key ?? '';
+    const backup = parseBackupName(id);
+    if (!backup || backup.room !== this.room) {
+      refuseBackup(channel);
+      return;
+    }
+
+    channel.binaryType = 'arraybuffer';
+    channel.onmessage = (ev: { data: unknown }) => {
+      void this.onMessage(id, backup, channel, from, ev.data).catch(() => {});
+    };
+    channel.onclose = () => this.onClose(id, channel);
+  }
+
+  private async onMessage(
+    id: string,
+    backup: BackupName,
+    channel: RTCDataChannel,
+    from: { peerId: string; name: string | null },
+    data: unknown
+  ): Promise<void> {
+    const msg = control(data);
+    if (msg?.type === 'backup_offer') {
+      await this.handleOffer(id, backup, channel, from, msg.size, msg.key);
+      return;
+    }
+    if (msg?.type === 'resume_query') {
+      say(channel, NO_COPY);
+    }
+  }
+
+  private async handleOffer(
+    id: string,
+    backup: BackupName,
+    channel: RTCDataChannel,
+    from: { peerId: string; name: string | null },
+    size: unknown,
+    key: unknown
+  ): Promise<void> {
+    if (!Number.isSafeInteger(size) || (size as number) <= 0) {
+      turnAway(channel);
+      return;
+    }
+    if (typeof key !== 'string' || key.length < 1 || key.length > 64) {
+      turnAway(channel);
+      return;
+    }
+
+    const old = this.records.get(id);
+    if (old && old.key !== key && old.channel.readyState === 'open') {
+      turnAway(channel);
+      return;
+    }
+
+    const clean = sanitizeText(from.name ?? '').trim();
+    const hasVisible = /[^\p{Cf}\p{Z}\p{Cc}]/u.test(clean);
+    const who = hasVisible ? [...clean].slice(0, 64).join('') : 'Guest';
+
+    let waitingCount = 0;
+    for (const r of this.records.values()) {
+      if (r !== old && r.peerId === from.peerId && r.item.status === 'offered') {
+        waitingCount++;
+      }
+    }
+    if (waitingCount >= MAX_BACKUP_OFFERS_PER_PEER) {
+      turnAway(channel);
+      return;
+    }
+
+    if (old && old.item.status === 'offered') {
+      const previous = old.channel;
+      // The sender repeats an offer on the connection that already holds it:
+      // the host has read that size and name, so neither may change under it.
+      if (previous === channel) return;
+      old.channel = channel;
+      old.peerId = from.peerId;
+      old.key = key;
+      old.item = { ...old.item, size: size as number, from: who };
+      this.emit();
+      turnAway(previous);
+      return;
+    }
+
+    const item: BackupTransfer = {
+      id,
+      kind: backup.kind,
+      size: size as number,
+      status: 'offered',
+      percent: 0,
+      from: who,
+    };
+    const newRecord: BackupRecord = {
+      item,
+      backup,
+      peerId: from.peerId,
+      channel,
+      key,
+    };
+    this.records.set(id, newRecord);
+    this.emit();
+
+    if (old) {
+      if (old.channel !== channel) {
+        turnAway(old.channel);
+      }
+      await this.endRecordFile(old);
+    }
+  }
+
+  /** The host said yes to the offers it was shown: open a file for each. Never throws. */
+  async accept(dir: FsDirectoryHandle, shown: readonly BackupTransfer[]): Promise<void> {
+    const waiting: BackupRecord[] = [];
+    for (const record of this.records.values()) {
+      if (record.item.status === 'offered' && shown.includes(record.item)) {
+        record.item = { ...record.item, status: 'active' };
+        waiting.push(record);
+      }
+    }
+    if (waiting.length === 0) return;
+    this.emit();
+
+    // One Save's files open one after another. A second Save that lands while
+    // this one is still probing names would pick the same free name, and the
+    // record it replaces would remove the file the other just opened.
+    this.opening = this.opening.then(() => this.open(waiting, dir));
+    await this.opening;
+  }
+
+  private async open(waiting: BackupRecord[], dir: FsDirectoryHandle): Promise<void> {
+    for (const record of waiting) {
+      // A new offer for the same backup replaces its record in the map. The
+      // replaced record must not get a file or a "go" for the host's yes.
+      if (this.records.get(record.item.id) !== record) continue;
+      try {
+        const candidate = returnedBackupName(record.backup, record.item.from ?? null);
+        const name = await freeName(dir, candidate);
+        const writer = new FileWriter();
+        try {
+          await writer.openIn(dir, name);
+        } catch (e) {
+          // openIn creates the file before it opens a writable, so a folder
+          // that refuses the writable would keep an empty file the host never
+          // asked for.
+          await dir.removeEntry?.(name).catch(() => {});
+          throw e;
+        }
+        record.dir = dir;
+        record.file = writer.fileName;
+        record.writer = writer;
+        if (this.records.get(record.item.id) !== record) {
+          await this.endRecordFile(record);
+          continue;
+        }
+        say(
+          record.channel,
+          JSON.stringify({
+            type: 'resume_offset',
+            recordingId: record.item.id,
+            lastByte: 0,
+            lastIdx: -1,
+          })
+        );
+      } catch {
+        // The failure is not this accept's to answer when a new offer replaced
+        // the record: its channel now says the sender started over.
+        if (this.records.get(record.item.id) !== record) {
+          await this.endRecordFile(record);
+          continue;
+        }
+        await this.failRecord(record);
+      }
+    }
+  }
+
+  private async failRecord(record: BackupRecord): Promise<void> {
+    if (record.item.status === 'saved' || record.item.status === 'failed') return;
+    record.item = { ...record.item, status: 'failed' };
+    this.emit();
+    turnAway(record.channel);
+    await this.endRecordFile(record);
+  }
+
+  private async endRecordFile(record: BackupRecord): Promise<void> {
+    const writer = record.writer;
+    const dir = record.dir;
+    const file = record.file;
+    record.writer = undefined;
+    record.dir = undefined;
+    record.file = undefined;
+    await writer?.close().catch(() => {});
+    if (writer && file && dir?.removeEntry) {
+      await dir.removeEntry(file).catch(() => {});
+    }
+  }
+
+  private onClose(id: string, channel: RTCDataChannel): void {
+    const record = this.records.get(id);
+    if (!record || record.channel !== channel) return;
+    if (record.item.status === 'offered') {
+      this.records.delete(id);
+      this.emit();
+    }
+  }
+
+  /** The host turned the waiting offers down: answer and drop each. */
+  decline(): void {
+    for (const [id, record] of this.records) {
+      if (record.item.status === 'offered') {
+        this.records.delete(id);
+        turnAway(record.channel);
+      }
+    }
+    this.emit();
+  }
+
+  /** Leaving the room: close every open file. */
+  async close(): Promise<void> {
+    await Promise.allSettled(Array.from(this.records.values(), (r) => r.writer?.close()));
+  }
 }

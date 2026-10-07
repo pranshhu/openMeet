@@ -73,7 +73,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
-  channel and carries the file size). Recording acks flow here, **not** over WS.
+  channel and carries the file size and the sender's key). Recording acks flow here, **not**
+  over WS.
 - `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
@@ -380,6 +381,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   take already recording when the board is first opened keeps a mic-only MP4 (a running
   `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
   board says so for that take.
+- `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
+  the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
+  A waiting or accepted backup can only be moved or restarted by an offer carrying the key of the
+  offer that created it, while its channel is open. Nothing is written until the host accepts, and a
+  Save covers only the offers that were on screen when it was clicked; each accepted file is opened
+  under a free name that never replaces an existing file in the folder (`…_2.<ext>`).
 
 ---
 
