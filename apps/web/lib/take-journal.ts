@@ -84,11 +84,24 @@ export interface TakeJournal {
 }
 
 const TAKE_PREFIX = 'openmeet-take';
+const NOTES_FILE = 'take.json';
 const ROOM_RE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
-// Anchored: a path, `.` or `..` must never reach a directory name.
-const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(mp4|wav|webm|m4a)$/;
 const PART_RE = /^(\d{6})-(\d+)-(\d+)\.part$/;
 const FINISHED_MARK = 'finished';
+// Anchored and exactly thirteen digits, like parseBackupName: the listing
+// parses the number back out of the name, so a leading zero or an unsafe
+// integer would not round-trip.
+const TAKE_DIR_RE = /^openmeet-take-(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})$/;
+// The directory names tryOpenOpfs writes, with and without its optional parts.
+const BACKUP_DIR_RE = /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d{13}(?:-[a-z]{3}-[a-z]{4}-[a-z]{3})?$/;
+const KEY_RE = /^[A-Za-z0-9-]{0,64}$/;
+const MAX_NOTES_TEXT = 200;
+const MAX_BACKUPS = 16;
+
+/** A file's name in the recording folder, and so its directory's name in the journal: no separators, no leading dot, one known recording extension. */
+export function isJournalFileName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*\.(mp4|wav|webm|m4a)$/.test(name);
+}
 
 /** More non-contiguous appends than this in one commit are dropped: a sender must not decide how many files the host creates. */
 export const MAX_RUNS_PER_COMMIT = 8;
@@ -249,6 +262,7 @@ class JournalFileImpl implements JournalFile {
       this.seq += 1;
       this.journal.state.bytes += run.size;
     }
+    await this.journal.flushNotes();
   }
 
   private async writePart(name: string, run: Run): Promise<boolean> {
@@ -316,9 +330,10 @@ const DEAD_FILE: JournalFile = {
 };
 
 class TakeJournalImpl implements TakeJournal {
-  readonly notesOk = true;
   readonly state: JournalState;
   private readonly files = new Map<string, JournalFileImpl>();
+  /** A note change that is not on disk yet; the next commit writes it. */
+  private notesDirty = false;
 
   constructor(
     readonly dirName: string,
@@ -327,6 +342,7 @@ class TakeJournalImpl implements TakeJournal {
     state: JournalState,
     private readonly seqByName: Map<string, number>,
     readonly notes: TakeNotes,
+    readonly notesOk: boolean,
   ) {
     this.state = state;
   }
@@ -341,10 +357,30 @@ class TakeJournalImpl implements TakeJournal {
 
   note(change: (n: TakeNotes) => void): void {
     change(this.notes);
+    this.notesDirty = true;
+  }
+
+  /**
+   * Write the notes once a commit's parts are durable. A failed write leaves
+   * them dirty for the next commit: the parts are the take and the notes are
+   * only its label, so a bad label must not kill the journal. Never called
+   * outside a commit, so notes alone never drive disk writes.
+   */
+  async flushNotes(): Promise<void> {
+    if (!this.notesDirty) return;
+    this.notesDirty = false;
+    try {
+      const handle = await this.dir.getFileHandle(NOTES_FILE, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([JSON.stringify(this.notes)]));
+      await writable.close();
+    } catch {
+      this.notesDirty = true;
+    }
   }
 
   file(name: string): JournalFile {
-    if (!FILE_NAME_RE.test(name)) return DEAD_FILE;
+    if (!isJournalFileName(name)) return DEAD_FILE;
     const existing = this.files.get(name);
     if (existing) return existing;
     const file = new JournalFileImpl(this, name, this.seqByName.get(name) ?? 0);
@@ -377,6 +413,107 @@ class TakeJournalImpl implements TakeJournal {
     } catch {
       return null;
     }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A string the notes may keep, or undefined when it is the wrong type or too long. */
+function shortString(value: unknown, max: number): string | undefined {
+  return typeof value === 'string' && value.length <= max ? value : undefined;
+}
+
+function fileNoteFrom(value: unknown): JournalFileNote | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.file !== 'string' || !isJournalFileName(value.file)) return null;
+  if (value.kind !== 'camera' && value.kind !== 'wav' && value.kind !== 'screen') return null;
+
+  const note: JournalFileNote = { file: value.file, kind: value.kind };
+  // What is not usable is dropped, never the entry: one peer's bad value must
+  // not cost the take its other files, and there is no bound on how many files
+  // a long take opens.
+  if (typeof value.key === 'string' && KEY_RE.test(value.key)) note.key = value.key;
+  if (typeof value.slot === 'number' && Number.isSafeInteger(value.slot) && value.slot >= 0) note.slot = value.slot;
+  if (typeof value.segment === 'number' && Number.isSafeInteger(value.segment) && value.segment >= 1) {
+    note.segment = value.segment;
+  }
+  const who = shortString(value.who, MAX_NOTES_TEXT);
+  if (who !== undefined) note.who = who;
+  const guestStart = value.guestStartHostMs;
+  if (guestStart === null || (typeof guestStart === 'number' && Number.isFinite(guestStart))) {
+    note.guestStartHostMs = guestStart;
+  }
+  const rtt = value.rttMs;
+  if (rtt === null || (typeof rtt === 'number' && Number.isFinite(rtt))) note.rttMs = rtt;
+  if (typeof value.startedAtMs === 'number' && Number.isFinite(value.startedAtMs)) note.startedAtMs = value.startedAtMs;
+  return note;
+}
+
+function backupNoteFrom(value: unknown): TakeNotes['backups'][number] | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.dir !== 'string' || !BACKUP_DIR_RE.test(value.dir)) return null;
+  if (typeof value.file !== 'string' || !isJournalFileName(value.file)) return null;
+  if (value.kind !== 'camera' && value.kind !== 'wav' && value.kind !== 'screen') return null;
+  return { dir: value.dir, file: value.file, kind: value.kind };
+}
+
+function markerFrom(value: unknown): TakeNotes['markers'][number] | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.atMs !== 'number' || !Number.isFinite(value.atMs)) return null;
+  if (value.from !== 'host' && value.from !== 'guest' && value.from !== 'producer') return null;
+  const label = shortString(value.label, MAX_NOTES_TEXT);
+  if (label === undefined) return null;
+
+  const marker: TakeNotes['markers'][number] = { atMs: value.atMs, label, from: value.from };
+  const name = shortString(value.name, MAX_NOTES_TEXT);
+  if (name !== undefined) marker.name = name;
+  return marker;
+}
+
+/** The record a take.json holds, or null when it is not one. Unknown extra keys are ignored, so a later ticket can add one. */
+function notesFrom(value: unknown): TakeNotes | null {
+  if (!isRecord(value)) return null;
+  const room = shortString(value.room, 64);
+  const recordingId = shortString(value.recordingId, 64);
+  if (room === undefined || recordingId === undefined) return null;
+  if (typeof value.take !== 'number' || !Number.isSafeInteger(value.take) || value.take < 1) return null;
+  if (typeof value.hostStartMs !== 'number' || !Number.isFinite(value.hostStartMs) || value.hostStartMs < 0) return null;
+  if (!Array.isArray(value.files) || !Array.isArray(value.backups) || !Array.isArray(value.markers)) return null;
+
+  const files: JournalFileNote[] = [];
+  for (const entry of value.files) {
+    const note = fileNoteFrom(entry);
+    if (note) files.push(note);
+  }
+  const backups: TakeNotes['backups'] = [];
+  for (const entry of value.backups.slice(0, MAX_BACKUPS)) {
+    const note = backupNoteFrom(entry);
+    if (note) backups.push(note);
+  }
+  const markers: TakeNotes['markers'] = [];
+  for (const entry of value.markers) {
+    const marker = markerFrom(entry);
+    if (marker) markers.push(marker);
+  }
+  return { room, recordingId, take: value.take, hostStartMs: value.hostStartMs, files, backups, markers };
+}
+
+/** The notes a take directory already holds, or the fallback with `ok` false. Never rejects. */
+async function adoptNotes(dir: TakeDir, fallback: TakeNotes): Promise<{ notes: TakeNotes; ok: boolean }> {
+  let handle: OpfsFileHandle;
+  try {
+    handle = await dir.getFileHandle(NOTES_FILE);
+  } catch {
+    return { notes: fallback, ok: true }; // never written: the init-built notes stand
+  }
+  try {
+    const bytes = await (await handle.getFile()).arrayBuffer();
+    const record = notesFrom(JSON.parse(new TextDecoder().decode(bytes)));
+    return record ? { notes: record, ok: true } : { notes: fallback, ok: false };
+  } catch {
+    return { notes: fallback, ok: false };
   }
 }
 
@@ -443,7 +580,7 @@ export async function openTakeJournal(
       // An unreadable listing leaves an empty journal rather than no journal.
     }
 
-    return new TakeJournalImpl(dirName, rootDir, dir, state, seqByName, {
+    const fallback: TakeNotes = {
       room: init.room,
       recordingId: init.recordingId,
       take: init.take,
@@ -451,8 +588,98 @@ export async function openTakeJournal(
       files: [],
       backups: [],
       markers: [],
-    });
+    };
+    const adopted = await adoptNotes(dir, fallback);
+
+    return new TakeJournalImpl(dirName, rootDir, dir, state, seqByName, adopted.notes, adopted.ok);
   } catch {
     return null;
+  }
+}
+
+/** Whether any file subdirectory of a take directory holds a part. */
+async function hasPart(dir: OpfsDir): Promise<boolean> {
+  try {
+    for (const sub of await getDirEntries(dir)) {
+      if (!isDirectoryHandle(sub)) continue;
+      for (const part of await getDirEntries(sub)) {
+        if (!isDirectoryHandle(part) && part.name && PART_RE.test(part.name)) return true;
+      }
+    }
+  } catch {
+    return true; // a directory that cannot be walked may still hold a take
+  }
+  return false;
+}
+
+/**
+ * Live take journals in OPFS, newest first. [] when OPFS is absent. A finished
+ * journal, and one that holds neither a part nor a usable record, is deleted
+ * here instead of listed.
+ */
+export async function findTakeJournals(root?: OpfsRootGetter): Promise<TakeJournal[]> {
+  const getRoot = root ?? defaultOpfsRoot();
+  if (!getRoot) return [];
+  let rootDir: OpfsDir;
+  try {
+    rootDir = await getRoot();
+  } catch {
+    return [];
+  }
+
+  const found: { startedMs: number; journal: TakeJournal }[] = [];
+  try {
+    for (const entry of await getDirEntries(rootDir)) {
+      if (!isDirectoryHandle(entry) || !entry.name) continue;
+      const match = TAKE_DIR_RE.exec(entry.name);
+      if (!match) continue;
+      const dirName = entry.name;
+
+      if (await entry.getFileHandle(FINISHED_MARK).then(() => true, () => false)) {
+        await rootDir.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        continue;
+      }
+
+      // Reuse the opener so a listed journal is live: its bytes, next seq,
+      // file(), replay() and root all come from the same code a new one uses.
+      const journal = await openTakeJournal(
+        { room: match[2]!, recordingId: '', take: 1, hostStartMs: Number(match[1]) },
+        async () => rootDir,
+      );
+      if (!journal) continue;
+
+      const recordOnDisk = await entry.getFileHandle(NOTES_FILE).then(() => true, () => false);
+      if (!(await hasPart(entry)) && (!recordOnDisk || !journal.notesOk)) {
+        await rootDir.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        continue;
+      }
+      found.push({ startedMs: Number(match[1]), journal });
+    }
+  } catch {
+    return [];
+  }
+
+  found.sort((a, b) => b.startedMs - a.startedMs);
+  return found.map((item) => item.journal);
+}
+
+/** Remove one take journal by directory name. A name this app never wrote deletes nothing; the row goes away either way. */
+export async function deleteTakeJournal(dirName: string, root?: OpfsRootGetter): Promise<void> {
+  const getRoot = root ?? defaultOpfsRoot();
+  if (!getRoot) return;
+  let dir: OpfsDir;
+  try {
+    dir = await getRoot();
+  } catch {
+    return;
+  }
+  if (!dir || typeof dir.removeEntry !== 'function') return;
+  if (!TAKE_DIR_RE.test(dirName)) return;
+
+  try {
+    await dir.removeEntry(dirName, { recursive: true });
+  } catch {
+    // A missing directory is success, and anything else is swallowed: the
+    // lobby row goes away either way.
   }
 }

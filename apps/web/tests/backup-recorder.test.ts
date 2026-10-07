@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName } from '@/lib/backup-recorder';
-import { openTakeJournal } from '@/lib/take-journal';
+import { openTakeJournal, findTakeJournals, deleteTakeJournal, isJournalFileName } from '@/lib/take-journal';
 import { wavHeader } from '@/lib/wav';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
 
@@ -1339,6 +1339,471 @@ describe('take journal — small closed parts in browser storage', () => {
       },
     });
     expect(end2).toBe(4);
+  });
+
+  async function putText(dir: FakeDirectoryHandle, name: string, text: string) {
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(new Blob([text]));
+    await writable.close();
+    return handle;
+  }
+
+  function record(overrides: Record<string, unknown> = {}) {
+    return {
+      room: 'abc-defg-hij',
+      recordingId: 'r1',
+      take: 1,
+      hostStartMs: 1759824000000,
+      files: [],
+      backups: [],
+      markers: [],
+      ...overrides,
+    };
+  }
+
+  function listed(root: FakeDirectoryHandle) {
+    return findTakeJournals(async () => root as never);
+  }
+
+  it('notes round-trip through take.json', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const first = (await open(root))!;
+    first.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0, who: 'Bob' }));
+    first.file('guest_r.mp4').append(0, ab(4));
+    await first.file('guest_r.mp4').commit(1);
+
+    const second = (await open(root))!;
+    expect(second.notesOk).toBe(true);
+    expect(second.notes).toEqual({
+      room: 'abc-defg-hij',
+      recordingId: 'r1',
+      take: 1,
+      hostStartMs: 1759824000000,
+      files: [{ file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0, who: 'Bob' }],
+      backups: [],
+      markers: [],
+    });
+  });
+
+  it('take.json is written once per change, not once per commit', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = takeDirOf(root);
+    const real = dir.getFileHandle.bind(dir);
+    let creates = 0;
+    dir.getFileHandle = async (name, opts) => {
+      if (name === 'take.json' && opts?.create) creates += 1;
+      return real(name, opts);
+    };
+
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+    file.append(4, ab(4));
+    await file.commit(2);
+
+    expect(creates).toBe(1);
+    expect(dir.entries.has('take.json')).toBe(true);
+
+    // Adopting a record is not a change to it
+    const reopened = (await open(root))!;
+    reopened.file('guest_r.mp4').append(8, ab(4));
+    await reopened.file('guest_r.mp4').commit(3);
+    expect(creates).toBe(1);
+  });
+
+  it('note() alone never writes take.json', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+
+    expect(takeDirOf(root).entries.has('take.json')).toBe(false);
+  });
+
+  it('a commit with no runs to write flushes dirty notes to take.json', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+
+    await journal.file('guest_r.mp4').commit(0);
+
+    const dir = takeDirOf(root);
+    expect(dir.entries.has('take.json')).toBe(true);
+    const written = await (dir.entries.get('take.json') as FakeFileHandle).getFile();
+    expect(JSON.parse(new TextDecoder().decode(await written.arrayBuffer()))).toEqual({
+      room: 'abc-defg-hij',
+      recordingId: 'r1',
+      take: 1,
+      hostStartMs: 1759824000000,
+      files: [{ file: 'guest_r.mp4', kind: 'camera' }],
+      backups: [],
+      markers: [],
+    });
+  });
+
+  it('a failed take.json write leaves the journal alive and the notes dirty', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = takeDirOf(root);
+    const real = dir.getFileHandle.bind(dir);
+    dir.getFileHandle = async (name, opts) => {
+      if (name === 'take.json' && opts?.create) throw new Error('disk full');
+      return real(name, opts);
+    };
+
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await expect(file.commit(1)).resolves.toBeUndefined();
+
+    expect(journal.dead).toBe(false);
+    expect(journal.bytes).toBe(4);
+    expect(dir.entries.has('take.json')).toBe(false);
+
+    dir.getFileHandle = real;
+    file.append(4, ab(4));
+    await file.commit(2);
+
+    const written = await (dir.entries.get('take.json') as FakeFileHandle).getFile();
+    expect(JSON.parse(new TextDecoder().decode(await written.arrayBuffer()))).toEqual({
+      room: 'abc-defg-hij',
+      recordingId: 'r1',
+      take: 1,
+      hostStartMs: 1759824000000,
+      files: [{ file: 'guest_r.mp4', kind: 'camera' }],
+      backups: [],
+      markers: [],
+    });
+  });
+
+  it('a bad record is no record and the directory name is the fallback', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.file('guest_r.mp4').append(0, ab(4));
+    await journal.file('guest_r.mp4').commit(1);
+    await putText(takeDirOf(root), 'take.json', '{');
+
+    const unreadableDir = 'openmeet-take-1759824000001-abc-defg-hij';
+    const unreadable = await root.getDirectoryHandle(unreadableDir, { create: true });
+    const broken = await putText(unreadable, 'take.json', '{}');
+    broken.getFile = async () => {
+      throw new Error('unreadable');
+    };
+    await putPart(await unreadable.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+
+    const found = await listed(root);
+    expect(found.map((j) => j.dirName)).toEqual([unreadableDir, TAKE_DIR]);
+    expect(found.map((j) => j.notes.hostStartMs)).toEqual([1759824000001, 1759824000000]);
+    for (const live of found) {
+      expect(live.notesOk).toBe(false);
+      expect(live.notes.files).toEqual([]);
+      expect(live.notes.backups).toEqual([]);
+      expect(live.notes.markers).toEqual([]);
+      expect(live.notes.room).toBe('abc-defg-hij');
+      expect(live.notes.recordingId).toBe('');
+      expect(live.notes.take).toBe(1);
+    }
+
+    // There is nothing usable to rewrite, so a later commit leaves the bad record alone
+    found[0]!.file('guest_r.mp4').append(4, ab(4));
+    await found[0]!.file('guest_r.mp4').commit(2);
+    expect(new TextDecoder().decode(broken.content)).toBe('{}');
+  });
+
+  it('one bad entry does not cost the record its other files', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const dir = await root.getDirectoryHandle(TAKE_DIR, { create: true });
+    await putText(dir, 'take.json', JSON.stringify(record({
+      recordingId: 'r6',
+      hostStartMs: 1759824000123,
+      future: { added: 'by a later ticket' },
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0, who: 'Bob', guestStartHostMs: null, rttMs: 12, startedAtMs: 5 },
+        { file: 'guest_b.mp4', kind: 'camera', key: 'k'.repeat(65) },
+        { file: '../escape.mp4', kind: 'camera' },
+        { file: 'guest_z.wav', kind: 'wav', key: 'bad key', slot: -1, segment: 0, who: 'w'.repeat(201), guestStartHostMs: 'x', rttMs: 'x', startedAtMs: null },
+      ],
+      markers: [
+        { atMs: 1, label: 'l'.repeat(201), from: 'host' },
+        { atMs: 'x', label: 'late', from: 'host' },
+        { atMs: 2, label: 'ok', from: 'robot' },
+        { atMs: 3, label: 'kept', from: 'guest', name: 'n'.repeat(201) },
+      ],
+    })));
+
+    const found = await listed(root);
+    expect(found).toHaveLength(1);
+    const notes = found[0]!.notes;
+    expect(found[0]!.notesOk).toBe(true);
+    expect(found[0]!.notes.recordingId).toBe('r6');
+    expect(found[0]!.notes.hostStartMs).toBe(1759824000123);
+    expect(notes.files).toEqual([
+      { file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0, who: 'Bob', guestStartHostMs: null, rttMs: 12, startedAtMs: 5 },
+      { file: 'guest_b.mp4', kind: 'camera' },
+      { file: 'guest_z.wav', kind: 'wav' },
+    ]);
+    expect(notes.markers).toEqual([{ atMs: 3, label: 'kept', from: 'guest' }]);
+  });
+
+  it('backups keep only known directory names and the first sixteen', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const dir = await root.getDirectoryHandle(TAKE_DIR, { create: true });
+    const backups = [
+      { dir: 'openmeet-backup-1759824000000-abc-defg-hij', file: 'guest_r.mp4', kind: 'camera' },
+      { dir: '../../etc', file: 'guest_r.mp4', kind: 'camera' },
+      { dir: 'openmeet-backup-host-audio-1759824000000-abc-defg-hij', file: 'master.wav', kind: 'wav' },
+      { dir: 'openmeet-backup-1759824000000-abc-defg-hij', file: 'take.json', kind: 'camera' },
+      { dir: 'openmeet-backup-1759824000000-abc-defg-hij', file: 'guest_r.mp4', kind: 'document' },
+      ...Array.from({ length: 20 }, (_, i) => ({
+        dir: `openmeet-backup-${1759824000000 + i}-abc-defg-hij`,
+        file: `guest_${i}.mp4`,
+        kind: 'camera',
+      })),
+    ];
+    await putText(dir, 'take.json', JSON.stringify(record({ backups })));
+
+    const found = await listed(root);
+    expect(found).toHaveLength(1);
+    const kept = found[0]!.notes.backups;
+    // The first sixteen, minus the three bad names inside them
+    expect(kept).toHaveLength(13);
+    expect(kept[0]!.dir).toBe('openmeet-backup-1759824000000-abc-defg-hij');
+    expect(kept[1]!.dir).toBe('openmeet-backup-host-audio-1759824000000-abc-defg-hij');
+  });
+
+  it('a record whose own fields are out of bounds is no record', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const outOfBounds: Record<string, unknown>[] = [
+      { room: 'r'.repeat(65) },
+      { recordingId: 'r'.repeat(65) },
+      { take: 0 },
+      { hostStartMs: -1 },
+      { files: 'nope' },
+      { markers: 'nope' },
+    ];
+    const names = outOfBounds.map((bad, i) => `openmeet-take-${1759824000000 + i}-abc-defg-hij`);
+    for (let i = 0; i < outOfBounds.length; i++) {
+      const dir = await root.getDirectoryHandle(names[i]!, { create: true });
+      await putText(dir, 'take.json', JSON.stringify(record(outOfBounds[i])));
+      await putPart(await dir.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    }
+
+    const found = await listed(root);
+    expect(found.map((j) => j.dirName)).toEqual([...names].reverse());
+    expect(found.map((j) => j.notesOk)).toEqual([false, false, false, false, false, false]);
+  });
+
+  it('the notes are written after the parts of their commit', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = takeDirOf(root);
+    const real = dir.getFileHandle.bind(dir);
+    let partsWhenNotesWritten = -1;
+    dir.getFileHandle = async (name, opts) => {
+      if (name === 'take.json' && opts?.create) {
+        const fileDir = dir.entries.get('guest_r.mp4') as FakeDirectoryHandle | undefined;
+        partsWhenNotesWritten = fileDir ? fileDir.entries.size : 0;
+      }
+      return real(name, opts);
+    };
+
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    file.append(4, ab(4));
+    await file.commit(2);
+
+    expect(partsWhenNotesWritten).toBe(1);
+  });
+
+  it('a take with a hundred files is not rejected', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const dir = await root.getDirectoryHandle(TAKE_DIR, { create: true });
+    const files = Array.from({ length: 100 }, (_, i) => ({ file: `guest_${i}.mp4`, kind: 'camera' }));
+    const markers = Array.from({ length: 100 }, (_, i) => ({ atMs: i, label: `m${i}`, from: 'host' }));
+    await putText(dir, 'take.json', JSON.stringify(record({ files, markers })));
+
+    const found = await listed(root);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.notesOk).toBe(true);
+    expect(found[0]!.notes.files).toHaveLength(100);
+    expect(found[0]!.notes.markers).toHaveLength(100);
+  });
+
+  it('an empty or finished journal is removed rather than listed', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const emptyDir = 'openmeet-take-1759824000000-abc-defg-hij';
+    const badDir = 'openmeet-take-1759824000001-abc-defg-hij';
+    const finishedDir = 'openmeet-take-1759824000002-abc-defg-hij';
+    const liveDir = 'openmeet-take-1759824000003-abc-defg-hij';
+    await root.getDirectoryHandle(emptyDir, { create: true });
+    await putText(await root.getDirectoryHandle(badDir, { create: true }), 'take.json', '{');
+    const finished = await root.getDirectoryHandle(finishedDir, { create: true });
+    await putText(finished, 'take.json', JSON.stringify(record()));
+    await putPart(await finished.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    await finished.getFileHandle('finished', { create: true });
+    const live = await root.getDirectoryHandle(liveDir, { create: true });
+    await putText(live, 'take.json', JSON.stringify(record()));
+    await putPart(await live.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+
+    expect((await listed(root)).map((j) => j.dirName)).toEqual([liveDir]);
+    expect(root.entries.has(emptyDir)).toBe(false);
+    expect(root.entries.has(badDir)).toBe(false);
+    expect(root.entries.has(finishedDir)).toBe(false);
+
+    // A locked root still lists what it can
+    const locked = new FakeDirectoryHandle('root');
+    const lockedLive = await locked.getDirectoryHandle(liveDir, { create: true });
+    await putPart(await lockedLive.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    await locked.getDirectoryHandle(emptyDir, { create: true });
+    locked.removeEntry = async () => {
+      throw new Error('locked');
+    };
+    expect((await listed(locked)).map((j) => j.dirName)).toEqual([liveDir]);
+  });
+
+  it('findTakeJournals lists newest first', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const olderDir = 'openmeet-take-1759824000000-abc-defg-hij';
+    const older = await root.getDirectoryHandle(olderDir, { create: true });
+    // The record's own start is later than the name's; the order still comes
+    // from the name, the one stamp a crash is guaranteed to leave in place.
+    await putText(older, 'take.json', JSON.stringify(record({ hostStartMs: 1759824009999 })));
+    await putPart(await older.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    const newerDir = 'openmeet-take-1759824000500-abc-defg-hij';
+    const newer = await root.getDirectoryHandle(newerDir, { create: true });
+    await putPart(await newer.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+
+    const found = await listed(root);
+    expect(found.map((j) => j.dirName)).toEqual([newerDir, olderDir]);
+    expect(found.map((j) => j.notes.hostStartMs)).toEqual([1759824000500, 1759824009999]);
+
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => root } });
+    try {
+      expect((await findTakeJournals()).map((j) => j.dirName)).toEqual([newerDir, olderDir]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a listed journal is live with its bytes, position, root and next seq', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.file('guest_r.mp4').append(0, ab(4));
+    await journal.file('guest_r.mp4').commit(1);
+
+    const found = await listed(root);
+    expect(found).toHaveLength(1);
+    const live = found[0]!;
+    expect(live.bytes).toBe(4);
+    expect(await live.file('guest_r.mp4').position()).toEqual({ nextIdx: 1, end: 4 });
+    expect(live.dead).toBe(false);
+    expect(live.root).toBe(root);
+
+    live.file('guest_r.mp4').append(4, ab(4));
+    await live.file('guest_r.mp4').commit(2);
+    expect([...fileDirOf(root, 'guest_r.mp4').entries.keys()]).toEqual([
+      '000000-0-1.part',
+      '000001-4-2.part',
+    ]);
+  });
+
+  it('foreign names are ignored by the listing', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const twelve = await root.getDirectoryHandle('openmeet-take-175982400000-xyz-abcd-pqr', { create: true });
+    await putPart(await twelve.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    const takeX = await root.getDirectoryHandle('openmeet-takeX-1759824000000-xyz-abcd-pqr', { create: true });
+    await putPart(await takeX.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+    await root.getFileHandle('openmeet-take-1759824009999-xyz-abcd-pqr', { create: true });
+    const backup = await root.getDirectoryHandle('openmeet-backup-1759824000000-xyz-abcd-pqr', { create: true });
+    await putPart(backup, '000000.part', new Uint8Array(4));
+    // A matching name whose open gives up: skipped without losing the others
+    const broken = await root.getDirectoryHandle('openmeet-take-1759824001500-xyz-abcd-pqr', { create: true });
+    const realGetFileHandle = broken.getFileHandle.bind(broken);
+    broken.getFileHandle = async (name, opts) => {
+      if (name === '.probe') return { kind: 'file', name } as never;
+      return realGetFileHandle(name, opts);
+    };
+    await putText(broken, 'take.json', '{}');
+    const liveDir = 'openmeet-take-1759824002000-xyz-abcd-pqr';
+    const live = await root.getDirectoryHandle(liveDir, { create: true });
+    await putPart(await live.getDirectoryHandle('guest_r.mp4', { create: true }), '000000-0-1.part', new Uint8Array(4));
+
+    expect((await listed(root)).map((j) => j.dirName)).toEqual([liveDir]);
+
+    const backups = await findBackups(async () => root as never);
+    expect(backups).toHaveLength(1);
+    expect(backups[0]!.name).not.toContain('openmeet-take');
+  });
+
+  it('file() refuses a name that is not a journal file name', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+
+    expect(isJournalFileName('guest_r.mp4')).toBe(true);
+    expect(isJournalFileName('take.json')).toBe(false);
+    expect(isJournalFileName('../x.mp4')).toBe(false);
+
+    const notes = journal.file('take.json');
+    expect(notes.dead).toBe(true);
+    await expect(notes.commit(1)).resolves.toBeUndefined();
+    expect(await notes.position()).toBeNull();
+
+    const escape = journal.file('../x.mp4');
+    expect(escape.dead).toBe(true);
+    await expect(escape.commit(1)).resolves.toBeUndefined();
+
+    expect(takeDirOf(root).entries.has('take.json')).toBe(false);
+    expect(takeDirOf(root).entries.has('../x.mp4')).toBe(false);
+    expect(journal.file('guest_r.mp4').dead).toBe(false);
+  });
+
+  it('deleteTakeJournal removes one directory recursively and refuses anything else', async () => {
+    const root = new FakeDirectoryHandle('root');
+    await root.getDirectoryHandle(TAKE_DIR, { create: true });
+    const realRemove = root.removeEntry.bind(root);
+    const remove = vi.spyOn(root, 'removeEntry');
+
+    await expect(deleteTakeJournal(TAKE_DIR, async () => root as never)).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith(TAKE_DIR, { recursive: true });
+    expect(root.entries.has(TAKE_DIR)).toBe(false);
+
+    await root.getDirectoryHandle('openmeet-take-xyz', { create: true });
+    await expect(deleteTakeJournal('openmeet-take-xyz', async () => root as never)).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(root.entries.has('openmeet-take-xyz')).toBe(true);
+
+    // A missing directory, an unreachable root, a root that cannot remove and a
+    // refused removal are all quiet: the lobby row goes away either way
+    await expect(deleteTakeJournal(TAKE_DIR, async () => root as never)).resolves.toBeUndefined();
+    await expect(deleteTakeJournal(TAKE_DIR, async () => { throw new Error('no storage'); })).resolves.toBeUndefined();
+    await expect(deleteTakeJournal(TAKE_DIR, async () => null as never)).resolves.toBeUndefined();
+    root.removeEntry = async () => {
+      const err = new Error('denied');
+      err.name = 'SecurityError';
+      throw err;
+    };
+    await expect(deleteTakeJournal(TAKE_DIR, async () => root as never)).resolves.toBeUndefined();
+    root.removeEntry = realRemove;
+
+    const byDefaultRoot = 'openmeet-take-1759824000001-abc-defg-hij';
+    await root.getDirectoryHandle(byDefaultRoot, { create: true });
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => root } });
+    try {
+      await expect(deleteTakeJournal(byDefaultRoot)).resolves.toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(root.entries.has(byDefaultRoot)).toBe(false);
+
+    await expect(findTakeJournals(async () => { throw new Error('no storage'); })).resolves.toEqual([]);
+    const angry = new FakeDirectoryHandle('root');
+    angry.values = () => {
+      throw new Error('listing failed');
+    };
+    await expect(listed(angry)).resolves.toEqual([]);
   });
 });
 
