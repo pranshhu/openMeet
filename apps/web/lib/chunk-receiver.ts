@@ -1,6 +1,7 @@
 import {
   ACK_EVERY_N_CHUNKS,
   ACK_EVERY_N_MS,
+  CHUNK_TIMESLICE_MS,
   decodeChunkHeader,
   type ChunkAck,
   type ChunkHeader,
@@ -13,6 +14,7 @@ import {
 import type { FileWriter } from './fs-writer';
 import { StreamingSha256 } from './sha256';
 import { cleanFps } from './quality';
+import type { JournalFile } from './take-journal';
 
 export interface ChunkReceiverOpts {
   recordingId: string;
@@ -24,6 +26,10 @@ export interface ChunkReceiverOpts {
   onError?: (err: unknown) => void;
   /** Largest end offset this file may reach, for a sender that declared its size up front. */
   maxBytes?: number;
+  /** The take's crash copy for this file. Without it acks behave exactly as before. */
+  journalFile?: JournalFile;
+  /** One message when the journal dies and the receiver falls back to acking the folder write. */
+  onWarn?: (msg: string) => void;
 }
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
@@ -40,6 +46,8 @@ export class ChunkReceiver {
   private readonly sendControl: (json: string) => void;
   private readonly onError: ((err: unknown) => void) | undefined;
   private readonly maxBytes: number | undefined;
+  private readonly journalFile: JournalFile | undefined;
+  private readonly onWarn: ((msg: string) => void) | undefined;
   /** The wire index the next accepted fragment must carry. Claimed before the write, since the next frame can arrive while it is pending. */
   private nextIdx = 0;
   /** When a gap was last answered with resume_offset, so one lost fragment cannot become a message per frame. */
@@ -59,6 +67,15 @@ export class ChunkReceiver {
   private lastOffset = 0;
   private chunksSinceAck = 0;
   private lastAckAt = Date.now();
+  private journalDead = false;
+  /** Zero until the first fragment arrives; stamped when a commit is queued, so a file commits at most once per timeslice. */
+  private lastCommitAt = 0;
+  /**
+   * Commits run one after another: the journal returns the commit already in
+   * flight to a second caller, and acking on that promise would cover bytes
+   * no part closed.
+   */
+  private commitChain: Promise<void> = Promise.resolve();
   private _bytesWritten = 0;
   private _guestStartHostMs: number | null = null;
   private _syncRttMs: number | null = null;
@@ -85,6 +102,8 @@ export class ChunkReceiver {
     this.sendControl = opts.sendControl;
     this.onError = opts.onError;
     this.maxBytes = opts.maxBytes;
+    this.journalFile = opts.journalFile;
+    this.onWarn = opts.onWarn;
   }
 
   get bytesWritten(): number {
@@ -307,12 +326,28 @@ export class ChunkReceiver {
     this._bytesWritten += data.byteLength;
     this.lastIdx = header.idx;
     this.lastOffset = header.offset + data.byteLength;
+    if (this.journalFile && !this.journalDead) {
+      // The folder write is a temporary file until close(); the guest must keep
+      // every byte the journal has not committed, so the ack waits for the commit.
+      this.journalFile.append(header.offset, data);
+      const now = Date.now();
+      if (this.lastCommitAt === 0) this.lastCommitAt = now;
+      if (now < this.lastCommitAt || now - this.lastCommitAt >= CHUNK_TIMESLICE_MS) {
+        this.lastCommitAt = now;
+        this.queueCommit(header.idx + 1, header.offset + data.byteLength);
+      }
+      return;
+    }
     this.chunksSinceAck += 1;
     this.maybeAck();
   }
 
   flushAck(): void {
     if (this.lastIdx < 0) return;
+    if (this.journalFile && !this.journalDead) {
+      this.queueCommit(this.lastIdx + 1, this.lastOffset);
+      return;
+    }
     this.emitAck();
   }
 
@@ -353,6 +388,36 @@ export class ChunkReceiver {
     this.sendControl(JSON.stringify(ro));
   }
 
+  /** Queue one commit behind any earlier one, so its ack covers exactly its own bytes. */
+  private queueCommit(nextIdx: number, uptoOffset: number): void {
+    // commit() never rejects. A control send that does must not stop the next
+    // commit, and must not surface from the finalize path's flushAck either.
+    this.commitChain = this.commitChain
+      .then(() => this.commitAndAck(nextIdx, uptoOffset))
+      .catch(() => {});
+  }
+
+  /**
+   * Close the bytes gathered so far and acknowledge exactly them, not the
+   * bytes that arrived while the commit was in flight.
+   */
+  private async commitAndAck(nextIdx: number, uptoOffset: number): Promise<void> {
+    if (this.journalDead) return;
+    await this.journalFile!.commit(nextIdx);
+    if (this.journalFile!.dead) {
+      // The latch comes first: a warning callback that throws must not leave
+      // the guest without the folder-write ack or the next commit unlatched.
+      this.journalDead = true;
+      try {
+        this.onWarn?.('Crash protection stopped for this take — browser storage would not take it.');
+      } finally {
+        if (this.lastIdx >= 0) this.emitAckAt(this.lastIdx, this.lastOffset);
+      }
+      return;
+    }
+    if (this.lastIdx >= 0) this.emitAckAt(nextIdx - 1, uptoOffset);
+  }
+
   private maybeAck(): void {
     const due =
       this.chunksSinceAck >= ACK_EVERY_N_CHUNKS || Date.now() - this.lastAckAt >= ACK_EVERY_N_MS;
@@ -361,11 +426,15 @@ export class ChunkReceiver {
   }
 
   private emitAck(): void {
+    this.emitAckAt(this.lastIdx, this.lastOffset);
+  }
+
+  private emitAckAt(uptoIdx: number, uptoOffset: number): void {
     const ack: ChunkAck = {
       type: 'ack',
       recordingId: this.recordingId,
-      uptoIdx: this.lastIdx,
-      uptoOffset: this.lastOffset,
+      uptoIdx,
+      uptoOffset,
     };
     this.sendControl(JSON.stringify(ack));
     this.chunksSinceAck = 0;

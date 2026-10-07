@@ -313,7 +313,11 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
   `writer.write(offset, data)`; `maxBytes` holds a sender to a size it declared; a bounded receiver
   also refuses a chunk whose declared size is not its payload's length, takes chunks only in order
-  and stops at its first refusal; acks every 5 chunks / 10s; `answerResume` replies
+  and stops at its first refusal; acks every 5 chunks / 10s (with a journal file attached, after
+  each journal commit instead, so an ack means the bytes are in a closed journal part; a commit
+  window holds at most 8 separate runs of bytes, so a sender that scatters its offsets further is
+  acknowledged from the folder write for the runs the journal did not take; a journal that fails
+  falls back to the folder-write ack with one warning); `answerResume` replies
   `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
   where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
@@ -425,7 +429,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
    auto-runs `beginGuestRecording`, opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
-   FileWriter at offset; acks every 5 chunks/10s; backpressure via watermarks.
+   FileWriter at offset; acks every 5 chunks/10s (with a journal attached, after each journal
+   commit instead); backpressure via watermarks.
    Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s per file,
    `GUEST_TAIL_TIMEOUT_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail.

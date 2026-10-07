@@ -1,9 +1,37 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChunkReceiver, MAX_OFFSET_JUMP_BYTES, RESUME_ASK_INTERVAL_MS } from '@/lib/chunk-receiver';
-import { encodeChunkHeader } from '@openmeet/protocol';
+import { CHUNK_TIMESLICE_MS, encodeChunkHeader } from '@openmeet/protocol';
+import type { JournalFile } from '@/lib/take-journal';
 
 function fakeWriter() {
   return { write: vi.fn().mockResolvedValue(undefined), fileName: 'guest.mp4' };
+}
+
+type FakeJournalFile = Omit<JournalFile, 'dead' | 'commit'> & {
+  dead: boolean;
+  commit: (nextIdx: number) => Promise<void>;
+};
+
+function fakeJournalFile(): FakeJournalFile {
+  return {
+    append: vi.fn(),
+    commit: vi.fn().mockResolvedValue(undefined),
+    position: vi.fn(),
+    parts: vi.fn(),
+    dead: false,
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function acks(sent: string[]) {
+  return sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'ack');
 }
 
 describe('ChunkReceiver', () => {
@@ -1659,5 +1687,386 @@ describe('ChunkReceiver — host-driven stop', () => {
       sendControl: () => {},
     });
     await expect(r.whenFinalized(10)).resolves.toBeUndefined();
+  });
+});
+
+describe('ChunkReceiver — journal-backed acks', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // A clock at 0 collides with the sentinel that says no commit was queued yet.
+    vi.setSystemTime(1_000_000);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  async function deliver(r: ChunkReceiver, idx: number, offset: number, bytes = 4) {
+    await r.handleMessage(encodeChunkHeader({ idx, offset, size: bytes, ts: 1 }));
+    await r.handleMessage(new Uint8Array(bytes).buffer);
+  }
+
+  /** Let the commit chain's microtasks run to quiescence. */
+  async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  }
+
+  function receiver(journal: FakeJournalFile, sent: string[], onWarn?: (msg: string) => void) {
+    return new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: (m) => sent.push(m),
+      journalFile: journal,
+      ...(onWarn ? { onWarn } : {}),
+    });
+  }
+
+  it('holds the ack until the commit covering the fragment resolves', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    journal.commit = vi.fn(() => gate.promise);
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    for (let i = 1; i < 5; i++) await deliver(r, i, i * 4);
+
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([]);
+
+    gate.resolve();
+    await settle();
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+    expect(journal.append).toHaveBeenCalledTimes(5);
+    for (let i = 0; i < 5; i++) {
+      expect(journal.append).toHaveBeenNthCalledWith(i + 1, i * 4, expect.any(ArrayBuffer));
+    }
+  });
+
+  it('commits on the timeslice, not on the fragment count', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(1000);
+    await deliver(r, 1, 4);
+    await settle();
+    expect(journal.commit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(2000);
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(journal.commit).toHaveBeenCalledWith(3);
+    await settle();
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+
+    vi.advanceTimersByTime(2000);
+    await deliver(r, 3, 12);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+    expect(journal.commit).toHaveBeenLastCalledWith(4);
+  });
+
+  it('acks the bytes the commit closed, not the ones that arrived while it ran', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    journal.commit = vi.fn(() => gate.promise);
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    for (let i = 1; i < 4; i++) await deliver(r, i, i * 4);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    gate.resolve();
+    await settle();
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+  });
+
+  it('does not start a second commit while one is in flight', async () => {
+    const journal = fakeJournalFile();
+    const first = deferred();
+    const second = deferred();
+    const gates = [first, second];
+    let inFlight: Promise<void> | null = null;
+    journal.commit = vi.fn(() => {
+      if (!inFlight) {
+        const started = gates.shift()!.promise;
+        inFlight = started;
+        void started.then(() => {
+          inFlight = null;
+        });
+      }
+      return inFlight;
+    });
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    // A commit is due again while the first is still in flight.
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    first.resolve();
+    await settle();
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+    expect(journal.commit).toHaveBeenLastCalledWith(3);
+  });
+
+  it('stamps the timeslice when the commit is queued, not when it resolves', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    let calls = 0;
+    journal.commit = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? gate.promise : Promise.resolve();
+    });
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    // The commit takes much longer than a timeslice.
+    vi.advanceTimersByTime(8000);
+    gate.resolve();
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to the folder-write ack at once, with one warning, when the journal dies', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    journal.commit = vi.fn(() => {
+      journal.dead = true;
+      return gate.promise;
+    });
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    for (let i = 1; i < 5; i++) await deliver(r, i, i * 4);
+    expect(journal.append).toHaveBeenCalledTimes(5);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([]);
+
+    gate.resolve();
+    await settle();
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledWith(
+      'Crash protection stopped for this take — browser storage would not take it.'
+    );
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 4, uptoOffset: 20 },
+    ]);
+
+    for (let i = 5; i < 10; i++) await deliver(r, i, i * 4);
+    expect(journal.append).toHaveBeenCalledTimes(5);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toHaveLength(2);
+    expect(acks(sent)[1]).toMatchObject({ uptoIdx: 9, uptoOffset: 40 });
+
+    // The tail ack goes out at once for a journal that is gone.
+    r.flushAck();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toHaveLength(3);
+  });
+
+  it('a commit already queued when the journal dies neither warns nor acks again', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    journal.commit = vi.fn(() => gate.promise);
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 2, 8);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    journal.dead = true;
+    gate.resolve();
+    await settle();
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+  });
+
+  it('flushAck queues the tail commit and still returns nothing', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+    expect(r.flushAck()).toBeUndefined();
+    expect(journal.commit).not.toHaveBeenCalled();
+    expect(acks(sent)).toEqual([]);
+
+    await deliver(r, 0, 0);
+    expect(journal.commit).not.toHaveBeenCalled();
+    expect(r.flushAck()).toBeUndefined();
+    await settle();
+    expect(journal.commit).toHaveBeenCalledWith(1);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
+    ]);
+  });
+
+  it('keeps committing when a control send throws', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    let attempts = 0;
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: (m) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('channel closed');
+        sent.push(m);
+      },
+      journalFile: journal,
+    });
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+    expect(sent).toEqual([]);
+
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+  });
+
+  it('acks the payload length when header.size claims a different size', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 100, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 4, size: 200, ts: 2 }));
+    await r.handleMessage(new Uint8Array(6).buffer);
+
+    await settle();
+    expect(journal.commit).toHaveBeenCalledWith(2);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 10 },
+    ]);
+  });
+
+  it('journals and acks only what the receiver took and the folder wrote', async () => {
+    const journal = fakeJournalFile();
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce(undefined) // idx 0
+      .mockRejectedValueOnce(new Error('disk full')) // idx 1
+      .mockResolvedValue(undefined);
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: { write, fileName: 'guest.mp4' } as never,
+      sendControl: (m) => sent.push(m),
+      journalFile: journal,
+      onError: () => {},
+    });
+
+    await deliver(r, 0, 0); // taken
+    await deliver(r, 0, 0); // a replay
+    await deliver(r, 9, 1_000_000); // past a gap
+    await deliver(r, 1, 4); // the folder refuses it
+    await deliver(r, 2, 8, 0); // an empty frame
+
+    expect(journal.append).toHaveBeenCalledTimes(1);
+    expect(journal.append).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    r.flushAck();
+    await settle();
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
+    ]);
+  });
+
+  it('commits when the host clock steps backwards', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    const r = receiver(journal, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+  });
+
+  it('latches a dead journal and sends the fallback ack when the warning throws', async () => {
+    const journal = fakeJournalFile();
+    journal.commit = vi.fn(() => {
+      journal.dead = true;
+      return Promise.resolve();
+    });
+    const sent: string[] = [];
+    const onWarn = vi.fn(() => {
+      throw new Error('the notice could not be shown');
+    });
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 2, 8);
+    await settle();
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
   });
 });
