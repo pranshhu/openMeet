@@ -1,0 +1,3 @@
+# semgrep's pnpm rules want blockExoticSubdeps, minimumReleaseAge and
+# trustPolicy, which need a newer pnpm than the 9.12 this repository pins.
+pnpm-workspace.yaml

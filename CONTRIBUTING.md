@@ -70,6 +70,10 @@ pnpm -r test        # the vitest suites for worker, web and protocol
 NEXT_PUBLIC_API_BASE=https://ci.invalid pnpm build
 ```
 
+CI also scans every push and pull request: `gitleaks` over the full history for
+leaked secrets, and `semgrep` for known-bad code patterns. A leak or a blocking
+finding fails the run the same way a red test does.
+
 There is deliberately **no linter**. The `tsconfig` is strict
 (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`,
 `noFallthroughCasesInSwitch`) and catches nearly everything ESLint would, and

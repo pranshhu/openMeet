@@ -76,6 +76,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   unauthenticated writes over WebSocket are ignored.
 - A wrong acknowledgement from the host can no longer stop a guest's recording from
   streaming to the host.
+- CI scans every push and pull request for leaked secrets and known-bad code patterns, and its actions are pinned to exact commits.
 
 ## [0.1.0] - 2026-09-29
 

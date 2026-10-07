@@ -396,7 +396,7 @@ describe('SignalClient — the heartbeat enforces a reply deadline', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     try {
       const c = new SignalClient({
-        wsBase: 'ws://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
+        wsBase: 'wss://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
         wsFactory: () => new FakeWs() as never,
       });
       c.connect();
@@ -421,7 +421,7 @@ describe('SignalClient — the heartbeat enforces a reply deadline', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     try {
       const c = new SignalClient({
-        wsBase: 'ws://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
+        wsBase: 'wss://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
         wsFactory: () => new FakeWs() as never,
       });
       c.connect();
@@ -613,4 +613,3 @@ describe('endHostRecording — patches WAV header on incomplete or abandoned tak
     expect(riffSizeView.getUint32(0, true)).toBe(996);
   });
 });
-
