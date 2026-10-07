@@ -292,6 +292,56 @@ describe('ChunkReceiver', () => {
     expect(r.bytesWritten).toBe(0); // failed write does not count toward bytes
   });
 
+  it('stops a bounded receiver at a write failure', async () => {
+    const writer = {
+      write: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('full'), { name: 'DiskFullError' }))
+        .mockResolvedValue(undefined),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).name).toBe('DiskFullError');
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('keeps taking later chunks after a write failure when unbounded', async () => {
+    const writer = {
+      write: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('full'), { name: 'DiskFullError' }))
+        .mockResolvedValue(undefined),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(10);
+  });
+
   it('flushAck() emits an ack for the latest index even below the cadence', async () => {
     const writer = fakeWriter();
     const sent: string[] = [];
@@ -366,6 +416,409 @@ describe('ChunkReceiver', () => {
     expect(writer.write).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
     expect(r.bytesWritten).toBe(0);
+  });
+
+  it('refuses a chunk that leaves a gap', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 5, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data out of order.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('refuses a chunk that rewrites bytes already taken', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(10);
+    expect(onError).not.toHaveBeenCalled();
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data out of order.' })
+    );
+    expect(r.bytesWritten).toBe(10);
+    expect(r.receivedFinalHeader).toBe(false);
+  });
+
+  it('refuses a chunk that starts inside bytes already taken and runs past them', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 5, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data out of order.' })
+    );
+    expect(r.bytesWritten).toBe(10);
+  });
+
+  it('takes two honest chunks delivered back to back while write is pending', async () => {
+    const resolves: Array<() => void> = [];
+    const writer = {
+      write: vi.fn().mockImplementation(() => new Promise<void>((resolve) => resolves.push(resolve))),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    const p1 = r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    const p2 = r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(resolves).toHaveLength(2);
+    resolves.forEach((res) => res());
+    await Promise.all([p1, p2]);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(1, 0, expect.any(ArrayBuffer));
+    expect(writer.write).toHaveBeenNthCalledWith(2, 10, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(20);
+  });
+
+  it('takes no more data chunks and reports the error once after a refusal, while still handling control messages', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+      maxBytes: 100,
+    });
+
+    const rBaseline = new ChunkReceiver({
+      recordingId: 'base',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      maxBytes: 100,
+    });
+    await rBaseline.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await rBaseline.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 20, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Send five more chunks, including one that would have been valid
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 10, size: 10, ts: 3 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 3, offset: 20, size: 10, ts: 4 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 4, offset: 30, size: 10, ts: 5 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 5, offset: 40, size: 10, ts: 6 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 6, offset: 50, size: 10, ts: 7 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // Refused chunks must not be hashed into digest
+    expect(await r.digestHex()).toBe(await rBaseline.digestHex());
+
+    // Control messages are still handled
+    sent.length = 0;
+    await r.handleMessage(JSON.stringify({ type: 'clock_ping', recordingId: 'r1', seq: 1, t0: 100 }));
+    expect(sent.map((s) => JSON.parse(s))).toContainEqual(expect.objectContaining({ type: 'clock_pong', seq: 1 }));
+
+    sent.length = 0;
+    await r.handleMessage(JSON.stringify({ type: 'resume_query', recordingId: 'r1' }));
+    expect(sent.map((s) => JSON.parse(s))).toContainEqual(
+      expect.objectContaining({ type: 'resume_offset', lastIdx: 0, lastByte: 10 })
+    );
+
+    await r.handleMessage(JSON.stringify({ type: 'stream-abandoned', recordingId: 'r1' }));
+    expect(r.isAbandoned).toBe(true);
+
+    await r.handleMessage(JSON.stringify({ type: 'recording-finalized', recordingId: 'r1' }));
+    expect(r.receivedFinalized).toBe(true);
+
+    // Duplicate chunks and control frames do not clear the refused state
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 7, offset: 10, size: 10, ts: 8 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes nothing more after a size refusal and reports the size error once', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 10,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 11, ts: 1 }));
+    await r.handleMessage(new Uint8Array(11).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // One chunk that would have been valid, then one past the bound again.
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 5, size: 10, ts: 3 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+  });
+
+  it('measures where the next chunk starts by the payload, not the declared size', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    // Chunk 0: declared size is 5, but actual payload is 10 bytes
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 5, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(10);
+    expect(onError).not.toHaveBeenCalled();
+
+    // Chunk 1: contiguous at offset 10
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(r.bytesWritten).toBe(20);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('accepts three contiguous chunks in sequence', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await r.handleMessage(encodeChunkHeader({ idx: i, offset: i * 10, size: 10, ts: i + 1 }));
+      await r.handleMessage(new Uint8Array(10).buffer);
+    }
+    expect(writer.write).toHaveBeenCalledTimes(3);
+    expect(r.bytesWritten).toBe(30);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('keeps its place across a recording-finalized message', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    await r.handleMessage(JSON.stringify({ type: 'recording-finalized', recordingId: 'r1' }));
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('refuses everything when maxBytes is NaN', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: NaN,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('refuses everything when maxBytes is Infinity', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: Infinity,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('drops an empty payload on a bounded receiver instead of counting it as progress', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 0, ts: 1 }));
+    await r.handleMessage(new ArrayBuffer(0));
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(10);
+  });
+
+  it('reports size error when a chunk is both past the bound and out of order', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 10,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 1_000_000, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(1).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('does not treat a replayed chunk as an out-of-order violation', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(20);
+  });
+
+  it('allows out-of-order chunks when maxBytes is undefined', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 100, size: 10, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(1, 100, expect.any(ArrayBuffer));
+    expect(writer.write).toHaveBeenNthCalledWith(2, 0, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
   });
 });
 

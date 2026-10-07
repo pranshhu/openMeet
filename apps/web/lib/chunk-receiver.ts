@@ -32,6 +32,10 @@ export class ChunkReceiver {
   private readonly sendControl: (json: string) => void;
   private readonly onError: ((err: unknown) => void) | undefined;
   private readonly maxBytes: number | undefined;
+  /** Bounded mode: where the next chunk must start. Claimed before the write, since the next chunk can arrive while it is pending. */
+  private nextOffset = 0;
+  /** Bounded mode: a chunk was refused, so no more data is taken. */
+  private refused = false;
   private pendingHeader: ChunkHeader | null = null;
   private lastIdx = -1;
   private lastOffset = 0;
@@ -189,15 +193,34 @@ export class ChunkReceiver {
     this.pendingHeader = null;
     if (!header) return;
     if (header.idx <= this.lastIdx) return;
-    if (this.maxBytes !== undefined && header.offset + data.byteLength > this.maxBytes) {
-      this.onError?.(new Error('Received more data than the sender declared.'));
-      return;
+    if (this.maxBytes !== undefined) {
+      // The recorder never sends an empty blob, and an empty frame would count
+      // for acks and the finalize wait without moving the transfer forward.
+      if (this.refused || data.byteLength === 0) return;
+      // A returned file is read front to back. Holding the sender to that
+      // keeps the digest of what arrived equal to the digest of the file,
+      // and what is taken within the size it declared. A size that is not a
+      // finite number refuses instead of allowing.
+      const end = header.offset + data.byteLength;
+      const why = !(Number.isFinite(this.maxBytes) && end <= this.maxBytes)
+        ? 'Received more data than the sender declared.'
+        : header.offset !== this.nextOffset
+          ? 'Received data out of order.'
+          : null;
+      if (why) {
+        this.refused = true;
+        this.onError?.(new Error(why));
+        return;
+      }
+      this.nextOffset = end;
     }
     try {
       await this.writer.write(header.offset, data);
     } catch (err) {
       // Disk full or other write failure — report once and stop processing
-      // this chunk. Caller transitions the room to an error state.
+      // this chunk. Caller transitions the room to an error state. A bounded
+      // receiver stops at this first error like a refusal.
+      if (this.maxBytes !== undefined) this.refused = true;
       this.onError?.(err);
       return;
     }
