@@ -436,9 +436,10 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
    FileWriter at offset; acks every 5 chunks/10s (with a journal attached, after each journal
    commit instead); backpressure via watermarks.
-   Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s per file,
-   `GUEST_TAIL_TIMEOUT_MS`) for each guest's
-   `recording-finalized` before closing writers — closing early truncates the guest's tail.
+   Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
+   file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
+   `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
+   guest that keeps sending cannot hold the save open.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; 32MiB cap (beyond → BackupRecorder only).
    **Full WS reconnect rebuilds the PeerConnection; `startPeer` (`useRoom.ts`) calls

@@ -158,10 +158,14 @@ export class ChunkReceiver {
   /**
    * Wait for the sender's `recording-finalized`, or give up after `timeoutMs` of no progress.
    *
+   * `hardCapMs` bounds the whole wait whatever the progress: a sender that
+   * keeps delivering can otherwise hold the file open for as long as it likes.
+   * Both give-ups set the same timed-out flag, so the file reads the same.
+   *
    * Never rejects: a guest that crashed mid-recording must not stop the host
    * from closing and keeping the bytes it already has on disk.
    */
-  whenFinalized(timeoutMs: number): Promise<void> {
+  whenFinalized(timeoutMs: number, hardCapMs = Infinity): Promise<void> {
     return new Promise<void>((resolve) => {
       let settled = false;
       this.finalized.then(() => {
@@ -171,13 +175,15 @@ export class ChunkReceiver {
         }
       });
 
+      const startedAt = Date.now();
       let lastProgress = this.lastDataReceivedAt;
       const check = () => {
         if (settled) return;
         if (this.lastDataReceivedAt > lastProgress) {
           lastProgress = this.lastDataReceivedAt;
         }
-        if (Date.now() - lastProgress >= timeoutMs) {
+        const now = Date.now();
+        if (now - lastProgress >= timeoutMs || now - startedAt >= hardCapMs) {
           settled = true;
           this._timedOut = true;
           resolve();

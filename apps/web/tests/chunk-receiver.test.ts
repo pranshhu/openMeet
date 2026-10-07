@@ -1690,6 +1690,95 @@ describe('ChunkReceiver — host-driven stop', () => {
   });
 });
 
+describe('ChunkReceiver — host-driven stop hard cap', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function deliver(r: ChunkReceiver, idx: number) {
+    await r.handleMessage(encodeChunkHeader({ idx, offset: idx * 4, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+  }
+
+  function receiver() {
+    return new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: () => {},
+    });
+  }
+
+  // A sender that keeps delivering never trips the no-progress rule, so without
+  // the cap it decides when the host may close the file — for as long as it likes.
+  it('gives up at the hard cap while fragments keep arriving', async () => {
+    const r = receiver();
+    let settled = false;
+    const waiting = r.whenFinalized(50, 200).then(() => {
+      settled = true;
+    });
+    // A fragment every 20 ms, so 50 ms of no progress never passes.
+    for (let i = 0; i < 9; i++) {
+      await vi.advanceTimersByTimeAsync(20);
+      await deliver(r, i);
+    }
+    expect(settled, 'resolved before the cap with the sender still delivering').toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20);
+    await deliver(r, 9);
+    expect(settled).toBe(true);
+    expect(r.isTimedOut).toBe(true);
+    await waiting;
+  });
+
+  // The cap bounds the wait; it does not replace the progress rule. A slow but
+  // honest sender is still given its no-progress window after the last fragment.
+  it('lets progress extend the wait up to the cap', async () => {
+    const r = receiver();
+    let settled = false;
+    let resolvedAt = 0;
+    const startedAt = Date.now();
+    const waiting = r.whenFinalized(50, 10_000).then(() => {
+      settled = true;
+      resolvedAt = Date.now();
+    });
+    // Fragments for 140 ms — nearly three times the 50 ms no-progress window.
+    for (let i = 0; i < 7; i++) {
+      await vi.advanceTimersByTimeAsync(20);
+      await deliver(r, i);
+      if (i === 4) {
+        expect(settled, 'gave up while the sender was still delivering').toBe(false);
+      }
+    }
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(settled).toBe(true);
+    expect(r.isTimedOut).toBe(true);
+    expect(resolvedAt - startedAt).toBeGreaterThanOrEqual(150);
+    expect(resolvedAt - startedAt).toBeLessThan(1000);
+    await waiting;
+  });
+
+  // No cap given means no cap: only the sender, or 20 s of silence, ends the
+  // wait. A default that quietly gave up would cut off a sender still sending.
+  it('has no cap when none is given', async () => {
+    const r = receiver();
+    let settled = false;
+    const waiting = r.whenFinalized(20_000).then(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 13; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      await deliver(r, i);
+      expect(settled, 'gave up without a cap while fragments were still arriving').toBe(false);
+    }
+
+    await r.handleMessage(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'r1', sha256: 'abc' })
+    );
+    await waiting;
+    expect(r.isTimedOut).toBe(false);
+  });
+});
+
 describe('ChunkReceiver — journal-backed acks', () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -96,6 +96,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   id, the call comes back by itself: connections to ids the room no longer lists
   are dropped instead of being negotiated a second time, which threw and left
   both sides on "Connection lost" with a ghost tile.
+- Ending a take no longer waits on a guest that keeps sending data: each guest
+  file is closed two minutes after the stop at the latest, however much is still
+  arriving.
 
 ### Security
 

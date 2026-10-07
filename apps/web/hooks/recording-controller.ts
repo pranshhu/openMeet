@@ -827,6 +827,16 @@ export async function rebindGuestRecordingWhenConnected(
  */
 export const GUEST_TAIL_TIMEOUT_MS = 45_000;
 
+/**
+ * The most the host waits for one guest file, progress or not.
+ *
+ * An honest guest stops its recorder on `recording-stop` and drains its sender
+ * for at most `DRAIN_HARD_CAP_MS` (30 s) before finalizing, so two minutes is
+ * far beyond anything an honest guest needs and still bounded: a guest that
+ * keeps sending fragments cannot hold the take's files open.
+ */
+export const GUEST_TAIL_HARD_CAP_MS = 120_000;
+
 /** How long a screen-share channel gets to open before we give up on it. */
 export const SCREEN_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 
@@ -1018,7 +1028,8 @@ export async function endHostRecording(
   const callCopies = Promise.all((h.callCopies ?? []).map((c) => finishCallCopy(h, c)));
   await stopScreenRecording(h);
   // Stop host capture first so End & save halts the host's own capture
-  // immediately without waiting for guests' tails (up to 45s).
+  // immediately without waiting for guests' tails (45s without progress per
+  // file, two minutes in all).
   const [, , backup, wavBackup] = await Promise.all([
     h.hostRecorder?.stopAndFlush(),
     h.hostPcm?.stopAndFlush(),
@@ -1066,7 +1077,7 @@ export async function endHostRecording(
   // on that event, so the close IS their finalize.
   await Promise.all(
     pReceivers.map(async (r) => {
-      await r.whenFinalized(GUEST_TAIL_TIMEOUT_MS);
+      await r.whenFinalized(GUEST_TAIL_TIMEOUT_MS, GUEST_TAIL_HARD_CAP_MS);
       const gName = receiverGuestMap.get(r) || 'Guest';
       const count = (pendingCounts.get(gName) ?? 1) - 1;
       if (count <= 0) {

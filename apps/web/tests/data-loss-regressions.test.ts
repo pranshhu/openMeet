@@ -8,6 +8,7 @@ import { wavHeader } from '@/lib/wav';
 import { SignalClient } from '@/lib/signal';
 import {
   decodeChunkHeader,
+  encodeChunkHeader,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_HEARTBEAT_TIMEOUT_MS,
 } from '@openmeet/protocol';
@@ -162,6 +163,41 @@ describe('endHostRecording — waits per FILE, not just the camera', () => {
       await vi.advanceTimersByTimeAsync(45_000);
       await endPromise;
       expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Fragments are progress by the per-file rule, so a guest that keeps sending
+  // decides when the host may close its file. The take's hard cap ends that.
+  it('caps the guest wait when fragments keep arriving', async () => {
+    vi.useFakeTimers();
+    try {
+      const recv = receiver();
+      const h: RecordingHandles = {
+        recordingId: 'r',
+        receiver: recv,
+        channelRef: { current: { readyState: 'open' } as RTCDataChannel },
+      };
+      let done = false;
+      const endPromise = endHostRecording(h).then(() => { done = true; });
+
+      // One fragment every 10 s: the 45 s no-progress rule never fires, so only
+      // the overall cap can end the wait.
+      for (let i = 0; i < 12; i++) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await recv.handleMessage(encodeChunkHeader({ idx: i, offset: i * 4, size: 4, ts: 1 }));
+        await recv.handleMessage(new Uint8Array(4).buffer);
+        // 40 s in: an honest guest still draining its tail keeps its grace.
+        if (i === 3) expect(done, 'gave up on a guest that was still sending').toBe(false);
+        // 60 s in: still making progress, so only the two-minute cap may end
+        // this wait.
+        if (i === 5) expect(done, 'gave up before the hard cap').toBe(false);
+      }
+
+      expect(done).toBe(true);
+      expect(recv.isTimedOut).toBe(true);
+      await endPromise;
     } finally {
       vi.useRealTimers();
     }
