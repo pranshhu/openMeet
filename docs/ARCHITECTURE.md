@@ -440,8 +440,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
    `rebindGuestRecording` for the guest's connection to the host, which recreates the camera
    (and WAV, if present) recording DataChannels, `ChunkSender.rebind()`s the existing senders onto
    them (queue, retransmit buffer, hash and indices all survive), and fires `resume_query` on each
-   `open` — so the guest resumes streaming into the same host files from the last acked chunk with
-   no gap.** `role-assigned` lists the whole room as it stands, so every connection to an id the
+   `open`, holding the replay until the host reports its position (five seconds at most) — so the
+   guest resumes streaming into the same host files from the last acked chunk with no gap.**
+   `role-assigned` lists the whole room as it stands, so every connection to an id the
    Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
    sends `peer-left` for the sockets it lost — and only the connections that message opened are
    negotiated on it. When sharing screen, a reconnect finishes the old screen segment and starts a new

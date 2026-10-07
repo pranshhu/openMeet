@@ -32,6 +32,9 @@ export interface ChunkSenderOpts {
   onError?: (err: unknown) => void;
 }
 
+/** How long a rebound sender waits for the host's position before replaying anyway. */
+export const RESUME_ANSWER_TIMEOUT_MS = 5000;
+
 export class ChunkSender {
   private readonly recordingId: string;
   private channel: RTCDataChannel;
@@ -48,6 +51,8 @@ export class ChunkSender {
   private readonly buffer = new RetransmitBuffer();
   private readonly hash = new StreamingSha256();
   private paused = false;
+  private held = false;
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
   // Wire-level index. Independent of the recorder's, because one recorded chunk
   // becomes several frames on the wire.
   private outIdx = 0;
@@ -66,6 +71,21 @@ export class ChunkSender {
     if (this._abandoned && this.needSendAbandoned) {
       this.sendAbandonedMessage();
     }
+  }
+
+  /** Stop sending until the host has said where its file stands. Queued chunks stay queued; the hold expires on its own, so a host that never answers costs five seconds, not the take. */
+  hold(): void {
+    this.held = true;
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => this.release(), RESUME_ANSWER_TIMEOUT_MS);
+  }
+
+  release(): void {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    if (!this.held) return;
+    this.held = false;
+    this.drainQueue();
   }
 
   get lastAckedIdx(): number {
@@ -178,7 +198,7 @@ export class ChunkSender {
     // a zero-filled hole, with nothing thrown on either side. The WAV path made
     // this routine: its onBackpressure is a no-op, so the pump kept feeding the
     // sender while the queue sat there.
-    if (!open || overHigh || this.queue.length > 0) {
+    if (!open || overHigh || this.queue.length > 0 || this.held) {
       this.queue.push(chunk);
       // Pause on a closed channel too. Without it the queue grows unbounded at
       // ~5 Mbps video + ~1.15 Mbps WAV — roughly 3.4 GB/hr — until the tab dies,
@@ -197,6 +217,7 @@ export class ChunkSender {
       if (this.needSendAbandoned) this.sendAbandonedMessage();
       return;
     }
+    if (this.held) return;
     while (
       this.queue.length > 0 &&
       this.channel.readyState === 'open' &&
@@ -263,7 +284,7 @@ export class ChunkSender {
   }
 
   async drain(): Promise<boolean> {
-    if (this._abandoned) return false;
+    if (this._abandoned || this.held) return false;
     let lastProgressAt = Date.now();
     let lastAcked = this._lastAckedIdx;
     let lastQueueLen = this.queue.length;

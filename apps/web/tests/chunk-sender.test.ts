@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ChunkSender } from '@/lib/chunk-sender';
+import { ChunkSender, RESUME_ANSWER_TIMEOUT_MS } from '@/lib/chunk-sender';
 import { encodeChunkHeader, decodeChunkHeader, type ChunkHeader } from '@openmeet/protocol';
 
 class FakeChannel {
@@ -356,6 +356,121 @@ describe('ChunkSender', () => {
     await vi.advanceTimersByTimeAsync(200);
 
     await expect(p).resolves.toBe(true);
+  });
+
+  // A rebound sender must not put its backlog on a channel the host has not
+  // bound a receiver to yet: those bytes land before the host knows where its
+  // file stands, and the replay that follows sends them a second time.
+  describe('while held for the host position', () => {
+    it('queues a chunk without sending and without pausing the recorder', () => {
+      const ch = new FakeChannel();
+      const backpressure: boolean[] = [];
+      const s = new ChunkSender({
+        recordingId: 'r1',
+        channel: ch as unknown as RTCDataChannel,
+        onBackpressure: (p) => backpressure.push(p),
+      });
+
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      expect(ch.sent).toHaveLength(0);
+      expect(s.hasQueuedChunks).toBe(true);
+      // A wait of a few seconds is not back pressure: a full or closed pipe
+      // pauses the recorder, a hold does not.
+      expect(backpressure).toEqual([]);
+    });
+
+    it('release() sends the held queue in idx order and does nothing when never held', () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+      s.sendChunk(chunk(1, 8, 8));
+      expect(ch.sent).toHaveLength(0);
+
+      s.release();
+      const headers = ch.sent
+        .filter((f): f is string => typeof f === 'string')
+        .map((f) => decodeChunkHeader(f)!.idx);
+      expect(headers).toEqual([0, 1]);
+
+      // Never held: a queue that formed behind a full pipe is the pipe's to
+      // drain, so release() leaves it alone.
+      const full = new FakeChannel();
+      full.bufferedAmount = 17 * 1024 * 1024;
+      const s2 = new ChunkSender({ recordingId: 'r1', channel: full as unknown as RTCDataChannel });
+      s2.sendChunk(chunk(0, 0, 8));
+      full.bufferedAmount = 0;
+      s2.release();
+      expect(full.sent).toHaveLength(0);
+      s2.drainQueue();
+      expect(full.sent).toHaveLength(2);
+    });
+
+    it('drain() resolves false at once while held', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      let result: boolean | undefined;
+      void s.drain().then((v) => { result = v; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toBe(false);
+    });
+
+    it('resume() keeps the replay queued while held, and release() sends it', () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      for (let i = 0; i < 3; i++) s.sendChunk(chunk(i, i * 8, 8));
+      s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+      ch.sent.length = 0;
+
+      s.hold();
+      s.resume(0);
+      expect(ch.sent).toHaveLength(0);
+      expect(s.hasQueuedChunks).toBe(true);
+
+      s.release();
+      const headers = ch.sent
+        .filter((f): f is string => typeof f === 'string')
+        .map((f) => decodeChunkHeader(f)!.idx);
+      expect(headers).toEqual([1, 2]);
+    });
+
+    it('a second hold() restarts the five second wait', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      await vi.advanceTimersByTimeAsync(3000);
+      s.hold();
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(ch.sent).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(RESUME_ANSWER_TIMEOUT_MS);
+      expect(ch.sent).toHaveLength(2);
+    });
+
+    it('release() cancels the hold timer so a subsequent hold does not expire early', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      await vi.advanceTimersByTimeAsync(2000);
+      s.release();
+
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      // 3000 ms more reaches the first hold's 5 s mark, but only 3 s of the second hold.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(ch.sent).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ch.sent).toHaveLength(2);
+    });
   });
 });
 

@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   bindGuestChannel,
   rebindGuestRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
-import { ChunkSender } from '@/lib/chunk-sender';
+import { ChunkSender, RESUME_ANSWER_TIMEOUT_MS } from '@/lib/chunk-sender';
+import { decodeChunkHeader } from '@openmeet/protocol';
 import type { PeerConnection } from '@/lib/peer';
 
 class FakeChannel {
@@ -303,5 +304,132 @@ describe('rebindGuestRecording', () => {
       data: JSON.stringify({ type: 'ack', recordingId: 'wav-take', uptoIdx: 0, uptoOffset: 0 }),
     } as MessageEvent);
     expect(seen).toEqual(['cam-take', 'wav-take']);
+  });
+
+  // A replay sent before the host has bound a receiver for the new channel
+  // arrives nowhere and the host asks for it again, so every backlogged byte
+  // crosses the wire twice. The sender waits for the host's own position
+  // instead, and gives up after five seconds.
+  describe('holding the replay for the host position', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    const chunk = (idx: number) => ({
+      header: { idx, offset: idx * 4, size: 4, ts: 0 },
+      payload: new Uint8Array(4).buffer,
+    });
+
+    const headerIdxs = (sent: (string | ArrayBuffer)[]) =>
+      sent
+        .filter((f): f is string => typeof f === 'string')
+        .map((f) => decodeChunkHeader(f)?.idx)
+        .filter((idx): idx is number => idx !== undefined);
+
+    it('holds a rebound camera sender until the host answers, then replays once each', () => {
+      const peer = new FakePeer();
+      const oldCam = new FakeChannel();
+      oldCam.readyState = 'open';
+      const sender = new ChunkSender({
+        recordingId: 'rec-hold-cam',
+        channel: oldCam as unknown as RTCDataChannel,
+      });
+      for (let i = 0; i < 5; i++) sender.sendChunk(chunk(i));
+      sender.handleControl({ type: 'ack', recordingId: 'rec-hold-cam', uptoIdx: 2, uptoOffset: 12 });
+
+      const h: RecordingHandles = {
+        recordingId: 'rec-hold-cam',
+        sender,
+        channel: oldCam as unknown as RTCDataChannel,
+      };
+      rebindGuestRecording(h, peer as unknown as PeerConnection);
+      const newCam = peer.cameraChannel!;
+      newCam.open();
+      expect(newCam.sent).toEqual([
+        JSON.stringify({ type: 'resume_query', recordingId: 'rec-hold-cam' }),
+      ]);
+
+      // A chunk recorded after the rebind must wait behind the replay.
+      sender.sendChunk(chunk(5));
+      expect(newCam.sent).toHaveLength(1);
+
+      newCam.onmessage!({
+        data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 12, lastIdx: 2 }),
+      } as MessageEvent);
+
+      const headers = headerIdxs(newCam.sent);
+      expect(headers).toEqual([3, 4, 5]);
+      expect(new Set(headers).size).toBe(headers.length);
+    });
+
+    it('holds a rebound WAV sender until the host answers on the WAV channel', () => {
+      const peer = new FakePeer();
+      const oldCam = new FakeChannel();
+      const oldWav = new FakeChannel();
+      oldCam.readyState = 'open';
+      oldWav.readyState = 'open';
+      const sender = new ChunkSender({
+        recordingId: 'rec-hold-wav',
+        channel: oldCam as unknown as RTCDataChannel,
+      });
+      const wavSender = new ChunkSender({
+        recordingId: 'rec-hold-wav',
+        channel: oldWav as unknown as RTCDataChannel,
+      });
+
+      const h: RecordingHandles = {
+        recordingId: 'rec-hold-wav',
+        sender,
+        channel: oldCam as unknown as RTCDataChannel,
+        wavSender,
+        wavChannel: oldWav as unknown as RTCDataChannel,
+      };
+      rebindGuestRecording(h, peer as unknown as PeerConnection);
+      const newWav = peer.audioChannel!;
+      newWav.open();
+      expect(newWav.sent).toEqual([
+        JSON.stringify({ type: 'resume_query', recordingId: 'rec-hold-wav' }),
+      ]);
+
+      wavSender.sendChunk(chunk(0));
+      expect(newWav.sent).toHaveLength(1);
+
+      newWav.onmessage!({
+        data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 0, lastIdx: -1 }),
+      } as MessageEvent);
+      expect(headerIdxs(newWav.sent)).toEqual([0]);
+    });
+
+    it('costs five seconds when the host never answers, and an invalid answer releases nothing', async () => {
+      const peer = new FakePeer();
+      const oldCam = new FakeChannel();
+      oldCam.readyState = 'open';
+      const sender = new ChunkSender({
+        recordingId: 'rec-hold-timeout',
+        channel: oldCam as unknown as RTCDataChannel,
+      });
+      const h: RecordingHandles = {
+        recordingId: 'rec-hold-timeout',
+        sender,
+        channel: oldCam as unknown as RTCDataChannel,
+      };
+      rebindGuestRecording(h, peer as unknown as PeerConnection);
+      const ch = peer.cameraChannel!;
+      ch.open();
+
+      sender.sendChunk(chunk(0));
+      for (const lastIdx of ['2', 1.5, -2, -100, 1e30, 9007199254740992, null, undefined, {}, [], "text\n'\""]) {
+        ch.onmessage!({
+          data: JSON.stringify({ type: 'resume_offset', recordingId: 'r\n"\'', lastByte: 1e30, lastIdx }),
+        } as MessageEvent);
+      }
+      ch.onmessage!({ data: new ArrayBuffer(8) } as MessageEvent);
+      ch.onmessage!({ data: '{malformed json' } as MessageEvent);
+      ch.onmessage!({ data: 'null' } as MessageEvent);
+      ch.onmessage!({ data: '123' } as MessageEvent);
+      expect(ch.sent).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(RESUME_ANSWER_TIMEOUT_MS);
+      expect(headerIdxs(ch.sent)).toEqual([0]);
+    });
   });
 });

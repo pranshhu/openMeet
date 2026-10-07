@@ -662,6 +662,9 @@ export function bindGuestChannel(
           msg.lastIdx <= sender.lastSentIdx
         ) {
           sender.resume(msg.lastIdx);
+          // A rebind held the sender until the host's receiver was bound; this
+          // is that answer arriving. A sender that was never held is untouched.
+          sender.release();
         }
       } else if (msg.type === 'clock_pong') clockSync?.handlePong(msg);
     } catch { /* ignore */ }
@@ -691,6 +694,7 @@ export function rebindGuestRecording(h: RecordingHandles, peer: PeerConnection):
     h.channel = ch;
     ch.addEventListener('open', () => requestResume(h));
     h.sender.rebind(ch);
+    h.sender.hold();
     bindGuestChannel(ch, h.sender, h.clockSync, h.onHostTakeId);
   }
 
@@ -703,6 +707,7 @@ export function rebindGuestRecording(h: RecordingHandles, peer: PeerConnection):
       }
     });
     h.wavSender.rebind(wch);
+    h.wavSender.hold();
     bindGuestChannel(wch, h.wavSender, undefined, h.onHostTakeId);
   }
 }
