@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { encodeChunkHeader } from '@openmeet/protocol';
+import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
 import {
   bindHostGuestChannel,
@@ -731,5 +732,196 @@ describe('a guest WAV that received nothing is still reported', () => {
     expect(reports[0]?.wavFile).toBeUndefined();
     expect(reports[0]?.noWav).toBe(true);
     expect(report.data.warnings).toContain('no WAV master for Ann');
+  });
+});
+
+/**
+ * A guest picks the key in `recording#<key>`, and every new key becomes a new
+ * slot, a new file in the host's folder and a new receiver, so a take opens at
+ * most MAX_GUEST_SLOTS guest slots and one connection may introduce at most
+ * MAX_GUEST_SLOTS_PER_PEER keys; a key that already has a slot always binds,
+ * so a reconnect keeps its file.
+ */
+describe('a guest cannot make the host open files without end', () => {
+  const REFUSAL_MESSAGE =
+    'A guest opened more recordings than one take allows. The extra ones were not saved; their own backup has them.';
+
+  function errorLog() {
+    const errors: unknown[] = [];
+    return {
+      errors,
+      onError: (e: unknown) => {
+        errors.push(e);
+      },
+    };
+  }
+
+  it('refuses a third key from one connection: no file, no receiver, one report', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    const first = fakeChannel('recording#k1');
+    const second = fakeChannel('recording#k2');
+    const third = fakeChannel('recording#k3');
+    await bindHostGuestChannel(first, h, 'peer-a', onError);
+    await bindHostGuestChannel(second, h, 'peer-a', onError);
+    await bindHostGuestChannel(third, h, 'peer-a', onError);
+
+    // The first key claimed slot 0's eager file; only the second opened one.
+    expect(opened).toEqual(['guest2_rec.mp4']);
+    expect(h.guestReceivers?.has('k3:mp4')).toBe(false);
+    expect(third.onmessage).toBeNull();
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+  });
+
+  it('keeps refusing later keys from that connection without reporting again', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k3'), h, 'peer-a', onError);
+    const fourth = fakeChannel('recording#k4');
+    await bindHostGuestChannel(fourth, h, 'peer-a', onError);
+
+    expect(opened).toEqual(['guest2_rec.mp4']);
+    expect(h.guestReceivers?.has('k4:mp4')).toBe(false);
+    expect(fourth.onmessage).toBeNull();
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+    // A refused key is not remembered in either map.
+    expect(h.guestSlotOwners?.size).toBe(2);
+    expect(h.guestSlots?.size).toBe(2);
+  });
+
+  it('shows the refusal as the plain statement it is, not as a recording failure', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k3'), h, 'peer-a', onError);
+
+    expect(recordingErrorMessage(errors[0])).toBe(REFUSAL_MESSAGE);
+  });
+
+  it('opens one file per name when several channels of one key arrive together', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    // The first key takes slot 0, whose MP4 is opened eagerly; the burst below
+    // takes a slot above 0, so every file it opens is visible here.
+    await bindHostGuestChannel(fakeChannel('recording#k0'), h, 'peer-a');
+
+    const camera = () => fakeChannel('recording#k1');
+    const audio = () => fakeChannel('recording-audio#k1');
+    await Promise.all([
+      bindHostGuestChannel(camera(), h, 'peer-b'),
+      bindHostGuestChannel(camera(), h, 'peer-b'),
+      bindHostGuestChannel(camera(), h, 'peer-b'),
+      bindHostAudioChannel(audio(), h, 'peer-b'),
+      bindHostAudioChannel(audio(), h, 'peer-b'),
+      bindHostAudioChannel(audio(), h, 'peer-b'),
+    ]);
+
+    expect(opened).toEqual(['guest2_rec.mp4', 'guest2_rec.wav']);
+    expect(h.extraWriters).toHaveLength(2);
+  });
+
+  it("one refused connection does not refuse another connection's first key", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-a', onError);
+    await bindHostGuestChannel(fakeChannel('recording#k3'), h, 'peer-a', onError);
+    const b = fakeChannel('recording#b1');
+    await bindHostGuestChannel(b, h, 'peer-b', onError);
+    await sendChunk(b, 0, 0, 30);
+
+    expect(opened).toEqual(['guest2_rec.mp4', 'guest3_rec.mp4']);
+    expect(written).toEqual([{ file: 'guest3_rec.mp4', position: 0, bytes: 30 }]);
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+  });
+
+  it('refuses the ninth key of a take, whoever opens it', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    // Five connections, two keys each, then one more: the take has eight slots.
+    for (let p = 1; p <= 4; p++) {
+      for (let k = 1; k <= 2; k++) {
+        await bindHostGuestChannel(fakeChannel(`recording#p${p}k${k}`), h, `peer-${p}`, onError);
+      }
+    }
+    const ninth = fakeChannel('recording#p5k1');
+    await bindHostGuestChannel(ninth, h, 'peer-5', onError);
+
+    expect(opened).toEqual([
+      'guest2_rec.mp4',
+      'guest3_rec.mp4',
+      'guest4_rec.mp4',
+      'guest5_rec.mp4',
+      'guest6_rec.mp4',
+      'guest7_rec.mp4',
+      'guest8_rec.mp4',
+    ]);
+    expect(h.guestReceivers?.has('p5k1:mp4')).toBe(false);
+    expect(ninth.onmessage).toBeNull();
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+  });
+
+  it('keeps a key bindable from a new connection once the take is full', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+    const { errors, onError } = errorLog();
+
+    for (let p = 1; p <= 4; p++) {
+      for (let k = 1; k <= 2; k++) {
+        await bindHostGuestChannel(fakeChannel(`recording#p${p}k${k}`), h, `peer-${p}`, onError);
+      }
+    }
+    await bindHostGuestChannel(fakeChannel('recording#p5k1'), h, 'peer-5', onError);
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+
+    // peer-1's tab reloaded: a new peer id, but the same key, so the same file.
+    const reconnected = fakeChannel('recording#p1k1');
+    await bindHostGuestChannel(reconnected, h, 'peer-6', onError);
+    await sendChunk(reconnected, 0, 0, 10);
+
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+    expect(opened).toHaveLength(7);
+    expect(slot0).toEqual([{ file: 'guest_rec.mp4', position: 0, bytes: 10 }]);
+  });
+
+  it('bounds the audio-master channel by the same keys, and its slot is shared with the camera', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { errors, onError } = errorLog();
+
+    // One key's camera and audio are one key, both on slot 0.
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', onError);
+    await bindHostAudioChannel(fakeChannel('recording-audio#k1'), h, 'peer-a', onError);
+    // A second key's audio must not count as a third key.
+    await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-a', onError);
+    await bindHostAudioChannel(fakeChannel('recording-audio#k2'), h, 'peer-a', onError);
+    // A third key's audio is refused like its camera would be.
+    await bindHostAudioChannel(fakeChannel('recording-audio#k3'), h, 'peer-a', onError);
+
+    expect(opened).toEqual(['guest_rec.wav', 'guest2_rec.mp4', 'guest2_rec.wav']);
+    expect(h.guestReceivers?.has('k3:wav')).toBe(false);
+    expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
   });
 });

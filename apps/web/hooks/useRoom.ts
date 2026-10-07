@@ -360,7 +360,7 @@ export function recordingErrorMessage(e: unknown): string {
   if (name === 'UnsupportedCodecError') {
     return 'This browser cannot record MP4. Use a Chromium browser such as Google Chrome.';
   }
-  if (name === 'ChannelNeverOpenedError') {
+  if (name === 'ChannelNeverOpenedError' || name === 'GuestLimitError') {
     return (e as Error).message;
   }
   if (name === 'DiskFullError') {
@@ -1151,6 +1151,11 @@ export function useRoom(slug: string) {
               }
               return;
             }
+            // Only the host opens guest files, and only for the peers it
+            // records. A producer or a present-only companion publishes no
+            // camera or mic, so it has no file to bind and must not spend a
+            // guest slot a recorded guest needs.
+            if (roleRef.current !== 'host' || remoteRole === 'producer' || remoteCompanion) return;
             const fail = (e: unknown) =>
               setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
             if (recordingChannelKind(channel.label).base === DATA_CHANNEL_RECORDING_AUDIO) {

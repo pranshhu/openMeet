@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { PeerConnection } from '@/lib/peer';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies } from '@/hooks/recording-controller';
+import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, type RecordingHandles } from '@/hooks/recording-controller';
 import { patchRecording } from '@/lib/api';
 import { buildSyncReport } from '@/lib/sync-report';
 import type { ServerMessage } from '@openmeet/protocol';
@@ -2753,5 +2753,135 @@ describe('role-assigned describes the whole room', () => {
     const newHost = peersFor('p-host-2')[0]!;
     expect(sender.rebind).toHaveBeenCalledTimes(1);
     expect(sender.rebind).toHaveBeenCalledWith(newHost.createRecordingChannel.mock.results[0]!.value);
+  });
+});
+
+/**
+ * Only the host opens guest files, and only for the peers it records. A
+ * producer or a present-only companion publishes no camera or mic, so it has
+ * no file to bind and must not spend a guest slot a recorded guest needs.
+ */
+describe('guest slots belong to the peers a host records', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  const guest = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' };
+  const producer = { peerId: 'p-prod', ordinal: 3, role: 'producer', displayName: 'Pat' };
+  const companion = { peerId: 'p-comp', ordinal: 4, role: 'guest', displayName: 'Cam', companion: true };
+
+  const channel = (label: string) =>
+    Object.assign(new EventTarget(), { label, readyState: 'open', send: () => {} }) as unknown as RTCDataChannel;
+  /** The real onDataChannel of the connection to one peer, whichever call created it. */
+  const channelTo = (peerId: string) =>
+    vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+      .onDataChannel!;
+
+  /** Let every bind the channels started finish, including the file opens. */
+  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  /** A host in a take whose real handles write into a folder this test can read. */
+  async function hostTake(opened: string[]) {
+    const handles: RecordingHandles = {
+      recordingId: 'rec-gate',
+      take: 1,
+      dir: {
+        getFileHandle: async (name: string) => {
+          opened.push(name);
+          return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+        },
+      } as unknown as NonNullable<RecordingHandles['dir']>,
+      guestSlots: new Map<string, number>(),
+      receiver: { bytesWritten: 0, isAbandoned: false, answerResume: () => {} } as never,
+      channelRef: { current: null },
+    };
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => handles as never);
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(
+        { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+        'Host Hana'
+      );
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [guest, producer, companion],
+        recording: false,
+      });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    return { result, handles };
+  }
+
+  it('opens no file for a producer that sends camera and audio channels', async () => {
+    const opened: string[] = [];
+    const { result, handles } = await hostTake(opened);
+
+    act(() => {
+      channelTo('p-prod')(channel('recording#a'));
+      channelTo('p-prod')(channel('recording-audio#a'));
+    });
+    await settle();
+
+    expect(opened).toEqual([]);
+    expect(handles.guestSlots?.size).toBe(0);
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  it('opens no file for a present-only companion that sends camera and audio channels', async () => {
+    const opened: string[] = [];
+    const { result, handles } = await hostTake(opened);
+
+    act(() => {
+      channelTo('p-comp')(channel('recording#a'));
+      channelTo('p-comp')(channel('recording-audio#a'));
+    });
+    await settle();
+
+    expect(opened).toEqual([]);
+    expect(handles.guestSlots?.size).toBe(0);
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  it('leaves a recording guest alone when a peer opens keys at it', async () => {
+    const result = await recordingGuest();
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      channelTo('p-host')(channel('recording#a'));
+      channelTo('p-host')(channel('recording#b'));
+      channelTo('p-host')(channel('recording#c'));
+    });
+    await settle();
+
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  it('binds the camera and audio channels of a recorded guest', async () => {
+    const opened: string[] = [];
+    const { result, handles } = await hostTake(opened);
+    const camera = channel('recording#g');
+
+    act(() => {
+      channelTo('p-guest')(camera);
+      channelTo('p-guest')(channel('recording-audio#g'));
+    });
+    await settle();
+
+    expect(opened).toEqual(['guest_rec-gate.wav']);
+    expect(handles.guestSlots?.get('g')).toBe(0);
+    expect(handles.channel).toBe(camera);
+    expect(result.current.state.recordingError).toBeNull();
   });
 });

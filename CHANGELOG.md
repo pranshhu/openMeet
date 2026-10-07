@@ -111,6 +111,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A room URL with a percent-encoded character could leave the room unable to start its next session.
 - Only the authenticated host can write or change recording metadata rows in D1;
   unauthenticated writes over WebSocket are ignored.
+- A guest can no longer make the host open an unbounded number of recording files by
+  opening channels under made-up keys: a take opens at most eight guest slots and one
+  connection may introduce two keys, after which the extra channels are refused.
 - A wrong acknowledgement from the host can no longer stop a guest's recording from
   streaming to the host.
 - CI scans every push and pull request for leaked secrets and known-bad code patterns, and its actions are pinned to exact commits.

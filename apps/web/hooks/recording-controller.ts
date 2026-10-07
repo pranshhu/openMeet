@@ -28,6 +28,12 @@ export const CALL_COPY_MAX_FILES = 50;
  */
 export const CALL_COPY_MAX_PER_PEER = 12;
 
+/** Guest files one take opens: three recorded guests plus a reloaded tab each, and a ceiling a guest cannot pass. */
+export const MAX_GUEST_SLOTS = 8;
+
+/** New keys one connection may introduce in one take: its own, and one more for a tab that reloaded. */
+export const MAX_GUEST_SLOTS_PER_PEER = 2;
+
 /** One stretch of one guest's live call audio, recorded by the host as a fallback. */
 export interface CallCopy {
   peerId: string;
@@ -45,6 +51,9 @@ export interface CallCopy {
   /** A write or the close failed, so what the folder holds of it is unknown. */
   failed?: boolean;
 }
+
+/** One guest's open ingest: its receiver, the channel target and the file behind it. */
+type GuestIngest = { receiver: ChunkReceiver; ref: { current: RTCDataChannel | null }; writer?: FileWriter };
 
 export interface RecordingHandles {
   recordingId: string;
@@ -88,6 +97,10 @@ export interface RecordingHandles {
    * unchanged.
    */
   guestSlots?: Map<string, number>;
+  /** Key to the peer id that first used it this take, so one connection's key count can be bounded. */
+  guestSlotOwners?: Map<string, string>;
+  /** Set on the first refusal, so later refusals in the same take stay silent. */
+  guestSlotsRefused?: boolean;
   /** Map from slot index to socket remotePeerId, so display names can be mapped. */
   slotPeerIds?: Map<number, string>;
   /**
@@ -101,7 +114,13 @@ export interface RecordingHandles {
    * Ingest for guests 2+, keyed `<peerId>:<ext>`. Slot 0 keeps using
    * `receiver`/`wavReceiver` so the two-person path is untouched.
    */
-  guestReceivers?: Map<string, { receiver: ChunkReceiver; ref: { current: RTCDataChannel | null }; writer?: FileWriter }>;
+  guestReceivers?: Map<string, GuestIngest>;
+  /**
+   * Opens still in flight, keyed as `guestReceivers`. Channels of one key can
+   * arrive in a burst; sharing the first open keeps a burst from opening a
+   * writer per channel over the same file.
+   */
+  guestOpenings?: Map<string, Promise<GuestIngest>>;
   /** Files opened for guests 2+, so endHostRecording can close them. */
   extraWriters?: FileWriter[];
   hostPcm?: PcmRecorder;
@@ -198,6 +217,45 @@ export function guestSlot(h: RecordingHandles, peerId: string): number {
   const next = slots.size;
   slots.set(peerId, next);
   return next;
+}
+
+/**
+ * The slot for a key a guest's channel carries, or null when the take refuses it.
+ *
+ * The key is the guest's to choose, so without a bound every invented key would
+ * become a file in the host's folder. A key that already has a slot always
+ * binds: the point of the label key is that a reconnected guest resumes its own
+ * file. A new key needs a free slot in the take and an unused key allowance for
+ * the connection that introduced it. The first refusal is reported once; the
+ * rest are silent so a flood of channels cannot flood the error banner too.
+ */
+function claimGuestSlot(
+  h: RecordingHandles,
+  key: string,
+  peerId: string,
+  onError?: (err: unknown) => void
+): number | null {
+  const existing = h.guestSlots?.get(key);
+  if (existing !== undefined) return existing;
+  const owners = (h.guestSlotOwners ??= new Map());
+  let introduced = 0;
+  for (const owner of owners.values()) if (owner === peerId) introduced++;
+  if ((h.guestSlots?.size ?? 0) >= MAX_GUEST_SLOTS || introduced >= MAX_GUEST_SLOTS_PER_PEER) {
+    if (!h.guestSlotsRefused) {
+      h.guestSlotsRefused = true;
+      const refusal = new Error(
+        'A guest opened more recordings than one take allows. The extra ones were not saved; their own backup has them.'
+      );
+      // Named so the banner can show this as the plain statement it is:
+      // nothing on this browser failed.
+      refusal.name = 'GuestLimitError';
+      onError?.(refusal);
+    }
+    return null;
+  }
+  const slot = guestSlot(h, key);
+  owners.set(key, peerId);
+  return slot;
 }
 
 export function guestName(slot: number, recordingId: string, take: number, ext: string): string {
@@ -440,31 +498,43 @@ async function ingestFor(
   const key = `${peerId}:${ext}`;
   const cached = h.guestReceivers?.get(key);
   if (cached) return cached;
-  if (!h.dir) return null; // host isn't recording; nothing to write into
+  const dir = h.dir;
+  if (!dir) return null; // host isn't recording; nothing to write into
 
-  const writer = new FileWriter();
-  await writer.openIn(h.dir, guestName(slot, h.recordingId, h.take ?? 1, ext));
-  const ref: { current: RTCDataChannel | null } = { current: null };
-  const receiver = new ChunkReceiver({
-    recordingId: h.recordingId,
-    writer,
-    sendControl: (json) => {
-      const c = ref.current;
-      if (c && c.readyState === 'open') c.send(json);
-    },
-    ...(onError ? { onError } : {}),
-  });
-  const entry = { receiver, ref, writer };
-  h.guestReceivers = new Map(h.guestReceivers ?? []).set(key, entry);
-  if (slot === 0) {
-    // Keep the fields endHostRecording and the sync report already read.
-    h.guestWavWriter = writer;
-    h.wavReceiver = receiver;
-    h.wavChannelRef = ref;
-  } else {
-    h.extraWriters = [...(h.extraWriters ?? []), writer];
+  const openings = (h.guestOpenings ??= new Map());
+  const inFlight = openings.get(key);
+  if (inFlight) return inFlight;
+  const open = (async (): Promise<GuestIngest> => {
+    const writer = new FileWriter();
+    await writer.openIn(dir, guestName(slot, h.recordingId, h.take ?? 1, ext));
+    const ref: { current: RTCDataChannel | null } = { current: null };
+    const receiver = new ChunkReceiver({
+      recordingId: h.recordingId,
+      writer,
+      sendControl: (json) => {
+        const c = ref.current;
+        if (c && c.readyState === 'open') c.send(json);
+      },
+      ...(onError ? { onError } : {}),
+    });
+    const entry = { receiver, ref, writer };
+    h.guestReceivers = new Map(h.guestReceivers ?? []).set(key, entry);
+    if (slot === 0) {
+      // Keep the fields endHostRecording and the sync report already read.
+      h.guestWavWriter = writer;
+      h.wavReceiver = receiver;
+      h.wavChannelRef = ref;
+    } else {
+      h.extraWriters = [...(h.extraWriters ?? []), writer];
+    }
+    return entry;
+  })();
+  openings.set(key, open);
+  try {
+    return await open;
+  } finally {
+    if (openings.get(key) === open) openings.delete(key);
   }
-  return entry;
 }
 
 /**
@@ -488,7 +558,8 @@ export async function bindHostAudioChannel(
   // A real key is the guest's 36-character recordingId; the key is held and
   // compared for the whole take, so a longer one is not a key.
   if (key.length > 64) return;
-  const slot = guestSlot(h, key);
+  const slot = claimGuestSlot(h, key, peerId, onError);
+  if (slot === null) return;
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
   rememberSlotName(h, slot, name);
@@ -514,7 +585,8 @@ export async function bindHostGuestChannel(
   const key = recordingChannelKind(channel.label).key ?? peerId;
   // Same bound as bindHostAudioChannel — see there.
   if (key.length > 64) return;
-  const slot = guestSlot(h, key);
+  const slot = claimGuestSlot(h, key, peerId, onError);
+  if (slot === null) return;
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
   rememberSlotName(h, slot, name);

@@ -463,15 +463,18 @@ describe('collectTrackHealth', () => {
     const h = await hostHandles();
     h.hostRecorder = { totalBytes: 100 } as unknown as ChunkRecorder;
 
+    // A take lets one connection introduce two camera/audio keys, so the
+    // row cap is reached with screen channels, which keep their own numbering.
+    await bindHostGuestChannel(fakeChannel('recording#flood-cam'), h, 'peer-0');
+    await bindHostAudioChannel(fakeChannel('recording-audio#flood-wav'), h, 'peer-0');
     for (let i = 0; i < 20; i++) {
-      const ch = fakeChannel(`recording#flood-${i}`);
-      await bindHostGuestChannel(ch, h, 'peer-0');
+      await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-0');
     }
     const peers = [peer('peer-0', 'Guest 0'), peer('late', 'Late', true)];
 
     const rows = collectTrackHealth(h, peers);
     expect(rows[0]?.key).toBe('own:camera');
-    expect(rows.filter((r) => r.key.startsWith('g'))).toHaveLength(4);
+    expect(rows.filter((r) => r.who === 'Guest 0')).toHaveLength(4);
     expect(rows.some((r) => r.key === 'p:late')).toBe(true);
   });
 
@@ -479,8 +482,7 @@ describe('collectTrackHealth', () => {
     const h = await hostHandles();
 
     for (let i = 0; i < 16; i++) {
-      const ch = fakeChannel(`recording#flood-${i}`);
-      await bindHostGuestChannel(ch, h, 'peer-flooder');
+      await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-flooder');
     }
 
     const camHonest = fakeChannel('recording#honest');
@@ -491,7 +493,7 @@ describe('collectTrackHealth', () => {
     await sendChunk(camHonest, 0, 0, 1000);
     await sendChunk(wavHonest, 0, 0, 2000);
 
-    const peers = [peer('peer-flooder', 'Flooder'), peer('peer-honest', 'Honest')];
+    const peers = [peer('peer-flooder', 'Flooder', false), peer('peer-honest', 'Honest')];
     await vi.waitFor(() => {
       const rows = collectTrackHealth(h, peers);
       const flooderRows = rows.filter((r) => r.who === 'Flooder');
@@ -499,8 +501,8 @@ describe('collectTrackHealth', () => {
 
       expect(flooderRows.length).toBeLessThanOrEqual(4);
       expect(honestRows).toEqual([
-        { key: 'g16:mp4', who: 'Honest', track: 'camera', bytes: 1000 },
-        { key: 'g16:wav', who: 'Honest', track: 'wav', bytes: 2000 },
+        { key: 'g0:mp4', who: 'Honest', track: 'camera', bytes: 1000 },
+        { key: 'g0:wav', who: 'Honest', track: 'wav', bytes: 2000 },
       ]);
     });
   });
@@ -595,21 +597,29 @@ describe('collectTrackHealth', () => {
   it('keeps the zero-byte row of a guest whose other rows fill its cap', async () => {
     const h = await hostHandles();
     await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    // Two keys are all one connection may introduce; screen rows fill the
+    // rest of the cap so the uncounted zero-byte row still has to survive.
+    await bindHostAudioChannel(fakeChannel('recording-audio#b0'), h, 'peer-b');
+    await bindHostAudioChannel(fakeChannel('recording-audio#b1'), h, 'peer-b');
     for (let i = 0; i < 6; i++) {
-      await bindHostAudioChannel(fakeChannel(`recording-audio#b${i}`), h, 'peer-b');
+      await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-b');
     }
     const rows = collectTrackHealth(h, [peer('peer-a', 'Asha'), peer('peer-b', 'Boris')]);
     expect(rows.filter((r) => r.who === 'Boris').map((r) => r.key)).toEqual([
-      'g1:wav', 'g2:wav', 'g3:wav', 'g4:wav', 'p:peer-b',
+      'g1:wav', 'g2:wav', 'p:peer-b', 's1', 's2',
     ]);
   });
 
   it("counts the cap by peerId, so a flooder using another guest's name leaves that guest alone", async () => {
     const h = await hostHandles();
-    for (let i = 0; i < 8; i++) await bindHostGuestChannel(fakeChannel(`recording#flood-${i}`), h, 'peer-m');
+    await bindHostGuestChannel(fakeChannel('recording#flood-cam'), h, 'peer-m');
+    await bindHostAudioChannel(fakeChannel('recording-audio#flood-wav'), h, 'peer-m');
+    for (let i = 0; i < 8; i++) {
+      await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-m');
+    }
     await bindHostGuestChannel(fakeChannel('recording#honest'), h, 'peer-c');
     const rows = collectTrackHealth(h, [peer('peer-m', 'Carol'), peer('peer-c', 'Carol')]);
-    expect(rows.map((r) => r.key)).toEqual(['g0:mp4', 'g1:mp4', 'g2:mp4', 'g3:mp4', 'g8:mp4']);
+    expect(rows.map((r) => r.key)).toEqual(['g0:mp4', 'g1:wav', 'g2:mp4', 's1', 's2']);
   });
 
   it("reports what the host has acknowledged of a guest's own camera", () => {
