@@ -89,6 +89,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   resume this recording, instead of being told to press a button guests do not
   have; when the host does resume, the guest's file continues instead of
   splitting in two.
+- A call-audio copy whose write or close failed is no longer listed in the session
+  summary and the sync file, and one guest's reconnects can no longer spend every
+  other guest's files; the sync file says when the file limit was reached.
 
 ### Security
 

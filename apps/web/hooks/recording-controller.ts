@@ -21,6 +21,13 @@ import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } fro
 /** Most files one take opens for call copies; a guest who keeps reconnecting gets no more. */
 export const CALL_COPY_MAX_FILES = 50;
 
+/**
+ * Most files one connection may spend of that budget. Not small on purpose: the
+ * host's own reconnect ends every running copy and spends one of each guest's
+ * share, so four recorded guests still fit inside the take's files.
+ */
+export const CALL_COPY_MAX_PER_PEER = 12;
+
 /** One stretch of one guest's live call audio, recorded by the host as a fallback. */
 export interface CallCopy {
   peerId: string;
@@ -35,6 +42,8 @@ export interface CallCopy {
   startMs?: number;
   /** Set once the copy has been told to stop; resolves when its file is closed. */
   finished?: Promise<void>;
+  /** A write or the close failed, so what the folder holds of it is unknown. */
+  failed?: boolean;
 }
 
 export interface RecordingHandles {
@@ -144,6 +153,8 @@ export interface RecordingHandles {
   callCopies?: CallCopy[];
   /** Set as the take starts ending: a stream arriving after that opens nothing. */
   callCopiesClosed?: boolean;
+  /** Set at the first refusal: the take's file limit was reached, so later stretches have no copy. */
+  callCopiesCapped?: boolean;
 }
 
 /**
@@ -749,11 +760,19 @@ const warnCallCopy = (e: unknown) => console.warn('openMeet: call audio copy', e
 function finishCallCopy(h: RecordingHandles, c: CallCopy): Promise<void> {
   return (c.finished ??= (async () => {
     await c.opened;
-    await c.recorder?.stopAndFlush();
-    await c.writer.close();
+    // Separate: a stop that throws must not leave the file uncommitted, and a
+    // file only reaches disk on close.
+    try {
+      await c.recorder?.stopAndFlush();
+    } finally {
+      await c.writer.close();
+    }
     // Nothing was recorded: leave no empty file behind.
     if (!c.writer.size && c.writer.fileName) await h.dir?.removeEntry?.(c.writer.fileName);
-  })().catch(warnCallCopy));
+  })().catch((e: unknown) => {
+    c.failed = true;
+    warnCallCopy(e);
+  }));
 }
 
 async function openCallCopy(
@@ -772,6 +791,7 @@ async function openCallCopy(
     stream: new MediaStream([c.track]),
     onChunk: (chunk) => {
       c.writer.write(chunk.header.offset, chunk.payload).catch((e: unknown) => {
+        c.failed = true;
         warnCallCopy(e);
         // A writer that failed once fails every later write: free the encoder.
         void finishCallCopy(h, c);
@@ -811,7 +831,18 @@ export function syncCallCopies(
       // One copy per track, ever: the second ontrack call for a stream and every
       // later change to the peer list end here.
       if (!track || track.readyState === 'ended' || copies.some((c) => c.track === track)) continue;
-      if (copies.length >= CALL_COPY_MAX_FILES) return;
+      // One connection may not spend the take's whole budget: the others'
+      // later stretches need files too.
+      if (
+        copies.filter((c) => c.peerId === p.peerId).length >= CALL_COPY_MAX_PER_PEER ||
+        copies.length >= CALL_COPY_MAX_FILES
+      ) {
+        if (!h.callCopiesCapped) {
+          warnCallCopy(new Error('call copy file limit reached; later stretches have no copy'));
+        }
+        h.callCopiesCapped = true;
+        continue;
+      }
       const mimeType = pickCallAudioMime();
       if (!mimeType) return;
       const copy: CallCopy = {
@@ -1415,15 +1446,21 @@ export function collectScreenSegments(
     });
 }
 
-/** Call copies that recorded something, each with its start relative to the host recording start. */
+/**
+ * Copies the folder really holds: the writer committed bytes and no write or
+ * close of it failed. A failed copy may be gone or half-written, so the summary
+ * and the sync file must not name it.
+ */
+const keptCallCopies = (h: RecordingHandles): CallCopy[] =>
+  (h.callCopies ?? []).filter((c) => !c.failed && c.writer.size > 0 && c.writer.fileName);
+
+/** Call copies that are in the folder, each with its start relative to the host recording start. */
 export function collectCallCopies(h: RecordingHandles): CallCopyInput[] {
-  return (h.callCopies ?? [])
-    .filter((c) => (c.recorder?.totalBytes ?? 0) > 0 && c.writer.fileName)
-    .map((c) => ({
-      file: c.writer.fileName,
-      offsetMs: c.startMs != null && h.hostStartMs != null ? Math.max(0, c.startMs - h.hostStartMs) : 0,
-      ...(c.name ? { name: c.name } : {}),
-    }));
+  return keptCallCopies(h).map((c) => ({
+    file: c.writer.fileName,
+    offsetMs: c.startMs != null && h.hostStartMs != null ? Math.max(0, c.startMs - h.hostStartMs) : 0,
+    ...(c.name ? { name: c.name } : {}),
+  }));
 }
 
 /**
@@ -1456,11 +1493,9 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
         : {}),
     });
   }
-  // A finished call copy closed its own file and is not in allWriters; one that
-  // recorded nothing was removed from the folder.
-  for (const c of h.callCopies ?? []) {
-    if (c.recorder?.totalBytes && c.writer.fileName) out.set(c.writer.fileName, { bytes: c.writer.size });
-  }
+  // A finished call copy closed its own file and is not in allWriters; one the
+  // take removed, or whose write or close failed, has no file to check.
+  for (const c of keptCallCopies(h)) out.set(c.writer.fileName, { bytes: c.writer.size });
   return out;
 }
 

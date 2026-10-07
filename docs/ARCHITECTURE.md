@@ -379,7 +379,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   (`syncCallCopies`, driven by one effect in `useRoom`): an audio-only `MediaRecorder` on the guest's
   incoming live track (`pickCallAudioMime`: AAC or Opus in MP4, else WebM/Opus), written to
   `call<n>_<id>.m4a`, one file per stretch of one guest's stream (a reconnect starts the next), at
-  most `CALL_COPY_MAX_FILES` per take, never for a producer, a companion or a guest whose browser
+  most `CALL_COPY_MAX_FILES` per take and `CALL_COPY_MAX_PER_PEER` per connection, so one guest's
+  reconnects cannot spend the other guests' files; the first refusal is logged and recorded as
+  `callCopiesCapped` in the sync file. Never for a producer, a companion or a guest whose browser
   cannot record. A guest's copy starts when that guest's camera recording channel arrives for the
   take, because a guest opens that channel from the handler that shows it the recording notice: the
   channel arriving is the proof the guest was told, and there is no second notice. It adds no video
@@ -579,6 +581,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   markers; takes started later include them. The WAV master is mic-only by design.
 - **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
   timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- **A participant who rejoins gets a new id and a new share of the call-copy files,**
+  so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.

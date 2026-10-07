@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   syncCallCopies,
   CALL_COPY_MAX_FILES,
+  CALL_COPY_MAX_PER_PEER,
   allWriters,
   collectCallCopies,
   collectFileChecks,
@@ -225,6 +226,7 @@ describe('syncCallCopies', () => {
   it('at the cap a peer whose stream is gone has its file closed whatever its place in the list', async () => {
     const { dir, files } = fakeDir();
     const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const peers = Array.from({ length: CALL_COPY_MAX_FILES }, (_, i) => peer(`p${i}`));
     syncCallCopies(h, peers);
     await opened(h);
@@ -312,6 +314,7 @@ describe('syncCallCopies', () => {
   it('no more than CALL_COPY_MAX_FILES files are opened in one take', async () => {
     const { dir, files } = fakeDir();
     const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const peers = Array.from({ length: CALL_COPY_MAX_FILES + 3 }, (_, i) => peer(`p${i}`));
     syncCallCopies(h, peers);
     await opened(h);
@@ -320,20 +323,62 @@ describe('syncCallCopies', () => {
     expect(h.callCopies?.length).toBe(CALL_COPY_MAX_FILES);
   });
 
-  it('one guest presenting a new track over and over opens no more than the cap', async () => {
+  it('one guest presenting a new track over and over opens no more than its share', async () => {
     const { dir, files } = fakeDir();
     const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (let i = 0; i < CALL_COPY_MAX_FILES + 3; i++) {
       syncCallCopies(h, [peer('p1')]);
       await opened(h);
     }
     await finished(h);
-    expect(files.size).toBe(CALL_COPY_MAX_FILES);
+    expect(files.size).toBe(CALL_COPY_MAX_PER_PEER);
+  });
+
+  it('a peer at its share is refused while a second peer still gets a copy', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < CALL_COPY_MAX_PER_PEER; i++) {
+      syncCallCopies(h, [peer('p1')]);
+      await opened(h);
+    }
+    expect(files.size).toBe(CALL_COPY_MAX_PER_PEER);
+
+    syncCallCopies(h, [peer('p1'), peer('p2')]);
+    await opened(h);
+
+    expect(files.size).toBe(CALL_COPY_MAX_PER_PEER + 1);
+    expect(files.has(`call${CALL_COPY_MAX_PER_PEER + 1}_rec.m4a`)).toBe(true);
+  });
+
+  it('one peer’s share leaves files for four recorded guests inside the take limit', () => {
+    expect(CALL_COPY_MAX_PER_PEER).toBe(12);
+    expect(CALL_COPY_MAX_PER_PEER * 4).toBeLessThanOrEqual(CALL_COPY_MAX_FILES);
+  });
+
+  it('a refusal at the file limit is logged once for the take and sets callCopiesCapped', async () => {
+    const { dir } = fakeDir();
+    const h = handles(dir);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < CALL_COPY_MAX_PER_PEER; i++) {
+      syncCallCopies(h, [peer('p1')]);
+      await opened(h);
+    }
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    syncCallCopies(h, [peer('p1')]);
+    syncCallCopies(h, [peer('p1')]);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect((warnSpy.mock.calls[0]![1] as Error).message).toMatch(/limit/);
+    expect(h.callCopiesCapped).toBe(true);
   });
 
   it('reconnects under a new peerId each time open no more than the cap', async () => {
     const { dir, files } = fakeDir();
     const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (let i = 0; i < CALL_COPY_MAX_FILES + 3; i++) {
       syncCallCopies(h, [peer(`p${i}`)]);
       await opened(h);
@@ -512,6 +557,63 @@ describe('syncCallCopies', () => {
 
     expect(removeEntry).toHaveBeenCalledWith('call1_rec.m4a');
   });
+
+  it('a copy whose first write fails is not listed as a file of the take', async () => {
+    const { dir, files, removeEntry } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+
+    const mr = FakeMediaRecorder.instances[0]!;
+    files.get('call1_rec.m4a')!.write.mockRejectedValue(new Error('write failed'));
+    mr.emit(10);
+    await tick();
+    await finished(h);
+
+    expect(removeEntry).toHaveBeenCalledWith('call1_rec.m4a');
+    expect(collectCallCopies(h)).toEqual([]);
+    expect((await collectFileChecks(h)).has('call1_rec.m4a')).toBe(false);
+  });
+
+  it('a copy whose write fails after bytes reached the file is not listed either', async () => {
+    const { dir, files, removeEntry } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+
+    const mr = FakeMediaRecorder.instances[0]!;
+    mr.emit(10);
+    await tick();
+    const file = files.get('call1_rec.m4a')!;
+    file.write.mockRejectedValue(new Error('write failed'));
+    mr.emit(6);
+    await tick();
+    await h.callCopies![0]!.finished;
+
+    expect(file.write.mock.calls.length).toBe(2);
+    expect(removeEntry).not.toHaveBeenCalled();
+    expect(collectCallCopies(h)).toEqual([]);
+    expect((await collectFileChecks(h)).has('call1_rec.m4a')).toBe(false);
+  });
+
+  it('a copy whose close fails is not listed, so the summary cannot call it complete', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    FakeMediaRecorder.instances[0]!.emit(10);
+    await tick();
+    files.get('call1_rec.m4a')!.close.mockRejectedValue(new Error('close failed'));
+
+    syncCallCopies(h, []);
+    await finished(h);
+
+    expect(collectCallCopies(h)).toEqual([]);
+    expect((await collectFileChecks(h)).has('call1_rec.m4a')).toBe(false);
+  });
 });
 
 describe('call-audio copies at the end of a take', () => {
@@ -579,6 +681,24 @@ describe('call-audio copies at the end of a take', () => {
     const file = files.get('call1_rec.m4a')!;
     file.close.mockRejectedValue(new Error('copy close failed'));
     await expect(endHostRecording(h)).resolves.toBeDefined();
+  });
+
+  it('a copy whose recorder throws on stop still has its file closed once and the take still ends', async () => {
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    const file = files.get('call1_rec.m4a')!;
+    h.callCopies![0]!.recorder = {
+      stopAndFlush: async () => {
+        throw new Error('stop failed');
+      },
+    } as never;
+
+    await expect(endHostRecording(h)).resolves.toBeDefined();
+    expect(file.close).toHaveBeenCalledTimes(1);
+    expect(allWriters(h)).toEqual([]);
   });
 
   it('after endHostRecording has been called, syncCallCopies opens nothing', async () => {
@@ -669,17 +789,17 @@ describe('call-audio copies at the end of a take', () => {
 });
 
 describe('collectCallCopies', () => {
-  const copy = (fileName: string, bytes: number | null, startMs?: number, name?: string) =>
+  const copy = (fileName: string, bytes: number | null, startMs?: number, name?: string, failed?: boolean) =>
     ({
       peerId: 'p1',
       track: track(),
-      writer: { fileName },
-      ...(bytes === null ? {} : { recorder: { totalBytes: bytes } }),
+      writer: { fileName, size: bytes ?? 0 },
+      ...(failed ? { failed } : {}),
       ...(startMs !== undefined ? { startMs } : {}),
       ...(name !== undefined ? { name } : {}),
     }) as never;
 
-  it('keeps only the copies that recorded something, with their offset from the host start', () => {
+  it('keeps only the copies whose file holds bytes, with their offset from the host start', () => {
     const h = {
       recordingId: 'rec',
       hostStartMs: 1_000,
@@ -689,6 +809,7 @@ describe('collectCallCopies', () => {
         copy('call3_rec.m4a', null),
         copy('call4_rec.m4a', 5, 900),
         copy('', 5),
+        copy('call5_rec.m4a', 10, 900, undefined, true),
       ],
     } as unknown as RecordingHandles;
 
@@ -727,6 +848,21 @@ describe('collectCallCopies', () => {
 
       await endHostRecording(h);
       expect((await collectFileChecks(h)).get('call1_rec.m4a')).toEqual({ bytes: 10 });
+    });
+
+    it('reports what the file holds, not what the recorder produced', async () => {
+      const { dir } = fakeDir();
+      const h = handles(dir);
+      syncCallCopies(h, [peer('p1')]);
+      await opened(h);
+      FakeMediaRecorder.instances[0]!.emit(10);
+      await tick();
+      // A blob the encoder produced but the file never got: the folder holds 10.
+      h.callCopies![0]!.recorder = { totalBytes: 999, stopAndFlush: async () => {} } as never;
+
+      await endHostRecording(h);
+      expect((await collectFileChecks(h)).get('call1_rec.m4a')).toEqual({ bytes: 10 });
+      expect(collectCallCopies(h).map((c) => c.file)).toEqual(['call1_rec.m4a']);
     });
   });
 });

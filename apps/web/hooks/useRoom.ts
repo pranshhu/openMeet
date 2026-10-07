@@ -1925,6 +1925,7 @@ export function useRoom(slug: string) {
               (h.hostPcm?.totalBytes ?? 1) > 0 ? h.hostWavWriter?.fileName : undefined,
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
             callCopies: collectCallCopies(h),
+            callCopiesCapped: h.callCopiesCapped,
           };
           let report: SyncReport;
           try {

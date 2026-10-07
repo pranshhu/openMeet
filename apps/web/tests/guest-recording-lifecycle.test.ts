@@ -2360,15 +2360,16 @@ describe('host backup after a take in useRoom', () => {
           name: 'Bob',
           track: {},
           opened: Promise.resolve(),
-          writer: { fileName: 'call1_rec-host-1.m4a' },
-          recorder: { totalBytes: 10 },
+          writer: { fileName: 'call1_rec-host-1.m4a', size: 10 },
           startMs: 1_000_500,
         },
       ],
+      callCopiesCapped: true,
     });
     expect(result.current.state.phase).toBe('done');
     expect(vi.mocked(buildSyncReport).mock.calls.at(-1)![0]).toMatchObject({
       callCopies: [{ file: 'call1_rec-host-1.m4a', offsetMs: 500, name: 'Bob' }],
+      callCopiesCapped: true,
     });
     expect(result.current.state.summary?.fileList).toContainEqual(
       expect.objectContaining({

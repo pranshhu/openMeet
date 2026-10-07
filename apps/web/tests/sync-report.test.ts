@@ -589,6 +589,25 @@ describe('post-session report', () => {
     expect(empty.data.fileList).toEqual(without.data.fileList);
   });
 
+  it('says in the copy note when the take reached its file limit, and nothing when it did not', () => {
+    const callCopies = [{ file: 'call1_r.m4a', offsetMs: 0 }];
+    const capped = buildSyncReport({ ...base, guests: [], callCopies, callCopiesCapped: true });
+    const plain = buildSyncReport({ ...base, guests: [], callCopies });
+    expect((JSON.parse(capped.json) as { callCopies: { note: string } }).callCopies.note).toMatch(
+      /file limit, so later stretches have no copy\.$/
+    );
+    expect((JSON.parse(plain.json) as { callCopies: { note: string } }).callCopies.note).not.toMatch(
+      /file limit/
+    );
+  });
+
+  it('writes the copy note when the cap left no copy to list', () => {
+    const r = buildSyncReport({ ...base, guests: [], callCopies: [], callCopiesCapped: true });
+    const callCopies = (JSON.parse(r.json) as { callCopies: { files: unknown[]; note: string } }).callCopies;
+    expect(callCopies.files).toEqual([]);
+    expect(callCopies.note).toMatch(/file limit, so later stretches have no copy\.$/);
+  });
+
   it('sanitises a hostile copy name and drops one that is not usable', () => {
     const r = buildSyncReport({
       ...base,

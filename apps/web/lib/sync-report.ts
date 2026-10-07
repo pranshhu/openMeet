@@ -94,6 +94,8 @@ export interface SyncReportInput {
   checks?: ReadonlyMap<string, FileCheck> | undefined;
   /** The host's own copies of each guest's live call audio, in the order they were opened. */
   callCopies?: CallCopyInput[] | undefined;
+  /** Set when the take's call-copy file limit was reached, so later stretches have none. */
+  callCopiesCapped?: boolean | undefined;
 }
 
 export interface SummaryFile {
@@ -626,10 +628,14 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     screenFiles,
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
-    ...(callCopies.length > 0
+    ...(callCopies.length > 0 || input.callCopiesCapped
       ? {
           callCopies: {
-            note: "The host's own recording of each guest's live call audio: call quality, as the host heard it. A fallback for a guest track that is missing or short. Place each file at its offsetMs from the host start.",
+            note:
+              "The host's own recording of each guest's live call audio: call quality, as the host heard it. A fallback for a guest track that is missing or short. Place each file at its offsetMs from the host start." +
+              (input.callCopiesCapped
+                ? ' The take reached its file limit, so later stretches have no copy.'
+                : ''),
             files: callCopies,
           },
         }
