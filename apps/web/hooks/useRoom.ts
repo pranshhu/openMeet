@@ -1220,22 +1220,53 @@ export function useRoom(slug: string) {
         roleRef.current = m.role;
         myPeerIdRef.current = m.peerId;
         myOrdinalRef.current = m.ordinal;
+        // role-assigned describes the whole room as it stands, and the DO mints
+        // a peer id per socket: an id it does not list is someone who is gone
+        // and will not come back under that id. A Room that restarted never
+        // sent peer-left for those sockets, so their connections are dropped
+        // the same way that handler drops one — otherwise they sit in the map
+        // holding senders for a take that ended with their socket.
+        // The Room's message is not trusted here: a payload that is not a list
+        // of ids leaves this tab waiting on its own rather than throwing out of
+        // the socket handler, which would strand it mid-reconnect.
+        const peers = (Array.isArray(m.peers) ? m.peers : []).filter(
+          (other) => other && typeof other.peerId === 'string'
+        );
+        const here = new Set(peers.map((other) => other.peerId));
+        for (const [peerId, peer] of peersRef.current) {
+          if (here.has(peerId)) continue;
+          peer.close();
+          peersRef.current.delete(peerId);
+        }
+        // The room got smaller, so everyone left can spend more again.
+        syncSendQuality();
         // Politeness is pairwise and comes from join ordinals, NOT from role.
         // Deriving it from role made every peer polite whenever the host token
         // didn't reach the tab (invite link opened directly, new tab, private
         // mode) — routine — and no all-polite set can complete a handshake.
-        for (const other of m.peers) startPeer(other.peerId, other.ordinal, other.role, other.companion);
+        // Keep only what this message opened, so the set-up below adds tracks
+        // once: a live connection already holds its senders, and handing it
+        // over again is the InvalidAccessError that leaves both sides waiting
+        // for an offer. A failed or closed one is the exception — its peer's
+        // socket never dropped, so replacing it is the only way back for the
+        // pair after the ICE failure that triggered the reconnect.
+        const started: PeerConnection[] = [];
+        for (const other of peers) {
+          const held = peersRef.current.get(other.peerId);
+          if (held && held.connectionState !== 'failed' && held.connectionState !== 'closed') continue;
+          started.push(startPeer(other.peerId, other.ordinal, other.role, other.companion));
+        }
         // Everyone already here → negotiate now and leave the waiting room.
         // Otherwise wait for 'peer-joined'.
-        const anyoneHere = m.peers.length > 0;
+        const anyoneHere = peers.length > 0;
         const outgoing = withBoardAudio(localStream, boardRef.current);
         if (anyoneHere) {
-          setupJoinerNegotiation(peersRef.current.values(), asProducer, outgoing, screenStreamRef.current);
+          setupJoinerNegotiation(started, asProducer, outgoing, screenStreamRef.current);
         }
         setState((s) => ({
           ...s,
           role: m.role,
-          remotePeers: m.peers.map((pp) => ({
+          remotePeers: peers.map((pp) => ({
             peerId: pp.peerId,
             name: pp.displayName,
             stream: null,

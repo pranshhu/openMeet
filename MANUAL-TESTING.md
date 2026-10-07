@@ -156,6 +156,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.7 | Leaving | After a take, host clicks **Leave call** | "You left the call" with **Rejoin**, **Back to home** and download links for sync.json, chapters and backups; closing the tab asks first | ☐ | |
 | 7.8 | Host opens a second tab mid-take | Recording, open the room again in a second tab of the host's profile and press **Join now** | A dialog says another tab is recording this room. **Cancel** leaves the first tab recording; after **End & save** there, **Join now** goes straight in. (**OK** takes the call over: the first tab shows the End & save banner) | ☐ | |
 | 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
+| 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
 
 ## 8 — Extras
 

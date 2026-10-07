@@ -92,6 +92,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A call-audio copy whose write or close failed is no longer listed in the session
   summary and the sync file, and one guest's reconnects can no longer spend every
   other guest's files; the sync file says when the file limit was reached.
+- When the signalling service restarts and every socket rejoins under a new peer
+  id, the call comes back by itself: connections to ids the room no longer lists
+  are dropped instead of being negotiated a second time, which threw and left
+  both sides on "Connection lost" with a ghost tile.
 
 ### Security
 

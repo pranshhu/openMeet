@@ -2577,3 +2577,181 @@ describe('track panel readings in useRoom', () => {
     );
   });
 });
+
+// A Room that restarts mints every socket a new peer id, and a reconnecting tab
+// still holds the connections it made before. `role-assigned` describes the room
+// as it stands now, so an id it does not list is a connection to let go of.
+describe('role-assigned describes the whole room', () => {
+  type FakePeer = {
+    close: ReturnType<typeof vi.fn>;
+    setLocalStream: ReturnType<typeof vi.fn>;
+    createRecordingChannel: ReturnType<typeof vi.fn>;
+    connectionState: string | null;
+    setPeerCount: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    vi.clearAllMocks();
+  });
+
+  const stream = () =>
+    ({ getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] }) as unknown as MediaStream;
+
+  const host = (peerId: string) => ({ peerId, ordinal: 1, role: 'host', displayName: 'Host' });
+
+  const roleAssigned = (peers: unknown[]) => ({
+    type: 'role-assigned',
+    role: 'guest',
+    peerId: 'p-guest',
+    ordinal: 3,
+    peers,
+    recording: false,
+  });
+
+  /** The fake connections this tab opened for one peer id, oldest first. */
+  function peersFor(peerId: string): FakePeer[] {
+    return vi
+      .mocked(PeerConnection)
+      .mock.calls.map(([opts], i) => ({
+        remotePeerId: (opts as { remotePeerId: string }).remotePeerId,
+        peer: vi.mocked(PeerConnection).mock.results[i]!.value as unknown as FakePeer,
+      }))
+      .filter((p) => p.remotePeerId === peerId)
+      .map((p) => p.peer);
+  }
+
+  /** A guest in a call with the peers role-assigned lists, not recording. */
+  async function joinedGuest(peers: unknown[] = [host('p-host')]) {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(stream(), 'Guest Alice');
+    });
+    act(() => {
+      emitSignal('role-assigned', roleAssigned(peers));
+    });
+    return result;
+  }
+
+  it('closes the connection to an id the room no longer lists and opens one for the new id', async () => {
+    const result = await joinedGuest();
+    const oldHost = peersFor('p-host')[0]!;
+    expect(oldHost.setLocalStream).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([host('p-host-2')]));
+    });
+
+    expect(oldHost.close).toHaveBeenCalled();
+    // Setting the stale connection up again adds a second sender for the same
+    // track, which is the throw that left both pages on "Connection lost".
+    expect(oldHost.setLocalStream).toHaveBeenCalledTimes(1);
+    expect(peersFor('p-host-2')).toHaveLength(1);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host-2']);
+  });
+
+  it('leaves a connection alone when the same id is listed again', async () => {
+    const result = await joinedGuest();
+    const hostPeer = peersFor('p-host')[0]!;
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([host('p-host')]));
+    });
+
+    expect(hostPeer.close).not.toHaveBeenCalled();
+    expect(hostPeer.setLocalStream).toHaveBeenCalledTimes(1);
+    expect(peersFor('p-host')).toHaveLength(1);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+  });
+
+  it('rebuilds the connection held for a peer that stayed when it has failed', async () => {
+    const result = await joinedGuest();
+    const hostPeer = peersFor('p-host')[0]!;
+    hostPeer.connectionState = 'failed';
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([host('p-host')]));
+    });
+
+    // The peer's socket never dropped, so its id stays; the ICE-failure
+    // reconnect is the only way back for this pair and still has to replace it.
+    expect(hostPeer.close).toHaveBeenCalled();
+    expect(peersFor('p-host')).toHaveLength(2);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+  });
+
+  it('closes every connection and waits again when the list comes back empty', async () => {
+    const result = await joinedGuest([
+      host('p-host'),
+      { peerId: 'p-bo', ordinal: 2, role: 'guest', displayName: 'Bo' },
+    ]);
+    const hostPeer = peersFor('p-host')[0]!;
+    const bo = peersFor('p-bo')[0]!;
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([]));
+    });
+
+    expect(hostPeer.close).toHaveBeenCalled();
+    expect(bo.close).toHaveBeenCalled();
+    expect(result.current.state.remotePeers).toEqual([]);
+    expect(result.current.state.phase).toBe('waiting');
+  });
+
+  it('resyncs send quality and removes dropped peer from the connection map when a peer leaves', async () => {
+    const result = await joinedGuest([
+      host('p-host'),
+      { peerId: 'p-bo', ordinal: 2, role: 'guest', displayName: 'Bo' },
+    ]);
+    const hostPeer = peersFor('p-host')[0]!;
+    const bo = peersFor('p-bo')[0]!;
+
+    expect(hostPeer.setPeerCount).toHaveBeenLastCalledWith(3);
+    expect(bo.setPeerCount).toHaveBeenLastCalledWith(3);
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([host('p-host')]));
+    });
+
+    expect(bo.close).toHaveBeenCalled();
+    expect(hostPeer.setPeerCount).toHaveBeenLastCalledWith(2);
+    expect(bo.setPeerCount).toHaveBeenCalledTimes(1);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+  });
+
+  it('treats a peer list that is not a list as nobody, without throwing', async () => {
+    const result = await joinedGuest();
+    const hostPeer = peersFor('p-host')[0]!;
+
+    act(() => {
+      emitSignal('role-assigned', { ...roleAssigned([]), peers: null });
+    });
+
+    expect(hostPeer.close).toHaveBeenCalled();
+    expect(result.current.state.remotePeers).toEqual([]);
+    expect(result.current.state.phase).toBe('waiting');
+  });
+
+  it('rebinds a recording guest onto the connection it opens for the host’s new id', async () => {
+    await joinedGuest();
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-x',
+        kind: 'camera',
+        filename: 'guest_rec-x.mp4',
+      });
+    });
+    const sender = vi.mocked(startGuestRecording).mock.results.at(-1)!.value.sender;
+
+    await act(async () => {
+      emitSignal('role-assigned', roleAssigned([host('p-host-2')]));
+    });
+
+    const newHost = peersFor('p-host-2')[0]!;
+    expect(sender.rebind).toHaveBeenCalledTimes(1);
+    expect(sender.rebind).toHaveBeenCalledWith(newHost.createRecordingChannel.mock.results[0]!.value);
+  });
+});
