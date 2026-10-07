@@ -165,6 +165,32 @@ describe('recording', () => {
     }
   });
 
+  // The panel lives in CallStage, but the reading is the hook's: this is the
+  // wiring between them, so a broken pass-through leaves the panel unmounted.
+  it('hands the call the room’s track readings', () => {
+    Object.assign(state, {
+      phase: 'recording',
+      role: 'host',
+      peerRecording: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+    });
+    hook.readTrackHealth = () => [{ key: 'own:camera', track: 'camera', bytes: 1 }];
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByTestId('track-health')).toBeInTheDocument();
+  });
+
   it('passes low-power mode and its switch to the call', () => {
     Object.assign(state, {
       phase: 'in-call',

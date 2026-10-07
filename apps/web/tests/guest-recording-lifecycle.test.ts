@@ -1696,3 +1696,152 @@ describe('host backup after a take in useRoom', () => {
     );
   });
 });
+
+describe('track panel readings in useRoom', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  const bob = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' };
+  const hostStream = {
+    getTracks: () => [],
+    getAudioTracks: () => [{ kind: 'audio' }],
+    getVideoTracks: () => [{ kind: 'video' }],
+  } as unknown as MediaStream;
+  const takeHandles = {
+    hostStartMs: 1,
+    dir: {},
+    hostRecorder: { totalBytes: 2048 },
+    receiver: { bytesWritten: 512, isAbandoned: false },
+    channelRef: { current: {} },
+    slotPeerIds: new Map([[0, 'p-guest']]),
+  };
+
+  /** Joins as host, with `peers` already in the room, and returns the hook. */
+  async function joinHost(peers: unknown[] = [bob], hook = () => useRoom('xyz-test-room')) {
+    const result = renderHook(hook).result;
+    await act(async () => {
+      await result.current.join(hostStream, 'Host Hana');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers,
+        recording: false,
+      });
+    });
+    return result;
+  }
+
+  /** A joined host whose take started with these handles. */
+  async function hostTakeWith(
+    handles: Record<string, unknown>,
+    peers: unknown[] = [bob],
+    hook = () => useRoom('xyz-test-room')
+  ) {
+    vi.mocked(startHostRecording).mockImplementationOnce(
+      async (args) => ({ recordingId: args.recordingId, ...handles }) as never
+    );
+    const result = await joinHost(peers, hook);
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    return result;
+  }
+
+  it('reads nothing before a take starts', async () => {
+    const result = await joinHost();
+    expect(result.current.readTrackHealth()).toEqual([]);
+  });
+
+  it('reads this browser’s files first, then each guest’s, with the sizes on disk', async () => {
+    const result = await hostTakeWith(takeHandles);
+    expect(result.current.readTrackHealth()).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 2048 },
+      { key: 'g0:mp4', who: 'Bob', track: 'camera', bytes: 512 },
+    ]);
+  });
+
+  it('expects a guest’s camera unless that guest’s browser said it cannot record', async () => {
+    const result = await hostTakeWith(
+      {
+        hostStartMs: 1,
+        dir: {},
+        receiver: { bytesWritten: 0, isAbandoned: false },
+        channelRef: { current: null },
+      },
+      [
+        bob,
+        { peerId: 'p-prod', ordinal: 3, role: 'producer', displayName: 'Pat' },
+        { peerId: 'p-old', ordinal: 0, role: 'host', displayName: 'Old tab' },
+        { peerId: 'p-deck', ordinal: 4, role: 'guest', displayName: 'Deck', companion: true },
+      ]
+    );
+    expect(result.current.readTrackHealth()).toEqual([
+      { key: 'p:p-guest', who: 'Bob', track: 'camera', bytes: 0 },
+    ]);
+    const says = (mp4: unknown, wav: boolean) =>
+      act(() => {
+        emitSignal('recording-capability', {
+          type: 'recording-capability',
+          from: 'guest',
+          fromPeerId: 'p-guest',
+          mp4,
+          wav,
+        });
+      });
+    // The Room relays `mp4` as sent: only a literal false means "cannot record",
+    // and a browser with no WAV capture still sends its camera.
+    for (const mp4 of [true, 0, null, 'no']) {
+      says(mp4, false);
+      expect(result.current.readTrackHealth()).toEqual([
+        { key: 'p:p-guest', who: 'Bob', track: 'camera', bytes: 0 },
+      ]);
+    }
+    says(false, true);
+    expect(result.current.readTrackHealth()).toEqual([]);
+  });
+
+  it('reads without rendering, and hands back the same function across renders', async () => {
+    let renders = 0;
+    const result = await hostTakeWith(takeHandles, [bob], () => {
+      renders += 1;
+      return useRoom('xyz-test-room');
+    });
+
+    const before = renders;
+    // act flushes any update a read scheduled; outside it the count could not move.
+    act(() => {
+      for (let i = 0; i < 3; i += 1) expect(result.current.readTrackHealth().length).toBe(2);
+    });
+    expect(renders).toBe(before);
+
+    const read = result.current.readTrackHealth;
+    act(() => {
+      emitSignal('chat', { type: 'chat', from: 'guest', fromPeerId: 'p-guest', text: 'hi' });
+      emitSignal('presence', {
+        type: 'presence',
+        from: 'guest',
+        fromPeerId: 'p-guest',
+        micOn: false,
+        camOn: true,
+        screenSharing: false,
+      });
+      emitSignal('recording-capability', {
+        type: 'recording-capability',
+        from: 'guest',
+        fromPeerId: 'p-guest',
+        mp4: true,
+        wav: true,
+      });
+    });
+    expect(result.current.readTrackHealth).toBe(read);
+  });
+});

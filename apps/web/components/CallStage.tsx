@@ -8,11 +8,13 @@ import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
+import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
 import { ChatPanel, chatSenderLabel, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
+import { RecordingHealth } from './RecordingHealth';
 import { RecordingNotice } from './RecordingNotice';
 import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
@@ -115,6 +117,7 @@ export function CallStage({
   isFallbackMedia = false,
   presentingRearCamera = false,
   readLoad,
+  readTrackHealth,
   lowPower = false,
   onSetLowPower,
 }: {
@@ -181,6 +184,8 @@ export function CallStage({
   presentingRearCamera?: boolean;
   /** One reading of how this device is coping; polled only while a take records. */
   readLoad?: () => Promise<LoadSample>;
+  /** Read on a timer by the track panel; it must keep its identity between renders. */
+  readTrackHealth?: () => TrackReading[];
   /** This device is sending everyone a smaller live picture to spare its processor. */
   lowPower?: boolean;
   onSetLowPower?: (on: boolean) => void;
@@ -517,7 +522,7 @@ export function CallStage({
           recording" is the one status that must not be silent. */}
       <div
         data-testid="status-bar"
-        className="flex items-center gap-3 px-4 py-3.5 text-sm min-[861px]:px-14"
+        className="relative flex items-center gap-3 px-4 py-3.5 text-sm min-[861px]:px-14"
         aria-live="polite"
       >
         {/* Top-left at the waiting room's inset, so the mark stays put when the
@@ -542,6 +547,7 @@ export function CallStage({
             {markerCount} marker{markerCount === 1 ? '' : 's'}
           </span>
         )}
+        {phase === 'recording' && readTrackHealth && <RecordingHealth read={readTrackHealth} />}
         {/* The host's downloads live in the summary; here is only the verdict.
             A guest has no summary, so its backups stay on this line. */}
         {phase === 'done' && !roomRecording && (

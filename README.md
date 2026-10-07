@@ -75,6 +75,8 @@ retention policy to trust, because there's nothing retained.
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up, with a low-power
   mode that sends the others a smaller live picture and leaves the recording alone
+- A live track panel during a take: every camera, WAV and screen file with its size
+  growing, and a warning when one stops getting data
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**

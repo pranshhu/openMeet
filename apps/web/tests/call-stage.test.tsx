@@ -1687,3 +1687,48 @@ describe('CallStage mic warning', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
   });
 });
+
+describe('CallStage track panel', () => {
+  const read = () => [{ key: 'own:camera', track: 'camera' as const, bytes: 1_500_000 }];
+
+  // Against the call screen the panel would be positioned against the whole
+  // viewport and land off the bottom of it; the status bar is its anchor.
+  it('mounts the track panel inside a status bar it is positioned against', () => {
+    render(<CallStage {...baseProps} phase="recording" markerCount={2} readTrackHealth={read} />);
+    const bar = screen.getByTestId('status-bar');
+    expect(bar.contains(screen.getByTestId('track-health'))).toBe(true);
+    expect(bar.className).toMatch(/\brelative\b/);
+    expect(screen.getByText('2 markers').nextElementSibling).toBe(screen.getByTestId('track-health'));
+  });
+
+  it('leaves the track panel unmounted while the room records and this browser does not', () => {
+    render(<CallStage {...baseProps} phase="in-call" roomRecording readTrackHealth={read} />);
+    expect(screen.queryByTestId('track-health')).toBeNull();
+  });
+
+  it.each(['in-call', 'finalizing', 'done'] as const)(
+    'leaves the track panel unmounted outside a take (%s)',
+    (phase) => {
+      render(<CallStage {...baseProps} phase={phase} readTrackHealth={read} />);
+      expect(screen.queryByTestId('track-health')).toBeNull();
+    }
+  );
+
+  // The element is absent either way (the panel itself skips a failed read), so
+  // the only trace of a panel mounted without a reading is its armed timer.
+  it('arms no timer for a panel that has nothing to read', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      const bare = render(<CallStage {...baseProps} phase="recording" />);
+      const elapsedOnly = spy.mock.calls.length;
+      bare.unmount();
+      spy.mockClear();
+
+      const withRead = render(<CallStage {...baseProps} phase="recording" readTrackHealth={read} />);
+      expect(spy.mock.calls.length).toBe(elapsedOnly + 1);
+      withRead.unmount();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

@@ -53,9 +53,11 @@ import {
   collectGuestReports,
   collectScreenSegments,
   collectFileChecks,
+  collectTrackHealth,
   takeName,
   writeTakeSidecars,
   type RecordingHandles,
+  type TrackReading,
 } from './recording-controller';
 
 export type RoomPhase =
@@ -551,6 +553,7 @@ export function useRoom(slug: string) {
   // endRecording is memoised per room, so it reads peer names through this
   // rather than a stale `state` closure.
   const remotePeersRef = useRef<RemotePeer[]>([]);
+  const capabilitiesRef = useRef<RoomState['capabilities']>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
@@ -637,6 +640,10 @@ export function useRoom(slug: string) {
   useEffect(() => {
     remotePeersRef.current = state.remotePeers;
   }, [state.remotePeers]);
+
+  useEffect(() => {
+    capabilitiesRef.current = state.capabilities;
+  }, [state.capabilities]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1521,6 +1528,27 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * What each file of the running take has recorded or received so far. The
+   * track panel calls this on its own timer, so a chunk arriving never
+   * renders React.
+   */
+  const readTrackHealth = useCallback((): TrackReading[] => {
+    const h = recordingRef.current;
+    if (!h) return [];
+    return collectTrackHealth(
+      h,
+      remotePeersRef.current.map((p) => ({
+        peerId: p.peerId,
+        name: p.name,
+        // Only a guest sends the host a camera, and one whose browser said
+        // it cannot record is already named in its own warning line.
+        expected:
+          p.role === 'guest' && !p.companion && capabilitiesRef.current[p.peerId]?.mp4 !== false,
+      }))
+    );
+  }, []);
+
+  /**
    * Read once how this device is coping. Both figures exist already: the WAV
    * recorder counts the audio it had to pad, and the browser says when a live
    * encoder is limited by the processor. Meant to be polled every few seconds.
@@ -2083,6 +2111,7 @@ export function useRoom(slug: string) {
     openMediaBoard,
     newTake,
     discardTake,
+    readTrackHealth,
     readLoad,
     setLowPower,
   };
