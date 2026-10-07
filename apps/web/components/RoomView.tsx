@@ -83,6 +83,7 @@ export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
     startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    setLowPower,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -278,6 +279,8 @@ export function RoomView({ slug }: { slug: string }) {
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
       readLoad={readLoad}
+      lowPower={state.lowPower}
+      onSetLowPower={setLowPower}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}

@@ -1304,6 +1304,184 @@ describe('CallStage keep-up notice', () => {
       }
     }
   );
+
+  it('offers low-power mode when the device is struggling', async () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.fn();
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const onToggleCam = vi.fn();
+      render(<CallStage {...baseProps} phase="recording" onSetLowPower={spy} onToggleCam={onToggleCam} readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+      const btn = screen.getByRole('button', { name: 'Turn on low-power mode' });
+      expect(btn).toHaveAttribute('type', 'button');
+      fireEvent.click(btn);
+      expect(spy).toHaveBeenCalledWith(true);
+      expect(onToggleCam).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says the mode is on, between takes too, and turns it off', () => {
+    const spy = vi.fn();
+    render(<CallStage {...baseProps} phase="in-call" lowPower onSetLowPower={spy} />);
+    const text = screen.getByText(
+      'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+    );
+    expect(text.closest('[role="status"]')).not.toBeNull();
+    const btn = screen.getByRole('button', { name: 'Turn off low-power mode' });
+    fireEvent.click(btn);
+    expect(spy).toHaveBeenCalledWith(false);
+  });
+
+  it.each(['in-call', 'finalizing', 'done'] as const)(
+    'says the mode is on outside a take (%s)',
+    (phase) => {
+      render(<CallStage {...baseProps} phase={phase} lowPower />);
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+    }
+  );
+
+  it('says what is left when low-power mode was not enough', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      render(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Turn off low-power mode' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the camera alone when the mode is turned off while still struggling', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const onToggleCam = vi.fn();
+      render(
+        <CallStage
+          {...baseProps}
+          phase="recording"
+          lowPower
+          readLoad={readLoad}
+          onToggleCam={onToggleCam}
+          onSetLowPower={vi.fn()}
+        />
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Turn off low-power mode' }));
+      expect(onToggleCam).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forgets the earlier trouble once the mode is turned on', async () => {
+    vi.useFakeTimers();
+    try {
+      let step = 150;
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += step), cpuLimited: false }));
+      const { rerender } = render(<CallStage {...baseProps} phase="recording" readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+      const button = screen.getByRole('button', { name: 'Turn on low-power mode' });
+      button.focus();
+
+      step = 0;
+      rerender(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Turn off low-power mode' }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goes back to the plain sentence once the take is over', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const { rerender } = render(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      rerender(<CallStage {...baseProps} phase="done" lowPower readLoad={readLoad} />);
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('CallStage mic warning', () => {

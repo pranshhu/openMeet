@@ -21,6 +21,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   or the battery is low.
 - A notice during a take when the device is not keeping up: audio was skipped, or
   the browser reports its video encoder limited by the processor.
+- Low-power mode, offered when the device is struggling during a take: the others
+  get a smaller live picture and the recording is unchanged.
 - A public demo environment: `[env.demo]` in `apps/worker/wrangler.toml`, deployed with
   `pnpm --filter @openmeet/worker run deploy:demo` (migrations with `db:migrate:demo`).
   Self-host installs never read it.

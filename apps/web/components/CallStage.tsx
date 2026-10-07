@@ -115,6 +115,8 @@ export function CallStage({
   isFallbackMedia = false,
   presentingRearCamera = false,
   readLoad,
+  lowPower = false,
+  onSetLowPower,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -179,6 +181,9 @@ export function CallStage({
   presentingRearCamera?: boolean;
   /** One reading of how this device is coping; polled only while a take records. */
   readLoad?: () => Promise<LoadSample>;
+  /** This device is sending everyone a smaller live picture to spare its processor. */
+  lowPower?: boolean;
+  onSetLowPower?: (on: boolean) => void;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -204,7 +209,7 @@ export function CallStage({
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   const isTakeActive = phase === 'recording' || phase === 'finalizing';
   const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
-  const overloaded = useOverloadWatch(phase === 'recording', readLoad);
+  const overloaded = useOverloadWatch(phase === 'recording', readLoad, lowPower);
 
   // The invite link is only in the waiting room otherwise, and the host leaves
   // that as soon as the first guest arrives. origin+pathname drops ?producer=1
@@ -640,13 +645,26 @@ export function CallStage({
           </button>
         </div>
       )}
-      {overloaded && (
-        <p
+      {(overloaded || lowPower) && (
+        <div
           role="status"
-          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+          className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
         >
-          This device is struggling to keep up, so the recording may skip. Close other apps and tabs.
-        </p>
+          <span>
+            {!lowPower
+              ? 'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+              : overloaded
+                ? 'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+                : 'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => onSetLowPower?.(!lowPower)}
+            className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-7"
+          >
+            {lowPower ? 'Turn off low-power mode' : 'Turn on low-power mode'}
+          </button>
+        </div>
       )}
 
       {/* Recording failures render HERE, inside the call, rather than switching

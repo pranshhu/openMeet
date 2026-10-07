@@ -256,7 +256,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
   every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
   reports a live encoder as limited by the CPU) and shows a notice for the rest of the take once
-  the device is not keeping up.
+  the device is not keeping up; the notice offers low-power mode (`useRoom().setLowPower`), which
+  makes `sendEncoding` send a quarter-size camera picture at the floor bitrate and a shared screen
+  at 4 fps on every connection, leaves every recorder alone, and stays on until turned off.
+  Switching the mode starts the readings over, and while it is on only lost audio counts.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`

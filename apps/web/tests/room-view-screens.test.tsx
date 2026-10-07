@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 
 /**
@@ -160,6 +160,70 @@ describe('recording', () => {
           'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
         )
       ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes low-power mode and its switch to the call', () => {
+    Object.assign(state, {
+      phase: 'in-call',
+      role: 'host',
+      peerRecording: false,
+      lowPower: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    hook.setLowPower = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off low-power mode' }));
+    expect(hook.setLowPower).toHaveBeenCalledWith(false);
+  });
+
+  it('turns low-power mode on from the call', async () => {
+    Object.assign(state, {
+      phase: 'recording',
+      role: 'host',
+      peerRecording: true,
+      lowPower: false,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    let lost = 0;
+    hook.readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+    hook.setLowPower = vi.fn();
+    vi.useFakeTimers();
+    try {
+      render(<RoomView slug="abc-defg-hij" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Turn on low-power mode' }));
+      expect(hook.setLowPower).toHaveBeenCalledWith(true);
     } finally {
       vi.useRealTimers();
     }

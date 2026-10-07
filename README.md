@@ -73,7 +73,8 @@ retention policy to trust, because there's nothing retained.
   (unplugged, muted on the device, wrong input)
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
-- A notice during a take when this device is struggling to keep up
+- A notice during a take when this device is struggling to keep up, with a low-power
+  mode that sends the others a smaller live picture and leaves the recording alone
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**

@@ -214,4 +214,159 @@ describe('useOverloadWatch', () => {
 
     expect(result.current).toBe(false);
   });
+
+  it('starts the evidence over when low-power mode changes', async () => {
+    vi.useFakeTimers();
+    let val = 150;
+    const read = vi.fn(async () => s(val)).mockResolvedValueOnce(s(0));
+    const { result, rerender } = renderHook(
+      ({ lowPower }) => useOverloadWatch(true, read, lowPower),
+      { initialProps: { lowPower: false } }
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(result.current).toBe(true);
+
+    rerender({ lowPower: true });
+    expect(result.current).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(result.current).toBe(false);
+
+    val = 300;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it('never shows a verdict reached in the other mode, not even for one render', async () => {
+    vi.useFakeTimers();
+    let val = 150;
+    const read = vi.fn(async () => s(val)).mockResolvedValueOnce(s(0));
+    const renders: { lowPower: boolean; overloaded: boolean }[] = [];
+    const { rerender } = renderHook(
+      ({ lowPower }) => {
+        const overloaded = useOverloadWatch(true, read, lowPower);
+        renders.push({ lowPower, overloaded });
+        return overloaded;
+      },
+      { initialProps: { lowPower: false } }
+    );
+    expect(renders[0]).toEqual({ lowPower: false, overloaded: false });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(renders[renders.length - 1]).toEqual({ lowPower: false, overloaded: true });
+
+    rerender({ lowPower: true });
+    const lowPowerRenders = renders.filter((r) => r.lowPower);
+    expect(lowPowerRenders.length).toBeGreaterThanOrEqual(1);
+    expect(renders.some((r) => r.lowPower && r.overloaded)).toBe(false);
+  });
+
+  it('never shows a verdict reached with the mode on once it is turned off', async () => {
+    vi.useFakeTimers();
+    let lost = 0;
+    const read = vi.fn(async () => s((lost += 150)));
+    const renders: { lowPower: boolean; overloaded: boolean }[] = [];
+    const { rerender } = renderHook(
+      ({ lowPower }) => {
+        const overloaded = useOverloadWatch(true, read, lowPower);
+        renders.push({ lowPower, overloaded });
+        return overloaded;
+      },
+      { initialProps: { lowPower: true } }
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(renders[renders.length - 1]).toEqual({ lowPower: true, overloaded: true });
+    rerender({ lowPower: false });
+    expect(renders.some((r) => !r.lowPower)).toBe(true);
+    expect(renders.some((r) => !r.lowPower && r.overloaded)).toBe(false);
+  });
+
+  it('counts only lost audio while low-power mode is on', async () => {
+    vi.useFakeTimers();
+    let lost = 0;
+    const read = vi.fn(async () => s(lost, true));
+    const renders: boolean[] = [];
+    const { result } = renderHook(() => {
+      const v = useOverloadWatch(true, read, true);
+      renders.push(v);
+      return v;
+    });
+    expect(renders[0]).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(result.current).toBe(false);
+
+    lost = 150;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it('counts processor limits when low-power mode is off by default', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => s(0, true));
+    const { result } = renderHook(() => useOverloadWatch(true, read));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(result.current).toBe(true);
+  });
+
+  it('does not poll or throw when read is undefined', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useOverloadWatch(true, undefined));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it('starts evidence over when read function changes', async () => {
+    vi.useFakeTimers();
+    const read1 = vi.fn(async () => s(150)).mockResolvedValueOnce(s(0));
+    const { result, rerender } = renderHook(
+      ({ read }) => useOverloadWatch(true, read),
+      { initialProps: { read: read1 } }
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(result.current).toBe(true);
+
+    const read2 = vi.fn(async () => s(0));
+    rerender({ read: read2 });
+    expect(result.current).toBe(false);
+  });
+
+  it('drops the verdict when the take ends', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => s(150)).mockResolvedValueOnce(s(0));
+    const { result, rerender } = renderHook(
+      ({ active }) => useOverloadWatch(active, read),
+      { initialProps: { active: true } }
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(result.current).toBe(true);
+    rerender({ active: false });
+    expect(result.current).toBe(false);
+  });
 });

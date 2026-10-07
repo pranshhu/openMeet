@@ -31,11 +31,24 @@ export function isOverloaded(samples: readonly LoadSample[]): boolean {
  * True once the take being recorded has shown this device is not keeping up.
  * It stays true for the rest of that take, so the notice does not come and
  * go, and starts clean with the next take.
+ *
+ * Changing low-power mode starts the evidence over: what was measured before
+ * says nothing about the mode now in use. While the mode is on only lost audio
+ * counts: the encoder flag describes the live picture, which is then a quarter
+ * size, and the browser goes on reporting a past limit for a while after the
+ * load has gone.
  */
-export function useOverloadWatch(active: boolean, read?: () => Promise<LoadSample>): boolean {
-  const [overloaded, setOverloaded] = useState(false);
+export function useOverloadWatch(
+  active: boolean,
+  read?: () => Promise<LoadSample>,
+  lowPower = false
+): boolean {
+  // The mode the verdict was reached in, or null while there is none. Compared
+  // with the mode in use on the way out, so a verdict from before a switch is
+  // not shown even for the one render that runs before the effect starts over.
+  const [overloadedIn, setOverloadedIn] = useState<boolean | null>(null);
   useEffect(() => {
-    setOverloaded(false);
+    setOverloadedIn(null);
     if (!active || !read) return;
     let cancelled = false;
     const samples: LoadSample[] = [];
@@ -43,9 +56,9 @@ export function useOverloadWatch(active: boolean, read?: () => Promise<LoadSampl
       read().then(
         (sample) => {
           if (cancelled) return;
-          samples.push(sample);
+          samples.push(lowPower ? { ...sample, cpuLimited: false } : sample);
           if (samples.length > OVERLOAD_WINDOW) samples.shift();
-          if (isOverloaded(samples)) setOverloaded(true);
+          if (isOverloaded(samples)) setOverloadedIn(lowPower);
         },
         () => {
           // A reading that failed is no evidence either way.
@@ -56,6 +69,6 @@ export function useOverloadWatch(active: boolean, read?: () => Promise<LoadSampl
       cancelled = true;
       clearInterval(id);
     };
-  }, [active, read]);
-  return overloaded;
+  }, [active, read, lowPower]);
+  return overloadedIn === lowPower;
 }
