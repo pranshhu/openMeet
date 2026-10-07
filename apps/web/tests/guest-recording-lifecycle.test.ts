@@ -748,6 +748,15 @@ describe('host backup after a take in useRoom', () => {
     });
     expect(parsedSync.frameRate.files[1].conform).toContain('-vf fps=24 ');
 
+    expect(parsedSync.aligned.files).toContainEqual({
+      file: 'guest_rec-host-sidecars.mp4',
+      padMs: 500,
+      cmd: expect.stringContaining('-itsoffset 0.500 '),
+    });
+    expect(result.current.state.summary?.commands.map((c) => c.label)).toContain(
+      'Bob: aligned copy of the video (starts 0.500 s in)'
+    );
+
     expect(writtenFiles.has('chat_rec-host-sidecars.txt')).toBe(true);
     const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-host-sidecars.txt')?.data);
     expect(chatContent).toContain('hello from host during take');

@@ -32,6 +32,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   video file, one that measures how variable its frame rate is and one that
   re-encodes it to a constant frame rate.
 - The session summary and the sync file show the size of every file a take wrote.
+- Aligned copies: `sync.json` (`aligned`) and the session summary give an `ffmpeg`
+  command per file that writes a copy starting at the host's start, so every
+  track can be placed at 00:00. WAV copies get real silence; MP4 copies are
+  not re-encoded.
 
 ### Security
 

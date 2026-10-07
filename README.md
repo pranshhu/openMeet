@@ -76,8 +76,8 @@ retention policy to trust, because there's nothing retained.
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**
 - `sync.json` with the start-time offset between tracks, a SHA-256 integrity verdict,
-  and ready-to-run `ffmpeg` commands for remuxing and for pairing each video with its
-  WAV master, downloaded from the summary
+  and ready-to-run `ffmpeg` commands for remuxing, for pairing each video with its
+  WAV master and for aligned copies that start at 00:00, downloaded from the summary
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -382,6 +382,11 @@ the screen that follows offers them too.
 1. **Remux:** Run the `+faststart` remux commands in `sync.json` (`seekability`) so clips are seekable:
    `ffmpeg -i "<file>.mp4" -c copy -tag:v avc1 -movflags +faststart "<file>_seekable.mp4"`
 2. **Timeline:** Import everything and offset each guest clip by its `offsetMs` in `timeline.guests` (`timeline.guestMinusHostMs` in a two-person session); screen segments carry their own offset in `timeline.screenSegments`. If an offset is null, align by waveform.
+   Or run the aligned-copy commands first (`aligned` in `sync.json`, also under Editor
+   commands in the summary): each writes an `_aligned` copy that starts at the host's
+   start, so the copies and the host's files all go at 00:00. WAV copies get real silence;
+   MP4 copies are not re-encoded (the delay is stored in the file), and an editor that
+   ignores it still needs the offset.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.

@@ -328,12 +328,13 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry — plus integrity verdicts,
-  each file's size (`verification[]`), lossless
-  `+faststart` remux and WAV-pairing commands, and a `frameRate` section: the requested rate, each camera
-  file's track-reported rate where known, and per video file a `measure` (ffmpeg `vfrdet`) and a
-  re-encoding `conform` command), saved to the recording folder alongside chapters and
-  chat sidecars and surfaced in the session summary as "Download sync.json" (downloaded as
+  the host start, with `sharer` display name on each entry — plus integrity verdicts, each file's
+  size (`verification[]`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
+  per file, its delay from the host start and an `ffmpeg` command that writes a copy starting there,
+  and a `frameRate` section: the requested rate, each camera file's track-reported rate where known,
+  and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
+  recording folder alongside chapters and chat sidecars and surfaced in the session summary as
+  "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `startRecording` in one click (same folder, no second prompt). With nobody left to record, that

@@ -224,7 +224,10 @@ export class ChunkReceiver {
   }
 
   private captureMeta(m: RecordingMeta): void {
-    if (Number.isFinite(m.guestStartHostMs)) {
+    // The guest reports its start on this clock, and started before it could
+    // report: a later time is not a start. Left unset, the report says to align
+    // by waveform rather than pad a file by an amount the sender made up.
+    if (Number.isFinite(m.guestStartHostMs) && m.guestStartHostMs <= Date.now()) {
       this._guestStartHostMs = m.guestStartHostMs;
     }
     if (Number.isFinite(m.rttMs)) {

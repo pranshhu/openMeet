@@ -176,7 +176,7 @@ export function SessionSummary({
       {alignment && (
         <section>
           <h3 className="mb-1 font-medium text-white/80">Alignment</h3>
-          {/* One line per guest. */}
+          {/* One line per guest, then the note on aligned copies when there are any. */}
           <p className="whitespace-pre-line text-white/60">{alignment}</p>
         </section>
       )}

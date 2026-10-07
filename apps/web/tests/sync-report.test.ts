@@ -665,3 +665,181 @@ describe('verification and file sizes', () => {
     );
   });
 });
+
+describe('aligned copies', () => {
+  const base = { recordingId: 'r', hostFile: 'host_r.mp4', hostStartMs: 1_000_000 };
+  const bob = (startHostMs: number | null) => ({
+    slot: 0,
+    name: 'Bob',
+    file: 'guest_r.mp4',
+    startHostMs,
+    rttMs: 20,
+  });
+  const HINT =
+    "The aligned-copy commands under Editor commands write copies that start when the host's recording starts, " +
+    "so each copy lines up with the host's files at 00:00 on a timeline. Audio copies get real silence. " +
+    'Video copies are not re-encoded: the delay is stored in the file, and an editor that ignores it needs ' +
+    'the clip moved by the time shown with its command.';
+  const VIDEO_CMD =
+    'ffmpeg -itsoffset 1.500 -i "guest_r.mp4" -c copy -tag:v avc1 -movflags +faststart "guest_r_aligned.mp4"';
+
+  it('gives a late guest a delayed video copy and the host none', () => {
+    const r = buildSyncReport({ ...base, guests: [bob(1_001_500)] });
+    const aligned = JSON.parse(r.json).aligned;
+    expect(Object.keys(aligned)).toEqual(['note', 'files']);
+    expect(aligned.note).toContain('not re-encoded');
+    expect(aligned.files).toEqual([
+      { file: 'host_r.mp4', padMs: 0 },
+      { file: 'guest_r.mp4', padMs: 1500, cmd: VIDEO_CMD },
+    ]);
+    expect(r.data.commands).toContainEqual({
+      label: 'Bob: aligned copy of the video (starts 1.500 s in)',
+      cmd: VIDEO_CMD,
+    });
+  });
+
+  it('gives a guest WAV a silence-padded copy with the same pad as its video', () => {
+    const r = buildSyncReport({
+      ...base,
+      hostWavFile: 'host_r.wav',
+      guests: [{ ...bob(1_001_500), wavFile: 'guest_r.wav' }],
+    });
+    const aligned = JSON.parse(r.json).aligned;
+    const wavCmd =
+      'ffmpeg -i "guest_r.wav" -af "adelay=1500:all=1" -c:a pcm_s24le -rf64 auto "guest_r_aligned.wav"';
+    expect(aligned.files).toEqual([
+      { file: 'host_r.mp4', padMs: 0 },
+      { file: 'host_r.wav', padMs: 0 },
+      { file: 'guest_r.mp4', padMs: 1500, cmd: VIDEO_CMD },
+      { file: 'guest_r.wav', padMs: 1500, cmd: wavCmd },
+    ]);
+    expect(r.data.commands).toContainEqual({
+      label: 'Bob: aligned copy of the audio master (1.500 s of silence added)',
+      cmd: wavCmd,
+    });
+  });
+
+  it('gives no command when the start is unknown or not a finite number', () => {
+    for (const g of [bob(null), bob(Infinity)]) {
+      const r = buildSyncReport({ ...base, guests: [g] });
+      const aligned = JSON.parse(r.json).aligned;
+      expect(aligned.files).toEqual([
+        { file: 'host_r.mp4', padMs: 0 },
+        { file: 'guest_r.mp4', padMs: null },
+      ]);
+      const alignedLabels = r.data.commands.filter((c) => c.label.includes('aligned copy'));
+      expect(alignedLabels).toEqual([]);
+      expect(r.data.alignment).not.toContain('aligned-copy');
+    }
+    const rEmpty = buildSyncReport({ recordingId: 'r', hostStartMs: 1_000_000, guests: [] });
+    expect(JSON.parse(rEmpty.json).aligned.files).toEqual([]);
+  });
+
+  it('never pads a file whose start was estimated before the host', () => {
+    const r = buildSyncReport({ ...base, guests: [bob(999_600)] });
+    expect(r.guestMinusHostMs).toBe(-400);
+    const aligned = JSON.parse(r.json).aligned;
+    expect(aligned.files).toEqual([
+      { file: 'host_r.mp4', padMs: 0 },
+      { file: 'guest_r.mp4', padMs: 0 },
+    ]);
+    const alignedLabels = r.data.commands.filter((c) => c.label.includes('aligned copy'));
+    expect(alignedLabels).toEqual([]);
+  });
+
+  it("takes each guest's pad from that guest alone", () => {
+    const r = buildSyncReport({
+      ...base,
+      guests: [
+        bob(1_001_500),
+        { slot: 1, name: 'Carol', file: 'guest2_r.mp4', startHostMs: 999_000, rttMs: 20 },
+      ],
+    });
+    const aligned = JSON.parse(r.json).aligned;
+    expect(aligned.files.map((f: { file: string; padMs: number | null }) => [f.file, f.padMs])).toEqual([
+      ['host_r.mp4', 0],
+      ['guest_r.mp4', 1500],
+      ['guest2_r.mp4', 0],
+    ]);
+  });
+
+  it('delays a screen segment by its offset', () => {
+    const cmd =
+      'ffmpeg -itsoffset 27.000 -i "guest_screen_r_2.mp4" -c copy -tag:v avc1 -movflags +faststart "guest_screen_r_2_aligned.mp4"';
+    const r = buildSyncReport({
+      ...base,
+      guests: [],
+      screenSegments: [
+        { file: 'host_screen_r.mp4', offsetMs: 0 },
+        { file: 'guest_screen_r_2.mp4', offsetMs: 27000 },
+      ],
+    });
+    const aligned = JSON.parse(r.json).aligned;
+    expect(aligned.files).toEqual([
+      { file: 'host_r.mp4', padMs: 0 },
+      { file: 'host_screen_r.mp4', padMs: 0 },
+      { file: 'guest_screen_r_2.mp4', padMs: 27000, cmd },
+    ]);
+    const alignedLabels = r.data.commands.filter((c) => c.label.includes('aligned copy'));
+    expect(alignedLabels).toEqual([
+      { label: 'Screen segment 2: aligned copy of the video (starts 27.000 s in)', cmd },
+    ]);
+    expect(r.data.alignment).toBe(HINT);
+  });
+
+  it('pads by whole milliseconds, written as plain decimals', () => {
+    const r = buildSyncReport({ ...base, guests: [bob(1_000_000 + 3_600_000.4)] });
+    const aligned = JSON.parse(r.json).aligned;
+    const guestEntry = aligned.files.find((f: { file: string }) => f.file === 'guest_r.mp4');
+    expect(guestEntry.padMs).toBe(3_600_000);
+    expect(guestEntry.cmd).toContain('-itsoffset 3600.000 ');
+  });
+
+  it('explains the commands in the summary only, after the existing alignment line', () => {
+    const line = 'Bob started 1500 ms AFTER host. Shift the Bob clip +1500 ms (later) relative to host.';
+    const r = buildSyncReport({ ...base, guests: [bob(1_001_500)] });
+    expect(r.data.alignment).toBe(`${line}\n${HINT}`);
+    expect(JSON.parse(r.json).alignment).toBe(line);
+  });
+
+  it('lists the aligned-copy commands after every existing command', () => {
+    const r = buildSyncReport({
+      ...base,
+      hostWavFile: 'host_r.wav',
+      guests: [
+        { ...bob(1_001_500), wavFile: 'guest_r.wav' },
+        { slot: 1, name: 'Carol', file: 'guest2_r.mp4', wavFile: 'guest2_r.wav', startHostMs: 1_003_200, rttMs: 20 },
+      ],
+    });
+    expect(r.data.commands.map((c) => c.label)).toEqual([
+      'Make the host file seekable (lossless)',
+      'Make the Bob file seekable (lossless)',
+      'Make the Carol file seekable (lossless)',
+      'Host: pair video with the uncompressed audio master',
+      'Bob: pair video with the uncompressed audio master',
+      'Carol: pair video with the uncompressed audio master',
+      'Bob: aligned copy of the video (starts 1.500 s in)',
+      'Bob: aligned copy of the audio master (1.500 s of silence added)',
+      'Carol: aligned copy of the video (starts 3.200 s in)',
+      'Carol: aligned copy of the audio master (3.200 s of silence added)',
+    ]);
+  });
+
+  it('keeps a screen segment on its own offset, lists it after the guests, and names an unnamed guest', () => {
+    const r = buildSyncReport({
+      ...base,
+      guests: [{ slot: 0, file: 'guest_r.mp4', startHostMs: 1_001_500, rttMs: 20 }],
+      screenSegments: [{ file: 'host_screen_r.mp4', offsetMs: 27000 }],
+    });
+    const aligned = JSON.parse(r.json).aligned;
+    expect(aligned.files.map((f: { file: string; padMs: number | null }) => [f.file, f.padMs])).toEqual([
+      ['host_r.mp4', 0],
+      ['guest_r.mp4', 1500],
+      ['host_screen_r.mp4', 27000],
+    ]);
+    expect(r.data.commands.map((c) => c.label).filter((l) => l.includes('aligned copy'))).toEqual([
+      'Guest: aligned copy of the video (starts 1.500 s in)',
+      'Screen segment 1: aligned copy of the video (starts 27.000 s in)',
+    ]);
+  });
+});

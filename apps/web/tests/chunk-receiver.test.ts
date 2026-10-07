@@ -81,6 +81,32 @@ describe('ChunkReceiver', () => {
     expect(r.syncRttMs).toBe(42);
   });
 
+  it('ignores a guest start later than the host clock, and keeps one that is not', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+    });
+    await r.handleMessage(
+      JSON.stringify({
+        type: 'recording_meta',
+        recordingId: 'r1',
+        guestStartHostMs: Date.now() + 60_000,
+      })
+    );
+    expect(r.guestStartHostMs).toBeNull();
+
+    const past = Date.now() - 500;
+    await r.handleMessage(
+      JSON.stringify({
+        type: 'recording_meta',
+        recordingId: 'r1',
+        guestStartHostMs: past,
+      })
+    );
+    expect(r.guestStartHostMs).toBe(past);
+  });
+
   it('leaves numeric fields unset when recording_meta contains non-finite or non-numeric values', async () => {
     const r = new ChunkReceiver({
       recordingId: 'r1',

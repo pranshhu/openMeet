@@ -1,4 +1,4 @@
-import { RECORDING_FRAME_RATE, type Role } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, type Role } from '@openmeet/protocol';
 import { cleanFps } from './quality';
 
 export interface ChapterMarker {
@@ -194,6 +194,30 @@ function muxWavCmd(video: string, wav: string): string {
   return `ffmpeg -i "${video}" -i "${wav}" -map 0:v -map 1:a -c:v copy -c:a copy -tag:v avc1 "${out}"`;
 }
 
+const seconds = (ms: number) => (ms / 1000).toFixed(3);
+
+// The remux with a start delay. Real padding would mean encoding black frames,
+// so the delay is an empty edit in the container and the stream is copied as is.
+function alignVideoCmd(file: string, padMs: number): string {
+  const out = file.replace(/\.[^.]+$/, '') + '_aligned.mp4';
+  return `ffmpeg -itsoffset ${seconds(padMs)} -i "${file}" -c copy -tag:v avc1 -movflags +faststart "${out}"`;
+}
+
+// PCM in, PCM out at the depth the master was written in, so every sample after
+// the silence is the one in the master. all=1 delays every channel, not only the
+// first; the depth is named because ffmpeg writes 16-bit WAV otherwise; -rf64
+// keeps a copy that crosses 4 GiB readable.
+function alignWavCmd(file: string, padMs: number): string {
+  const out = file.replace(/\.[^.]+$/, '') + '_aligned.wav';
+  return `ffmpeg -i "${file}" -af "adelay=${padMs}:all=1" -c:a pcm_s${WAV_BIT_DEPTH}le -rf64 auto "${out}"`;
+}
+
+const ALIGNED_HINT =
+  "The aligned-copy commands under Editor commands write copies that start when the host's recording starts, " +
+  "so each copy lines up with the host's files at 00:00 on a timeline. Audio copies get real silence. " +
+  'Video copies are not re-encoded: the delay is stored in the file, and an editor that ignores it needs ' +
+  'the clip moved by the time shown with its command.';
+
 const FRAME_RATE_NOTE =
   "MediaRecorder has no constant-frame-rate setting, so the frame rate inside these files can vary. requestedFps is the rate a camera is asked for by default. trackFps is what the browser reported that camera running at when its recording started, or null when that was not reported; a screen is only captured when it changes, so screen files have none. Neither is a count of the frames in a file. For that, run the file's measure command: it decodes the file with your own ffmpeg, and its last VFR line reads 0.000000 when every frame interval is the same.";
 
@@ -295,6 +319,30 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   }[] = [];
   const alignmentLines: string[] = [];
 
+  const alignedFiles: { file: string; padMs: number | null; cmd?: string }[] = [];
+  const alignCommands: { label: string; cmd: string }[] = [];
+  const align = (file: string, offsetMs: number | null, who: string, wav = false) => {
+    // Zero is the floor: a guest starts on the host's signal, so an estimate
+    // that puts it before the host is clock-sync error, and zero is nearer the
+    // truth than the estimate.
+    const padMs =
+      offsetMs === null || !Number.isFinite(offsetMs) ? null : Math.max(0, Math.round(offsetMs));
+    if (!padMs) {
+      alignedFiles.push({ file, padMs });
+      return;
+    }
+    const cmd = wav ? alignWavCmd(file, padMs) : alignVideoCmd(file, padMs);
+    alignedFiles.push({ file, padMs, cmd });
+    alignCommands.push({
+      label: wav
+        ? `${who}: aligned copy of the audio master (${seconds(padMs)} s of silence added)`
+        : `${who}: aligned copy of the video (starts ${seconds(padMs)} s in)`,
+      cmd,
+    });
+  };
+  if (hostFile) align(hostFile, 0, 'Host');
+  if (input.hostWavFile) align(input.hostWavFile, 0, 'Host', true);
+
   for (const g of guests) {
     const { slot } = g;
     const key = slot === 0 ? 'guest' : `guest${slot + 1}`;
@@ -323,6 +371,8 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
 
     // Offset
     const guestMinusHostMs = g.startHostMs === null ? null : g.startHostMs - hostStartMs;
+    align(g.file, guestMinusHostMs, displayName);
+    if (g.wavFile) align(g.wavFile, guestMinusHostMs, displayName, true);
 
     if (guestMinusHostMs === null) {
       if (guests.length === 1) {
@@ -465,11 +515,13 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     label: `Make screen segment ${i + 1} seekable`,
     cmd: remuxCmd(f),
   }));
+  screenSegments.forEach((s, i) => align(s.file, s.offsetMs, `Screen segment ${i + 1}`));
 
   const commands: { label: string; cmd: string }[] = [
     ...remuxCommands,
     ...screenRemuxCommands,
     ...combineCommands,
+    ...alignCommands,
   ];
 
   const report = {
@@ -518,6 +570,15 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       note: 'Pairs each camera file with its uncompressed audio master, losslessly. Output is .mov because MP4 cannot carry linear PCM without re-encoding.',
       ...combineMap,
     },
+    aligned: {
+      note:
+        "Each cmd writes a copy that starts at the host's recording start, so the copies and the host's own files " +
+        'all go at 00:00 on a timeline. padMs is how late the file starts: 0 needs no copy, null means the start ' +
+        "is unknown (align by waveform). A start estimated before the host's counts as 0. WAV copies get real " +
+        'silence, losslessly. MP4 copies are not re-encoded and are seekable like the remux copies: the delay is ' +
+        'stored as an edit list, and an editor that ignores it needs the clip moved by padMs.',
+      files: alignedFiles,
+    },
     frameRate: {
       note: FRAME_RATE_NOTE,
       requestedFps: RECORDING_FRAME_RATE,
@@ -547,7 +608,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       audioMasters: audioMastersRecord,
       screenFiles,
       ...(screenSegments.length > 0 ? { screenSegments } : {}),
-      alignment,
+      alignment: alignCommands.length > 0 ? [alignment, ALIGNED_HINT].filter(Boolean).join('\n') : alignment,
       backupNote,
       integrity: overallIntegrity,
       warnings,

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SessionSummary, type SummaryFile } from '@/components/SessionSummary';
+import { buildSyncReport } from '@/lib/sync-report';
 
 describe('SessionSummary', () => {
   const baseProps = {
@@ -228,6 +229,44 @@ describe('SessionSummary', () => {
     render(<SessionSummary {...baseProps} onClose={onClose} />);
     fireEvent.click(screen.getByRole('button', { name: 'Back to the call' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the aligned-copy commands and what they do, from a real report', () => {
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r.mp4',
+      hostWavFile: 'host_r.wav',
+      hostStartMs: 1_000_000,
+      guests: [
+        {
+          slot: 0,
+          name: 'Bob',
+          file: 'guest_r.mp4',
+          wavFile: 'guest_r.wav',
+          startHostMs: 1_001_500,
+          rttMs: 20,
+        },
+      ],
+    });
+    render(
+      <SessionSummary
+        {...baseProps}
+        alignment={r.data.alignment}
+        commands={r.data.commands}
+      />
+    );
+    expect(
+      screen.getByText(/The aligned-copy commands under Editor commands write copies/)
+    ).toBeInTheDocument();
+    const videoCmd =
+      'ffmpeg -itsoffset 1.500 -i "guest_r.mp4" -c copy -tag:v avc1 -movflags +faststart "guest_r_aligned.mp4"';
+    const cmdEl = screen.getByText(videoCmd);
+    expect(cmdEl.closest('details')?.open).toBe(false);
+    expect(
+      screen.getByRole('button', {
+        name: 'Copy: Bob: aligned copy of the video (starts 1.500 s in)',
+      })
+    ).toBeInTheDocument();
   });
 });
 
