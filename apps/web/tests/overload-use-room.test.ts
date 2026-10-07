@@ -77,6 +77,7 @@ vi.mock('@/lib/peer', () => ({
       createRecordingChannel: vi.fn().mockImplementation(channel),
       createRecordingAudioChannel: vi.fn().mockImplementation(channel),
       cpuLimited: vi.fn().mockResolvedValue(false),
+      setLowPower: vi.fn(),
     };
     peers.push(p);
     return p;
@@ -202,5 +203,83 @@ describe('useRoom.readLoad', () => {
     });
 
     expect(result.current.readLoad).toBe(first);
+  });
+});
+
+describe('useRoom.setLowPower', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    peers = [];
+    vi.stubGlobal('MediaStream', FakeStream);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('turns low-power on and off for every connection and says so in state', async () => {
+    const { result } = await joinAs('host', [
+      { peerId: 'g1', ordinal: 2, role: 'guest' },
+      { peerId: 'g2', ordinal: 3, role: 'guest' },
+    ]);
+
+    expect(peers).toHaveLength(2);
+    expect(result.current.state.lowPower).toBe(false);
+
+    act(() => {
+      result.current.setLowPower(true);
+    });
+
+    expect(peers[0].setLowPower).toHaveBeenLastCalledWith(true);
+    expect(peers[1].setLowPower).toHaveBeenLastCalledWith(true);
+    expect(result.current.state.lowPower).toBe(true);
+
+    act(() => {
+      result.current.setLowPower(false);
+    });
+
+    expect(peers[0].setLowPower).toHaveBeenLastCalledWith(false);
+    expect(peers[1].setLowPower).toHaveBeenLastCalledWith(false);
+    expect(result.current.state.lowPower).toBe(false);
+  });
+
+  it('tells a connection that opens later, and only while the mode is on', async () => {
+    const { result } = await joinAs('host', []);
+
+    act(() => {
+      emit('peer-joined', { peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' });
+    });
+
+    expect(peers).toHaveLength(1);
+    expect(peers[0].setLowPower).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.setLowPower(true);
+    });
+
+    act(() => {
+      emit('peer-joined', { peerId: 'g2', ordinal: 3, role: 'guest', displayName: 'B' });
+    });
+
+    expect(peers).toHaveLength(2);
+    expect(peers[1].setLowPower).toHaveBeenCalledWith(true);
+
+    act(() => {
+      result.current.newTake();
+    });
+    expect(result.current.state.lowPower).toBe(true);
+    expect(peers[1].setLowPower).toHaveBeenLastCalledWith(true);
+
+    act(() => {
+      result.current.setLowPower(false);
+    });
+
+    act(() => {
+      emit('peer-joined', { peerId: 'g3', ordinal: 4, role: 'guest', displayName: 'C' });
+    });
+
+    expect(peers).toHaveLength(3);
+    expect(peers[2].setLowPower).not.toHaveBeenCalled();
   });
 });

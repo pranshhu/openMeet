@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PeerConnection, ConnectionTimeoutError } from '@/lib/peer';
+import { sendEncoding } from '@/lib/send-quality';
 
 class FakePC {
   localDescription: { type: string; sdp: string } | null = null;
@@ -307,5 +308,41 @@ describe('PeerConnection.cpuLimited', () => {
 
     peer.close();
     expect(await peer.cpuLimited()).toBe(false);
+  });
+});
+
+describe('PeerConnection.setLowPower', () => {
+  const mic = { id: 'mic', kind: 'audio' } as unknown as MediaStreamTrack;
+  const cam = { id: 'cam', kind: 'video', contentHint: '' } as unknown as MediaStreamTrack;
+  class FakeStream {
+    constructor(private tracks: MediaStreamTrack[]) {}
+    getTracks() { return this.tracks; }
+    getAudioTracks() { return this.tracks.filter((t) => t.kind === 'audio'); }
+    getVideoTracks() { return this.tracks.filter((t) => t.kind === 'video'); }
+  }
+
+  it('applies the low-power cap to the camera already being sent, and restores the normal one exactly', () => {
+    const { peer, pc } = setup(false);
+    const stream = new FakeStream([mic, cam]) as unknown as MediaStream;
+    peer.start();
+    peer.setLocalStream(stream);
+    const videoSender = pc.getSenders().find((s) => (s.track as MediaStreamTrack).kind === 'video')!;
+    expect(videoSender.params.encodings[0]).toEqual(sendEncoding(2, 'camera'));
+    peer.setLowPower(true);
+    expect(videoSender.params.encodings[0]).toEqual(sendEncoding(2, 'camera', true));
+    peer.setLowPower(false);
+    expect(videoSender.params.encodings[0]).toEqual(sendEncoding(2, 'camera'));
+    const audioSender = pc.getSenders().find((s) => (s.track as MediaStreamTrack).kind === 'audio')!;
+    expect(audioSender.params.encodings).toEqual([]);
+  });
+
+  it('caps a track that is added while the mode is on', () => {
+    const { peer, pc } = setup(false);
+    const screenTrack = { kind: 'video', contentHint: '' } as unknown as MediaStreamTrack;
+    peer.start();
+    peer.setLowPower(true);
+    peer.addTrack(screenTrack, {} as MediaStream);
+    const videoSender = pc.getSenders().find((s) => (s.track as MediaStreamTrack).kind === 'video')!;
+    expect(videoSender.params.encodings[0]?.maxFramerate).toBe(4);
   });
 });

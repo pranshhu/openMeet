@@ -179,6 +179,11 @@ export interface RoomState {
    */
   peerRecording: boolean;
   /**
+   * This device sends everyone a smaller live picture, to leave more of its
+   * processor for the recording. The files are not affected.
+   */
+  lowPower: boolean;
+  /**
    * What each remote peer's browser can actually capture, keyed by peerId.
    * Lets the host see BEFORE pressing Record who won't be captured, and why,
    * instead of finding out at playback. Populated from `recording-capability`
@@ -516,6 +521,7 @@ export function useRoom(slug: string) {
     summary: null,
     takes: [],
     peerRecording: false,
+    lowPower: false,
     capabilities: {},
     finalizingGuests: [],
   });
@@ -545,6 +551,7 @@ export function useRoom(slug: string) {
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
   const screenSharingRef = useRef(false);
+  const lowPowerRef = useRef(false);
   const companionRef = useRef(false);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   // The local screen share gets its OWN MediaStream (distinct id) so the remote
@@ -987,7 +994,11 @@ export function useRoom(slug: string) {
        */
       const syncSendQuality = () => {
         const count = peersRef.current.size + 1; // remotes + me
-        for (const p of peersRef.current.values()) p.setPeerCount(count);
+        for (const p of peersRef.current.values()) {
+          p.setPeerCount(count);
+          // Off is a connection's default, so only a mode that is on needs telling.
+          if (lowPowerRef.current) p.setLowPower(true);
+        }
       };
 
       const startPeer = (
@@ -1516,6 +1527,13 @@ export function useRoom(slug: string) {
       audioDroppedMs: (h?.hostPcm ?? h?.guestPcm)?.droppedMs ?? 0,
       cpuLimited: limited.includes(true),
     };
+  }, []);
+
+  /** Turn low-power mode on or off for every connection, now and later. */
+  const setLowPower = useCallback((on: boolean) => {
+    lowPowerRef.current = on;
+    for (const p of peersRef.current.values()) p.setLowPower(on);
+    setState((s) => ({ ...s, lowPower: on }));
   }, []);
 
   /**
@@ -2056,5 +2074,6 @@ export function useRoom(slug: string) {
     newTake,
     discardTake,
     readLoad,
+    setLowPower,
   };
 }

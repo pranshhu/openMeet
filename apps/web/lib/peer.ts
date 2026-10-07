@@ -72,6 +72,7 @@ export class PeerConnection {
   private screenChannelSeq = 0;
   /** People in the room including us. 2 until told otherwise. */
   private peerCount = 2;
+  private lowPower = false;
   /** Serializes handleSignal() calls so signals are processed strictly in order. */
   private signalTail: Promise<void> = Promise.resolve();
   // Lazily created by whenConnected() so a caller that never asks pays nothing.
@@ -311,6 +312,13 @@ export class PeerConnection {
     this.applySendQuality();
   }
 
+  /** Send a much smaller live picture so the recording gets the processor. */
+  setLowPower(on: boolean): void {
+    if (on === this.lowPower) return;
+    this.lowPower = on;
+    this.applySendQuality();
+  }
+
   /**
    * Cap every outbound video sender.
    *
@@ -332,7 +340,7 @@ export class PeerConnection {
       // Before the first negotiation `encodings` can be empty; setting it then
       // throws, so seed one entry rather than skipping the cap entirely.
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      const want = sendEncoding(this.peerCount, kind);
+      const want = sendEncoding(this.peerCount, kind, this.lowPower);
       params.encodings[0] = { ...params.encodings[0], ...want };
       void sender.setParameters(params).catch(() => {
         /* unsupported here; the call still works, just uncapped */

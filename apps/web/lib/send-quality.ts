@@ -41,21 +41,35 @@ const SCREEN_FLOOR_BPS = 300_000;
  */
 const SCREEN_MAX_FPS = 8;
 
+/**
+ * Low-power mode: a quarter of the camera's width and height, at the floor
+ * bitrate. A camera already below 720p ends up very small; a size-based
+ * cap would be kinder once every supported browser has one.
+ */
+const LOW_POWER_CAMERA_SCALE = 4;
+/** A shared screen keeps its size, so text stays readable, and halves its frame rate. */
+const LOW_POWER_SCREEN_FPS = 4;
+
 export type SendKind = 'camera' | 'screen';
 
 /**
  * Encoder settings for one outbound track, given how many people are in the
  * room. `peerCount` includes yourself, so it matches `remotePeers.length + 1`.
+ * `lowPower` trades what the others see for processor time on this device. Both
+ * modes return the same keys for a kind: `applySendQuality` merges, so a key
+ * only one mode set would never be cleared.
  */
-export function sendEncoding(peerCount: number, kind: SendKind): RTCRtpEncodingParameters {
+export function sendEncoding(peerCount: number, kind: SendKind, lowPower = false): RTCRtpEncodingParameters {
   const remotes = Math.max(1, peerCount - 1);
 
   if (kind === 'screen') {
     return {
       maxBitrate: Math.max(SCREEN_FLOOR_BPS, Math.floor(SCREEN_TOTAL_BPS / remotes)),
-      maxFramerate: SCREEN_MAX_FPS,
+      maxFramerate: lowPower ? LOW_POWER_SCREEN_FPS : SCREEN_MAX_FPS,
     };
   }
+
+  if (lowPower) return { maxBitrate: CAMERA_FLOOR_BPS, scaleResolutionDownBy: LOW_POWER_CAMERA_SCALE };
 
   return {
     maxBitrate: Math.max(CAMERA_FLOOR_BPS, Math.floor(CAMERA_TOTAL_BPS / remotes)),
