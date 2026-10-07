@@ -334,7 +334,48 @@ describe('BackupIntake', () => {
     expect(state.items[0]!.from).toBe('Alice');
   });
 
-  it('different key after the holder channel closed, on an accepted record: listed as offered again from newcomer', async () => {
+  it('different key after the holder channel closed, on an accepted record: newcomer is refused and the file stays', async () => {
+    const { state, onChange, intake } = setup();
+
+    const label = validLabel(1700000000000, ROOM, 'mp4');
+    const ch1 = fakeChannel(label);
+    intake.offer(ch1, { peerId: 'peer-1', name: 'Alice' });
+    ch1.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+
+    const folder = fakeFolder();
+    await intake.accept(folder, state.items);
+    expect(state.items[0]!.status).toBe('active');
+    expect(folder.files.has(FILE)).toBe(true);
+    onChange.mockClear();
+
+    // Holder channel closes
+    ch1.close();
+    await flush();
+
+    // Newcomer sends different key after holder closed
+    const ch2 = fakeChannel(label);
+    intake.offer(ch2, { peerId: 'peer-2', name: 'Bob' });
+    ch2.deliver(offerMsg(2000, 'key-bob'));
+    await flush();
+
+    // Newcomer gets NO_COPY and is closed
+    expect(ch2.sent).toEqual([NO_COPY]);
+    expect(ch2.readyState).toBe('closed');
+
+    // The accepted record is untouched
+    expect(onChange).not.toHaveBeenCalled();
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('active');
+    expect(state.items[0]!.from).toBe('Alice');
+    expect(state.items[0]!.size).toBe(1000);
+
+    // The file is still in the folder and nothing was removed
+    expect(folder.files.has(FILE)).toBe(true);
+    expect(folder.removed).toEqual([]);
+  });
+
+  it('same key after the holder channel closed, on an accepted record: the offer starts over and drops the first file', async () => {
     const { state, intake } = setup();
 
     const label = validLabel(1700000000000, ROOM, 'mp4');
@@ -348,25 +389,48 @@ describe('BackupIntake', () => {
     expect(state.items[0]!.status).toBe('active');
     expect(folder.files.has(FILE)).toBe(true);
 
-    // Holder channel closes
     ch1.close();
     await flush();
 
-    // Newcomer sends different key after holder closed
+    const ch2 = fakeChannel(label);
+    intake.offer(ch2, { peerId: 'peer-1', name: 'Alice' });
+    ch2.deliver(offerMsg(2000, 'key-alice'));
+    await flush();
+
+    // The same key starts the offer over: listed as offered again at the new
+    // size, with the first file closed and removed.
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('offered');
+    expect(state.items[0]!.from).toBe('Alice');
+    expect(state.items[0]!.size).toBe(2000);
+    expect(folder.removed).toEqual([FILE]);
+    expect(folder.files.has(FILE)).toBe(false);
+    expect(ch2.readyState).toBe('open');
+  });
+
+  it('different key while the holder channel is not open, holder WAITING: the newcomer is listed', async () => {
+    const { state, intake } = setup();
+
+    const label = validLabel(1700000000000, ROOM, 'mp4');
+    const ch1 = fakeChannel(label);
+    intake.offer(ch1, { peerId: 'peer-1', name: 'Alice' });
+    ch1.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+
+    // Closing, and its close event has not fired yet: the record still holds it.
+    ch1.readyState = 'closing';
+
     const ch2 = fakeChannel(label);
     intake.offer(ch2, { peerId: 'peer-2', name: 'Bob' });
     ch2.deliver(offerMsg(2000, 'key-bob'));
     await flush();
 
-    // Listed as offered again from newcomer
+    // Nothing was on disk, so the waiting name can change hands.
     expect(state.items).toHaveLength(1);
     expect(state.items[0]!.status).toBe('offered');
     expect(state.items[0]!.from).toBe('Bob');
     expect(state.items[0]!.size).toBe(2000);
-
-    // First file was closed and removed
-    expect(folder.removed).toEqual([FILE]);
-    expect(folder.files.has(FILE)).toBe(false);
+    expect(ch2.readyState).toBe('open');
   });
 
   it.each([
@@ -1052,8 +1116,8 @@ describe('BackupIntake', () => {
     intake.offer(alice, { peerId: 'p1', name: 'Alice' });
     alice.deliver(offerMsg(1000, 'key-alice'));
     await flush();
-    await intake.accept(fakeFolder(), state.items);
-    alice.close();
+    // Alice is reconnecting: her offer is still waiting, with no file on disk.
+    alice.readyState = 'closing';
 
     const bob = fakeChannel(validLabel(1700000000000));
     intake.offer(bob, { peerId: 'p2', name: 'Bob' });

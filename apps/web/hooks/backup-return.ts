@@ -215,7 +215,10 @@ export class BackupIntake {
     }
 
     const old = this.records.get(id);
-    if (old && old.key !== key && old.channel.readyState === 'open') {
+    // Another key may only take a name that holds nothing: a waiting offer whose channel is
+    // gone. An accepted backup has a file on the host's disk, and only the key that created
+    // it may restart it.
+    if (old && old.key !== key && (old.item.status !== 'offered' || old.channel.readyState === 'open')) {
       turnAway(channel);
       return;
     }

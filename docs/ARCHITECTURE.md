@@ -383,10 +383,11 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   board says so for that take.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
-  A waiting or accepted backup can only be moved or restarted by an offer carrying the key of the
-  offer that created it, while its channel is open. Nothing is written until the host accepts, and a
-  Save covers only the offers that were on screen when it was clicked; each accepted file is opened
-  under a free name that never replaces an existing file in the folder (`…_2.<ext>`).
+  An accepted backup can be restarted only by the key of the offer that created it; another key can
+  take a name only while it holds a waiting offer whose channel is gone. Nothing is written until the
+  host accepts, and a Save covers only the offers that were on screen when it was clicked; each
+  accepted file is opened under a free name that never replaces an existing file in the folder
+  (`…_2.<ext>`).
 
 ---
 
