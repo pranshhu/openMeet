@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { Lobby } from '@/components/Lobby';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
+import type { TakeJournal } from '@/lib/take-journal';
+
+const JOURNAL_A = 'openmeet-take-1759824000000-xyz-abcd-pqr';
+const JOURNAL_B = 'openmeet-take-1759800000000-klm-nopq-rst';
+const JOURNAL_C = 'openmeet-take-1759752000000-klm-nopq-rst';
 
 function fakeStream(): MediaStream {
   const tracks = [{ kind: 'audio', enabled: true, stop: vi.fn() }, { kind: 'video', enabled: true, stop: vi.fn() }];
@@ -238,6 +243,248 @@ describe('Lobby', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/test-backup-unmount');
 
     findBackupsSpy.mockRestore();
+  });
+
+  /** A journal as findTakeJournals hands it back: the lobby reads only these fields. */
+  function fakeJournal(
+    dirName: string,
+    notes: { room: string; hostStartMs: number },
+    bytes: number,
+    notesOk = true
+  ): TakeJournal {
+    return { dirName, notes, notesOk, bytes } as unknown as TakeJournal;
+  }
+
+  it('lists this room’s unfinished recording and hides another room’s', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal(JOURNAL_B, { room: 'klm-nopq-rst', hostStartMs: 1759800000000 }, 1_000_000),
+      // Readable, but it names this room from another room's directory.
+      fakeJournal(JOURNAL_C, { room: 'xyz-abcd-pqr', hostStartMs: 1759752000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      const row = await screen.findByText(`Recording from ${when}`);
+      expect(screen.getAllByRole('heading', { name: 'Unsaved recording' })).toHaveLength(1);
+      expect(
+        screen.getByText('A recording made in this browser was interrupted before it was saved to a folder.')
+      ).toBeInTheDocument();
+      expect(row.parentElement?.textContent).toMatch(/· 2\.5 GB$/);
+      expect(screen.queryByText(`Recording from ${new Date(1759800000000).toLocaleString()}`)).not.toBeInTheDocument();
+      expect(screen.queryByText(`Recording from ${new Date(1759752000000).toLocaleString()}`)).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('puts the unsaved recording under the backups list and before the device checks', async () => {
+    const fakeFile = new File(['content'], 'openmeet-backup.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([fakeFile]);
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const backups = await screen.findByRole('heading', { name: 'Backups on this device' });
+      const unsaved = await screen.findByRole('heading', { name: 'Unsaved recording' });
+      const checklist = await screen.findByText(/Wear headphones/);
+      const invite = screen.getByRole('button', { name: /copy invite link/i });
+      expect(invite.compareDocumentPosition(unsaved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(backups.compareDocumentPosition(unsaved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(unsaved.compareDocumentPosition(checklist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      findBackupsSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('shows no unsaved recording when this browser holds none', async () => {
+    const { request } = takeHeldElsewhere();
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      // Nothing to hide, so the room's lock is never asked for.
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('lists every unfinished recording of this room', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal('openmeet-take-1759812000000-xyz-abcd-pqr', { room: 'xyz-abcd-pqr', hostStartMs: 1759812000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const first = await screen.findByText(`Recording from ${new Date(1759824000000).toLocaleString()}`);
+      const second = screen.getByText(`Recording from ${new Date(1759812000000).toLocaleString()}`);
+      expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getAllByRole('button', { name: /delete unsaved recording/i })).toHaveLength(2);
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('does not open another room’s journal when the slug is only its tail', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_B, { room: 'klm-nopq-rst', hostStartMs: 1759800000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="nopq-rst" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /delete unsaved recording/i })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('re-reads the journals when the room changes', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    try {
+      const { rerender } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await screen.findByRole('heading', { name: 'Unsaved recording' });
+      findJournalsSpy.mockResolvedValue([]);
+      rerender(<Lobby slug="klm-nopq-rst" onJoin={vi.fn()} />);
+      await waitFor(() =>
+        expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument()
+      );
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('ignores a slow journal response from a previous room', async () => {
+    let resolveFirst!: (value: TakeJournal[]) => void;
+    const slowFirst = new Promise<TakeJournal[]>((res) => {
+      resolveFirst = res;
+    });
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals')
+      .mockReturnValueOnce(slowFirst)
+      .mockResolvedValueOnce([]);
+
+    try {
+      const { rerender } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      rerender(<Lobby slug="klm-nopq-rst" onJoin={vi.fn()} />);
+      await settle();
+
+      await act(async () => {
+        resolveFirst([
+          fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+        ]);
+      });
+      await settle();
+
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('hides the unsaved recording while another tab records this room', async () => {
+    const { request } = takeHeldElsewhere();
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal('openmeet-take-1759812000000-xyz-abcd-pqr', { room: 'xyz-abcd-pqr', hostStartMs: 1759812000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /delete unsaved recording/i })).not.toBeInTheDocument();
+      // One lock for the room, not one per row.
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0]![0]).toBe('openmeet-take:xyz-abcd-pqr');
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('asks before deleting an unsaved recording, and keeps it when the user says no', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    const deleteJournalSpy = vi.spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal').mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      await screen.findByText(`Recording from ${when}`);
+      fireEvent.click(screen.getByRole('button', { name: /delete unsaved recording/i }));
+      expect(confirm).toHaveBeenCalledWith('Delete this unsaved recording? It can’t be recovered.');
+      await settle();
+      expect(deleteJournalSpy).not.toHaveBeenCalled();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+      deleteJournalSpy.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it('deletes the unsaved recording when the user confirms', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    const deleteJournalSpy = vi.spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal').mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      await screen.findByText(`Recording from ${when}`);
+      fireEvent.click(screen.getByRole('button', { name: `Delete unsaved recording from ${when}` }));
+      await waitFor(() => {
+        expect(deleteJournalSpy).toHaveBeenCalledWith(JOURNAL_A);
+        expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+      });
+    } finally {
+      findJournalsSpy.mockRestore();
+      deleteJournalSpy.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it('lists an unfinished recording whose record cannot be read', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 1_000_000, false),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      const row = await screen.findByText(`Recording from ${when}`);
+      expect(row.parentElement?.textContent).toMatch(/· 1 MB$/);
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('shows no unsaved recording on the producer or present-only pages', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      unmount();
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
   });
 
   it('shows guest recording disclosure when viewer is not host', async () => {

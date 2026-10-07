@@ -24,6 +24,7 @@ import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup } from '@/lib/backup-recorder';
+import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
@@ -145,6 +146,7 @@ export function Lobby({
   const [backups, setBackups] = useState<BackupItem[]>([]);
   const backupsRef = useRef<BackupItem[]>([]);
   backupsRef.current = backups;
+  const [journals, setJournals] = useState<TakeJournal[]>([]);
   const [isHost, setIsHost] = useState(false);
   const guestGuidance = !producer && !isHost ? guestRecordingGuidance() : null;
   const mmRef = useRef<MediaManager | null>(null);
@@ -175,6 +177,24 @@ export function Lobby({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void findTakeJournals().then(async (found) => {
+      // The anchored directory name is the identity deleteTakeJournal
+      // re-checks, and the notes carry the directory's room when they could
+      // not be read. A slug that is only the tail of another room's name
+      // must not open that room's journal.
+      const mine = found.filter(
+        (j) => j.notes.room === slug && j.dirName.endsWith(`-${slug}`)
+      );
+      const held = mine.length > 0 && (await isTakeLockHeld(slug));
+      if (!cancelled) setJournals(held ? [] : mine);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  useEffect(() => {
     setIsHost(!!getHostToken(slug));
   }, [slug]);
 
@@ -193,6 +213,12 @@ export function Lobby({
       }
       return prev.filter((b) => b.file.name !== fileName);
     });
+  }
+
+  async function removeUnsaved(j: TakeJournal) {
+    if (!window.confirm('Delete this unsaved recording? It can’t be recovered.')) return;
+    await deleteTakeJournal(j.dirName);
+    setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
   }
 
   function startPreview(mm: MediaManager, quality: string) {
@@ -642,6 +668,42 @@ export function Lobby({
                     </li>
                   );
                 })}
+              </ul>
+            </section>
+          )}
+          {/* Beside Join, like the backups: a host back after a browser crash
+              has to see the interrupted take without scrolling, and only when
+              no tab here still records this room — a live take is not unsaved. */}
+          {journals.length > 0 && (
+            <section
+              aria-labelledby="unsaved-title"
+              className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
+            >
+              <h2 id="unsaved-title" className="text-sm font-medium text-[#202124]">
+                Unsaved recording
+              </h2>
+              <p className="mt-1 text-[13px] leading-relaxed text-[#5f6368]">
+                A recording made in this browser was interrupted before it was saved to a folder.
+              </p>
+              <ul className="mt-3 divide-y divide-[#e1e5ea]">
+                {journals.map((j) => (
+                  <li key={j.dirName} className="flex flex-col gap-1 py-2.5 text-[13px] text-[#202124]">
+                    <p className="min-w-0">
+                      <span>Recording from {new Date(j.notes.hostStartMs).toLocaleString()}</span>
+                      <span className="whitespace-nowrap text-[#5f6368]"> · {formatSize(j.bytes)}</span>
+                    </p>
+                    <div className="-ml-4 flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void removeUnsaved(j)}
+                        aria-label={`Delete unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()}`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#b3261e] transition-colors hover:bg-[#b3261e]/10 sm:min-h-9 ${focusRing}`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
               </ul>
             </section>
           )}
