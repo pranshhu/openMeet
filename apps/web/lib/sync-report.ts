@@ -67,6 +67,11 @@ export interface FileCheck {
     | undefined;
 }
 
+export interface FileVerdict {
+  status: 'complete' | 'unverified' | 'incomplete';
+  text: string;
+}
+
 export interface SyncReportInput {
   recordingId: string;
   hostFile?: string | undefined;
@@ -90,6 +95,7 @@ export interface SummaryFile {
   detail?: string | undefined;
   participant?: string | undefined;
   bytes?: number | undefined;
+  verdict?: FileVerdict | undefined;
 }
 
 export interface SyncReport {
@@ -148,6 +154,10 @@ export function formatBytes(n: number): string {
 // separators and bidirectional controls becomes one space; joiners are kept
 // so joined emoji and scripts that need them survive.
 export const sanitizeText = (s: string) => s.replace(/[\p{Cc}\p{Z}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]+/gu, ' ');
+
+// A name comes from another participant and ends up in text on the host's disk.
+const whoOf = (name: unknown, fallback: string): string =>
+  (typeof name === 'string' ? sanitizeText(name).trim() : '') || fallback;
 
 /**
  * Chapter list in description format.
@@ -289,6 +299,46 @@ export function integrityVerdict(sent?: string, written?: string): { ok: boolean
   return sent === written
     ? { ok: true, text: 'Integrity verified — bytes written match bytes sent (sha256).' }
     : { ok: false, text: 'INTEGRITY MISMATCH — the received file differs from what was sent. Keep the guest backup.' };
+}
+
+/**
+ * One file's verdict, in words a host can act on.
+ *
+ * A file that arrived from a guest is complete only when the sender said it
+ * had sent everything and the two digests agree; anything short of that says
+ * what is missing and where the full copy is. The host's own files never
+ * travelled, so there is nothing to compare: they are complete once they
+ * hold bytes.
+ */
+export function fileVerdict(c: FileCheck | undefined, who: string): FileVerdict {
+  if (!c) return { status: 'unverified', text: 'Not verified. This file was not checked.' };
+  const r = c.received;
+  const ask = `Ask ${who} for the backup their browser kept; it is listed in the lobby on their device.`;
+  const incomplete = (text: string): FileVerdict => ({ status: 'incomplete', text });
+  if (c.bytes === 0) {
+    return incomplete(
+      r
+        ? `Empty. Nothing arrived from ${who}. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.`
+        : "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call."
+    );
+  }
+  if (!r) return { status: 'complete', text: 'Complete. Recorded on this computer.' };
+  if (r.abandoned) {
+    return incomplete(
+      `Incomplete. The upload from ${who} fell too far behind and stopped, so this file ends early. ${ask}`
+    );
+  }
+  if (r.sha256Sent) {
+    return r.sha256Sent === r.sha256Written
+      ? { status: 'complete', text: `Complete. Matches what ${who} sent (SHA-256).` }
+      : incomplete(
+          `Incomplete. Part of this file is missing or damaged: it differs from what ${who} sent (SHA-256). ${ask}`
+        );
+  }
+  if (r.finalized) {
+    return { status: 'unverified', text: `Complete, not verified. No checksum arrived from ${who} to compare.` };
+  }
+  return incomplete(`Incomplete. No finish signal arrived from ${who}, so this file may end early. ${ask}`);
 }
 
 /**
@@ -521,7 +571,8 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     }),
   ].map((f: SummaryFile) => {
     const c = input.checks?.get(f.name);
-    return c ? { ...f, bytes: c.bytes } : f;
+    const who = whoOf(f.participant, f.kind === 'screen' ? 'the sharer' : 'the guest');
+    return { ...f, ...(c ? { bytes: c.bytes } : {}), verdict: fileVerdict(c, who) };
   });
 
   const screenRemuxCommands = screenFiles.map((f, i) => ({
@@ -572,7 +623,12 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
     integrity: overallIntegrity.text,
-    verification: fileList.map((f) => ({ file: f.name, bytes: f.bytes ?? null })),
+    verification: fileList.map((f) => ({
+      file: f.name,
+      bytes: f.bytes ?? null,
+      status: f.verdict?.status,
+      detail: f.verdict?.text,
+    })),
     warnings,
     seekability: {
       note: 'MediaRecorder writes MP4 progressively and may lack a seek index/duration until remuxed. This is lossless (no re-encode) and fast.',

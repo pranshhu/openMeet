@@ -15,6 +15,12 @@ import { formatBytes, formatTimecode } from '@/lib/sync-report';
 import type { SummaryFile } from '@/lib/sync-report';
 export type { SummaryFile };
 
+const VERDICT_TONE = {
+  complete: 'text-[#81c995]',
+  unverified: 'text-[#fdd663]',
+  incomplete: 'text-[#f6aea9]',
+} as const;
+
 export function SessionSummary({
   files,
   markers,
@@ -168,6 +174,9 @@ export function SessionSummary({
                 {f.bytes !== undefined ? ` · ${formatBytes(f.bytes)}` : ''}
                 {f.detail ? ` (${f.detail})` : ''}
               </span>
+              {f.verdict && (
+                <span className={`min-w-0 break-words text-xs ${VERDICT_TONE[f.verdict.status]}`}>{f.verdict.text}</span>
+              )}
             </li>
           ))}
         </ul>

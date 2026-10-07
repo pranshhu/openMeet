@@ -533,11 +533,13 @@ describe('guest recording lifecycle in useRoom', () => {
       await result.current.endRecording();
     });
     expect(result.current.state.phase).toBe('done');
-    expect(result.current.state.summary?.fileList).toContainEqual({
-      name: 'guest_rec-host-1.mp4',
-      kind: 'video',
-      participant: 'Bob',
-    });
+    expect(result.current.state.summary?.fileList).toContainEqual(
+      expect.objectContaining({
+        name: 'guest_rec-host-1.mp4',
+        kind: 'video',
+        participant: 'Bob',
+      })
+    );
   });
 });
 
@@ -1713,6 +1715,101 @@ describe('host backup after a take in useRoom', () => {
         `guest_screen_${recordingId}_2.mp4`,
       ])
     );
+  });
+
+  /** One host take whose writers and receiver let the checks run for real. */
+  async function hostTakeWithChecks() {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-v',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-v.mp4', size: 100 },
+      guestWriter: { fileName: 'guest_rec-v.mp4', size: 50 },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        fileName: 'guest_rec-v.mp4',
+        digestHex: async () => 'aaa',
+        senderSha256: 'bbb',
+        receivedFinalized: true,
+        isAbandoned: false,
+        isTimedOut: false,
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 50,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const fakeStream = {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Host Ana');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    return { result, writtenFiles };
+  }
+
+  it('gives every file of the take its verdict in the summary and in the sync file', async () => {
+    const { result, writtenFiles } = await hostTakeWithChecks();
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBeNull();
+    const guest = result.current.state.summary?.fileList.find((f) => f.name === 'guest_rec-v.mp4');
+    expect(guest?.verdict?.status).toBe('incomplete');
+    const host = result.current.state.summary?.fileList.find((f) => f.name === 'host_rec-v.mp4');
+    expect(host?.verdict?.status).toBe('complete');
+
+    const parsedSync = JSON.parse(new TextDecoder().decode(writtenFiles.get('sync_rec-v.json')?.data));
+    expect(parsedSync.verification).toContainEqual(
+      expect.objectContaining({ file: 'guest_rec-v.mp4', status: 'incomplete' })
+    );
+    expect(
+      parsedSync.verification.find((v: { file: string }) => v.file === 'guest_rec-v.mp4').detail
+    ).toContain('Bob');
+  });
+
+  it('still finalizes and says so per file when the checks cannot be gathered', async () => {
+    vi.mocked(collectFileChecks).mockRejectedValueOnce(new Error('checks failed'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result, writtenFiles } = await hostTakeWithChecks();
+
+      expect(result.current.state.phase).toBe('done');
+      expect(result.current.state.recordingError).toBeNull();
+      const files = result.current.state.summary?.fileList ?? [];
+      expect(files).toHaveLength(2);
+      for (const f of files) {
+        expect(f.verdict?.text).toBe('Not verified. This file was not checked.');
+      }
+      expect(writtenFiles.has('sync_rec-v.json')).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

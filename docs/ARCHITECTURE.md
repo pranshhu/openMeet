@@ -316,7 +316,7 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
   the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
   so it stays idempotent / updatable. Two independent digests (guest=sent, host=written) compared at
-  finalize for integrity.
+  finalize for every guest file (camera, WAV, each screen segment).
 - `backup-recorder.ts`: a 2nd MediaRecorder over the same stream, on **both** host
   (`startHostRecording`) and guest (`beginGuestRecording`), plus a WAV master backup (its own
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
@@ -337,8 +337,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry — plus integrity verdicts, each file's
-  size (`verification[]`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
+  the host start, with `sharer` display name on each entry — plus integrity verdicts,
+  a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
+  `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file, its delay from the host start and an `ffmpeg` command that writes a copy starting there,
   and a `frameRate` section: the requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the

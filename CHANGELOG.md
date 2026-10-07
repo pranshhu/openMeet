@@ -34,7 +34,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   and, where known, the rate each one reported, plus two `ffmpeg` commands per
   video file, one that measures how variable its frame rate is and one that
   re-encodes it to a constant frame rate.
-- The session summary and the sync file show the size of every file a take wrote.
+- Every file of a take gets its own size and verdict in the session summary and the
+  sync file: complete, complete but not verified, or incomplete with what is missing
+  and where the backup is. WAV masters and screen recordings are checked against
+  what the guest sent, as camera files are.
 - Aligned copies: `sync.json` (`aligned`) and the session summary give an `ffmpeg`
   command for each file that starts after the host's; it writes a copy starting at the
   host's start, so every track can be placed at 00:00. WAV copies get real silence;

@@ -81,9 +81,10 @@ retention policy to trust, because there's nothing retained.
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**
-- `sync.json` with the start-time offset between tracks, a SHA-256 integrity verdict,
-  and ready-to-run `ffmpeg` commands for remuxing, for pairing each video with its
-  WAV master and for aligned copies that start at 00:00, downloaded from the summary
+- `sync.json` with the start-time offset between tracks, the size of every file and a
+  verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
+  for pairing each video with its WAV master and for aligned copies that start at
+  00:00, downloaded from the summary
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -350,7 +351,7 @@ All in the one folder the host picks, per take:
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
 | `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
-| `sync_<id>.json` | Start-time offsets, integrity verdicts, and remux commands |
+| `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
 | `chat_<id>.txt` | Chat log from the take window (when messages sent) |
 

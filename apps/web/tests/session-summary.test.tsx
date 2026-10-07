@@ -117,6 +117,37 @@ describe('SessionSummary', () => {
     expect(screen.getByText('Screen · 12 MB (Alice, +5000ms)')).toBeInTheDocument();
   });
 
+  // The status is the first word of each verdict, so the tone is never the only
+  // signal; a long unbroken name must still wrap inside the sheet.
+  it.each([
+    ['complete', 'text-[#81c995]'],
+    ['unverified', 'text-[#fdd663]'],
+    ['incomplete', 'text-[#f6aea9]'],
+  ] as const)('shows a %s verdict as its own line in its tone', (status, tone) => {
+    render(
+      <SessionSummary
+        {...baseProps}
+        files={[{ name: 'guest_r.mp4', kind: 'video', verdict: { status, text: 'Verdict text here.' } }]}
+      />
+    );
+    const line = screen.getByText('Verdict text here.');
+    expect(line.className).toMatch(/\bbreak-words\b/);
+    expect(line.className).toContain(tone);
+  });
+
+  // A take can list a dozen files; a dozen announcements at once help nobody.
+  it('shows a verdict as plain text, not a live region', () => {
+    render(
+      <SessionSummary
+        {...baseProps}
+        files={[{ name: 'guest_r.mp4', kind: 'video', verdict: { status: 'incomplete', text: 'Verdict text here.' } }]}
+      />
+    );
+    const line = screen.getByText('Verdict text here.');
+    expect(line).not.toHaveAttribute('role');
+    expect(line).not.toHaveAttribute('aria-live');
+  });
+
   it('renders integrity-missing message once, not duplicated', () => {
     const integrityMsg = 'Integrity not verified — one of the digests is missing.';
     render(
@@ -269,4 +300,3 @@ describe('SessionSummary', () => {
     ).toBeInTheDocument();
   });
 });
-

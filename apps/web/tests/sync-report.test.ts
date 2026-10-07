@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
-import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, type FileCheck } from '@/lib/sync-report';
+import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, fileVerdict, type FileCheck, type FileVerdict } from '@/lib/sync-report';
 
 describe('buildSyncReport', () => {
   const base = {
@@ -663,6 +663,238 @@ describe('verification and file sizes', () => {
     expect(parsed.verification[2]).toEqual(
       expect.objectContaining({ file: 'host_screen_rec.mp4', bytes: null })
     );
+  });
+
+  const received = (
+    over: Partial<NonNullable<FileCheck['received']>> = {}
+  ): NonNullable<FileCheck['received']> => ({
+    finalized: true,
+    abandoned: false,
+    sha256Written: 'x',
+    ...over,
+  });
+
+  // Each row is one outcome of the state machine: which facts put a file in
+  // which of the three states, and the words a host acts on.
+  const verdicts: [string, FileCheck | undefined, FileVerdict][] = [
+    ['no check at all', undefined, { status: 'unverified', text: 'Not verified. This file was not checked.' }],
+    [
+      'empty and arrived from a guest',
+      { bytes: 0, received: received() },
+      {
+        status: 'incomplete',
+        text: 'Empty. Nothing arrived from Priya. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ],
+    [
+      "empty and the host's own",
+      { bytes: 0 },
+      {
+        status: 'incomplete',
+        text: "Empty. Nothing was recorded. Your browser's backup, if it caught anything, is under Safety copies in the session summary; download it before you leave the call.",
+      },
+    ],
+    [
+      "the host's own with bytes",
+      { bytes: 1024 },
+      { status: 'complete', text: 'Complete. Recorded on this computer.' },
+    ],
+    [
+      'abandoned, even with equal digests',
+      { bytes: 10, received: received({ abandoned: true, sha256Sent: 'same', sha256Written: 'same' }) },
+      {
+        status: 'incomplete',
+        text: 'Incomplete. The upload from Priya fell too far behind and stopped, so this file ends early. Ask Priya for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ],
+    [
+      'digests equal',
+      { bytes: 10, received: received({ sha256Sent: 'same', sha256Written: 'same' }) },
+      { status: 'complete', text: 'Complete. Matches what Priya sent (SHA-256).' },
+    ],
+    [
+      'digests differ',
+      { bytes: 10, received: received({ sha256Sent: 'sent', sha256Written: 'written' }) },
+      {
+        status: 'incomplete',
+        text: 'Incomplete. Part of this file is missing or damaged: it differs from what Priya sent (SHA-256). Ask Priya for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ],
+    [
+      'finalized with no digest reported',
+      { bytes: 10, received: received() },
+      { status: 'unverified', text: 'Complete, not verified. No checksum arrived from Priya to compare.' },
+    ],
+    [
+      'finalized with an empty digest',
+      { bytes: 10, received: received({ sha256Sent: '' }) },
+      { status: 'unverified', text: 'Complete, not verified. No checksum arrived from Priya to compare.' },
+    ],
+    [
+      'no finish signal',
+      { bytes: 10, received: received({ finalized: false }) },
+      {
+        status: 'incomplete',
+        text: 'Incomplete. No finish signal arrived from Priya, so this file may end early. Ask Priya for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ],
+  ];
+
+  it.each(verdicts)('gives a file %s its verdict', (_row, check, expected) => {
+    expect(fileVerdict(check, 'Priya')).toEqual(expected);
+  });
+
+  it('names each file by who sent it, falling back to the guest or the sharer', () => {
+    const check = () => ({ bytes: 10, received: received({ finalized: false }) });
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostStartMs: 10_000,
+      guests: [
+        { slot: 0, name: 'Bob', file: 'guest_bob.mp4', wavFile: 'guest_bob.wav', startHostMs: 10_500, rttMs: 10 },
+        { slot: 1, file: 'guest_noname.mp4', startHostMs: 10_500, rttMs: 10 },
+      ],
+      screenSegments: [
+        { file: 'host_screen_alice.mp4', offsetMs: 1000, sharer: 'Alice' },
+        { file: 'host_screen_noname.mp4', offsetMs: 2000 },
+      ],
+      checks: new Map<string, FileCheck>([
+        ['guest_bob.mp4', check()],
+        ['guest_bob.wav', check()],
+        ['guest_noname.mp4', check()],
+        ['host_screen_alice.mp4', check()],
+        ['host_screen_noname.mp4', check()],
+      ]),
+    });
+    const text = (name: string) => r.data.fileList.find((f) => f.name === name)?.verdict?.text;
+    expect(text('guest_bob.mp4')).toContain('from Bob');
+    expect(text('guest_bob.wav')).toContain('from Bob');
+    expect(text('guest_noname.mp4')).toContain('from the guest');
+    expect(text('host_screen_alice.mp4')).toContain('from Alice');
+    expect(text('host_screen_noname.mp4')).toContain('from the sharer');
+  });
+
+  it('cleans a name before it reaches the verdict, and survives one that is not a string', () => {
+    const check: FileCheck = { bytes: 10, received: received({ finalized: false }) };
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostStartMs: 10_000,
+      guests: [
+        { slot: 0, name: 'Sam\n\u202Eevil', file: 'guest_evil.mp4', startHostMs: 10_500, rttMs: 10 },
+        { slot: 1, name: 42 as never, file: 'guest_42.mp4', startHostMs: 10_500, rttMs: 10 },
+      ],
+      checks: new Map<string, FileCheck>([
+        ['guest_evil.mp4', check],
+        ['guest_42.mp4', check],
+      ]),
+    });
+    const evil = r.data.fileList.find((f) => f.name === 'guest_evil.mp4')?.verdict?.text ?? '';
+    expect(evil).toContain('from Sam evil');
+    expect(evil).not.toContain('\n');
+    expect(evil).not.toContain('\u202E');
+    expect(r.data.fileList.find((f) => f.name === 'guest_42.mp4')?.verdict?.text).toContain('from the guest');
+  });
+
+  it('trims a name, and falls back when it holds only whitespace', () => {
+    const check: FileCheck = { bytes: 10, received: received({ finalized: false }) };
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostStartMs: 10_000,
+      guests: [
+        { slot: 0, name: '  Sam  ', file: 'guest_padded.mp4', startHostMs: 10_500, rttMs: 10 },
+        { slot: 1, name: '   ', file: 'guest_blank.mp4', startHostMs: 10_500, rttMs: 10 },
+      ],
+      checks: new Map<string, FileCheck>([
+        ['guest_padded.mp4', check],
+        ['guest_blank.mp4', check],
+      ]),
+    });
+    const text = (name: string) => r.data.fileList.find((f) => f.name === name)?.verdict?.text ?? '';
+    expect(text('guest_padded.mp4')).toContain('from Sam, so this file may end early.');
+    expect(text('guest_blank.mp4')).toContain('from the guest, so this file may end early.');
+  });
+
+  it('calls a file it has no check for unverified, with or without a checks map', () => {
+    const input = {
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 10_000,
+      guests: [{ slot: 0, file: 'guest_rec.mp4', startHostMs: 10_500, rttMs: 10 }],
+    };
+    const partial = buildSyncReport({
+      ...input,
+      checks: new Map<string, FileCheck>([['host_rec.mp4', { bytes: 10 }]]),
+    });
+    expect(partial.data.fileList.find((f) => f.name === 'guest_rec.mp4')?.verdict).toEqual({
+      status: 'unverified',
+      text: 'Not verified. This file was not checked.',
+    });
+
+    const unchecked = buildSyncReport(input);
+    expect(unchecked.data.fileList.map((f) => f.verdict)).toEqual([
+      { status: 'unverified', text: 'Not verified. This file was not checked.' },
+      { status: 'unverified', text: 'Not verified. This file was not checked.' },
+    ]);
+  });
+
+  it('writes file, bytes, status and detail for every listed file, in fileList order', () => {
+    const r = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 10_000,
+      guests: [{ slot: 0, name: 'Priya', file: 'guest_rec.mp4', startHostMs: 10_500, rttMs: 10 }],
+      screenSegments: [{ file: 'host_screen_rec.mp4', offsetMs: 1000 }],
+      checks: new Map<string, FileCheck>([
+        ['host_rec.mp4', { bytes: 812 }],
+        [
+          'guest_rec.mp4',
+          { bytes: 44_000, received: received({ sha256Sent: 'same', sha256Written: 'same' }) },
+        ],
+        ['host_screen_rec.mp4', { bytes: 0, received: received() }],
+      ]),
+    });
+    expect(JSON.parse(r.json).verification).toEqual([
+      { file: 'host_rec.mp4', bytes: 812, status: 'complete', detail: 'Complete. Recorded on this computer.' },
+      {
+        file: 'guest_rec.mp4',
+        bytes: 44_000,
+        status: 'complete',
+        detail: 'Complete. Matches what Priya sent (SHA-256).',
+      },
+      {
+        file: 'host_screen_rec.mp4',
+        bytes: 0,
+        status: 'incomplete',
+        detail:
+          'Empty. Nothing arrived from the sharer. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    ]);
+  });
+
+  // Slice -e replaces the camera-only warnings with a roll-up; until then the
+  // checks must not add a word of their own to them.
+  it('leaves the warnings and the integrity line as they were', () => {
+    const input = {
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostWavFile: 'host_rec.wav',
+      hostStartMs: 10_000,
+      guests: [
+        { slot: 0, name: 'Priya', file: 'guest_rec.mp4', wavFile: 'guest_rec.wav', startHostMs: null, rttMs: null },
+      ],
+    };
+    const withChecks = buildSyncReport({
+      ...input,
+      checks: new Map<string, FileCheck>([
+        ['guest_rec.wav', { bytes: 10, received: received({ finalized: false }) }],
+      ]),
+    });
+    const withoutChecks = buildSyncReport(input);
+    expect(withChecks.data.warnings).toEqual([
+      'Clock sync did not converge, so the start offset is unknown. Align by waveform.',
+      'Integrity not verified — one of the digests is missing.',
+    ]);
+    expect(withChecks.data.warnings).toEqual(withoutChecks.data.warnings);
+    expect(withChecks.data.integrity).toEqual(withoutChecks.data.integrity);
   });
 });
 
