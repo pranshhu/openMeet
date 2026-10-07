@@ -5,7 +5,13 @@ import {
   refuseBackup,
   type BackupTransfer,
 } from '@/hooks/backup-return';
-import { fakeFolder, fakeChannel, flush } from './backup-fakes';
+import { fakeFolder, fakeChannel, flush, framesFor, type FakeChannel } from './backup-fakes';
+import {
+  startHostRecording,
+  endHostRecording,
+  bindHostGuestChannel,
+  bindHostScreenChannel,
+} from '@/hooks/recording-controller';
 
 const ROOM = 'abc-defg-hij';
 const NO_COPY = JSON.stringify({
@@ -349,9 +355,12 @@ describe('BackupIntake', () => {
     expect(folder.files.has(FILE)).toBe(true);
     onChange.mockClear();
 
-    // Holder channel closes
+    // Holder channel closes: the accepted transfer waits for its sender.
     ch1.close();
     await flush();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(state.items[0]!.status).toBe('stalled');
+    onChange.mockClear();
 
     // Newcomer sends different key after holder closed
     const ch2 = fakeChannel(label);
@@ -366,7 +375,7 @@ describe('BackupIntake', () => {
     // The accepted record is untouched
     expect(onChange).not.toHaveBeenCalled();
     expect(state.items).toHaveLength(1);
-    expect(state.items[0]!.status).toBe('active');
+    expect(state.items[0]!.status).toBe('stalled');
     expect(state.items[0]!.from).toBe('Alice');
     expect(state.items[0]!.size).toBe(1000);
 
@@ -836,7 +845,7 @@ describe('BackupIntake', () => {
     expect(ch.readyState).toBe('closed');
   });
 
-  it('does not delete active record when its channel closes', async () => {
+  it('does not delete an active record whose channel closes', async () => {
     const { state, intake } = setup();
 
     const ch = fakeChannel(validLabel(1700000000000, ROOM, 'mp4'));
@@ -852,9 +861,9 @@ describe('BackupIntake', () => {
     ch.close();
     await flush();
 
-    // Active record remains in the list
+    // Record remains in the list, waiting for the sender to ask where to resume
     expect(state.items).toHaveLength(1);
-    expect(state.items[0]!.status).toBe('active');
+    expect(state.items[0]!.status).toBe('stalled');
   });
 
   it('decline leaves active records intact while clearing offered ones', async () => {
@@ -1392,5 +1401,712 @@ describe('BackupIntake', () => {
     await expectNoRejections(() => {
       ch.deliver(offerMsg(100));
     });
+  });
+});
+
+const BACKUP_ID = `openmeet-backup-1700000000000-${ROOM}.mp4`;
+const NOTE = FILE.replace(/\.mp4$/, '.json');
+
+function payloadOf(size: number, seed = 1): Uint8Array {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i++) bytes[i] = (i * seed + 7) & 0xff;
+  return bytes;
+}
+
+const finalized = (totalBytes: number, sha256: string) =>
+  JSON.stringify({ type: 'recording-finalized', recordingId: 'x', totalBytes, sha256 });
+
+const resumeQuery = (key?: string) =>
+  JSON.stringify({ type: 'resume_query', recordingId: BACKUP_ID, ...(key ? { key } : {}) });
+
+async function settle(times = 12): Promise<void> {
+  for (let i = 0; i < times; i++) await flush();
+}
+
+function messages(ch: FakeChannel, type: string): Record<string, unknown>[] {
+  return ch.sent
+    .filter((m): m is string => typeof m === 'string')
+    .map((m) => JSON.parse(m) as Record<string, unknown>)
+    .filter((m) => m.type === type);
+}
+
+/** Offer, Save, and hand back everything the test needs to drive the channel. */
+async function offered(
+  size: number,
+  folderOpts?: { lateWrites?: boolean; fullDisk?: boolean; closeFails?: boolean },
+  key = 'key-a'
+) {
+  const { state, onChange, intake } = setup();
+  const ch = fakeChannel(validLabel());
+  intake.offer(ch, { peerId: 'p1', name: 'Alice' });
+  ch.deliver(offerMsg(size, key));
+  await flush();
+  const folder = fakeFolder(folderOpts);
+  await intake.accept(folder, state.items);
+  return { state, onChange, intake, ch, folder };
+}
+
+describe('BackupIntake receiving a returned backup', () => {
+  it('writes every frame, verifies the digest and saves a backup with its note', async () => {
+    const payload = payloadOf(200_000, 3);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    const file = folder.files.get(FILE)!;
+    expect(Array.from(file.bytes)).toEqual(Array.from(payload));
+    expect(file.closed).toBe(true);
+
+    const note = JSON.parse(
+      new TextDecoder().decode(folder.files.get(NOTE)!.bytes)
+    ) as Record<string, unknown>;
+    expect(note).toMatchObject({
+      file: FILE,
+      backupOf: BACKUP_ID,
+      from: 'Alice',
+      sizeBytes: payload.byteLength,
+      sha256,
+    });
+    expect(String(note.alignment)).toContain('do not apply');
+
+    expect(messages(ch, 'recording-finalized')).toEqual([
+      {
+        type: 'recording-finalized',
+        recordingId: BACKUP_ID,
+        totalBytes: payload.byteLength,
+        sha256,
+      },
+    ]);
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+  });
+
+  it('verifies a late-written file only after the writer has closed', async () => {
+    const payload = payloadOf(200_000, 5);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength, { lateWrites: true });
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle(30);
+
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+    expect(messages(ch, 'recording-finalized').at(-1)).toEqual({
+      type: 'recording-finalized',
+      recordingId: BACKUP_ID,
+      totalBytes: payload.byteLength,
+      sha256,
+    });
+    expect(folder.files.get(FILE)!.closed).toBe(true);
+  });
+
+  it('does not call onChange for every chunk of a large file', async () => {
+    const payload = payloadOf(300_000, 2);
+    const { frames } = await framesFor(payload);
+    const { state, onChange, ch, folder } = await offered(64 * 1024 * 1024);
+    expect(state.items[0]!.status).toBe('active');
+    onChange.mockClear();
+
+    for (const f of frames) ch.deliver(f);
+    await settle();
+
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(state.items[0]).toMatchObject({ status: 'active', percent: 0 });
+  });
+
+  it('refuses a chunk that would end past the declared size and fails the transfer', async () => {
+    const payload = payloadOf(200_000, 3);
+    const { frames } = await framesFor(payload);
+    const { state, ch, folder } = await offered(1000);
+
+    for (const f of frames) ch.deliver(f);
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(ch.sent).toContain(NO_COPY);
+    expect(ch.readyState).toBe('closed');
+    expect(folder.files.has(FILE)).toBe(false);
+  });
+
+  it("keeps the bytes of a refused transfer's file, written before the refusal", async () => {
+    const payload = payloadOf(65_536, 3);
+    const { frames } = await framesFor(payload);
+    const { state, ch, folder } = await offered(65_536, { lateWrites: true });
+
+    for (const f of frames) ch.deliver(f);
+    // A chunk past the declared size arrives while the first write is queued.
+    ch.deliver(JSON.stringify({ idx: 1, offset: 65_536, size: 100, ts: 2 }));
+    ch.deliver(new Uint8Array(100).buffer);
+    await settle(30);
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(65_536);
+  });
+
+  it('fails a transfer whose sender digest does not match, keeping the file without a note', async () => {
+    const payload = payloadOf(200_000, 7);
+    const { frames } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, 'f'.repeat(64)));
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(folder.files.has(NOTE)).toBe(false);
+    expect(folder.files.get(FILE)).toMatchObject({ closed: true });
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+    expect(ch.sent).toContain(NO_COPY);
+  });
+
+  it('fails a transfer finalized before all its declared bytes arrived', async () => {
+    const payload = payloadOf(120_000, 7);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength + 1);
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(folder.files.has(NOTE)).toBe(false);
+    expect(folder.files.get(FILE)).toMatchObject({ closed: true });
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+  });
+
+  it('removes the empty file of a transfer that failed before any byte arrived', async () => {
+    const { state, ch, folder } = await offered(1000);
+    expect(folder.files.has(FILE)).toBe(true);
+
+    ch.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'x', lastIdx: -1 }));
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(folder.files.has(FILE)).toBe(false);
+    expect(folder.removed).toEqual([FILE]);
+  });
+
+  it('removes the empty file of a stalled transfer when the intake closes', async () => {
+    const { state, intake, ch, folder } = await offered(1000);
+    expect(folder.files.has(FILE)).toBe(true);
+
+    ch.close();
+    await flush();
+    expect(state.items[0]!.status).toBe('stalled');
+
+    await intake.close();
+
+    expect(folder.files.has(FILE)).toBe(false);
+    expect(folder.removed).toEqual([FILE]);
+  });
+
+  it('keeps the bytes of a stalled transfer when the intake closes', async () => {
+    const payload = payloadOf(150_000, 6);
+    const { frames } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames.slice(0, 2)) ch.deliver(f);
+    await settle();
+    ch.close();
+    await flush();
+    expect(state.items[0]!.status).toBe('stalled');
+
+    await intake.close();
+
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(65_536);
+  });
+
+  it('keeps the part that arrived when the sender gives up', async () => {
+    const payload = payloadOf(150_000, 6);
+    const { frames } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames) ch.deliver(f);
+    await settle();
+    ch.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'x', lastIdx: 2 }));
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+    expect(folder.files.has(NOTE)).toBe(false);
+  });
+
+  it('stays failed when the sender gives up while the finalizing file is still closing', async () => {
+    const payload = payloadOf(150_000, 14);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, onChange, ch, folder } = await offered(payload.byteLength, { lateWrites: true });
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    // Let the finalize reach the close; the queued writes still hold it there.
+    await Promise.resolve();
+    await Promise.resolve();
+    ch.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'x', lastIdx: 2 }));
+    await settle(30);
+
+    expect(onChange.mock.calls.map((c) => (c[0] as BackupTransfer[])[0]!.status)).not.toContain('saved');
+    expect(state.items[0]!.status).toBe('failed');
+    expect(ch.readyState).toBe('closed');
+    expect(folder.files.has(NOTE)).toBe(false);
+  });
+
+  it('does not transition to stalled when the channel closes while the finalizing file is closing', async () => {
+    const payload = payloadOf(150_000, 14);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, onChange, ch, folder } = await offered(payload.byteLength, { lateWrites: true });
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    // Let the finalize reach writer.close(); the queued writes hold it in closing.
+    await Promise.resolve();
+    await Promise.resolve();
+    ch.close();
+    await settle(30);
+
+    expect(onChange.mock.calls.map((c) => (c[0] as BackupTransfer[])[0]!.status)).not.toContain('stalled');
+    expect(state.items[0]!.status).toBe('saved');
+    expect(folder.files.has(NOTE)).toBe(true);
+  });
+
+  it('marks a record diskFull when a write fails with QuotaExceededError', async () => {
+    const payload = payloadOf(1000, 1);
+    const { frames } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength, { fullDisk: true });
+
+    for (const f of frames) ch.deliver(f);
+    await settle();
+
+    expect(state.items[0]).toMatchObject({ status: 'failed', diskFull: true });
+    expect(ch.sent).toContain(NO_COPY);
+    expect(ch.readyState).toBe('closed');
+    expect(folder.files.has(NOTE)).toBe(false);
+  });
+
+  it('stalls when the channel closes, then resumes on a second channel into the same file', async () => {
+    const payload = payloadOf(200_000, 9);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    await settle();
+    const creates = folder.calls.filter((c) => c.create && c.name === FILE).length;
+
+    ch.close();
+    await flush();
+    expect(state.items[0]!.status).toBe('stalled');
+
+    const ch2 = fakeChannel(validLabel());
+    intake.offer(ch2, { peerId: 'p1', name: 'Alice' });
+    ch2.deliver(resumeQuery('key-a'));
+    await settle();
+
+    expect(messages(ch2, 'resume_offset').at(-1)).toEqual({
+      type: 'resume_offset',
+      recordingId: BACKUP_ID,
+      lastByte: 131_072,
+      lastIdx: 1,
+    });
+    expect(state.items[0]!.status).toBe('active');
+
+    // The sender resumes at the offset it was handed, on the new channel.
+    for (const f of frames.slice(4)) ch2.deliver(f);
+    ch2.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    expect(Array.from(folder.files.get(FILE)!.bytes)).toEqual(Array.from(payload));
+    expect(folder.calls.filter((c) => c.create && c.name === FILE).length).toBe(creates);
+    expect(folder.files.has(NOTE)).toBe(true);
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+  });
+
+  it('stays stalled while the writes queued at the close still finish', async () => {
+    const payload = payloadOf(200_000, 13);
+    const { frames } = await framesFor(payload);
+    const { state, ch } = await offered(payload.byteLength, { lateWrites: true });
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    ch.close();
+    await settle(30);
+
+    expect(ch.readyState).toBe('closed');
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['stalled', 65]]);
+  });
+
+  it('ignores a silent second channel until it asks to resume, then drops the first', async () => {
+    const payload = payloadOf(200_000, 10);
+    const { frames } = await framesFor(payload);
+    const { intake, ch, folder } = await offered(payload.byteLength);
+
+    const ch2 = fakeChannel(validLabel());
+    intake.offer(ch2, { peerId: 'p1', name: 'Alice' });
+    await flush();
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    await settle();
+    expect(folder.files.get(FILE)!.bytes.length).toBe(131_072);
+
+    ch2.deliver(resumeQuery('key-a'));
+    await settle();
+
+    expect(ch.sent).toContain(NO_COPY);
+    expect(ch.readyState).toBe('closed');
+
+    for (const f of frames.slice(4)) ch.deliver(f);
+    await settle();
+    expect(folder.files.get(FILE)!.bytes.length).toBe(131_072);
+  });
+
+  it('answers a resume_query only after the pending writes, with the last index written', async () => {
+    const payload = payloadOf(200_000, 12);
+    const { frames } = await framesFor(payload);
+    const { ch, folder } = await offered(payload.byteLength, { lateWrites: true });
+
+    // Two chunks in flight: their writes are still queued when the query lands.
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    ch.deliver(resumeQuery('key-a'));
+    await settle(30);
+
+    expect(messages(ch, 'resume_offset').at(-1)).toEqual({
+      type: 'resume_offset',
+      recordingId: BACKUP_ID,
+      lastByte: 131_072,
+      lastIdx: 1,
+    });
+
+    for (const f of frames.slice(4)) ch.deliver(f);
+    await settle(30);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+  });
+
+  it.each([
+    ['another key', 'key-mallory'],
+    ['no key at all', undefined],
+  ])('refuses a resume_query with %s and leaves the transfer alone', async (_name, key) => {
+    const payload = payloadOf(200_000, 11);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength, undefined, 'key-alice');
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    await settle();
+
+    const thief = fakeChannel(validLabel());
+    intake.offer(thief, { peerId: 'p2', name: 'Mallory' });
+    thief.deliver(resumeQuery(key));
+    await settle();
+
+    expect(thief.sent).toEqual([NO_COPY]);
+    expect(thief.readyState).toBe('closed');
+    expect(ch.readyState).toBe('open');
+
+    for (const f of frames.slice(4)) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+    expect(Array.from(folder.files.get(FILE)!.bytes)).toEqual(Array.from(payload));
+  });
+
+  it('another key cannot take a stalled transfer, and the holder still resumes', async () => {
+    const payload = payloadOf(200_000, 16);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength, undefined, 'key-alice');
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    await settle();
+    ch.close();
+    await flush();
+    expect(state.items[0]!.status).toBe('stalled');
+
+    const thief = fakeChannel(validLabel());
+    intake.offer(thief, { peerId: 'p2', name: 'Mallory' });
+    thief.deliver(offerMsg(5, 'key-mallory'));
+    await settle();
+
+    expect(thief.sent).toEqual([NO_COPY]);
+    expect(thief.readyState).toBe('closed');
+    expect(state.items.map((i) => [i.status, i.from, i.size])).toEqual([
+      ['stalled', 'Alice', payload.byteLength],
+    ]);
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(131_072);
+
+    // A Save after the refusal opens no second file for the same name.
+    await intake.accept(folder, state.items);
+    expect(folder.calls.filter((c) => c.create && c.name === FILE).length).toBe(1);
+
+    // The holder's own key is still answered with where its transfer stands.
+    const ch2 = fakeChannel(validLabel());
+    intake.offer(ch2, { peerId: 'p1', name: 'Alice' });
+    ch2.deliver(resumeQuery('key-alice'));
+    await settle();
+    expect(messages(ch2, 'resume_offset').at(-1)).toEqual({
+      type: 'resume_offset',
+      recordingId: BACKUP_ID,
+      lastByte: 131_072,
+      lastIdx: 1,
+    });
+    expect(state.items[0]!.status).toBe('active');
+
+    // And the transfer still finishes on the holder's new channel.
+    for (const f of frames.slice(4)) ch2.deliver(f);
+    ch2.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+  });
+
+  it('another key cannot take a saved transfer, and no second file is opened', async () => {
+    const payload = payloadOf(100_000, 17);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength, undefined, 'key-alice');
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+    expect(state.items[0]!.status).toBe('saved');
+    ch.close();
+    await flush();
+
+    const thief = fakeChannel(validLabel());
+    intake.offer(thief, { peerId: 'p2', name: 'Alice' });
+    thief.deliver(offerMsg(50, 'key-mallory'));
+    await settle();
+
+    expect(thief.sent).toEqual([NO_COPY]);
+    expect(thief.readyState).toBe('closed');
+    expect(state.items.map((i) => [i.status, i.from, i.size])).toEqual([
+      ['saved', 'Alice', payload.byteLength],
+    ]);
+    expect(folder.files.has(NOTE)).toBe(true);
+
+    await intake.accept(folder, state.items);
+    expect(folder.calls.filter((c) => c.create && c.name === FILE).length).toBe(1);
+    expect(folder.files.has(numbered(2))).toBe(false);
+  });
+
+  it('answers a repeated finalized or a resume on a new channel with the same verdict', async () => {
+    const payload = payloadOf(100_000, 4);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch } = await offered(payload.byteLength);
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+    expect(state.items[0]!.status).toBe('saved');
+    const verdict = {
+      type: 'recording-finalized',
+      recordingId: BACKUP_ID,
+      totalBytes: payload.byteLength,
+      sha256,
+    };
+
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+    expect(messages(ch, 'recording-finalized').at(-1)).toEqual(verdict);
+
+    const ch2 = fakeChannel(validLabel());
+    intake.offer(ch2, { peerId: 'p1', name: 'Alice' });
+    ch2.deliver(resumeQuery('key-a'));
+    await settle();
+    expect(messages(ch2, 'recording-finalized').at(-1)).toEqual(verdict);
+  });
+
+  it('keeps the part that arrived when a fresh offer starts the backup over', async () => {
+    const payload = payloadOf(150_000, 8);
+    const { frames } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength);
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    await settle();
+    const arrived = folder.files.get(FILE)!.bytes.length;
+    expect(arrived).toBe(131_072);
+
+    const ch2 = fakeChannel(validLabel());
+    intake.offer(ch2, { peerId: 'p1', name: 'Alice' });
+    ch2.deliver(offerMsg(payload.byteLength + 10, 'key-a'));
+    await settle();
+
+    expect(state.items.map((i) => [i.status, i.size])).toEqual([['offered', payload.byteLength + 10]]);
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)).toMatchObject({ closed: true });
+    expect(folder.files.get(FILE)!.bytes.length).toBe(arrived);
+
+    await intake.accept(folder, state.items);
+    expect(folder.files.has(numbered(2))).toBe(true);
+  });
+
+  it('does not emit active progress for a chunk that settles after a fresh offer dropped the receiver', async () => {
+    const { onChange, ch } = await offered(300_000, { lateWrites: true });
+
+    const { frames } = await framesFor(payloadOf(65_536, 1));
+    for (const f of frames) ch.deliver(f);
+    // While the chunk write is queued, same key starts over:
+    ch.deliver(offerMsg(500_000, 'key-a'));
+    await settle(30);
+
+    const emits = onChange.mock.calls.map((c) => (c[0] as Array<{ status: string }>)[0]!.status);
+    expect(emits).toEqual(['offered', 'active', 'offered']);
+  });
+
+  it('drops a late write error of the file a fresh offer replaced', async () => {
+    const { state, ch } = await offered(300_000, { lateWrites: true, fullDisk: true });
+
+    // One chunk: its write is queued when the same key starts the offer over on
+    // the same channel, which drops the record's receiver.
+    const { frames } = await framesFor(payloadOf(65_536, 1));
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(offerMsg(500_000, 'key-a'));
+    await settle(30);
+
+    expect(state.items.map((i) => [i.status, i.size])).toEqual([['offered', 500_000]]);
+    expect(ch.readyState).toBe('open');
+    expect(ch.sent).toEqual([
+      JSON.stringify({
+        type: 'resume_offset',
+        recordingId: BACKUP_ID,
+        lastByte: 0,
+        lastIdx: -1,
+      }),
+    ]);
+  });
+
+  it('fails the transfer when the writer throws on close', async () => {
+    const payload = payloadOf(150_000, 15);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength, { closeFails: true });
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    expect(state.items[0]!.status).toBe('failed');
+    expect(ch.sent).toContain(NO_COPY);
+    expect(ch.readyState).toBe('closed');
+    expect(folder.files.has(NOTE)).toBe(false);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(payload.byteLength);
+  });
+
+  it('saves a backup even when its note cannot be written', async () => {
+    const payload = payloadOf(100_000, 2);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, ch, folder } = await offered(payload.byteLength);
+
+    const origGet = folder.getFileHandle.bind(folder);
+    folder.getFileHandle = async (name: string, o?: { create?: boolean }) => {
+      if (name.endsWith('.json')) {
+        throw new Error('Disk error on sidecar');
+      }
+      return origGet(name, o);
+    };
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+    expect(folder.files.has(NOTE)).toBe(false);
+    expect(folder.files.get(FILE)!.closed).toBe(true);
+    expect(Array.from(folder.files.get(FILE)!.bytes)).toEqual(Array.from(payload));
+    expect(messages(ch, 'recording-finalized')).toEqual([
+      {
+        type: 'recording-finalized',
+        recordingId: BACKUP_ID,
+        totalBytes: payload.byteLength,
+        sha256,
+      },
+    ]);
+  });
+});
+
+// The live take's receivers are built elsewhere and have no declared size to
+// bound them to: every one of them still takes a chunk at any offset.
+describe('live take receivers are unbounded', () => {
+  class FakeMediaRecorder {
+    static instances: FakeMediaRecorder[] = [];
+    static isTypeSupported = () => true;
+    ondataavailable: ((ev: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    state = 'inactive';
+    constructor(public stream: unknown, public opts: unknown) {
+      FakeMediaRecorder.instances.push(this);
+    }
+    start() {
+      this.state = 'recording';
+    }
+    stop() {
+      this.state = 'inactive';
+      this.onstop?.();
+    }
+  }
+
+  function liveStream() {
+    const track = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }) };
+    return {
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+  }
+
+  function writableDir() {
+    return {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+      }),
+    };
+  }
+
+  it('writes a far-offset chunk on the slot-0, guest and screen receivers', async () => {
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+    const handles = await startHostRecording({
+      recordingId: 'rec-live',
+      localStream: liveStream(),
+      dir: writableDir() as never,
+    });
+
+    // Header and payload exactly as a sender puts them on the wire: idx 0 at
+    // offset 100 is not where an unbounded receiver expects the file to start.
+    const farChunk = [
+      JSON.stringify({ idx: 0, offset: 100, size: 4, ts: 1 }),
+      new Uint8Array([1, 2, 3, 4]).buffer,
+    ] as const;
+
+    const camera = fakeChannel('');
+    await bindHostGuestChannel(camera, handles, 'peer-a');
+    for (const f of farChunk) camera.deliver(f);
+
+    const second = fakeChannel('');
+    await bindHostGuestChannel(second, handles, 'peer-b');
+    for (const f of farChunk) second.deliver(f);
+
+    const screen = fakeChannel('');
+    (screen as unknown as { addEventListener: (t: string, f: () => void) => void }).addEventListener =
+      () => {};
+    await bindHostScreenChannel(screen, handles);
+    for (const f of farChunk) screen.deliver(f);
+
+    await flush();
+
+    expect(handles.guestWriter?.size).toBe(104);
+    expect(handles.guestReceivers?.get('peer-b:mp4')?.writer?.size).toBe(104);
+    expect(handles.screenWriters?.at(-1)?.size).toBe(104);
+
+    for (const ch of [camera, second, screen]) {
+      ch.deliver(
+        JSON.stringify({
+          type: 'recording-finalized',
+          recordingId: 'rec-live',
+          totalBytes: 4,
+          sha256: 'x',
+        })
+      );
+    }
+    await endHostRecording(handles);
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
   });
 });

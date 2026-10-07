@@ -392,7 +392,13 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   take a name only while it holds a waiting offer whose channel is gone. Nothing is written until the
   host accepts, and a Save covers only the offers that were on screen when it was clicked; each
   accepted file is opened under a free name that never replaces an existing file in the folder
-  (`…_2.<ext>`).
+  (`…_2.<ext>`). An accepted
+  transfer is written through a `ChunkReceiver` bounded to the size its sender declared, and answers a
+  `resume_query` only with the key of the offer that holds it. On the sender's finalize the file is
+  closed first, then its digest and byte count are compared with the sender's, and a verified backup
+  gets a `<name>.json` note beside it; a failed or cut-off transfer keeps the bytes that arrived with
+  no note (an empty file is removed), and a dropped connection shows `stalled` until the sender asks
+  where to resume on a new channel.
 
 ---
 

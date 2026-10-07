@@ -46,6 +46,8 @@ export interface ChunkAck {
 export interface ChunkResumeQuery {
   type: 'resume_query';
   recordingId: string;
+  /** For a returned backup: the key of the offer that holds it. */
+  key?: string;
 }
 
 export interface ChunkResumeOffset {

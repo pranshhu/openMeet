@@ -1,7 +1,9 @@
 import { recordingChannelKind } from '@openmeet/protocol';
 import { integrityVerdict, sanitizeText } from '@/lib/sync-report';
 import { parseBackupName, type BackupName } from '@/lib/backup-recorder';
-import { FileWriter, type FsDirectoryHandle } from '@/lib/fs-writer';
+import { ChunkReceiver } from '@/lib/chunk-receiver';
+import { DiskFullError, FileWriter, type FsDirectoryHandle } from '@/lib/fs-writer';
+import { writeTakeSidecars } from './recording-controller';
 
 /** One backup on its way from a guest to the host, as either side shows it. */
 export interface BackupTransfer {
@@ -126,6 +128,13 @@ interface BackupRecord {
   dir?: FsDirectoryHandle | undefined;
   file?: string | undefined;
   writer?: FileWriter | undefined;
+  receiver?: ChunkReceiver | undefined;
+  /** A finalize is running: the file is being closed and checked. */
+  closing: boolean;
+  /** The verdict already sent, so a sender that asks again gets it again. */
+  verdict?: string | undefined;
+  /** Every write routed so far: a resume answer must not name an offset short of the file. */
+  pending: Promise<void>;
 }
 
 // A guest's backup is never deleted automatically, so it comes back, and
@@ -193,8 +202,123 @@ export class BackupIntake {
       return;
     }
     if (msg?.type === 'resume_query') {
-      say(channel, NO_COPY);
+      const record = this.records.get(id);
+      if (!record?.receiver) {
+        // This tab holds none of this backup: frames on this channel are gone.
+        say(channel, NO_COPY);
+        return;
+      }
+      // Only the sender that created the record may move it: a channel that
+      // merely guesses the label would otherwise take over the transfer.
+      if (msg.key !== record.key) {
+        turnAway(channel);
+        return;
+      }
+      if (record.channel !== channel) {
+        // The same backup on a rebuilt connection. Move it before the old
+        // channel closes, so its close event is not read as this record's.
+        const previous = record.channel;
+        record.channel = channel;
+        turnAway(previous);
+      }
+      // The receiver hashes and counts a chunk only after its write resolves,
+      // so with writes queued it would report an offset short of the bytes on
+      // disk and refuse the sender's honest next chunk as out of order.
+      await record.pending;
+      // Fall through: the receiver answers with where it actually stands.
     }
+
+    const record = this.records.get(id);
+    const receiver = record?.receiver;
+    if (!record || !receiver || record.channel !== channel) return;
+    const handled = receiver.handleMessage(data as string | ArrayBuffer);
+    // Not just this message's write: one that returned without writing must
+    // not make a later resume answer look settled while an earlier write runs.
+    record.pending = Promise.all([record.pending, handled]).then(
+      () => undefined,
+      () => undefined
+    );
+    await handled;
+    if (record.receiver !== receiver) return;
+
+    if (record.verdict) {
+      // Saved: a sender that asked again because the first answer died with
+      // its connection gets the verdict, not a resume offset.
+      say(record.channel, record.verdict);
+      return;
+    }
+    if (receiver.isAbandoned) {
+      await this.failRecord(record);
+      return;
+    }
+    if (receiver.receivedFinalized) {
+      await this.finish(record, receiver);
+      return;
+    }
+    const percent = Math.min(99, Math.floor((receiver.bytesWritten * 100) / record.item.size));
+    // A write that was queued before the connection dropped settles after
+    // `stalled` was shown: it may move the percent, never the status.
+    const status = record.channel.readyState === 'open' ? 'active' : record.item.status;
+    if (percent !== record.item.percent || status !== record.item.status) {
+      record.item = { ...record.item, status, percent };
+      this.emit();
+    }
+  }
+
+  /** The sender says everything it sent has arrived: close, verify, and say what was saved. */
+  private async finish(record: BackupRecord, receiver: ChunkReceiver): Promise<void> {
+    if (record.closing) return;
+    record.closing = true;
+    try {
+      await record.writer?.close();
+    } catch (e) {
+      record.closing = false;
+      await this.failRecord(record, e);
+      return;
+    }
+    // Both are final only once every queued write has finished: the receiver
+    // hashes and counts a chunk after its write resolves, never before.
+    const written = await receiver.digestHex();
+    // The sender may have given up while the file was closing: the record was
+    // failed and its receiver dropped, and its verdict is no longer this one's.
+    if (record.receiver !== receiver) return;
+    if (receiver.bytesWritten !== record.item.size || receiver.senderSha256 !== written) {
+      await this.failRecord(record);
+      return;
+    }
+
+    const id = record.item.id;
+    const file = record.file ?? receiver.fileName;
+    let content = '';
+    try {
+      content = buildBackupNote({
+        file,
+        backupOf: id,
+        backup: record.backup,
+        from: record.item.from ?? 'Guest',
+        sizeBytes: receiver.bytesWritten,
+        sha256Sent: receiver.senderSha256 ?? '',
+        sha256Written: written,
+      });
+    } catch {
+      // A note that cannot be built must not fail a verified backup.
+    }
+    if (record.dir) {
+      await writeTakeSidecars(record.dir, [{ name: file.replace(/\.[^.]+$/, '.json'), content }]);
+    }
+
+    // The file is closed; the receiver stays so a later resume_query is answered.
+    record.writer = undefined;
+    const verdict = JSON.stringify({
+      type: 'recording-finalized',
+      recordingId: id,
+      totalBytes: receiver.bytesWritten,
+      sha256: written,
+    });
+    record.verdict = verdict;
+    say(record.channel, verdict);
+    record.item = { ...record.item, status: 'saved', percent: 100 };
+    this.emit();
   }
 
   private async handleOffer(
@@ -266,6 +390,8 @@ export class BackupIntake {
       peerId: from.peerId,
       channel,
       key,
+      closing: false,
+      pending: Promise.resolve(),
     };
     this.records.set(id, newRecord);
     this.emit();
@@ -322,6 +448,17 @@ export class BackupIntake {
           await this.endRecordFile(record);
           continue;
         }
+        const receiver = new ChunkReceiver({
+          recordingId: record.item.id,
+          writer,
+          maxBytes: record.item.size,
+          // Reads the record each time, so replies follow a replaced channel.
+          sendControl: (json) => say(record.channel, json),
+          onError: (e) => {
+            if (record.receiver === receiver) void this.failRecord(record, e);
+          },
+        });
+        record.receiver = receiver;
         say(
           record.channel,
           JSON.stringify({
@@ -343,9 +480,12 @@ export class BackupIntake {
     }
   }
 
-  private async failRecord(record: BackupRecord): Promise<void> {
+  private async failRecord(record: BackupRecord, error?: unknown): Promise<void> {
     if (record.item.status === 'saved' || record.item.status === 'failed') return;
-    record.item = { ...record.item, status: 'failed' };
+    record.item =
+      error instanceof DiskFullError
+        ? { ...record.item, status: 'failed', diskFull: true }
+        : { ...record.item, status: 'failed' };
     this.emit();
     turnAway(record.channel);
     await this.endRecordFile(record);
@@ -358,8 +498,14 @@ export class BackupIntake {
     record.writer = undefined;
     record.dir = undefined;
     record.file = undefined;
+    record.receiver = undefined;
     await writer?.close().catch(() => {});
-    if (writer && file && dir?.removeEntry) {
+    // The bytes that reached the file decide, not the receiver's count: a
+    // receiver that refuses stops counting writes that were already queued.
+    const arrived = writer?.size ?? 0;
+    // A transfer that wrote nothing leaves an empty file nobody asked for; a
+    // partial one is kept, and only a verified one gets a note.
+    if (writer && file && dir?.removeEntry && arrived === 0) {
       await dir.removeEntry(file).catch(() => {});
     }
   }
@@ -369,6 +515,11 @@ export class BackupIntake {
     if (!record || record.channel !== channel) return;
     if (record.item.status === 'offered') {
       this.records.delete(id);
+      this.emit();
+      return;
+    }
+    if (record.item.status === 'active' && !record.closing) {
+      record.item = { ...record.item, status: 'stalled' };
       this.emit();
     }
   }
@@ -386,6 +537,11 @@ export class BackupIntake {
 
   /** Leaving the room: close every open file. */
   async close(): Promise<void> {
-    await Promise.allSettled(Array.from(this.records.values(), (r) => r.writer?.close()));
+    await Promise.allSettled(
+      Array.from(this.records.values(), (r) =>
+        // A record mid-finalize owns its file: finish() closes and checks it.
+        r.closing ? r.writer?.close() : this.endRecordFile(r)
+      )
+    );
   }
 }

@@ -1,4 +1,5 @@
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
+import { ChunkSender } from '@/lib/chunk-sender';
 
 export interface FakeFolderFile {
   bytes: Uint8Array;
@@ -12,7 +13,12 @@ export interface FakeFolderHandle extends FsDirectoryHandle {
   removeEntry(name: string): Promise<void>;
 }
 
-export function fakeFolder(opts?: { refuseCreate?: boolean }): FakeFolderHandle {
+export function fakeFolder(opts?: {
+  refuseCreate?: boolean;
+  lateWrites?: boolean;
+  fullDisk?: boolean;
+  closeFails?: boolean;
+}): FakeFolderHandle {
   const files = new Map<string, FakeFolderFile>();
   const calls: Array<{ name: string; create: boolean }> = [];
   const removed: string[] = [];
@@ -51,6 +57,14 @@ export function fakeFolder(opts?: { refuseCreate?: boolean }): FakeFolderHandle 
           }
           return {
             async write(d: { type?: 'write'; position: number; data: ArrayBuffer | ArrayBufferView }) {
+              // A real writable settles off the current task, so a receiver that
+              // reads its own state right after calling write() sees it stale.
+              if (opts?.lateWrites) await new Promise((r) => setTimeout(r, 0));
+              if (opts?.fullDisk) {
+                const err = new Error('Quota exceeded');
+                err.name = 'QuotaExceededError';
+                throw err;
+              }
               const fileEntry = files.get(name);
               if (!fileEntry) throw new Error('File removed');
               const src =
@@ -68,6 +82,12 @@ export function fakeFolder(opts?: { refuseCreate?: boolean }): FakeFolderHandle 
               fileEntry.bytes.set(src, d.position);
             },
             async close() {
+              // Commit often fails on a disk that filled up while writing.
+              if (opts?.closeFails) {
+                const err = new Error('Quota exceeded');
+                err.name = 'QuotaExceededError';
+                throw err;
+              }
               const fileEntry = files.get(name);
               if (fileEntry) fileEntry.closed = true;
             },
@@ -129,4 +149,24 @@ export function fakeChannel(label = ''): RTCDataChannel & FakeChannel {
 
 export function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
+}
+
+/** What a real ChunkSender puts on the wire for one recorded chunk, plus its digest. */
+export async function framesFor(
+  bytes: Uint8Array
+): Promise<{ frames: (string | ArrayBuffer)[]; sha256: string }> {
+  const frames: (string | ArrayBuffer)[] = [];
+  const channel = {
+    readyState: 'open',
+    bufferedAmount: 0,
+    send(data: string | ArrayBuffer) {
+      frames.push(data);
+    },
+  } as unknown as RTCDataChannel;
+  const sender = new ChunkSender({ recordingId: 'backup', channel });
+  sender.sendChunk({
+    header: { idx: 0, offset: 0, size: bytes.byteLength, ts: 1 },
+    payload: bytes.slice().buffer,
+  });
+  return { frames, sha256: await sender.digestHex() };
 }
