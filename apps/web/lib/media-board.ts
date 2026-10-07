@@ -14,13 +14,15 @@
  * Files are read locally and never uploaded, consistent with the rest of openMeet.
  */
 
+import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
+
 export interface Pad {
   id: string;
   name: string;
   durationMs: number;
 }
 
-type Ctor = new () => AudioContext;
+type Ctor = new (options?: AudioContextOptions) => AudioContext;
 
 export class MediaBoard {
   private ctx: AudioContext;
@@ -33,7 +35,9 @@ export class MediaBoard {
 
   constructor(micStream: MediaStream, ctxCtor?: Ctor) {
     const C = ctxCtor ?? ((globalThis as unknown as { AudioContext: Ctor }).AudioContext);
-    this.ctx = new C();
+    // The mix takes the microphone's place in the MP4, so it runs at the rate
+    // the WAV master is recorded at, not at the output device's.
+    this.ctx = new C({ sampleRate: WAV_SAMPLE_RATE });
     this.dest = this.ctx.createMediaStreamDestination();
     // The mic always feeds the mix; pads are added on top when they fire.
     this.ctx.createMediaStreamSource(micStream).connect(this.dest);

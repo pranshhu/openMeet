@@ -42,6 +42,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   seconds (unplugged, muted on the device, wrong input). Turning the mic off
   in the app does not count, and the note can be dismissed.
 
+### Changed
+
+- Audio is recorded at 48 kHz for everyone. A microphone that runs at another
+  rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
+  and camera MP4 has the same sample rate.
+
 ### Fixed
 
 - After a take, the recording's metadata row holds the size of the host's own

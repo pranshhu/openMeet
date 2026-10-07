@@ -503,7 +503,7 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings are delegated from the real track.
-  - Audio is an `AudioContext` locked to the initial mic's sample rate (default 48000) and channel count,
+  - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) with the initial mic's channel count,
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
     When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and

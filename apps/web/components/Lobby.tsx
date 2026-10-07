@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import {
   MediaDeviceMissingError,
   MediaManager,
@@ -140,7 +141,6 @@ export function Lobby({
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
-  const [audioRate, setAudioRate] = useState<number | null>(null);
   const [checkLevel, setCheckLevel] = useState<CheckLevel>('ok');
   const [backups, setBackups] = useState<BackupItem[]>([]);
   const backupsRef = useRef<BackupItem[]>([]);
@@ -208,10 +208,6 @@ export function Lobby({
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
         setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
         setActual(describeTrack(s.getVideoTracks()[0]));
-        // The REQUESTED rate is `ideal`, so the device is free to ignore it —
-        // and does. Claiming 48kHz while writing a 44.1kHz WAV is the same
-        // class of lie as quoting requested resolution instead of actual.
-        setAudioRate(typeof micSettings.sampleRate === 'number' ? micSettings.sampleRate : null);
       })
       .catch((e: unknown) => setPreviewError(previewProblem(e)));
   }
@@ -713,9 +709,8 @@ export function Lobby({
           {actual && (
             <p className="mt-2 text-center text-xs text-[#5f6368]">
               Capturing {actual} · audio{' '}
-              {audioRate ? `${(audioRate / 1000).toFixed(audioRate % 1000 ? 1 : 0)}kHz` : ''}
               {/* Only the WAV master is uncompressed; without it audio is the MP4's. */}
-              {isPcmCaptureSupported() ? '/24-bit uncompressed' : ' (compressed)'}
+              {isPcmCaptureSupported() ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit uncompressed` : '(compressed)'}
             </p>
           )}
           {stream && (

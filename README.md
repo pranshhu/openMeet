@@ -48,8 +48,8 @@ retention policy to trust, because there's nothing retained.
 **Recording**
 - Separate full-quality file per participant — nobody's track is degraded by anyone
   else's connection
-- **Uncompressed 24-bit WAV** master per person, alongside the MP4, captured at
-  whatever rate the device actually delivers
+- **Uncompressed 24-bit WAV** master per person, alongside the MP4, at 48 kHz
+  whatever rate the microphone itself runs at
 - Screen share recorded as its **own** track, one file per sharing stretch, with the
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K

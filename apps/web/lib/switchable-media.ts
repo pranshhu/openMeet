@@ -1,3 +1,4 @@
+import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import { DEFAULT_QUALITY_ID, presetForTrack } from './quality';
 import { cameraConstraints, micConstraints } from './media';
 import { watchMic, type MicWarning } from './mic-watch';
@@ -30,7 +31,7 @@ export function isPhone(): boolean {
  * Builds ONE stable output stream from the lobby stream:
  * - Video: MediaStreamTrackGenerator fed by current camera via MediaStreamTrackProcessor.
  *   One persistent writer; switching cancels old reader, closes stray frames, starts reader on new camera.
- * - Audio: AudioContext({ sampleRate: first mic's rate }) -> source(mic) -> MediaStreamAudioDestinationNode.
+ * - Audio: AudioContext({ sampleRate: WAV_SAMPLE_RATE }) -> source(mic) -> MediaStreamAudioDestinationNode.
  *   Fixed channel count and sample rate; Chrome resamples on mic swap without sample-rate glitching.
  *
  * In iOS Safari (where MSTG is missing): keeps raw tracks and uses replaceTrack on peers.
@@ -88,10 +89,6 @@ export class SwitchableMedia {
 
     // --- Stable Audio ---
     const micSettings = rawMicTrack?.getSettings?.() ?? {};
-    const sampleRate =
-      typeof micSettings.sampleRate === 'number' && micSettings.sampleRate > 0
-        ? micSettings.sampleRate
-        : 48000;
     const channelCount =
       typeof micSettings.channelCount === 'number' && micSettings.channelCount > 0
         ? micSettings.channelCount
@@ -99,10 +96,13 @@ export class SwitchableMedia {
           ? 1
           : 2;
 
+    // One rate for every microphone and every take. The AAC muxer and the WAV
+    // writer lock their rate on the first frame, and a device is free to run at
+    // 44.1 kHz or, over Bluetooth, 16 kHz; the source node resamples to this.
     const AudioContextClass =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioCtx = new AudioContextClass({ sampleRate });
+    this.audioCtx = new AudioContextClass({ sampleRate: WAV_SAMPLE_RATE });
     // Resume context if suspended
     if (this.audioCtx.state === 'suspended') {
       void this.audioCtx.resume().catch(() => {});

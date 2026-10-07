@@ -138,7 +138,7 @@ describe('SwitchableMedia', () => {
       mockDestinationNode = {
         stream: new (globalThis as any).MediaStream([mockDestTrack]),
         channelCount: 2,
-        channelCountMode: 'explicit',
+        channelCountMode: 'max',
       };
 
       mockAudioCtx = {
@@ -154,6 +154,48 @@ describe('SwitchableMedia', () => {
 
     it('detects track generator support', () => {
       expect(isTrackGeneratorSupported()).toBe(true);
+    });
+
+    it('builds the audio graph at 48 kHz for a microphone at another rate', () => {
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 44100, channelCount: 1 });
+      const lobbyStream = createMockStream(mic);
+      new SwitchableMedia(lobbyStream);
+      expect((globalThis as any).AudioContext).toHaveBeenCalledWith({ sampleRate: 48000 });
+      expect(mockDestinationNode.channelCount).toBe(1);
+      expect(mockDestinationNode.channelCountMode).toBe('explicit');
+    });
+
+    it('defaults destination channelCount to 1 when mic reports no channelCount', () => {
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 44100 });
+      const lobbyStream = createMockStream(mic);
+      new SwitchableMedia(lobbyStream);
+      expect(mockDestinationNode.channelCount).toBe(1);
+    });
+
+    it('resumes suspended AudioContext on construction', () => {
+      const resume = vi.fn().mockResolvedValue(undefined);
+      (globalThis as any).AudioContext = vi.fn().mockImplementation(() => ({
+        ...mockAudioCtx,
+        state: 'suspended',
+        resume,
+      }));
+      const mic = createMockTrack('audio', 'mic-1');
+      new SwitchableMedia(createMockStream(mic));
+      expect(resume).toHaveBeenCalled();
+    });
+
+    it('initializes stable audio track enabled state from mic track', () => {
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+      mic.enabled = false;
+      const sm = new SwitchableMedia(createMockStream(mic));
+      expect(sm.stream.getAudioTracks()[0]?.enabled).toBe(false);
+    });
+
+    it('closes the audio context on stop', () => {
+      const mic = createMockTrack('audio', 'mic-1');
+      const sm = new SwitchableMedia(createMockStream(mic));
+      sm.stop();
+      expect(mockAudioCtx.close).toHaveBeenCalled();
     });
 
     it('swaps camera and mic sources without changing stable track IDs, and stops the old devices', async () => {
@@ -208,6 +250,8 @@ describe('SwitchableMedia', () => {
 
       // The stable audio track id MUST NOT change
       expect(sm.stream.getAudioTracks()[0]?.id).toBe('stable-dest-audio-id');
+      // Fixed AudioContext is kept; no second context is created
+      expect((globalThis as any).AudioContext).toHaveBeenCalledTimes(1);
       // The old mic was disconnected and stopped
       expect(mockSourceNode.disconnect).toHaveBeenCalled();
       expect(initialMic.stop).toHaveBeenCalled();
@@ -435,9 +479,13 @@ describe('SwitchableMedia', () => {
   });
 
   describe('fallback mode when MediaStreamTrackGenerator is missing', () => {
+    let audioCtxSpy: ReturnType<typeof vi.fn>;
+
     beforeEach(() => {
       delete (globalThis as any).MediaStreamTrackGenerator;
       delete (globalThis as any).MediaStreamTrackProcessor;
+      audioCtxSpy = vi.fn();
+      (globalThis as any).AudioContext = audioCtxSpy;
     });
 
     it('chooses the fallback path when MSTG is missing', () => {
@@ -448,6 +496,7 @@ describe('SwitchableMedia', () => {
 
       const sm = new SwitchableMedia(lobbyStream);
       expect(sm.isFallback).toBe(true);
+      expect(audioCtxSpy).not.toHaveBeenCalled();
       // Keeps the raw tracks directly
       expect(sm.stream.getVideoTracks()[0]?.id).toBe('cam-1');
       expect(sm.stream.getAudioTracks()[0]?.id).toBe('mic-1');

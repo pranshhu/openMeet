@@ -14,8 +14,8 @@ function fakeStream(): MediaStream {
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
-function cam720Stream(): MediaStream {
-  const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate: 48000 }) };
+function cam720Stream(sampleRate = 48000): MediaStream {
+  const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate }) };
   const video = {
     kind: 'video',
     enabled: true,
@@ -103,6 +103,7 @@ describe('Lobby', () => {
     );
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/permission/i)).toBeInTheDocument());
+    expect(screen.queryByText(/Capturing/)).not.toBeInTheDocument();
   });
 
   it('renders recording backup, allows download and delete, and revokes URL on unmount', async () => {
@@ -340,15 +341,17 @@ describe('Lobby', () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     const line = await screen.findByText(/Capturing 1280x720/);
     expect(line.textContent).not.toMatch(/uncompressed/i);
+    expect(line.textContent).toMatch(/audio \(compressed\)/);
+    expect(line.textContent).not.toMatch(/kHz/);
   });
 
   it('states 24-bit uncompressed audio when the WAV master is available', async () => {
     vi.stubGlobal('MediaStreamTrackProcessor', class {});
     try {
-      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream());
+      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream(44100));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
       const line = await screen.findByText(/Capturing 1280x720/);
-      expect(line.textContent).toMatch(/48kHz\/24-bit uncompressed/);
+      expect(line.textContent).toMatch(/audio 48kHz\/24-bit uncompressed/);
     } finally {
       delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
     }
