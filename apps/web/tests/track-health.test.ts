@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { encodeChunkHeader, MAX_RECORDED_PEERS } from '@openmeet/protocol';
+import { encodeChunkHeader, MAX_RECORDED_PEERS, type ChunkHeader } from '@openmeet/protocol';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
   bindHostScreenChannel,
+  bindGuestChannel,
   collectTrackHealth,
   MAX_GUEST_TRACK_ROWS,
   type RecordingHandles,
@@ -11,6 +12,7 @@ import {
 } from '@/hooks/recording-controller';
 import type { ChunkRecorder } from '@/lib/recorder';
 import type { PcmRecorder } from '@/lib/pcm-recorder';
+import { ChunkSender } from '@/lib/chunk-sender';
 
 type Written = { file: string; position: number; bytes: number };
 
@@ -87,6 +89,34 @@ const peer = (peerId: string, name: string | null = null, expected = true): Heal
   name,
   expected,
 });
+
+/** A real ChunkSender on a fake channel, fed one chunk per size and optionally acked. */
+function makeSender(sizes: number[], opts: { backlogCapBytes?: number } = {}) {
+  const channel = {
+    readyState: 'open',
+    bufferedAmount: 0,
+    sent: [] as (string | ArrayBuffer)[],
+    send(data: string | ArrayBuffer) {
+      channel.sent.push(data);
+    },
+  };
+  const sender = new ChunkSender({
+    recordingId: 'rec',
+    channel: channel as unknown as RTCDataChannel,
+    ...opts,
+  });
+  sizes.forEach((size, i) =>
+    sender.sendChunk({
+      header: { idx: i, offset: i * size, size, ts: 0 } as ChunkHeader,
+      payload: new ArrayBuffer(size),
+    })
+  );
+  return { sender, channel };
+}
+
+function ack(sender: ChunkSender, uptoIdx: number): void {
+  sender.handleControl({ type: 'ack', recordingId: 'rec', uptoIdx, uptoOffset: 0 });
+}
 
 describe('collectTrackHealth', () => {
   it('lists own tracks with the recorder byte counts', () => {
@@ -432,6 +462,94 @@ describe('collectTrackHealth', () => {
     await bindHostGuestChannel(fakeChannel('recording#honest'), h, 'peer-c');
     const rows = collectTrackHealth(h, [peer('peer-m', 'Carol'), peer('peer-c', 'Carol')]);
     expect(rows.map((r) => r.key)).toEqual(['g0:mp4', 'g1:mp4', 'g2:mp4', 'g3:mp4', 'g8:mp4']);
+  });
+
+  it("reports what the host has acknowledged of a guest's own camera", () => {
+    const { sender } = makeSender([8, 8]);
+    ack(sender, 0);
+
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      guestRecorder: { totalBytes: 16 } as unknown as ChunkRecorder,
+      sender,
+    };
+    expect(collectTrackHealth(h, [])).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 16, acked: 8 },
+    ]);
+  });
+
+  it("reads the WAV and screen rows' acknowledgements from their own senders", () => {
+    const { sender: camera } = makeSender([8, 8]);
+    ack(camera, 0);
+    const { sender: wav } = makeSender([8, 8]);
+    ack(wav, 1);
+    const { sender: screen } = makeSender([8, 8]);
+
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      guestRecorder: { totalBytes: 16 } as unknown as ChunkRecorder,
+      guestPcm: { totalBytes: 32 } as unknown as PcmRecorder,
+      screenRecorder: { totalBytes: 40 } as unknown as ChunkRecorder,
+      screenSegment: 3,
+      sender: camera,
+      wavSender: wav,
+      screenSender: screen,
+    };
+    expect(collectTrackHealth(h, [])).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 16, acked: 8 },
+      { key: 'own:wav', track: 'wav', bytes: 32, acked: 16 },
+      { key: 'own:screen:3', track: 'screen', bytes: 40, acked: 0 },
+    ]);
+  });
+
+  it("marks a guest's own row whose sender gave up", () => {
+    const { sender } = makeSender([16], { backlogCapBytes: 10 });
+
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      guestRecorder: { totalBytes: 16 } as unknown as ChunkRecorder,
+      sender,
+    };
+    expect(collectTrackHealth(h, [])).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 16, acked: 0, stopped: true },
+    ]);
+  });
+
+  it("leaves the host's own rows without acknowledgement keys", () => {
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      hostRecorder: { totalBytes: 16 } as unknown as ChunkRecorder,
+      hostPcm: { totalBytes: 8 } as unknown as PcmRecorder,
+    };
+    const rows = collectTrackHealth(h, []);
+    expect(rows[0]).not.toHaveProperty('acked');
+    expect(rows[0]).not.toHaveProperty('stopped');
+    expect(rows[1]).not.toHaveProperty('acked');
+    expect(rows[1]).not.toHaveProperty('stopped');
+  });
+
+  it('checks an ack as it arrives on the bound channel', () => {
+    const channel = {
+      readyState: 'open',
+      bufferedAmount: 0,
+      send() {},
+      onmessage: null as ((ev: MessageEvent) => void) | null,
+    };
+    const sender = new ChunkSender({ recordingId: 'rec', channel: channel as unknown as RTCDataChannel });
+    bindGuestChannel(channel as unknown as RTCDataChannel, sender);
+    for (let i = 0; i < 2; i++) {
+      sender.sendChunk({
+        header: { idx: i, offset: i * 8, size: 8, ts: 0 } as ChunkHeader,
+        payload: new ArrayBuffer(8),
+      });
+    }
+
+    channel.onmessage!({ data: '{"type":"ack","uptoIdx":1e999}' } as MessageEvent);
+    channel.onmessage!({ data: '{"type":"ack","uptoIdx":"1"}' } as MessageEvent);
+    expect(sender.lastAckedIdx).toBe(-1);
+
+    channel.onmessage!({ data: '{"type":"ack","uptoIdx":1}' } as MessageEvent);
+    expect(sender.ackedBytes).toBe(16);
   });
 
   it('exports MAX_GUEST_TRACK_ROWS as the maximum channel rows for a full room', () => {

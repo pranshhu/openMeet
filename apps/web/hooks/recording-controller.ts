@@ -1372,6 +1372,8 @@ export interface TrackReading {
   track: 'camera' | 'wav' | 'screen';
   /** Own track: bytes the recorder has produced. A guest's track on the host: bytes written. */
   bytes: number;
+  /** Own track on a guest: bytes of it the host has acknowledged writing. */
+  acked?: number;
   /** The sender gave up streaming this file; the rest is only in its backup. */
   stopped?: boolean;
 }
@@ -1393,15 +1395,24 @@ export const MAX_GUEST_TRACK_ROWS = MAX_RECORDED_PEERS * MAX_ROWS_PER_PEER;
 
 export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): TrackReading[] {
   const own: TrackReading[] = [];
+  // What the host has confirmed of a track this browser streams to it. The
+  // host's own tracks go straight to disk and have no sender.
+  const sent = (s: ChunkSender | undefined) =>
+    s ? { acked: s.ackedBytes, ...(s.isAbandoned ? { stopped: true } : {}) } : {};
   const camera = h.hostRecorder ?? h.guestRecorder;
-  if (camera) own.push({ key: 'own:camera', track: 'camera', bytes: camera.totalBytes });
+  if (camera) {
+    own.push({ key: 'own:camera', track: 'camera', bytes: camera.totalBytes, ...sent(h.sender) });
+  }
   const pcm = h.hostPcm ?? h.guestPcm;
-  if (pcm) own.push({ key: 'own:wav', track: 'wav', bytes: pcm.totalBytes });
+  if (pcm) {
+    own.push({ key: 'own:wav', track: 'wav', bytes: pcm.totalBytes, ...sent(h.wavSender) });
+  }
   if (h.screenRecorder) {
     own.push({
       key: `own:screen:${h.screenSegment ?? 0}`,
       track: 'screen',
       bytes: h.screenRecorder.totalBytes,
+      ...sent(h.screenSender),
     });
   }
 

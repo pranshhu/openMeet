@@ -74,6 +74,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A room URL with a percent-encoded character could leave the room unable to start its next session.
 - Only the authenticated host can write or change recording metadata rows in D1;
   unauthenticated writes over WebSocket are ignored.
+- A wrong acknowledgement from the host can no longer stop a guest's recording from
+  streaming to the host.
 
 ## [0.1.0] - 2026-09-29
 

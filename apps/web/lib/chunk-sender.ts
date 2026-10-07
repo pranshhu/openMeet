@@ -41,6 +41,7 @@ export class ChunkSender {
   private readonly onError: ((err: unknown) => void) | undefined;
   private queue: Chunk[] = [];
   private _lastAckedIdx = -1;
+  private _ackedBytes = 0;
   private _lastSentIdx = -1;
   private _abandoned = false;
   private needSendAbandoned = false;
@@ -69,6 +70,11 @@ export class ChunkSender {
 
   get lastAckedIdx(): number {
     return this._lastAckedIdx;
+  }
+
+  /** Bytes of this stream the host has acknowledged writing. */
+  get ackedBytes(): number {
+    return this._ackedBytes;
   }
 
   get lastSentIdx(): number {
@@ -212,9 +218,15 @@ export class ChunkSender {
     // resume would need. One DataChannel carries one recording, so the channel
     // itself is the identity; the id bought nothing.
     if (msg.type !== 'ack') return;
+    // An index this sender never put on the wire cannot have been received.
+    // Believed, one such ack would outrank every real one after it and the
+    // retransmit buffer would stop emptying for the rest of the take.
+    if (!Number.isSafeInteger(msg.uptoIdx) || msg.uptoIdx > this._lastSentIdx) return;
     if (msg.uptoIdx > this._lastAckedIdx) {
       this._lastAckedIdx = msg.uptoIdx;
+      const held = this.buffer.bytes;
       this.buffer.truncate(msg.uptoIdx);
+      this._ackedBytes += held - this.buffer.bytes;
     }
   }
 
