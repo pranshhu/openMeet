@@ -1797,11 +1797,14 @@ export function useRoom(slug: string) {
           for (const p of remotePeersRef.current) {
             if (p.name) peerNameMap.set(p.peerId, p.name);
           }
-          const { sha256, totalBytes, backup, wavBackup } = await endHostRecording(h, {
+          const { backup, wavBackup } = await endHostRecording(h, {
             onProgress: (pending) => setState((s) => ({ ...s, finalizingGuests: pending })),
             getPeerName: (peerId) => peerNameMap.get(peerId),
           });
-          if (!takeTroubleRef.current) {
+          // An empty host file leaves its backup as the only copy of that track, so
+          // the backups stay for the lobby to list.
+          const hostFileEmpty = [h.hostWriter, h.hostWavWriter].some((w) => w?.size === 0);
+          if (!takeTroubleRef.current && !hostFileEmpty) {
             void h.backup?.markFinalized();
             void h.wavBackup?.markFinalized();
             for (const sb of h.screenBackups ?? []) {
@@ -1861,9 +1864,11 @@ export function useRoom(slug: string) {
             ? URL.createObjectURL(new Blob([report.chapters], { type: 'text/plain' }))
             : null;
           chaptersUrlRef.current = chaptersUrl;
+          // The row describes the host's own file; a host who recorded no camera has no size to give.
+          const hostBytes = h.hostWriter?.size;
           const patchPromise = patchRecording(
             h.recordingId,
-            { total_bytes: totalBytes, sha256, status: 'finalized' },
+            { ...(hostBytes !== undefined ? { total_bytes: hostBytes } : {}), status: 'finalized' },
             getHostToken(slug) ?? undefined
           ).catch((e) => {
             // Non-fatal: the recording is already safely on disk; only the metadata

@@ -37,6 +37,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   track can be placed at 00:00. WAV copies get real silence; MP4 copies are
   not re-encoded.
 
+### Fixed
+
+- After a take, the recording's metadata row holds the size of the host's own
+  file instead of the first guest file's size and checksum, and the host's
+  backups are kept when its own camera file or WAV master came out empty.
+
 ### Security
 
 - Malformed markers, chat or guest metadata can no longer make the host's take

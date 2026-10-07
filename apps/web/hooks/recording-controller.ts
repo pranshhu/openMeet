@@ -709,7 +709,7 @@ export async function endHostRecording(
     onProgress?: (pendingGuests: string[]) => void;
     getPeerName?: (peerId: string) => string | undefined;
   }
-): Promise<{ sha256: string; totalBytes: number; backup: Blob | null; wavBackup?: Blob | null }> {
+): Promise<{ backup: Blob | null; wavBackup?: Blob | null }> {
   await stopScreenRecording(h);
   // Stop host capture first so End & save halts the host's own capture
   // immediately without waiting for guests' tails (up to 45s).
@@ -800,9 +800,7 @@ export async function endHostRecording(
   const closed = await Promise.allSettled(allWriters(h).map((w) => w.close()));
   const failed = closed.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failed) throw failed.reason;
-  const sha256 = (await h.receiver?.digestHex()) ?? '';
-  const totalBytes = h.receiver?.bytesWritten ?? 0;
-  return { sha256, totalBytes, backup, wavBackup };
+  return { backup, wavBackup };
 }
 
 export async function endGuestRecording(

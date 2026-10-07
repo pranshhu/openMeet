@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks } from '@/hooks/recording-controller';
+import { patchRecording } from '@/lib/api';
 import { buildSyncReport } from '@/lib/sync-report';
 import type { ServerMessage } from '@openmeet/protocol';
 
@@ -118,7 +119,7 @@ vi.mock('@/hooks/recording-controller', async () => {
       slotPeerIds: new Map([[0, 'p-bob']]),
       receiver: { digestHex: async () => 'abc', senderSha256: 'abc', guestStartHostMs: 1_000_500, syncRttMs: 10, bytesWritten: 1 },
     })),
-    endHostRecording: vi.fn().mockResolvedValue({ sha256: 'abc', totalBytes: 1, backup: null }),
+    endHostRecording: vi.fn().mockResolvedValue({ backup: null }),
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
     collectFileChecks: vi.fn(actual.collectFileChecks),
   };
@@ -528,13 +529,18 @@ describe('host backup after a take in useRoom', () => {
   afterEach(() => vi.clearAllMocks());
 
   /** Runs one host take; `during` gets the recorder's onError to misbehave with. */
-  async function hostTake(during?: (onError: (e: unknown) => void) => void) {
+  async function hostTake(
+    during?: (onError: (e: unknown) => void) => void,
+    extra: Record<string, unknown> = {}
+  ) {
     const backup = { stop: vi.fn().mockResolvedValue(new Blob(['b'])), markFinalized: vi.fn().mockResolvedValue(undefined) };
     const wavBackup = { stop: vi.fn().mockResolvedValue(null), markFinalized: vi.fn().mockResolvedValue(undefined) };
     const screenBackup = { markFinalized: vi.fn().mockResolvedValue(undefined) };
     const hostWriter = { close: vi.fn().mockResolvedValue(undefined) };
     let onError: (e: unknown) => void = () => {};
+    let recordingId = '';
     vi.mocked(startHostRecording).mockImplementationOnce(async (args) => {
+      recordingId = args.recordingId;
       onError = args.onError ?? onError;
       return {
         recordingId: args.recordingId,
@@ -543,6 +549,7 @@ describe('host backup after a take in useRoom', () => {
         screenBackups: [screenBackup],
         hostWriter,
         hostStartMs: Date.now(),
+        ...extra,
       } as never;
     });
     const { result } = renderHook(() => useRoom('xyz-test-room'));
@@ -573,7 +580,7 @@ describe('host backup after a take in useRoom', () => {
       await result.current.endRecording();
     });
     expect(result.current.state.phase).toBe('done');
-    return { backup, wavBackup, screenBackup, hostWriter, result };
+    return { backup, wavBackup, screenBackup, hostWriter, result, recordingId };
   }
 
   // A full disk makes the errored writer reject its close, so the finalize
@@ -612,14 +619,155 @@ describe('host backup after a take in useRoom', () => {
 
   it('sets backupBlobUrl and wavBackupBlobUrl in state when host take finishes', async () => {
     vi.mocked(endHostRecording).mockResolvedValueOnce({
-      sha256: 'abc',
-      totalBytes: 1,
       backup: new Blob(['b']),
       wavBackup: new Blob(['w']),
     });
     const { result } = await hostTake();
     expect(result.current.state.backupBlobUrl).toBe('blob:mock-url');
     expect(result.current.state.wavBackupBlobUrl).toBe('blob:mock-url');
+  });
+
+  it('the row gets the host file’s size and no digest', async () => {
+    const { backup, wavBackup, screenBackup } = await hostTake(undefined, { hostWriter: { size: 2048 } });
+    expect(patchRecording).toHaveBeenCalledWith(
+      expect.any(String),
+      { total_bytes: 2048, status: 'finalized' },
+      undefined
+    );
+    expect(backup.markFinalized).toHaveBeenCalled();
+    expect(wavBackup.markFinalized).toHaveBeenCalled();
+    expect(screenBackup.markFinalized).toHaveBeenCalled();
+  });
+
+  it('a host with no camera file sends no size', async () => {
+    await hostTake(undefined, { hostWriter: undefined });
+    expect(patchRecording).toHaveBeenCalledWith(
+      expect.any(String),
+      { status: 'finalized' },
+      undefined
+    );
+  });
+
+  const guestSlot0 = {
+    guestWriter: { fileName: 'guest_x.mp4' },
+    receiver: { digestHex: async () => 'guest-digest', senderSha256: 'guest-digest', guestStartHostMs: null, syncRttMs: null, bytesWritten: 7 },
+  };
+
+  it('a recorded guest’s byte count and digest stay out of the row', async () => {
+    await hostTake(undefined, { hostWriter: { size: 2048 }, ...guestSlot0 });
+    expect(vi.mocked(patchRecording).mock.calls).toEqual([
+      [expect.any(String), { total_bytes: 2048, status: 'finalized' }, undefined],
+    ]);
+    expect(vi.mocked(patchRecording).mock.calls[0]?.[1]).not.toHaveProperty('sha256');
+  });
+
+  it('a host with no camera file sends no size even when a guest was recorded', async () => {
+    await hostTake(undefined, { hostWriter: undefined, ...guestSlot0 });
+    expect(vi.mocked(patchRecording).mock.calls[0]?.[1]).toStrictEqual({ status: 'finalized' });
+  });
+
+  it('the host file sizes are read after the files are flushed and closed', async () => {
+    const hostWriter = { size: 0 };
+    vi.mocked(endHostRecording).mockImplementationOnce(async () => {
+      hostWriter.size = 2048;
+      return { backup: null };
+    });
+    const { backup, wavBackup, screenBackup } = await hostTake(undefined, { hostWriter });
+    expect(backup.markFinalized).toHaveBeenCalled();
+    expect(wavBackup.markFinalized).toHaveBeenCalled();
+    expect(screenBackup.markFinalized).toHaveBeenCalled();
+    expect(patchRecording).toHaveBeenCalledWith(
+      expect.any(String),
+      { total_bytes: 2048, status: 'finalized' },
+      undefined
+    );
+  });
+
+  it('an empty host camera file keeps every host backup', async () => {
+    const { backup, wavBackup, screenBackup, result } = await hostTake(undefined, { hostWriter: { size: 0 } });
+    expect(backup.markFinalized).not.toHaveBeenCalled();
+    expect(wavBackup.markFinalized).not.toHaveBeenCalled();
+    expect(screenBackup.markFinalized).not.toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  it('an empty host WAV keeps every host backup', async () => {
+    const { backup, wavBackup, screenBackup } = await hostTake(undefined, { hostWavWriter: { size: 0 } });
+    expect(backup.markFinalized).not.toHaveBeenCalled();
+    expect(wavBackup.markFinalized).not.toHaveBeenCalled();
+    expect(screenBackup.markFinalized).not.toHaveBeenCalled();
+  });
+
+  it('an empty host camera file sends total_bytes 0 in metadata PATCH', async () => {
+    const { recordingId } = await hostTake(undefined, { hostWriter: { size: 0 } });
+    expect(patchRecording).toHaveBeenCalledWith(
+      recordingId,
+      { total_bytes: 0, status: 'finalized' },
+      undefined
+    );
+  });
+
+  it('an empty screen file does not keep the host backups', async () => {
+    const { backup, wavBackup, screenBackup } = await hostTake(undefined, {
+      hostWriter: { size: 2048 },
+      screenWriters: [{ size: 0, fileName: 'host_screen_x.mp4' }],
+    });
+    expect(backup.markFinalized).toHaveBeenCalled();
+    expect(wavBackup.markFinalized).toHaveBeenCalled();
+    expect(screenBackup.markFinalized).toHaveBeenCalled();
+  });
+
+  it('a failed metadata PATCH still ends the take with its summary and no error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(patchRecording).mockRejectedValueOnce(new Error('offline'));
+    const { result } = await hostTake();
+    expect(result.current.state.recordingError).toBeNull();
+    expect(result.current.state.summary).not.toBeNull();
+    expect(warn).toHaveBeenCalledWith('openMeet: recording metadata save failed', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('a host with no camera file marks backups when WAV master holds bytes', async () => {
+    const { backup, wavBackup, screenBackup, recordingId } = await hostTake(undefined, {
+      hostWriter: undefined,
+      hostWavWriter: { size: 1024 },
+    });
+    expect(patchRecording).toHaveBeenCalledWith(
+      recordingId,
+      { status: 'finalized' },
+      undefined
+    );
+    expect(backup.markFinalized).toHaveBeenCalled();
+    expect(wavBackup.markFinalized).toHaveBeenCalled();
+    expect(screenBackup.markFinalized).toHaveBeenCalled();
+  });
+
+  it('an empty WAV master keeps backups even when camera file has bytes', async () => {
+    const { backup, wavBackup, screenBackup, recordingId } = await hostTake(undefined, {
+      hostWriter: { size: 2048 },
+      hostWavWriter: { size: 0 },
+    });
+    expect(patchRecording).toHaveBeenCalledWith(
+      recordingId,
+      { total_bytes: 2048, status: 'finalized' },
+      undefined
+    );
+    expect(backup.markFinalized).not.toHaveBeenCalled();
+    expect(wavBackup.markFinalized).not.toHaveBeenCalled();
+    expect(screenBackup.markFinalized).not.toHaveBeenCalled();
+  });
+
+  it('wires getPeerName callback into endHostRecording', async () => {
+    await hostTake();
+    expect(endHostRecording).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        getPeerName: expect.any(Function),
+      })
+    );
+    const options = vi.mocked(endHostRecording).mock.calls[0]?.[1];
+    expect(options?.getPeerName?.('p-guest')).toBe('Guest');
   });
 
   it('a guest companion starts screen recording on recording-started without camera recording', async () => {

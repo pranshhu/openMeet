@@ -316,12 +316,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   A failed write is retried once and then the rest of the take continues in RAM with a warning
   banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. After a
-  clean host take (no recording error or connection warning) `markFinalized()` drops a `finalized`
-  marker and the next lobby's `findBackups()` deletes that directory. Guest backups are **never**
-  auto-deleted (a guest can't know the host's file was saved); they stay listed in the lobby until
-  deleted by hand. Each screen segment has its own backup (`openmeet-backup-screen-…`) fed the
-  segment recorder's chunks via `writeChunk` — no second screen encode; the host's are finalized
-  with its camera/WAV backups after a clean take.
+  clean host take (no recording error or connection warning, and neither the host's camera file nor
+  its WAV master came out empty) `markFinalized()` drops a `finalized` marker and the next lobby's
+  `findBackups()` deletes that directory. Guest backups are **never** auto-deleted (a guest can't know
+  the host's file was saved); they stay listed in the lobby until deleted by hand. Each screen segment
+  has its own backup (`openmeet-backup-screen-…`) fed the segment recorder's chunks via `writeChunk` —
+  no second screen encode; the host's are finalized with its camera/WAV backups after a clean take.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
