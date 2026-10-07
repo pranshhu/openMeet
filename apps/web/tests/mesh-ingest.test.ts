@@ -114,7 +114,9 @@ describe('host ingest routes by source peer', () => {
 
     // Slots go by arrival order, so peer-a takes slot 0 and peer-b takes 1.
     await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
-    await bindHostGuestChannel(fakeChannel(), h, 'peer-b');
+    const first = fakeChannel();
+    await bindHostGuestChannel(first, h, 'peer-b');
+    for (let i = 0; i < 5; i++) await sendChunk(first, i, i * 10, 10);
     const second = fakeChannel();
     await bindHostGuestChannel(second, h, 'peer-b'); // reconnect
     await sendChunk(second, 5, 900, 10);
@@ -122,7 +124,8 @@ describe('host ingest routes by source peer', () => {
     expect(opened).toEqual(['guest2_rec.mp4']); // opened once, not twice
     // idx/offset continue on the SAME receiver, so a resumed stream doesn't
     // restart at zero and overwrite what's already on disk.
-    expect(written).toEqual([{ file: 'guest2_rec.mp4', position: 900, bytes: 10 }]);
+    expect(written).toHaveLength(6);
+    expect(written.at(-1)).toEqual({ file: 'guest2_rec.mp4', position: 900, bytes: 10 });
   });
 
   it('separates the WAV masters per peer too', async () => {

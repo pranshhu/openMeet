@@ -151,4 +151,77 @@ describe('rebindGuestRecording', () => {
     expect(newCam.onmessage).toBeTypeOf('function');
     expect(newWav.onmessage).toBeTypeOf('function');
   });
+
+  // The host's lastIdx is its own number, so it can be nonsense or out of
+  // range. `resume` rebuilds the whole queue from it, and a value that is not
+  // an index would empty the queue and lose every chunk still waiting.
+  it('resumes the sender only for a resume_offset it can use', () => {
+    const peer = new FakePeer();
+    const oldCam = new FakeChannel();
+    oldCam.readyState = 'open';
+
+    const sender = new ChunkSender({
+      recordingId: 'rec-bad-resume',
+      channel: oldCam as unknown as RTCDataChannel,
+    });
+    // One chunk the host never acked, so the sender can still replay it.
+    sender.sendChunk({ header: { idx: 0, offset: 0, size: 4, ts: 0 }, payload: new Uint8Array([1, 2, 3, 4]).buffer });
+    const resumeSpy = vi.spyOn(sender, 'resume');
+
+    const h: RecordingHandles = {
+      recordingId: 'rec-bad-resume',
+      sender,
+      channel: oldCam as unknown as RTCDataChannel,
+    };
+    rebindGuestRecording(h, peer as unknown as PeerConnection);
+    const ch = peer.cameraChannel!;
+
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 0, lastIdx: -1 }),
+    } as MessageEvent);
+    expect(resumeSpy).toHaveBeenCalledWith(-1);
+
+    for (const lastIdx of ['1', 1.5, -2]) {
+      ch.onmessage!({
+        data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 0, lastIdx }),
+      } as MessageEvent);
+    }
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 0 }),
+    } as MessageEvent);
+
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    // A rejected value must not rebuild the queue: the unacked chunk is still
+    // here for the next resume or the drain that follows the rebind.
+    expect(sender.hasQueuedChunks).toBe(true);
+  });
+
+  it('resumes the sender for a positive lastIdx from a host that has written fragments', () => {
+    const peer = new FakePeer();
+    const oldCam = new FakeChannel();
+    oldCam.readyState = 'open';
+
+    const sender = new ChunkSender({
+      recordingId: 'rec-pos-resume',
+      channel: oldCam as unknown as RTCDataChannel,
+    });
+    for (let i = 0; i < 7; i++) {
+      sender.sendChunk({ header: { idx: 0, offset: i * 4, size: 4, ts: 0 }, payload: new Uint8Array([1, 2, 3, 4]).buffer });
+    }
+    const resumeSpy = vi.spyOn(sender, 'resume');
+
+    const h: RecordingHandles = {
+      recordingId: 'rec-pos-resume',
+      sender,
+      channel: oldCam as unknown as RTCDataChannel,
+    };
+    rebindGuestRecording(h, peer as unknown as PeerConnection);
+    const ch = peer.cameraChannel!;
+
+    ch.onmessage!({
+      data: JSON.stringify({ type: 'resume_offset', recordingId: 'r', lastByte: 20, lastIdx: 5 }),
+    } as MessageEvent);
+    expect(resumeSpy).toHaveBeenCalledWith(5);
+    expect(sender.hasQueuedChunks).toBe(true);
+  });
 });

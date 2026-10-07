@@ -68,6 +68,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A lost fragment no longer leaves a silent hole in a live recording: the host
+  asks the guest to resend from the last fragment it has.
 - Two screen shares starting at the same moment no longer write into one file.
 - After a take, the recording's metadata row holds the size of the host's own
   file instead of the first guest file's size and checksum, and the host's

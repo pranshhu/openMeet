@@ -581,8 +581,11 @@ export function bindGuestChannel(
     try {
       const msg = JSON.parse(ev.data) as ChunkAck | ChunkResumeOffset | ClockPong;
       if (msg.type === 'ack') sender.handleControl(msg);
-      else if (msg.type === 'resume_offset') sender.resume(msg.lastIdx);
-      else if (msg.type === 'clock_pong') clockSync?.handlePong(msg);
+      else if (msg.type === 'resume_offset') {
+        // The host's own number, so it can be nonsense or out of range. `resume`
+        // rebuilds the whole queue from it, so a bad value would empty it.
+        if (Number.isSafeInteger(msg.lastIdx) && msg.lastIdx >= -1) sender.resume(msg.lastIdx);
+      } else if (msg.type === 'clock_pong') clockSync?.handlePong(msg);
     } catch { /* ignore */ }
   };
   channel.bufferedAmountLowThreshold = 8 * 1024 * 1024;

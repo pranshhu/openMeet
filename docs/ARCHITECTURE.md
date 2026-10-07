@@ -303,11 +303,14 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   own header `idx`/`offset`; `rawSend` = one fragment's two-frame header+payload. Ack truncates
   retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
   `drain()` polls 100ms until empty or 30s cap.
-- `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; **drops
-  `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; `maxBytes` holds
-  a sender to a size it declared; a bounded receiver also refuses a chunk whose declared size is
-  not its payload's length, takes chunks only in order and stops at its first refusal; acks every
-  5 chunks / 10s; `answerResume` replies `resume_offset{lastByte,lastIdx}`.
+- `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
+  takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
+  and `resume_offset` is sent so the guest resends from the last fragment written, at most once
+  every 2 s — while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
+  `writer.write(offset, data)`; `maxBytes` holds a sender to a size it declared; a bounded receiver
+  also refuses a chunk whose declared size is not its payload's length, takes chunks only in order
+  and stops at its first refusal; acks every 5 chunks / 10s; `answerResume` replies
+  `resume_offset{lastByte,lastIdx}`.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).

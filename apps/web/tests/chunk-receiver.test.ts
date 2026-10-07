@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ChunkReceiver } from '@/lib/chunk-receiver';
+import { ChunkReceiver, RESUME_ASK_INTERVAL_MS } from '@/lib/chunk-receiver';
 import { encodeChunkHeader } from '@openmeet/protocol';
 
 function fakeWriter() {
@@ -265,8 +265,10 @@ describe('ChunkReceiver', () => {
     const writer = fakeWriter();
     const sent: string[] = [];
     const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: (m) => sent.push(m) });
-    await r.handleMessage(encodeChunkHeader({ idx: 3, offset: 30, size: 10, ts: 1 }));
-    await r.handleMessage(new Uint8Array(10).buffer);
+    for (let i = 0; i < 4; i++) {
+      await r.handleMessage(encodeChunkHeader({ idx: i, offset: i * 10, size: 10, ts: 1 }));
+      await r.handleMessage(new Uint8Array(10).buffer);
+    }
     sent.length = 0;
     await r.handleMessage(JSON.stringify({ type: 'resume_query', recordingId: 'r1' }));
     const ro = sent.map((s) => JSON.parse(s)).find((m) => m.type === 'resume_offset');
@@ -1001,6 +1003,181 @@ describe('ChunkReceiver', () => {
     r.flushAck();
     const ack = sent.map((m) => JSON.parse(m)).find((m) => m.type === 'ack');
     expect(ack).toMatchObject({ uptoIdx: 1, uptoOffset: 20 });
+  });
+});
+
+describe('ChunkReceiver — live take order', () => {
+  // A live file is written front to back. A fragment above the expected index
+  // means one was lost, and writing the later one anyway would leave a
+  // zero-filled hole nothing ever reports.
+  it('asks the guest to resend from the last fragment written when one is missing', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+    });
+
+    for (const idx of [0, 1, 5]) {
+      await r.handleMessage(encodeChunkHeader({ idx, offset: idx * 4, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    }
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    const asks = sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+    expect(asks).toEqual([{ type: 'resume_offset', recordingId: 'r1', lastByte: 8, lastIdx: 1 }]);
+  });
+
+  it('drops a fragment below the expected index without answering', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual([]);
+  });
+
+  it('writes a fragment that arrives while the previous write is still pending', async () => {
+    const resolves: Array<() => void> = [];
+    const writer = {
+      write: vi.fn().mockImplementation(() => new Promise<void>((res) => resolves.push(res))),
+      fileName: 'guest.mp4',
+    };
+    const sent: string[] = [];
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: (m) => sent.push(m) });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    const first = r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 4, size: 4, ts: 2 }));
+    const second = r.handleMessage(new Uint8Array([5, 6, 7, 8]).buffer);
+
+    expect(resolves).toHaveLength(2);
+    for (const resolve of resolves) resolve();
+    await Promise.all([first, second]);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    expect(writer.write).toHaveBeenNthCalledWith(1, 0, expect.any(ArrayBuffer));
+    expect(writer.write).toHaveBeenNthCalledWith(2, 4, expect.any(ArrayBuffer));
+    expect(sent.filter((m) => JSON.parse(m).type === 'resume_offset')).toEqual([]);
+  });
+
+  it('drops a replay that arrives while its write is still pending', async () => {
+    const resolves: Array<() => void> = [];
+    const writer = {
+      write: vi.fn().mockImplementation(() => new Promise<void>((res) => resolves.push(res))),
+      fileName: 'guest.mp4',
+    };
+    const sent: string[] = [];
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: writer as never, sendControl: (m) => sent.push(m) });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    const first = r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    const replay = r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+
+    expect(resolves).toHaveLength(1);
+    resolves[0]!();
+    await Promise.all([first, replay]);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(sent.filter((m) => JSON.parse(m).type === 'resume_offset')).toEqual([]);
+  });
+
+  it('asks for a gap at most once per RESUME_ASK_INTERVAL_MS', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const sent: string[] = [];
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: fakeWriter() as never,
+        sendControl: (m) => sent.push(m),
+      });
+      const asks = () => sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+
+      for (const idx of [5, 6, 7]) {
+        await r.handleMessage(encodeChunkHeader({ idx, offset: 0, size: 4, ts: 1 }));
+        await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+      }
+      expect(asks()).toHaveLength(1);
+
+      vi.advanceTimersByTime(1999);
+      await r.handleMessage(encodeChunkHeader({ idx: 8, offset: 0, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+      expect(asks()).toHaveLength(1);
+
+      vi.advanceTimersByTime(1);
+      await r.handleMessage(encodeChunkHeader({ idx: 9, offset: 0, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+      expect(asks()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the ask interval per receiver, not per module', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const firstSent: string[] = [];
+      const secondSent: string[] = [];
+      const first = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: fakeWriter() as never,
+        sendControl: (m) => firstSent.push(m),
+      });
+      const second = new ChunkReceiver({
+        recordingId: 'r2',
+        writer: fakeWriter() as never,
+        sendControl: (m) => secondSent.push(m),
+      });
+
+      await first.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 4, ts: 1 }));
+      await first.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+      await second.handleMessage(encodeChunkHeader({ idx: 1, offset: 0, size: 4, ts: 1 }));
+      await second.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+
+      const asks = secondSent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset');
+      expect(asks).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A returned file is read front to back against a declared size, so a gap
+  // there is a refusal, not a retransmit: the sender's buffer is long gone.
+  it('leaves a bounded receiver dropping replays and refusing a gap', async () => {
+    const writer = fakeWriter();
+    const sent: string[] = [];
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+    expect(onError).not.toHaveBeenCalled();
+
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 8, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array([1, 2, 3, 4]).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe('Received data out of order.');
+    expect(sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'resume_offset')).toEqual([]);
   });
 });
 

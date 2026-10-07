@@ -26,12 +26,18 @@ export interface ChunkReceiverOpts {
   maxBytes?: number;
 }
 
+export const RESUME_ASK_INTERVAL_MS = 2000;
+
 export class ChunkReceiver {
   private readonly recordingId: string;
   private readonly writer: FileWriter;
   private readonly sendControl: (json: string) => void;
   private readonly onError: ((err: unknown) => void) | undefined;
   private readonly maxBytes: number | undefined;
+  /** The wire index the next accepted fragment must carry. Claimed before the write, since the next frame can arrive while it is pending. */
+  private nextIdx = 0;
+  /** When a gap was last answered with resume_offset, so one lost fragment cannot become a message per frame. */
+  private lastResumeAskAt = 0;
   /** Bounded mode: where the next chunk must start. Claimed before the write, since the next chunk can arrive while it is pending. */
   private nextOffset = 0;
   /** Bounded mode: a chunk was refused, so no more data is taken. */
@@ -197,7 +203,26 @@ export class ChunkReceiver {
     const header = this.pendingHeader;
     this.pendingHeader = null;
     if (!header) return;
-    if (header.idx <= this.lastIdx) return;
+    if (this.maxBytes !== undefined) {
+      if (header.idx <= this.lastIdx) return;
+    } else {
+      // A live file is written front to back. A fragment below the expected
+      // index is a replay; one above it means a fragment was lost, and the
+      // sender still holds everything unacknowledged, so ask for it again
+      // rather than writing around the hole. `nextIdx` is claimed BEFORE the
+      // write is awaited: a second fragment can arrive while it is pending,
+      // and it must not be read as a duplicate.
+      if (header.idx < this.nextIdx) return;
+      if (header.idx > this.nextIdx) {
+        const now = Date.now();
+        if (now - this.lastResumeAskAt >= RESUME_ASK_INTERVAL_MS) {
+          this.lastResumeAskAt = now;
+          this.answerResume();
+        }
+        return;
+      }
+      this.nextIdx = header.idx + 1;
+    }
     if (this.maxBytes !== undefined) {
       // The recorder never sends an empty blob, and an empty frame would count
       // for acks and the finalize wait without moving the transfer forward.
