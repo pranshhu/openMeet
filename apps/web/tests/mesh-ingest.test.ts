@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { encodeChunkHeader } from '@openmeet/protocol';
+import { describe, it, expect, vi } from 'vitest';
+import { encodeChunkHeader, CHUNK_TIMESLICE_MS } from '@openmeet/protocol';
 import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
+import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
@@ -90,6 +91,39 @@ async function hostHandles(opened: string[], written: Written[], slot0: Written[
     sendControl: () => {},
   });
   return h;
+}
+
+/** A TakeJournal whose parts are counted, so a test can tell a receiver really holds its journal file. */
+function fakeJournal() {
+  const notes: TakeNotes = {
+    room: 'abc-defg-hij',
+    recordingId: 'rec',
+    take: 1,
+    hostStartMs: 1_700_000_000_000,
+    files: [],
+    backups: [],
+    markers: [],
+  };
+  const parts = new Map<string, { appends: number; commits: number }>();
+  const file = (name: string) => {
+    const counts = parts.get(name) ?? { appends: 0, commits: 0 };
+    parts.set(name, counts);
+    return {
+      append: () => {
+        counts.appends += 1;
+      },
+      commit: async () => {
+        counts.commits += 1;
+      },
+      dead: false,
+    };
+  };
+  const journal = {
+    notes,
+    note: (change: (n: TakeNotes) => void) => change(notes),
+    file,
+  } as unknown as TakeJournal;
+  return { journal, parts };
 }
 
 describe('host ingest routes by source peer', () => {
@@ -373,6 +407,84 @@ describe('host ingest routes by source peer', () => {
 
     const checks = await collectFileChecks(h);
     expect(checks.get('guest2_rec.mp4')?.received?.sha256Sent).toBe('');
+  });
+
+  it('notes a new guest file and commits its bytes into the journal', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const opened: string[] = [];
+      const written: Written[] = [];
+      const h = await hostHandles(opened, written, []);
+      const { journal, parts } = fakeJournal();
+      h.journal = journal;
+
+      await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+      const b = fakeChannel();
+      await bindHostGuestChannel(b, h, 'peer-b');
+
+      expect(journal.notes.files).toEqual([
+        { file: 'guest2_rec.mp4', kind: 'camera', key: 'peer-b', slot: 1 },
+      ]);
+
+      await sendChunk(b, 0, 0, 250);
+      await new Promise((r) => setTimeout(r, 0));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await sendChunk(b, 1, 250, 250);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(parts.get('guest2_rec.mp4')).toEqual({ appends: 2, commits: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives slot 0's note the channel key and the name at bind time", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { journal } = fakeJournal();
+    h.journal = journal;
+    h.guestWriter = { fileName: 'guest_rec.mp4' } as never;
+    journal.notes.files.push({ file: 'guest_rec.mp4', kind: 'camera', slot: 0 });
+
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', undefined, 'Bob');
+    expect(journal.notes.files[0]).toEqual({
+      file: 'guest_rec.mp4',
+      kind: 'camera',
+      slot: 0,
+      key: 'k1',
+      who: 'Bob',
+    });
+
+    // A rebind of the same slot carries the name the room knows now.
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', undefined, 'B'.repeat(300));
+    expect(journal.notes.files[0]?.who).toBe('B'.repeat(200));
+
+    // A second guest's new file gets its own key, also capped.
+    await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-b', undefined, 'C'.repeat(300));
+    expect(journal.notes.files[1]).toMatchObject({ file: 'guest2_rec.mp4', key: 'k2', who: 'C'.repeat(200) });
+
+    // The key is a channel-label key, so a key too long to be one never reaches a note.
+    await bindHostGuestChannel(fakeChannel(`recording#${'k'.repeat(300)}`), h, 'peer-c', undefined, 'Carol');
+    expect(journal.notes.files).toHaveLength(2);
+    expect(opened).toEqual(['guest2_rec.mp4']);
+  });
+
+  it('caps journal notes at 64 files and keeps the first 64 notes', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const { journal } = fakeJournal();
+    h.journal = journal;
+    for (let i = 0; i < 64; i++) {
+      journal.notes.files.push({ file: `f${i}.mp4`, kind: 'camera', slot: i });
+    }
+
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(fakeChannel('recording#k-extra'), h, 'peer-extra');
+
+    expect(journal.notes.files).toHaveLength(64);
+    expect(journal.notes.files.some((f) => f.key === 'k-extra')).toBe(false);
   });
 });
 

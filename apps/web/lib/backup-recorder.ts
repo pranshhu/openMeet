@@ -344,6 +344,16 @@ export class BackupRecorder {
     this.opts = opts;
   }
 
+  /** The OPFS directory this backup writes its parts into, or null before the open finished or when storage was unusable. */
+  get dirName(): string | null {
+    return this.backupDirName;
+  }
+
+  /** Resolves when the storage probe finished, whether or not storage was usable. */
+  whenOpen(): Promise<void> {
+    return (this.openPromise ?? Promise.resolve()).catch(() => {});
+  }
+
   isWav(): boolean {
     return (this.opts.mimeType ?? '').includes('wav');
   }

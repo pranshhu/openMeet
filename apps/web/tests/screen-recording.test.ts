@@ -9,6 +9,7 @@ import {
   type HealthPeer,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
+import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 
 /**
  * Screen share was rendered but never recorded: share a deck for twenty minutes
@@ -41,6 +42,29 @@ function fakeScreen(trackOverrides?: Record<string, unknown>): MediaStream {
     getAudioTracks: () => [],
     getTracks: () => [track],
   } as unknown as MediaStream;
+}
+
+/** A TakeJournal whose file() calls are recorded, so a test can tell a receiver really got its journal file. */
+function fakeJournal() {
+  const notes: TakeNotes = {
+    room: 'abc-defg-hij',
+    recordingId: 'rec',
+    take: 1,
+    hostStartMs: 1_700_000_000_000,
+    files: [],
+    backups: [],
+    markers: [],
+  };
+  const names: string[] = [];
+  const journal = {
+    notes,
+    note: (change: (n: TakeNotes) => void) => change(notes),
+    file: (name: string) => {
+      names.push(name);
+      return { append: () => {}, commit: async () => {}, dead: false };
+    },
+  } as unknown as TakeJournal;
+  return { journal, names };
 }
 
 // MediaRecorder isn't in jsdom; ChunkRecorder only needs it to construct/start.
@@ -633,5 +657,67 @@ describe('screen recording', () => {
     const checks = await collectFileChecks(h2);
     expect(checks.get('host_screen_r-own.mp4')).toBeDefined();
     expect(checks.get('host_screen_r-own.mp4')?.received).toBeUndefined();
+  });
+
+  it('notes a guest screen segment and hands its receiver the journal file', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(1_759_824_000_000);
+      const h: RecordingHandles = { recordingId: 'r-journal', dir: fakeDir() };
+      const { journal, names } = fakeJournal();
+      h.journal = journal;
+      const channel = new EventTarget() as unknown as RTCDataChannel;
+      (channel as any).readyState = 'open';
+
+      await bindHostScreenChannel(channel, h, undefined, 'peer-bob');
+
+      expect(journal.notes.files).toEqual([
+        {
+          file: 'guest_screen_r-journal.mp4',
+          kind: 'screen',
+          segment: 1,
+          startedAtMs: 1759824000000,
+          who: 'peer-bob',
+        },
+      ]);
+      expect(names).toEqual(['guest_screen_r-journal.mp4']);
+      expect(journal.notes.backups).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stores only the first 200 characters of a sharer name', async () => {
+    const h: RecordingHandles = { recordingId: 'r-long', dir: fakeDir() };
+    const { journal } = fakeJournal();
+    h.journal = journal;
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+
+    await bindHostScreenChannel(channel, h, undefined, 'S'.repeat(300));
+
+    expect(journal.notes.files[0]).toEqual({
+      file: 'guest_screen_r-long.mp4',
+      kind: 'screen',
+      segment: 1,
+      startedAtMs: expect.any(Number),
+      who: 'S'.repeat(200),
+    });
+  });
+
+  it('caps screen journal notes at 64 files', async () => {
+    const h: RecordingHandles = { recordingId: 'r-cap', dir: fakeDir() };
+    const { journal } = fakeJournal();
+    h.journal = journal;
+    for (let i = 0; i < 64; i++) {
+      journal.notes.files.push({ file: `f${i}.mp4`, kind: 'camera', slot: i });
+    }
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+
+    await bindHostScreenChannel(channel, h, undefined, 'sharer');
+
+    expect(journal.notes.files).toHaveLength(64);
+    expect(journal.notes.files.some((f) => f.kind === 'screen')).toBe(false);
   });
 });

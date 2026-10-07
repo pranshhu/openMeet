@@ -8,12 +8,13 @@ import {
 import { ChunkRecorder, pickRecordingMime, UnsupportedCodecError, pickCallAudioMime } from '@/lib/recorder';
 import { ChunkSender } from '@/lib/chunk-sender';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
-import { BackupRecorder } from '@/lib/backup-recorder';
+import { BackupRecorder, type OpfsRootGetter } from '@/lib/backup-recorder';
 import { ClockSync } from '@/lib/clock-sync';
 import { presetForTrack } from '@/lib/quality';
 import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
+import { openTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import type { PeerConnection } from '@/lib/peer';
 import { sanitizeText } from '@/lib/sync-report';
 import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
@@ -83,6 +84,12 @@ export interface RecordingHandles {
    * the take already in progress, never as a file name or a channel key.
    */
   onHostTakeId?: (id: string) => void;
+  /** The take's crash journal, present only when browser storage took one. */
+  journal?: TakeJournal;
+  /** True when no journal opened: nothing of this take survives a crash. */
+  unprotected?: boolean;
+  /** Surfaces a journal or backup warning for the caller to show. */
+  onWarn?: (msg: string) => void;
 
   // --- Uncompressed WAV master, captured in parallel with the MP4 ---
   // Held so the guest's .wav can be opened lazily, only once its audio channel
@@ -323,6 +330,10 @@ export interface StartHostArgs {
   /** Room slug, so the host's backup can say which room it came from. */
   room?: string;
   onWarn?: (msg: string) => void;
+  /** `false` starts a take with no crash copy; the default is on. */
+  journal?: boolean;
+  /** Test seam for the journal's storage root, the same shape as `directoryPicker`. */
+  journalRoot?: OpfsRootGetter;
 }
 export interface StartGuestArgs {
   recordingId: string;
@@ -371,6 +382,19 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
   const guestWriter = new FileWriter();
   await guestWriter.openIn(dir, takeName('guest', args.recordingId, take, 'mp4'));
 
+  // One start time for the take: the recorders' origin, the sync sidecar and
+  // the journal's directory name must agree.
+  const hostStartMs = Date.now();
+  const journal = args.journal === false
+    ? null
+    : await openTakeJournal(
+        { room: args.room ?? '', recordingId: args.recordingId, take, hostStartMs },
+        args.journalRoot
+      ).catch(() => null);
+  if (journal) {
+    journal.note((n) => n.files.push({ file: guestWriter.fileName, kind: 'camera', slot: 0 }));
+  }
+
   // The channel may not exist yet: the host is allowed to start recording before
   // the guest has opened the recording DataChannel. Control frames are addressed
   // through this box so they follow the live channel across rebinds, instead of
@@ -401,6 +425,8 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
       const c = channelRef.current;
       if (c && c.readyState === 'open') c.send(json);
     },
+    ...(journal ? { journalFile: journal.file(guestWriter.fileName) } : {}),
+    ...(args.onWarn ? { onWarn: args.onWarn } : {}),
     ...(args.onError ? { onError: args.onError } : {}),
   });
   if (args.channel) bindHostChannel(args.channel, receiver, channelRef);
@@ -445,11 +471,23 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
     });
   }
 
-  const hostStartMs = Date.now();
   hostRecorder?.start();
   hostPcm?.start();
   backup?.start();
   wavBackup?.start();
+
+  // The backups' storage probe must not hold up the take's start, so their
+  // directory names land in the notes once the probe settles.
+  const recordBackup = (b: BackupRecorder | undefined, kind: 'camera' | 'wav', file: string | undefined) => {
+    if (!journal || !b || !file) return;
+    void b.whenOpen().then(() => {
+      const dirName = b.dirName;
+      if (dirName) journal.note((n) => n.backups.push({ dir: dirName, file, kind }));
+    });
+  };
+  recordBackup(backup, 'camera', hostWriter?.fileName);
+  recordBackup(wavBackup, 'wav', hostWavWriter?.fileName);
+
   return {
     recordingId: args.recordingId,
     ...(hostWriter ? { hostWriter } : {}),
@@ -468,6 +506,8 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
     hostStartMs,
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
     ...(args.room ? { room: args.room } : {}),
+    ...(journal ? { journal } : { unprotected: true }),
+    ...(args.onWarn ? { onWarn: args.onWarn } : {}),
   };
 }
 
@@ -487,7 +527,8 @@ async function ingestFor(
   h: RecordingHandles,
   peerId: string,
   ext: 'mp4' | 'wav',
-  onError?: (err: unknown) => void
+  onError?: (err: unknown) => void,
+  who?: string
 ): Promise<{ receiver: ChunkReceiver; ref: { current: RTCDataChannel | null } } | null> {
   const slot = guestSlot(h, peerId);
   // Slot 0's MP4 writer is opened eagerly by startHostRecording, and its
@@ -507,6 +548,18 @@ async function ingestFor(
   const open = (async (): Promise<GuestIngest> => {
     const writer = new FileWriter();
     await writer.openIn(dir, guestName(slot, h.recordingId, h.take ?? 1, ext));
+    const name = writer.fileName;
+    const cappedWho = who ? who.slice(0, 200) : undefined;
+    h.journal?.note((n) => {
+      if (n.files.length >= 64) return;
+      n.files.push({
+        file: name,
+        kind: ext === 'mp4' ? 'camera' : 'wav',
+        key: peerId.slice(0, 64),
+        slot,
+        ...(cappedWho ? { who: cappedWho } : {}),
+      });
+    });
     const ref: { current: RTCDataChannel | null } = { current: null };
     const receiver = new ChunkReceiver({
       recordingId: h.recordingId,
@@ -515,6 +568,8 @@ async function ingestFor(
         const c = ref.current;
         if (c && c.readyState === 'open') c.send(json);
       },
+      ...(h.journal ? { journalFile: h.journal.file(name) } : {}),
+      ...(h.onWarn ? { onWarn: h.onWarn } : {}),
       ...(onError ? { onError } : {}),
     });
     const entry = { receiver, ref, writer };
@@ -563,7 +618,7 @@ export async function bindHostAudioChannel(
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
   rememberSlotName(h, slot, name);
-  const ingest = await ingestFor(h, key, 'wav', onError);
+  const ingest = await ingestFor(h, key, 'wav', onError, name);
   if (!ingest) return;
   bindHostChannel(channel, ingest.receiver, ingest.ref);
 }
@@ -590,10 +645,21 @@ export async function bindHostGuestChannel(
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
   rememberSlotName(h, slot, name);
-  const ingest = await ingestFor(h, key, 'mp4', onError);
+  const ingest = await ingestFor(h, key, 'mp4', onError, name);
   if (!ingest) return;
   bindHostChannel(channel, ingest.receiver, ingest.ref);
-  if (ingest.receiver === h.receiver) h.channel = channel;
+  if (ingest.receiver === h.receiver) {
+    h.channel = channel;
+    // The slot-0 note was written before a channel existed. Its key is what a
+    // resume matches a pending channel against, so it lands here, with the name.
+    const file = h.guestWriter?.fileName;
+    h.journal?.note((n) => {
+      const note = n.files.find((f) => f.file === file);
+      if (!note) return;
+      note.key = key.slice(0, 64);
+      if (name) note.who = name.slice(0, 200);
+    });
+  }
 }
 
 // Bind (or rebind, after reconnect, or bind for the first time when the guest's
@@ -1399,6 +1465,16 @@ export async function bindHostScreenChannel(
   }
   h.screenWriters = [...(h.screenWriters ?? []), writer];
   (h.screenStartsByFile ??= new Map()).set(writer.fileName, Date.now());
+  h.journal?.note((n) => {
+    if (n.files.length >= 64) return;
+    n.files.push({
+      file: writer.fileName,
+      kind: 'screen',
+      segment,
+      startedAtMs: Date.now(),
+      ...(sharerPeerIdOrName ? { who: sharerPeerIdOrName.slice(0, 200) } : {}),
+    });
+  });
   if (sharerPeerIdOrName) {
     (h.screenSharerPeerIdsByFile ??= new Map()).set(writer.fileName, sharerPeerIdOrName);
   }
@@ -1410,6 +1486,8 @@ export async function bindHostScreenChannel(
       const c = ref.current;
       if (c && c.readyState === 'open') c.send(json);
     },
+    ...(h.journal ? { journalFile: h.journal.file(writer.fileName) } : {}),
+    ...(h.onWarn ? { onWarn: h.onWarn } : {}),
     ...(onError ? { onError } : {}),
   });
   h.screenReceivers = new Map(h.screenReceivers ?? []).set(segment, receiver);

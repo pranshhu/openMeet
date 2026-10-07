@@ -344,6 +344,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   the host's file was saved); they stay listed in the lobby until deleted by hand. Each screen segment
   has its own backup (`openmeet-backup-screen-…`) fed the segment recorder's chunks via `writeChunk` —
   no second screen encode; the host's are finalized with its camera/WAV backups after a clean take.
+  While a take runs, its guest files are also kept in a crash journal (`lib/take-journal.ts`): one
+  directory per take (`openmeet-take-<startMs>-<slug>`) holding each file's acknowledged bytes in
+  small closed parts.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
@@ -379,6 +382,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
   `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  After the folder writers are open it opens that take's crash journal and hands each guest receiver
+  its journal file; when storage could not take one the handles say `unprotected` and the take
+  records as before.
   While a take runs the host also keeps a **call-audio copy** of every guest who is being recorded
   (`syncCallCopies`, driven by one effect in `useRoom`): an audio-only `MediaRecorder` on the guest's
   incoming live track (`pickCallAudioMime`: AAC or Opus in MP4, else WebM/Opus), written to

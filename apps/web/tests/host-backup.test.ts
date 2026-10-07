@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CHUNK_TIMESLICE_MS } from '@openmeet/protocol';
 import { startHostRecording, endHostRecording, bindHostGuestChannel, collectFileChecks } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
+import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
 
 class FakeMediaRecorder {
   static instances: FakeMediaRecorder[] = [];
@@ -282,5 +284,171 @@ describe('host backup recording', () => {
       bytes: 4,
       received: { finalized: true, sha256Sent: 'abc' },
     });
+  });
+
+  it('opens a take journal for slot 0 and commits parts into it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const warn = vi.fn();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-j',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => root as never,
+        onWarn: warn,
+      });
+
+      expect(handles.journal).toBeDefined();
+      expect(handles.unprotected).toBeUndefined();
+      expect(handles.onWarn).toBe(warn);
+
+      const takeDir = `openmeet-take-${handles.hostStartMs}-abc-defg-hij`;
+      expect(root.entries.has(takeDir)).toBe(true);
+
+      await handles.receiver!.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
+      await handles.receiver!.handleMessage(new ArrayBuffer(4));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await handles.receiver!.handleMessage(JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }));
+      await handles.receiver!.handleMessage(new ArrayBuffer(4));
+      await new Promise((r) => setTimeout(r, 0));
+
+      const take = root.entries.get(takeDir) as FakeDirectoryHandle;
+      const fileDir = take.entries.get('guest_test-rec-j.mp4') as FakeDirectoryHandle;
+      await vi.waitFor(() => {
+        expect([...fileDir.entries.keys()]).toEqual(['000000-0-2.part']);
+        expect((fileDir.entries.get('000000-0-2.part') as FakeFileHandle).content.byteLength).toBe(8);
+      });
+      const notesFile = take.entries.get('take.json') as FakeFileHandle;
+      await vi.waitFor(() => {
+        expect(JSON.parse(new TextDecoder().decode(notesFile.content)).files).toEqual([
+          { file: 'guest_test-rec-j.mp4', kind: 'camera', slot: 0 },
+        ]);
+      });
+
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('journal: false is an unprotected take that still records', async () => {
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-off',
+      localStream: fakeStream(),
+      dir: fakeDir() as never,
+      room: 'abc-defg-hij',
+      journal: false,
+      journalRoot: async () => new FakeDirectoryHandle() as never,
+    });
+
+    expect(handles.journal).toBeUndefined();
+    expect(handles.unprotected).toBe(true);
+    expect(handles.guestWriter?.fileName).toBe('guest_test-rec-off.mp4');
+    await expect(endHostRecording(handles)).resolves.toBeDefined();
+  });
+
+  it('no storage means an unprotected take that still records', async () => {
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-nostore',
+      localStream: fakeStream(),
+      dir: fakeDir() as never,
+      room: 'abc-defg-hij',
+      journalRoot: async () => {
+        throw new Error('no storage');
+      },
+    });
+
+    expect(handles.journal).toBeUndefined();
+    expect(handles.unprotected).toBe(true);
+    expect(handles.guestWriter?.fileName).toBe('guest_test-rec-nostore.mp4');
+    await expect(endHostRecording(handles)).resolves.toBeDefined();
+  });
+
+  it('a cancelled folder prompt touches no journal', async () => {
+    const root = new FakeDirectoryHandle();
+    const getDirectoryHandle = vi.spyOn(root, 'getDirectoryHandle');
+    const abort = new Error('The user aborted a request.');
+    abort.name = 'AbortError';
+
+    const started = startHostRecording({
+      recordingId: 'test-rec-abort',
+      localStream: fakeStream(),
+      directoryPicker: async () => {
+        throw abort;
+      },
+      room: 'abc-defg-hij',
+      journalRoot: async () => root as never,
+    });
+
+    await expect(started).rejects.toBe(abort);
+    expect(getDirectoryHandle).not.toHaveBeenCalled();
+  });
+
+  it("the notes name the host's own backups, in the background", async () => {
+    const whenOpen = vi.spyOn(BackupRecorder.prototype, 'whenOpen').mockResolvedValue(undefined);
+    class FakeTrackProcessor {
+      readable = new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      });
+    }
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor = FakeTrackProcessor;
+    const dirName = vi
+      .spyOn(BackupRecorder.prototype, 'dirName', 'get')
+      .mockReturnValue('openmeet-backup-host-1-abc-defg-hij');
+    try {
+      const videoTrack = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }) };
+      const audioTrack = {};
+      const stream = {
+        getTracks: () => [videoTrack, audioTrack],
+        getVideoTracks: () => [videoTrack],
+        getAudioTracks: () => [audioTrack],
+      } as unknown as MediaStream;
+
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-bg',
+        localStream: stream,
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => new FakeDirectoryHandle() as never,
+      });
+      await Promise.resolve();
+
+      expect(handles.journal?.notes.backups).toContainEqual({
+        dir: 'openmeet-backup-host-1-abc-defg-hij',
+        file: handles.hostWriter?.fileName,
+        kind: 'camera',
+      });
+      expect(handles.journal?.notes.backups).toContainEqual({
+        dir: 'openmeet-backup-host-1-abc-defg-hij',
+        file: handles.hostWavWriter?.fileName,
+        kind: 'wav',
+      });
+      await endHostRecording(handles);
+    } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+      whenOpen.mockRestore();
+      dirName.mockRestore();
+    }
+
+    const stuck = vi.spyOn(BackupRecorder.prototype, 'whenOpen').mockReturnValue(new Promise(() => {}));
+    try {
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-bg2',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => new FakeDirectoryHandle() as never,
+      });
+      await Promise.resolve();
+
+      expect(handles.journal?.notes.backups).toEqual([]);
+      await endHostRecording(handles);
+    } finally {
+      stuck.mockRestore();
+    }
   });
 });
