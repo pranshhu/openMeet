@@ -83,8 +83,13 @@ function status(row: TrackRow): string {
       : 'Stopped. Your backup has the rest.';
   }
   if (row.state === 'quiet') {
-    return byAcks(row)
-      ? `Not reaching the host for ${formatHiddenDuration(row.idleMs)}`
+    if (byAcks(row)) {
+      return `Not reaching the host for ${formatHiddenDuration(row.idleMs)}`;
+    }
+    // A guest's row needs its own words: a guest named "You" otherwise reads
+    // exactly like the host's own row.
+    return row.who !== undefined
+      ? `Not receiving for ${formatHiddenDuration(row.idleMs)}`
       : `No data for ${formatHiddenDuration(row.idleMs)}`;
   }
   if (row.state === 'behind') {
@@ -112,19 +117,22 @@ function indicator(rows: TrackRow[]): { text: string; mark: string; tone: string
 export function RecordingHealth({ read }: { read: () => TrackReading[] }): React.ReactElement | null {
   const [rows, setRows] = useState<TrackRow[]>([]);
   const memory = useRef<TrackMemory>(new Map());
+  const last = useRef<TrackReading[]>([]);
 
   useEffect(() => {
     const sample = () => {
       // This sits inside the call screen. A throw that reached React would
-      // unmount it and take "End & save" with it, so a failed sample keeps
-      // the last rows instead.
+      // unmount it and take "End & save" with it, so a failed read keeps the
+      // last readings — judged again, so a frozen count ages into "No data".
+      let readings = last.current;
       try {
-        const next = classifyTracks(read(), memory.current, Date.now());
-        memory.current = next.seen;
-        setRows(next.rows);
+        readings = last.current = read();
       } catch {
-        /* keep the last rows */
+        /* judge the last reading again */
       }
+      const next = classifyTracks(readings, memory.current, Date.now());
+      memory.current = next.seen;
+      setRows(next.rows);
     };
     sample();
     const id = setInterval(sample, HEALTH_SAMPLE_MS);

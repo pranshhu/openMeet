@@ -436,6 +436,9 @@ export async function bindHostAudioChannel(
   // is not (the DO mints a fresh one per socket). Prefer the key so a
   // rebuilt channel lands on the same slot/file it started on.
   const key = recordingChannelKind(channel.label).key ?? peerId;
+  // A real key is the guest's 36-character recordingId; the key is held and
+  // compared for the whole take, so a longer one is not a key.
+  if (key.length > 64) return;
   const slot = guestSlot(h, key);
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
@@ -458,6 +461,8 @@ export async function bindHostGuestChannel(
 ): Promise<void> {
   // Same stable-key preference as bindHostAudioChannel — see there.
   const key = recordingChannelKind(channel.label).key ?? peerId;
+  // Same bound as bindHostAudioChannel — see there.
+  if (key.length > 64) return;
   const slot = guestSlot(h, key);
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
@@ -1202,6 +1207,13 @@ export async function bindHostScreenChannel(
   const segment = (h.guestScreenSegments = Math.max(h.guestScreenSegments ?? 0, h.screenReceivers?.size ?? 0) + 1);
   const writer = new FileWriter();
   await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment));
+  // The share can stop while the file is opening. Its close event has fired by
+  // now, so nothing below would ever close this file or drop its row.
+  if (channel.readyState === 'closed') {
+    await writer.close();
+    await h.dir.removeEntry?.(writer.fileName);
+    return;
+  }
   h.screenWriters = [...(h.screenWriters ?? []), writer];
   (h.screenStartsByFile ??= new Map()).set(writer.fileName, Date.now());
   if (sharerPeerIdOrName) {
@@ -1386,12 +1398,15 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
 
 /** One recorded file's progress at one instant. The health panel reads these on a timer. */
 export interface TrackReading {
-  /** Stable for the life of the file, and never built from anything a peer chose. */
+  /** Stable for the life of the file, and never built from anything a peer chose.
+   *  Which peer a slot belongs to is the last one to bind that key, so a row's
+   *  owner is only as private as the key itself. */
   key: string;
   /** Whose file, for a guest's track arriving at the host. Absent for this browser's own. */
   who?: string;
   track: 'camera' | 'wav' | 'screen';
-  /** Own track: bytes the recorder has produced. A guest's track on the host: bytes written. */
+  /** Own track: bytes that reached the disk, or the recorder's count when this
+   *  browser has no writer. A guest's track on the host: bytes written. */
   bytes: number;
   /** Own track on a guest: bytes of it the host has acknowledged writing. */
   acked?: number;
@@ -1419,17 +1434,29 @@ export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): Tr
     s ? { acked: s.ackedBytes, ...(s.isAbandoned ? { stopped: true } : {}) } : {};
   const camera = h.hostRecorder ?? h.guestRecorder;
   if (camera) {
-    own.push({ key: 'own:camera', track: 'camera', bytes: camera.totalBytes, ...sent(h.sender) });
+    own.push({
+      key: 'own:camera',
+      track: 'camera',
+      // The recorder counts what it produced, which a refused write never
+      // reaches the disk with; the writer counts what did.
+      bytes: h.hostWriter ? h.hostWriter.size : camera.totalBytes,
+      ...sent(h.sender),
+    });
   }
   const pcm = h.hostPcm ?? h.guestPcm;
   if (pcm) {
-    own.push({ key: 'own:wav', track: 'wav', bytes: pcm.totalBytes, ...sent(h.wavSender) });
+    own.push({
+      key: 'own:wav',
+      track: 'wav',
+      bytes: h.hostWavWriter ? h.hostWavWriter.size : pcm.totalBytes,
+      ...sent(h.wavSender),
+    });
   }
   if (h.screenRecorder) {
     own.push({
       key: `own:screen:${h.screenSegment ?? 0}`,
       track: 'screen',
-      bytes: h.screenRecorder.totalBytes,
+      bytes: h.screenWriter ? h.screenWriter.size : h.screenRecorder.totalBytes,
       ...sent(h.screenSender),
     });
   }
@@ -1438,6 +1465,9 @@ export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): Tr
   const peerRows = new Map<string, number>();
   const cameraPeers = new Set<string>();
   const inRoom = (peerId: string | undefined) => peers.find((p) => p.peerId === peerId);
+  // A name can be blank as easily as missing, and a blank row reads as nobody.
+  const named = (name: unknown, fallback: string) =>
+    (typeof name === 'string' && name.trim() ? name : fallback);
   const received = (key: string, who: string, track: TrackReading['track'], r: ChunkReceiver) =>
     guests.push({ key, who, track, bytes: r.bytesWritten, ...(r.isAbandoned ? { stopped: true } : {}) });
   // The file of a guest who left, or who reloaded into a new slot, never
@@ -1450,7 +1480,7 @@ export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): Tr
     const count = peerRows.get(peer.peerId) ?? 0;
     if (count >= MAX_ROWS_PER_PEER) return;
     peerRows.set(peer.peerId, count + 1);
-    const who = peer.name || (slot === 0 ? 'Guest' : `Guest ${slot + 1}`);
+    const who = named(peer.name, slot === 0 ? 'Guest' : `Guest ${slot + 1}`);
     received(`g${slot}:${wav ? 'wav' : 'mp4'}`, who, wav ? 'wav' : 'camera', r);
   };
 
@@ -1468,7 +1498,7 @@ export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): Tr
     const count = peerRows.get(peer.peerId) ?? 0;
     if (count >= MAX_ROWS_PER_PEER) continue;
     peerRows.set(peer.peerId, count + 1);
-    received(`s${segment}`, peer.name || 'Guest', 'screen', r);
+    received(`s${segment}`, named(peer.name, 'Guest'), 'screen', r);
   }
   // Host only. A recorded guest with no file yet is the one failure the host
   // has no other way to see, so it gets a row that stays at zero. At most one
@@ -1476,7 +1506,7 @@ export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): Tr
   if (h.dir) {
     for (const p of peers) {
       if (p.expected && !cameraPeers.has(p.peerId)) {
-        guests.push({ key: `p:${p.peerId}`, who: p.name || 'Guest', track: 'camera', bytes: 0 });
+        guests.push({ key: `p:${p.peerId}`, who: named(p.name, 'Guest'), track: 'camera', bytes: 0 });
       }
     }
   }

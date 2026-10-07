@@ -685,7 +685,7 @@ export function CallStage({
         ) && (
           <div
             role="alert"
-            className="mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
+            className="relative z-50 mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
           >
             {recordingError}
           </div>
@@ -694,7 +694,7 @@ export function CallStage({
       {deviceError && (
         <div
           role="alert"
-          className="mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
+          className="relative z-50 mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
         >
           {deviceError}
         </div>

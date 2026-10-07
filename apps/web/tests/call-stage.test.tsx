@@ -1706,6 +1706,23 @@ describe('CallStage track panel', () => {
     expect(screen.getByTestId('track-health')).toBeTruthy();
   });
 
+  // The panel is positioned against the status bar and paints over the
+  // in-flow notices, so a banner only wins the stack by its own positioning.
+  it('keeps an alert banner above an open track panel', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        recordingError="The disk is full. Press End & save."
+        readTrackHealth={read}
+      />
+    );
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent('The disk is full. Press End & save.');
+    expect(banner.className).toMatch(/\brelative\b/);
+    expect(banner.className).toMatch(/\bz-50\b/);
+  });
+
   it('leaves the track panel unmounted while the room records and this browser does not', () => {
     render(<CallStage {...baseProps} phase="in-call" roomRecording readTrackHealth={read} />);
     expect(screen.queryByTestId('track-health')).toBeNull();

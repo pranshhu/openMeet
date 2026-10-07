@@ -12,6 +12,7 @@ import {
 import type { ChunkRecorder } from '@/lib/recorder';
 import type { PcmRecorder } from '@/lib/pcm-recorder';
 import { ChunkSender } from '@/lib/chunk-sender';
+import { FileWriter } from '@/lib/fs-writer';
 
 type Written = { file: string; position: number; bytes: number };
 
@@ -143,6 +144,45 @@ describe('collectTrackHealth', () => {
     ]);
   });
 
+  it('reads an own row from what reached the disk once a writer exists', async () => {
+    const refusing = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async () => {
+            throw new Error('write refused');
+          },
+          close: async () => {},
+        }),
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+
+    const openRefusing = async (name: string) => {
+      const w = new FileWriter();
+      await w.openIn(refusing, name);
+      await w.write(0, new ArrayBuffer(8)).catch(() => {});
+      return w;
+    };
+    const hostWriter = await openRefusing('host_rec.mp4');
+    const hostWavWriter = await openRefusing('host_rec.wav');
+    const screenWriter = await openRefusing('host_screen_rec.mp4');
+
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      hostRecorder: { totalBytes: 5_000_000 } as unknown as ChunkRecorder,
+      hostPcm: { totalBytes: 96 } as unknown as PcmRecorder,
+      screenRecorder: { totalBytes: 5 } as unknown as ChunkRecorder,
+      hostWriter,
+      hostWavWriter,
+      screenWriter,
+    };
+    expect(collectTrackHealth(h, [])).toEqual([
+      { key: 'own:camera', track: 'camera', bytes: 0 },
+      { key: 'own:wav', track: 'wav', bytes: 0 },
+      { key: 'own:screen:0', track: 'screen', bytes: 0 },
+    ]);
+  });
+
   it('gives no rows when nothing is recording yet', () => {
     expect(collectTrackHealth({ recordingId: 'x' }, [])).toEqual([]);
   });
@@ -186,6 +226,76 @@ describe('collectTrackHealth', () => {
 
     const fallback0 = collectTrackHealth(h, [peer('peer-a', null), peer('peer-b', 'Boris')]);
     expect(fallback0.find((r) => r.key === 'g0:mp4')?.who).toBe('Guest');
+  });
+
+  it('falls back to the slot name for a blank guest name', async () => {
+    const h = await hostHandles();
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-b');
+    await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-a');
+
+    const rows = collectTrackHealth(h, [peer('peer-a', '  '), peer('peer-b', '\n'), peer('peer-c', ' ')]);
+    const who = (key: string) => rows.find((r) => r.key === key)?.who;
+    expect(who('g0:mp4')).toBe('Guest');
+    expect(who('g1:mp4')).toBe('Guest 2');
+    expect(who('s1')).toBe('Guest');
+    expect(who('p:peer-c')).toBe('Guest');
+  });
+
+  it('falls back to the slot name for a name that is not a string', async () => {
+    const h = await hostHandles();
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-b');
+
+    const rows = collectTrackHealth(h, [
+      peer('peer-a', 123 as unknown as string),
+      peer('peer-b', true as unknown as string, false),
+      peer('peer-c', {} as unknown as string),
+    ]);
+    const who = (key: string) => rows.find((r) => r.key === key)?.who;
+    expect(who('g0:mp4')).toBe('Guest');
+    expect(who('s1')).toBe('Guest');
+    expect(who('p:peer-c')).toBe('Guest');
+  });
+
+  it('refuses a label key longer than a recording id and binds a real one', async () => {
+    const opened: string[] = [];
+    const h = await hostHandles(opened);
+
+    const long = 'k'.repeat(65);
+    const longCam = fakeChannel(`recording#${long}`);
+    const longWav = fakeChannel(`recording-audio#${long}`);
+    await bindHostGuestChannel(longCam, h, 'peer-a');
+    await bindHostAudioChannel(longWav, h, 'peer-a');
+
+    expect(h.guestSlots?.size ?? 0).toBe(0);
+    expect(opened).toEqual([]);
+    expect((longCam as unknown as { onmessage: unknown }).onmessage).toBeNull();
+
+    const real = 'a'.repeat(36);
+    const cam = fakeChannel(`recording#${real}`);
+    await bindHostGuestChannel(cam, h, 'peer-b');
+    expect(h.guestSlots?.get(real)).toBe(0);
+    expect(typeof (cam as unknown as { onmessage: unknown }).onmessage).toBe('function');
+
+    const maxAllowed = 'b'.repeat(64);
+    const maxCam = fakeChannel(`recording#${maxAllowed}`);
+    const maxWav = fakeChannel(`recording-audio#${maxAllowed}`);
+    await bindHostGuestChannel(maxCam, h, 'peer-c');
+    await bindHostAudioChannel(maxWav, h, 'peer-c');
+    expect(h.guestSlots?.get(maxAllowed)).toBe(1);
+    expect(typeof (maxCam as unknown as { onmessage: unknown }).onmessage).toBe('function');
+  });
+
+  it('gives a slot key to the last peer that binds it', async () => {
+    const h = await hostHandles();
+    const key = 'a'.repeat(36);
+    await bindHostGuestChannel(fakeChannel(`recording#${key}`), h, 'peer-a');
+    await bindHostAudioChannel(fakeChannel(`recording-audio#${key}`), h, 'peer-b');
+
+    expect(h.slotPeerIds?.get(0)).toBe('peer-b');
+    const rows = collectTrackHealth(h, [peer('peer-a', 'Asha', false), peer('peer-b', 'Mallory', false)]);
+    expect(rows.every((r) => r.who === 'Mallory')).toBe(true);
   });
 
   it('never leaks the guest-chosen label key into a row', async () => {
@@ -288,6 +398,45 @@ describe('collectTrackHealth', () => {
     channel.dispatchEvent(new Event('close'));
     expect(collectTrackHealth(h, [peer('peer-a', 'Asha', false)])).toEqual([]);
     expect(h.screenReceivers?.size).toBe(1);
+  });
+
+  it('leaves no row or file when a screen channel closes while its file opens', async () => {
+    const removed: string[] = [];
+    let closed = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const dir = {
+      getFileHandle: async (name: string) => {
+        await gate;
+        return {
+          name,
+          createWritable: async () => ({
+            write: async () => {},
+            close: async () => {
+              closed++;
+            },
+          }),
+        };
+      },
+      removeEntry: async (name: string) => {
+        removed.push(name);
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h: RecordingHandles = { recordingId: 'rec', take: 1, dir, channelRef: { current: null } };
+
+    const channel = Object.assign(new EventTarget(), { label: 'recording-screen-1', readyState: 'open' });
+    const bound = bindHostScreenChannel(channel as unknown as RTCDataChannel, h, undefined, 'peer-a');
+    channel.dispatchEvent(new Event('close'));
+    (channel as unknown as { readyState: string }).readyState = 'closed';
+    release();
+    await bound;
+
+    expect(collectTrackHealth(h, [peer('peer-a', 'Asha', false)])).toEqual([]);
+    expect(h.screenWriters ?? []).toEqual([]);
+    expect(removed).toEqual(['guest_screen_rec.mp4']);
+    expect(closed).toBe(1);
   });
 
   it('marks a track whose sender gave up with stopped: true', async () => {

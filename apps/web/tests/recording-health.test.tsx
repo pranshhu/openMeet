@@ -425,6 +425,44 @@ describe('RecordingHealth', () => {
     expect(screen.getByText('1.0 MB')).toBeInTheDocument();
   });
 
+  it('ages the last rows into Check tracks while reads keep failing', () => {
+    vi.useFakeTimers();
+    let call = 0;
+    const read = vi.fn<() => TrackReading[]>(() => {
+      call++;
+      if (call === 1) {
+        return [{ key: 'own:camera', track: 'camera', bytes: 1_000_000 }];
+      }
+      throw new Error('read failed');
+    });
+
+    render(<RecordingHealth read={read} />);
+    act(() => {
+      vi.advanceTimersByTime(TRACK_STALL_MS);
+    });
+
+    expect(screen.getByText('1.0 MB')).toBeInTheDocument();
+    expect(screen.getByText('Check tracks')).toBeInTheDocument();
+    expect(screen.getByText('No data for 15 s')).toBeInTheDocument();
+  });
+
+  it('gives a guest’s quiet row its own words, not the local row’s', () => {
+    vi.useFakeTimers();
+    const read = vi.fn<() => TrackReading[]>(() => [
+      { key: 'own:camera', track: 'camera', bytes: 1_000_000 },
+      { key: 'g0:mp4', who: 'You', track: 'camera', bytes: 500_000 },
+    ]);
+
+    render(<RecordingHealth read={read} />);
+    act(() => {
+      vi.advanceTimersByTime(TRACK_STALL_MS);
+    });
+
+    expect(screen.getAllByText('You')).toHaveLength(2);
+    expect(screen.getByText('No data for 15 s')).toBeInTheDocument();
+    expect(screen.getByText('Not receiving for 15 s')).toBeInTheDocument();
+  });
+
   it('stops sampling on unmount', () => {
     vi.useFakeTimers();
     const read = vi.fn<() => TrackReading[]>(() => [

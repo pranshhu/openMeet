@@ -76,6 +76,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After a take, the recording's metadata row holds the size of the host's own
   file instead of the first guest file's size and checksum, and the host's
   backups are kept when its own camera file or WAV master came out empty.
+- The track list no longer says a file is OK when nothing reached the disk: it
+  reads the host's own rows from what was written, keeps a red alert readable
+  above the open list, ages a stalled reading into **Check tracks**, names a
+  blank guest row, and refuses an oversized channel label from a guest.
 
 ### Security
 
