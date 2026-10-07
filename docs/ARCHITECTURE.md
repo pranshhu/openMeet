@@ -304,9 +304,9 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `drain()` polls 100ms until empty or 30s cap.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; **drops
   `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; `maxBytes` holds
-  a sender to a size it declared; a bounded receiver also takes chunks only in order and stops at
-  its first refusal; acks every 5 chunks / 10s; `answerResume` replies
-  `resume_offset{lastByte,lastIdx}`.
+  a sender to a size it declared; a bounded receiver also refuses a chunk whose declared size is
+  not its payload's length, takes chunks only in order and stops at its first refusal; acks every
+  5 chunks / 10s; `answerResume` replies `resume_offset{lastByte,lastIdx}`.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).

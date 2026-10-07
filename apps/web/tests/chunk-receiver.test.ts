@@ -521,6 +521,54 @@ describe('ChunkReceiver', () => {
     expect(r.bytesWritten).toBe(20);
   });
 
+  it('counts nothing from a chunk whose write was queued when the first write failed', async () => {
+    const rejects: Array<(err: unknown) => void> = [];
+    const resolves: Array<() => void> = [];
+    const writer = {
+      write: vi
+        .fn()
+        .mockImplementationOnce(() => new Promise<void>((_, reject) => rejects.push(reject)))
+        .mockImplementationOnce(() => new Promise<void>((resolve) => resolves.push(resolve))),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+      maxBytes: 100,
+    });
+    const rBaseline = new ChunkReceiver({
+      recordingId: 'base',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      maxBytes: 100,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    const p1 = r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    const p2 = r.handleMessage(new Uint8Array(10).buffer);
+
+    // Both writes are queued before either settles; the first one fails.
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    rejects[0]!(new Error('disk full'));
+    resolves[0]!();
+    await Promise.all([p1, p2]);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect((onError.mock.calls[0]![0] as Error).message).toBe('disk full');
+    expect(r.bytesWritten).toBe(0);
+    expect(await r.digestHex()).toBe(await rBaseline.digestHex());
+
+    // Nothing was taken for the second chunk, so there is no position to ack.
+    r.flushAck();
+    expect(sent).toEqual([]);
+  });
+
   it('takes no more data chunks and reports the error once after a refusal, while still handling control messages', async () => {
     const writer = fakeWriter();
     const onError = vi.fn();
@@ -624,7 +672,7 @@ describe('ChunkReceiver', () => {
     );
   });
 
-  it('measures where the next chunk starts by the payload, not the declared size', async () => {
+  it('refuses a bounded chunk whose declared size is not its payload length', async () => {
     const writer = fakeWriter();
     const onError = vi.fn();
     const r = new ChunkReceiver({
@@ -638,16 +686,92 @@ describe('ChunkReceiver', () => {
     // Chunk 0: declared size is 5, but actual payload is 10 bytes
     await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 5, ts: 1 }));
     await r.handleMessage(new Uint8Array(10).buffer);
-    expect(writer.write).toHaveBeenCalledTimes(1);
-    expect(r.bytesWritten).toBe(10);
-    expect(onError).not.toHaveBeenCalled();
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data that does not match its header.' })
+    );
+    expect(r.bytesWritten).toBe(0);
 
-    // Chunk 1: contiguous at offset 10
+    // The refusal latches: a later honest chunk is not taken either.
     await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
     await r.handleMessage(new Uint8Array(10).buffer);
-    expect(writer.write).toHaveBeenCalledTimes(2);
-    expect(r.bytesWritten).toBe(20);
-    expect(onError).not.toHaveBeenCalled();
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('refuses a bounded chunk whose declared size exceeds its payload length', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    // Chunk 0: declared size is 20, but actual payload is 10 bytes
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 20, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data that does not match its header.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+
+    // The refusal latches: a later honest chunk is not taken either.
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('reports the size-bound error for a chunk that is both past the bound and wrongly sized', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 5,
+    });
+
+    // Declared size is 1, the payload is 10 bytes, and the bound is 5.
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 1, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received more data than the sender declared.' })
+    );
+    expect(r.bytesWritten).toBe(0);
+  });
+
+  it('reports the header-mismatch error for a chunk that is both wrongly sized and out of order', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+      maxBytes: 100,
+    });
+
+    // Offset 5 leaves a gap, and the declared size is not the payload's length.
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 5, size: 5, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Received data that does not match its header.' })
+    );
+    expect(r.bytesWritten).toBe(0);
   });
 
   it('accepts three contiguous chunks in sequence', async () => {
@@ -819,6 +943,64 @@ describe('ChunkReceiver', () => {
     expect(writer.write).toHaveBeenNthCalledWith(1, 100, expect.any(ArrayBuffer));
     expect(writer.write).toHaveBeenNthCalledWith(2, 0, expect.any(ArrayBuffer));
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('writes a chunk whose declared size differs from its payload when maxBytes is undefined', async () => {
+    const writer = fakeWriter();
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 5, ts: 1 }));
+    await r.handleMessage(new Uint8Array(10).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    expect(onError).not.toHaveBeenCalled();
+    expect(r.bytesWritten).toBe(10);
+
+    // Without a bound, the resume answer still reports the declared size.
+    expect(r.lastOffsetValue).toBe(5);
+  });
+
+  it('counts a queued second chunk after a write failure when unbounded', async () => {
+    const rejects: Array<(err: unknown) => void> = [];
+    const resolves: Array<() => void> = [];
+    const writer = {
+      write: vi
+        .fn()
+        .mockImplementationOnce(() => new Promise<void>((_, reject) => rejects.push(reject)))
+        .mockImplementationOnce(() => new Promise<void>((resolve) => resolves.push(resolve))),
+      fileName: 'guest.mp4',
+    };
+    const onError = vi.fn();
+    const sent: string[] = [];
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: (m) => sent.push(m),
+      onError,
+    });
+
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 10, ts: 1 }));
+    const p1 = r.handleMessage(new Uint8Array(10).buffer);
+
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 10, ts: 2 }));
+    const p2 = r.handleMessage(new Uint8Array(10).buffer);
+
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    rejects[0]!(new Error('disk full'));
+    resolves[0]!();
+    await Promise.all([p1, p2]);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(10);
+    r.flushAck();
+    const ack = sent.map((m) => JSON.parse(m)).find((m) => m.type === 'ack');
+    expect(ack).toMatchObject({ uptoIdx: 1, uptoOffset: 20 });
   });
 });
 

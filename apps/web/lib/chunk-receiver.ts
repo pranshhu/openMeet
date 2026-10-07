@@ -204,9 +204,11 @@ export class ChunkReceiver {
       const end = header.offset + data.byteLength;
       const why = !(Number.isFinite(this.maxBytes) && end <= this.maxBytes)
         ? 'Received more data than the sender declared.'
-        : header.offset !== this.nextOffset
-          ? 'Received data out of order.'
-          : null;
+        : header.size !== data.byteLength
+          ? 'Received data that does not match its header.'
+          : header.offset !== this.nextOffset
+            ? 'Received data out of order.'
+            : null;
       if (why) {
         this.refused = true;
         this.onError?.(new Error(why));
@@ -224,6 +226,9 @@ export class ChunkReceiver {
       this.onError?.(err);
       return;
     }
+    // A write that was already queued when the receiver stopped must not be
+    // hashed, counted or acked once it resolves.
+    if (this.maxBytes !== undefined && this.refused) return;
     this.lastDataReceivedAt = Date.now();
     if (header.offset === 0 && this.lastIdx >= 0) {
       this._receivedFinalHeader = true;
