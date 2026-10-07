@@ -117,6 +117,17 @@ describe('SessionSummary', () => {
     expect(screen.getByText('Screen · 12 MB (Alice, +5000ms)')).toBeInTheDocument();
   });
 
+  it('renders a call-audio copy with its label and detail', () => {
+    render(
+      <SessionSummary
+        {...baseProps}
+        files={[{ name: 'call1_r.m4a', kind: 'call', detail: 'Dana, +1200ms' }]}
+      />
+    );
+    expect(screen.getByText('call1_r.m4a')).toBeInTheDocument();
+    expect(screen.getByText(/Call audio copy, lower quality \(Dana, \+1200ms\)/)).toBeInTheDocument();
+  });
+
   // The status is the first word of each verdict, so the tone is never the only
   // signal; a long unbroken name must still wrap inside the sheet.
   it.each([

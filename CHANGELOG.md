@@ -53,7 +53,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   data, and each guest sees their own.
 - The host keeps a call-audio copy of each recorded guest's live audio in the
   recording folder (`call<n>_<id>.m4a`): a call-quality fallback for a guest
-  track that never arrives.
+  track that never arrives, listed in the session summary and in
+  `sync_<id>.json`.
 
 ### Changed
 

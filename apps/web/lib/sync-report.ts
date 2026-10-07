@@ -45,6 +45,14 @@ export interface ScreenSegmentInput {
   sharer?: string | undefined;
 }
 
+export interface CallCopyInput {
+  file: string;
+  /** Start relative to the host recording start. */
+  offsetMs: number;
+  /** Whose audio it is, when the guest gave a name. */
+  name?: string | undefined;
+}
+
 /** What the host measured about one file once the take has ended. */
 export interface FileCheck {
   /** Size on the host's disk. */
@@ -84,11 +92,13 @@ export interface SyncReportInput {
   hostTrackFps?: number | null | undefined;
   /** One entry per file in the folder, keyed by file name. */
   checks?: ReadonlyMap<string, FileCheck> | undefined;
+  /** The host's own copies of each guest's live call audio, in the order they were opened. */
+  callCopies?: CallCopyInput[] | undefined;
 }
 
 export interface SummaryFile {
   name: string;
-  kind: 'video' | 'audio' | 'screen';
+  kind: 'video' | 'audio' | 'screen' | 'call';
   detail?: string | undefined;
   participant?: string | undefined;
   bytes?: number | undefined;
@@ -351,6 +361,11 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   const markers = input.markers ?? [];
   const screenSegments = input.screenSegments ?? [];
   const screenFiles = screenSegments.map((s) => s.file);
+  // A guest's display name is theirs to choose, and this goes to the host's disk.
+  const callCopies = (input.callCopies ?? []).map((c) => {
+    const name = typeof c.name === 'string' ? sanitizeText(c.name).trim() : '';
+    return { file: c.file, offsetMs: c.offsetMs, ...(name ? { name } : {}) };
+  });
 
   const filesRecord: SyncReportData['files'] = hostFile ? { host: hostFile } : {};
   const audioMastersRecord: SyncReportData['audioMasters'] = { host: input.hostWavFile ?? null };
@@ -530,6 +545,12 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         ...(sharer ? { participant: sharer } : {}),
       };
     }),
+    ...callCopies.map((c) => ({
+      name: c.file,
+      kind: 'call' as const,
+      detail: [c.name, `+${c.offsetMs}ms`].filter(Boolean).join(', '),
+      ...(c.name ? { participant: c.name } : {}),
+    })),
   ].map((f: SummaryFile) => {
     const c = input.checks?.get(f.name);
     const who = whoOf(f.participant, f.kind === 'screen' ? 'the sharer' : 'the guest');
@@ -593,6 +614,14 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     screenFiles,
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
+    ...(callCopies.length > 0
+      ? {
+          callCopies: {
+            note: "The host's own recording of each guest's live call audio: call quality, as the host heard it. A fallback for a guest track that is missing or short. Place each file at its offsetMs from the host start.",
+            files: callCopies,
+          },
+        }
+      : {}),
     integrity: overallIntegrity.text,
     verification: fileList.map((f) => ({
       file: f.name,

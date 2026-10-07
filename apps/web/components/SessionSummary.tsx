@@ -70,6 +70,7 @@ export function SessionSummary({
     video: 'Camera',
     audio: 'Audio master (uncompressed)',
     screen: 'Screen',
+    call: 'Call audio copy, lower quality',
   };
   const lastTake = takes[takes.length - 1];
   const secondary =

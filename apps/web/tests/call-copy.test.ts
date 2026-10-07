@@ -3,6 +3,8 @@ import {
   syncCallCopies,
   CALL_COPY_MAX_FILES,
   allWriters,
+  collectCallCopies,
+  collectFileChecks,
   endHostRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
@@ -644,5 +646,68 @@ describe('call-audio copies at the end of a take', () => {
     expect(stopAndFlush).toHaveBeenCalledTimes(1);
     release();
     await ending;
+  });
+});
+
+describe('collectCallCopies', () => {
+  const copy = (fileName: string, bytes: number | null, startMs?: number, name?: string) =>
+    ({
+      peerId: 'p1',
+      track: track(),
+      writer: { fileName },
+      ...(bytes === null ? {} : { recorder: { totalBytes: bytes } }),
+      ...(startMs !== undefined ? { startMs } : {}),
+      ...(name !== undefined ? { name } : {}),
+    }) as never;
+
+  it('keeps only the copies that recorded something, with their offset from the host start', () => {
+    const h = {
+      recordingId: 'rec',
+      hostStartMs: 1_000,
+      callCopies: [
+        copy('call1_rec.m4a', 10, 1_500, 'Dana'),
+        copy('call2_rec.m4a', 0),
+        copy('call3_rec.m4a', null),
+        copy('call4_rec.m4a', 5, 900),
+        copy('', 5),
+      ],
+    } as unknown as RecordingHandles;
+
+    expect(collectCallCopies(h)).toEqual([
+      { file: 'call1_rec.m4a', offsetMs: 500, name: 'Dana' },
+      { file: 'call4_rec.m4a', offsetMs: 0 },
+    ]);
+  });
+
+  it('returns nothing when the take opened no copies', () => {
+    expect(collectCallCopies({ recordingId: 'rec', hostStartMs: 1_000 } as unknown as RecordingHandles)).toEqual([]);
+  });
+
+  // A finished copy closes its own file and leaves allWriters, so its size has
+  // to come from the copy itself or the summary calls it unverified.
+  describe('collectFileChecks after a take', () => {
+    beforeEach(() => {
+      FakeMediaRecorder.instances = [];
+      FakeMediaRecorder.supported = () => true;
+      FakeMediaRecorder.tailBytes = 0;
+      (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+    });
+
+    afterEach(() => {
+      delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+      vi.restoreAllMocks();
+    });
+
+    it('reports the size of a finished call copy', async () => {
+      const { dir } = fakeDir();
+      const h = handles(dir);
+      syncCallCopies(h, [peer('p1')]);
+      await opened(h);
+      FakeMediaRecorder.instances[0]!.emit(10);
+      await tick();
+
+      await endHostRecording(h);
+      expect((await collectFileChecks(h)).get('call1_rec.m4a')).toEqual({ bytes: 10 });
+    });
   });
 });

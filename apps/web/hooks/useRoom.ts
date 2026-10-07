@@ -52,6 +52,7 @@ import {
   rebindGuestRecordingWhenConnected,
   collectGuestReports,
   collectScreenSegments,
+  collectCallCopies,
   collectFileChecks,
   collectTrackHealth,
   takeName,
@@ -1907,6 +1908,7 @@ export function useRoom(slug: string) {
             hostWavFile:
               (h.hostPcm?.totalBytes ?? 1) > 0 ? h.hostWavWriter?.fileName : undefined,
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
+            callCopies: collectCallCopies(h),
           };
           let report: SyncReport;
           try {

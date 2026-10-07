@@ -2071,6 +2071,38 @@ describe('host backup after a take in useRoom', () => {
       });
     });
   });
+
+  // A fallback nobody is told about is not found when it is needed, so the
+  // summary and the sync file both name the host's copy of a guest's audio.
+  it('lists the host’s call-audio copies in the summary and the sync file', async () => {
+    const { result } = await hostTake(undefined, {
+      hostStartMs: 1_000_000,
+      hostWriter: { fileName: 'host_rec-host-1.mp4' },
+      callCopies: [
+        {
+          peerId: 'p-bob',
+          name: 'Bob',
+          track: {},
+          opened: Promise.resolve(),
+          writer: { fileName: 'call1_rec-host-1.m4a' },
+          recorder: { totalBytes: 10 },
+          startMs: 1_000_500,
+        },
+      ],
+    });
+    expect(result.current.state.phase).toBe('done');
+    expect(vi.mocked(buildSyncReport).mock.calls.at(-1)![0]).toMatchObject({
+      callCopies: [{ file: 'call1_rec-host-1.m4a', offsetMs: 500, name: 'Bob' }],
+    });
+    expect(result.current.state.summary?.fileList).toContainEqual(
+      expect.objectContaining({
+        name: 'call1_rec-host-1.m4a',
+        kind: 'call',
+        detail: 'Bob, +500ms',
+        participant: 'Bob',
+      })
+    );
+  });
 });
 
 describe('track panel readings in useRoom', () => {

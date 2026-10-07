@@ -497,6 +497,63 @@ describe('post-session report', () => {
     expect(screenFile?.detail).toBe('+3400ms');
     expect(r.data.warnings.some((w) => w.includes('ended early'))).toBe(false);
   });
+
+  it('lists a call-audio copy with its offset and whose audio it is', () => {
+    const r = buildSyncReport({
+      ...base,
+      guests: [],
+      callCopies: [{ file: 'call1_r.m4a', offsetMs: 1200, name: 'Dana' }],
+    });
+    expect(r.data.fileList.at(-1)).toMatchObject({
+      name: 'call1_r.m4a',
+      kind: 'call',
+      detail: 'Dana, +1200ms',
+      participant: 'Dana',
+    });
+    expect((JSON.parse(r.json) as { callCopies: { files: unknown[] } }).callCopies.files).toEqual([
+      { file: 'call1_r.m4a', offsetMs: 1200, name: 'Dana' },
+    ]);
+  });
+
+  it('lists a copy the guest never named without a participant', () => {
+    const r = buildSyncReport({
+      ...base,
+      guests: [],
+      callCopies: [{ file: 'call1_r.m4a', offsetMs: 0 }],
+    });
+    const entry = r.data.fileList.at(-1)!;
+    expect(entry).toMatchObject({ name: 'call1_r.m4a', kind: 'call', detail: '+0ms' });
+    expect(entry).not.toHaveProperty('participant');
+    expect((JSON.parse(r.json) as { callCopies: { files: object[] } }).callCopies.files[0]).not.toHaveProperty('name');
+  });
+
+  it('leaves the sync file and the file list unchanged when no copy was recorded', () => {
+    const without = buildSyncReport({ ...base, guests: [] });
+    const empty = buildSyncReport({ ...base, guests: [], callCopies: [] });
+    expect(empty.json).toBe(without.json);
+    expect(JSON.parse(without.json)).not.toHaveProperty('callCopies');
+    expect(empty.data.fileList).toEqual(without.data.fileList);
+  });
+
+  it('sanitises a hostile copy name and drops one that is not usable', () => {
+    const r = buildSyncReport({
+      ...base,
+      guests: [],
+      callCopies: [
+        { file: 'call1_r.m4a', offsetMs: 0, name: 'Da\nna\u202E x' },
+        { file: 'call2_r.m4a', offsetMs: 0, name: 42 as never },
+        { file: 'call3_r.m4a', offsetMs: 0, name: '   ' },
+      ],
+    });
+    const files = (JSON.parse(r.json) as { callCopies: { files: { name?: string }[] } }).callCopies.files;
+    expect(files[0]).toEqual({ file: 'call1_r.m4a', offsetMs: 0, name: 'Da na x' });
+    const copies = r.data.fileList.filter((f) => f.kind === 'call');
+    expect(copies[0]?.detail).toBe('Da na x, +0ms');
+    expect(files[1]).not.toHaveProperty('name');
+    expect(copies[1]?.detail).toBe('+0ms');
+    expect(files[2]).not.toHaveProperty('name');
+    expect(copies[2]?.detail).toBe('+0ms');
+  });
 });
 
 describe('buildChatLog', () => {

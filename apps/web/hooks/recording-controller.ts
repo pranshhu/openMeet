@@ -15,7 +15,7 @@ import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind, MAX_RECORDED_PEERS
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
-import type { FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
+import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
 
 /** Most files one take opens for call copies; a guest who keeps reconnecting gets no more. */
 export const CALL_COPY_MAX_FILES = 50;
@@ -1332,6 +1332,17 @@ export function collectScreenSegments(
     });
 }
 
+/** Call copies that recorded something, each with its start relative to the host recording start. */
+export function collectCallCopies(h: RecordingHandles): CallCopyInput[] {
+  return (h.callCopies ?? [])
+    .filter((c) => (c.recorder?.totalBytes ?? 0) > 0 && c.writer.fileName)
+    .map((c) => ({
+      file: c.writer.fileName,
+      offsetMs: c.startMs != null && h.hostStartMs != null ? Math.max(0, c.startMs - h.hostStartMs) : 0,
+      ...(c.name ? { name: c.name } : {}),
+    }));
+}
+
 /**
  * What the host knows about every file this take wrote, keyed by file name:
  * its size and, for a file that arrived from a guest, what the sender
@@ -1361,6 +1372,11 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
           }
         : {}),
     });
+  }
+  // A finished call copy closed its own file and is not in allWriters; one that
+  // recorded nothing was removed from the folder.
+  for (const c of h.callCopies ?? []) {
+    if (c.recorder?.totalBytes && c.writer.fileName) out.set(c.writer.fileName, { bytes: c.writer.size });
   }
   return out;
 }

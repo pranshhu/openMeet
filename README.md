@@ -394,7 +394,9 @@ the screen that follows offers them too.
    commands in the summary): each writes an `_aligned` copy that starts at the host's
    start, so the copies and the host's files all go at 00:00. WAV copies get real silence;
    MP4 copies are not re-encoded (the delay is stored in the file), and an editor that
-   ignores it still needs the offset.
+   ignores it still needs the offset. Call-audio copies are listed under
+   `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
+   no clock sync applies.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.

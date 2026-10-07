@@ -338,7 +338,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry — plus integrity verdicts,
+  the host start, with `sharer` display name on each entry, and `callCopies.files[]`, each call-audio
+  copy with its offset from the host start and the guest's name — plus integrity verdicts,
   a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file, its delay from the host start and an `ffmpeg` command that writes a copy starting there,
