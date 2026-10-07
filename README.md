@@ -68,7 +68,8 @@ retention policy to trust, because there's nothing retained.
   screen share (phones present a photo/video or the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
-- Sound and a system notification when a recording problem appears during a take
+- A sound when a recording problem appears during a take, and a system
+  notification when the tab is in the background
 - A note in the call when your own microphone has sent no sound for 10 seconds
   (unplugged, muted on the device, wrong input) or keeps clipping
 - Screen kept awake during a take, REC badge when the tab is hidden, and

@@ -15,7 +15,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
-- A sound and a system notification when a recording problem appears during a take.
+- A sound when a recording problem appears during a take, and a system
+  notification when the tab is in the background.
 - Keep the screen awake during a take via Screen Wake Lock, prefix the document
   title with `● REC ` while hidden, and warn when the tab was in the background
   or the battery is low.
@@ -35,9 +36,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   re-encodes it to a constant frame rate.
 - The session summary and the sync file show the size of every file a take wrote.
 - Aligned copies: `sync.json` (`aligned`) and the session summary give an `ffmpeg`
-  command per file that writes a copy starting at the host's start, so every
-  track can be placed at 00:00. WAV copies get real silence; MP4 copies are
-  not re-encoded.
+  command for each file that starts after the host's; it writes a copy starting at the
+  host's start, so every track can be placed at 00:00. WAV copies get real silence;
+  MP4 copies are not re-encoded.
 - A note during the call when your own microphone has sent no sound for 10
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be

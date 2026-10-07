@@ -1,4 +1,4 @@
-import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, type Role } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
 import { cleanFps } from './quality';
 
 export interface ChapterMarker {
@@ -562,11 +562,11 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       })),
     audioMasters: {
       ...audioMastersRecord,
-      // No sample rate claimed. The requested 48kHz is `ideal`, so the device
-      // is free to give 44.1k and does — ffprobe on a real capture proved the
-      // note was wrong. The WAV header carries the truth; every editor reads it
-      // from there anyway.
-      note: 'Uncompressed 24-bit PCM at the capture rate. Edit from these; the MP4 audio track is the convenience copy.',
+      // The rate is fixed: capture runs the mic through an AudioContext at
+      // WAV_SAMPLE_RATE, so a device that runs at another rate is resampled.
+      note:
+        `Uncompressed ${WAV_BIT_DEPTH}-bit PCM at ${WAV_SAMPLE_RATE / 1000} kHz, whatever rate the ` +
+        'microphone ran at. Edit from these; the MP4 audio track is the convenience copy.',
     },
     screenFiles,
     ...(screenSegments.length > 0 ? { screenSegments } : {}),

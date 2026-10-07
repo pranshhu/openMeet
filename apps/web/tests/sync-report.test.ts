@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
 import { buildSyncReport, formatTimecode, buildChapters, integrityVerdict, buildChatLog, sanitizeText, formatBytes, type FileCheck } from '@/lib/sync-report';
 
@@ -841,5 +841,38 @@ describe('aligned copies', () => {
       'Guest: aligned copy of the video (starts 1.500 s in)',
       'Screen segment 1: aligned copy of the video (starts 27.000 s in)',
     ]);
+  });
+});
+
+describe('audio masters note', () => {
+  const note = () =>
+    (JSON.parse(
+      buildSyncReport({ recordingId: 'r', hostFile: 'host_r.mp4', hostStartMs: 0, guests: [] }).json
+    ) as { audioMasters: { note: string } }).audioMasters.note;
+
+  it('describes the masters at the fixed 48 kHz, not at the rate the microphone ran at', () => {
+    const text = note();
+    expect(text).toContain('48 kHz');
+    expect(text).not.toContain('capture rate');
+    expect(text).toBe(
+      'Uncompressed 24-bit PCM at 48 kHz, whatever rate the microphone ran at. ' +
+        'Edit from these; the MP4 audio track is the convenience copy.'
+    );
+  });
+
+  it('takes the depth and the rate in the note from the constants', async () => {
+    vi.resetModules();
+    vi.doMock('@openmeet/protocol', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@openmeet/protocol')>()),
+      WAV_BIT_DEPTH: 32,
+      WAV_SAMPLE_RATE: 44_100,
+    }));
+    const { buildSyncReport: build } = await import('@/lib/sync-report');
+    const text = (JSON.parse(build({ recordingId: 'r', hostStartMs: 0, guests: [] }).json) as {
+      audioMasters: { note: string };
+    }).audioMasters.note;
+    vi.doUnmock('@openmeet/protocol');
+    vi.resetModules();
+    expect(text).toContain('32-bit PCM at 44.1 kHz');
   });
 });
