@@ -82,6 +82,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   blank guest row, and refuses an oversized channel label from a guest.
 - After a reconnect the host tells the guest where its file ends as soon as the
   channel is attached, and counts only the bytes that actually arrived.
+- A guest who left before the take ended is still named on their files and in
+  the sync file, and a guest WAV master that was opened but received nothing is
+  listed with its size and verdict like every other file.
 
 ### Security
 

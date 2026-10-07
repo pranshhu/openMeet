@@ -1125,6 +1125,7 @@ export function useRoom(slug: string) {
             }));
           },
           onDataChannel: (channel) => {
+            const peerName = remotePeersRef.current.find((p) => p.peerId === remotePeerId)?.name ?? undefined;
             // Two recording channels now arrive: video on `recording`, the
             // uncompressed WAV master on `recording-audio`. Route by label.
             if (channel.label.startsWith(DATA_CHANNEL_RECORDING_SCREEN)) {
@@ -1149,7 +1150,7 @@ export function useRoom(slug: string) {
             if (recordingChannelKind(channel.label).base === DATA_CHANNEL_RECORDING_AUDIO) {
               audioChannelsRef.current.set(remotePeerId, channel);
               const recNow = recordingRef.current;
-              if (recNow) void bindHostAudioChannel(channel, recNow, remotePeerId, fail).catch(fail);
+              if (recNow) void bindHostAudioChannel(channel, recNow, remotePeerId, fail, peerName).catch(fail);
               return;
             }
             hostChannelRef.current = channel;
@@ -1169,7 +1170,7 @@ export function useRoom(slug: string) {
                     // told without a camera channel of its own.
                     [...p.filter((id) => peersRef.current.has(id)), remotePeerId]
               );
-              void bindHostGuestChannel(channel, rec, remotePeerId, fail).catch(fail);
+              void bindHostGuestChannel(channel, rec, remotePeerId, fail, peerName).catch(fail);
             }
           },
         });

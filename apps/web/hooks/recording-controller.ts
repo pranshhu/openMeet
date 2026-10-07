@@ -15,6 +15,7 @@ import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind } from '@openmeet/p
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
+import { sanitizeText } from '@/lib/sync-report';
 import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
 
 /** Most files one take opens for call copies; a guest who keeps reconnecting gets no more. */
@@ -73,6 +74,13 @@ export interface RecordingHandles {
   guestSlots?: Map<string, number>;
   /** Map from slot index to socket remotePeerId, so display names can be mapped. */
   slotPeerIds?: Map<number, string>;
+  /**
+   * The name the host knew for each slot when its channel was bound. Kept
+   * because a guest who leaves is gone from the room before the report is
+   * built, and an incomplete file is exactly when the host needs to know whose
+   * it is. A name still in the room at finalize wins over this.
+   */
+  slotNames?: Map<number, string>;
   /**
    * Ingest for guests 2+, keyed `<peerId>:<ext>`. Slot 0 keeps using
    * `receiver`/`wavReceiver` so the two-person path is untouched.
@@ -177,6 +185,26 @@ export function guestSlot(h: RecordingHandles, peerId: string): number {
 export function guestName(slot: number, recordingId: string, take: number, ext: string): string {
   const role = slot === 0 ? 'guest' : `guest${slot + 1}`;
   return take <= 1 ? `${role}_${recordingId}.${ext}` : `${role}_${recordingId}_take${take}.${ext}`;
+}
+
+/**
+ * Keep the name a slot's channel was bound with, for the report built after
+ * the guest may already have left. A name from another participant ends up as
+ * text on the host's disk and in the summary, so it is cleaned as a call
+ * copy's name is; one with nothing usable left keeps the last usable name
+ * rather than erasing it.
+ */
+function rememberSlotName(h: RecordingHandles, slot: number, name?: string): void {
+  const clean = typeof name === 'string' ? sanitizeText(name).trim() : '';
+  if (clean) (h.slotNames ??= new Map()).set(slot, clean);
+}
+
+/** The name stored for the slot of `peerId`, for a sharer the room no longer lists. */
+function slotNameForPeer(h: RecordingHandles, peerId: string): string | undefined {
+  for (const [slot, id] of h.slotPeerIds ?? []) {
+    if (id === peerId) return h.slotNames?.get(slot);
+  }
+  return undefined;
 }
 
 function screenFileName(role: 'host' | 'guest', recordingId: string, segment: number): string {
@@ -430,7 +458,8 @@ export async function bindHostAudioChannel(
   channel: RTCDataChannel,
   h: RecordingHandles,
   peerId: string,
-  onError?: (err: unknown) => void
+  onError?: (err: unknown) => void,
+  name?: string
 ): Promise<void> {
   // The label's key (if any) is stable across a reconnect; the socket peerId
   // is not (the DO mints a fresh one per socket). Prefer the key so a
@@ -442,6 +471,7 @@ export async function bindHostAudioChannel(
   const slot = guestSlot(h, key);
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
+  rememberSlotName(h, slot, name);
   const ingest = await ingestFor(h, key, 'wav', onError);
   if (!ingest) return;
   bindHostChannel(channel, ingest.receiver, ingest.ref);
@@ -457,7 +487,8 @@ export async function bindHostGuestChannel(
   channel: RTCDataChannel,
   h: RecordingHandles,
   peerId: string,
-  onError?: (err: unknown) => void
+  onError?: (err: unknown) => void,
+  name?: string
 ): Promise<void> {
   // Same stable-key preference as bindHostAudioChannel — see there.
   const key = recordingChannelKind(channel.label).key ?? peerId;
@@ -466,6 +497,7 @@ export async function bindHostGuestChannel(
   const slot = guestSlot(h, key);
   h.slotPeerIds ??= new Map();
   h.slotPeerIds.set(slot, peerId);
+  rememberSlotName(h, slot, name);
   const ingest = await ingestFor(h, key, 'mp4', onError);
   if (!ingest) return;
   bindHostChannel(channel, ingest.receiver, ingest.ref);
@@ -871,7 +903,7 @@ export async function endHostRecording(
   const pReceivers = pendingReceivers(h);
 
   const peerId0 = h.slotPeerIds?.get(0);
-  const name0 = (peerId0 ? opts?.getPeerName?.(peerId0) : undefined) || 'Guest';
+  const name0 = (peerId0 ? opts?.getPeerName?.(peerId0) : undefined) || h.slotNames?.get(0) || 'Guest';
 
   const receiverGuestMap = new Map<ChunkReceiver, string>();
   if (h.receiver) receiverGuestMap.set(h.receiver, name0);
@@ -884,7 +916,9 @@ export async function endHostRecording(
     // peerId, so the name comes through slotPeerIds.
     const peerId = slot !== undefined ? h.slotPeerIds?.get(slot) : undefined;
     const name =
-      (peerId ? opts?.getPeerName?.(peerId) : undefined) || (slot !== undefined ? `Guest ${slot + 1}` : 'Guest');
+      (peerId ? opts?.getPeerName?.(peerId) : undefined) ||
+      (slot !== undefined ? h.slotNames?.get(slot) : undefined) ||
+      (slot !== undefined ? `Guest ${slot + 1}` : 'Guest');
     receiverGuestMap.set(entry.receiver, name);
   }
 
@@ -1273,8 +1307,9 @@ export async function collectGuestReports(
   // Slot 0
   if (h.receiver) {
     const peerId0 = h.slotPeerIds?.get(0);
-    const name0 = peerId0 ? getPeerName?.(peerId0) : undefined;
-    const wavWritten0 = (h.wavReceiver?.bytesWritten ?? 0) > 0;
+    // The name the room still lists wins; a guest who left is named by the
+    // name their slot was bound with.
+    const name0 = (peerId0 ? getPeerName?.(peerId0) : undefined) || h.slotNames?.get(0);
     const abandoned0 = Boolean(h.receiver.isAbandoned || h.wavReceiver?.isAbandoned);
     const timedOut0 = Boolean(h.receiver.isTimedOut || h.wavReceiver?.isTimedOut);
     const endedEarly0 = abandoned0 || timedOut0;
@@ -1282,11 +1317,13 @@ export async function collectGuestReports(
       slot: 0,
       ...(name0 ? { name: name0 } : {}),
       file: h.guestWriter?.fileName || guestName(0, h.recordingId, h.take ?? 1, 'mp4'),
-      ...(wavWritten0 && h.guestWavWriter?.fileName ? { wavFile: h.guestWavWriter.fileName } : {}),
+      // Any WAV writer means a file in the folder, empty or not; a guest whose
+      // browser never opened one has nothing to report.
+      ...(h.guestWavWriter?.fileName ? { wavFile: h.guestWavWriter.fileName } : {}),
       startHostMs: h.receiver.guestStartHostMs,
       rttMs: h.receiver.syncRttMs,
       trackFps: h.receiver.senderFrameRate,
-      noWav: !h.guestWavWriter || !wavWritten0,
+      noWav: !h.guestWavWriter,
       ...(abandoned0 ? { abandoned: true } : {}),
       ...(timedOut0 ? { timedOut: true } : {}),
       ...(endedEarly0 ? { endedEarly: true } : {}),
@@ -1304,9 +1341,7 @@ export async function collectGuestReports(
     if (!mp4Entry && !wavEntry) continue;
 
     const peerId = h.slotPeerIds?.get(slot) || key;
-    const name = getPeerName?.(peerId);
-    const wavWritten = (wavEntry?.receiver.bytesWritten ?? 0) > 0;
-    const wavFile = wavWritten ? (wavEntry?.writer?.fileName || guestName(slot, h.recordingId, h.take ?? 1, 'wav')) : undefined;
+    const name = getPeerName?.(peerId) || h.slotNames?.get(slot);
     const abandoned = Boolean(mp4Entry?.receiver.isAbandoned || wavEntry?.receiver.isAbandoned);
     const timedOut = Boolean(mp4Entry?.receiver.isTimedOut || wavEntry?.receiver.isTimedOut);
     const endedEarly = abandoned || timedOut;
@@ -1315,11 +1350,11 @@ export async function collectGuestReports(
       slot,
       ...(name ? { name } : {}),
       file: mp4Entry?.writer?.fileName || guestName(slot, h.recordingId, h.take ?? 1, 'mp4'),
-      ...(wavFile ? { wavFile } : {}),
+      ...(wavEntry?.writer?.fileName ? { wavFile: wavEntry.writer.fileName } : {}),
       startHostMs: mp4Entry?.receiver.guestStartHostMs ?? null,
       rttMs: mp4Entry?.receiver.syncRttMs ?? null,
       trackFps: mp4Entry?.receiver.senderFrameRate ?? null,
-      noWav: !wavEntry || !wavWritten,
+      noWav: !wavEntry,
       ...(abandoned ? { abandoned: true } : {}),
       ...(timedOut ? { timedOut: true } : {}),
       ...(endedEarly ? { endedEarly: true } : {}),
@@ -1345,8 +1380,11 @@ export function collectScreenSegments(
       const startMs = h.screenStartsByFile?.get(w.fileName);
       const endedEarly = Boolean(h.screenEndedEarlyByFile?.has(w.fileName));
       const peerIdOrName = h.screenSharerPeerIdsByFile?.get(w.fileName);
+      // A sharer still in the room is named by the room; one who left by the
+      // name their slot was bound with.
       const sharer =
         (peerIdOrName ? getPeerName?.(peerIdOrName) : undefined) ??
+        (peerIdOrName ? slotNameForPeer(h, peerIdOrName) : undefined) ??
         h.screenSharersByFile?.get(w.fileName) ??
         (peerIdOrName && !getPeerName ? peerIdOrName : undefined);
       return {

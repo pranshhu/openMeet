@@ -360,7 +360,7 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
   button copies the invite link instead and the summary stays. The summary's file list leaves out a
-  guest WAV that was never written, host files a host companion never opened and empty guest screen
+  guest WAV that was never opened, host files a host companion never opened and empty guest screen
   segments (deleted); every file it lists shows its verdict and, when it was checked, its size (a
   file that was never created has no check, so no size); one that holds no bytes reads Empty, and
   one warning says so whenever any file is not complete. Clock-sync needs the host to be

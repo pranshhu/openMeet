@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { encodeChunkHeader } from '@openmeet/protocol';
-import { fileVerdict } from '@/lib/sync-report';
+import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
 import {
   bindHostGuestChannel,
   bindHostAudioChannel,
+  bindHostScreenChannel,
   collectGuestReports,
   collectFileChecks,
+  collectScreenSegments,
+  endHostRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 
@@ -44,6 +47,7 @@ function fakeChannel(label = '') {
     readyState: 'open',
     onmessage: null as ((ev: MessageEvent) => void) | null,
     sent: [] as (string | ArrayBuffer)[],
+    addEventListener: () => {},
     send(data: string | ArrayBuffer) {
       ch.sent.push(data);
     },
@@ -572,5 +576,160 @@ describe('a stale take-1 audio channel must not claim slot 0 in take 2', () => {
     // No slot was ever created for the dead take-1 key.
     expect(h2.guestSlots?.has('R1')).toBe(false);
     expect(h2.guestSlots?.get('R2')).toBe(0);
+  });
+});
+
+/**
+ * A guest who leaves mid-take is already gone from the room when End & save
+ * reads the names, which is exactly the case where a file is incomplete and
+ * the host needs to know whose it is. Each slot keeps the name its channel was
+ * bound with; a name still in the room at the end wins over it, and a slot
+ * that was never bound with one falls back as before.
+ */
+describe("a guest who left keeps the name their slot was bound with", () => {
+  const nobodyLeft = () => undefined;
+
+  it('names both guests on their camera and WAV files when one has left', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-b', undefined, 'Bo');
+    await bindHostAudioChannel(fakeChannel(), h, 'peer-b', undefined, 'Bo');
+
+    const reports = await collectGuestReports(h, (id) => (id === 'peer-a' ? 'Ann' : undefined));
+    expect(reports.map((g) => [g.slot, g.name, g.wavFile])).toEqual([
+      [0, 'Ann', undefined],
+      [1, 'Bo', 'guest2_rec.wav'],
+    ]);
+
+    const report = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 0,
+      guests: reports,
+      checks: await collectFileChecks(h),
+    });
+    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.mp4')?.participant).toBe('Bo');
+    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.wav')?.participant).toBe('Bo');
+    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.wav')?.verdict?.text).toContain('Bo');
+  });
+
+  it('prefers the name a guest is in the room with now over the stored one', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Bo');
+
+    const reports = await collectGuestReports(h, () => 'Bobby');
+    expect(reports[0]?.name).toBe('Bobby');
+  });
+
+  it('updates the stored name on a later bind, and keeps the last usable one', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Anna');
+    // Nothing a reader could use is not a name: it must not erase the last one.
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, '\n\n');
+
+    const reports = await collectGuestReports(h, nobodyLeft);
+    expect(reports[0]?.name).toBe('Anna');
+  });
+
+  it('updates the stored name when an audio channel is bound with a name', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostAudioChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+
+    const reports = await collectGuestReports(h, nobodyLeft);
+    expect(reports[0]?.name).toBe('Ann');
+  });
+
+  it('sanitises the stored name the way a call copy name is sanitised', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Bo\nEvil');
+
+    const reports = await collectGuestReports(h, nobodyLeft);
+    expect(reports[0]?.name).toBe('Bo Evil');
+  });
+
+  it('names a screen segment whose guest sharer has left', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+    await bindHostScreenChannel(fakeChannel('recording-screen#R1'), h, undefined, 'peer-a');
+
+    expect(collectScreenSegments(h, nobodyLeft).map((s) => s.sharer)).toEqual(['Ann']);
+  });
+
+  it('names a guest who left in the progress the host sees while the tail arrives', async () => {
+    const h = await hostHandles([], [], []);
+    const a = fakeChannel();
+    const b = fakeChannel();
+    await bindHostGuestChannel(a, h, 'peer-a', undefined, 'Ann');
+    await bindHostGuestChannel(b, h, 'peer-b', undefined, 'Bo');
+    const finalized = (idx: number) =>
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 0, sha256: `d${idx}` });
+    await a.deliver(finalized(0));
+    await b.deliver(finalized(1));
+
+    const seen: string[][] = [];
+    await endHostRecording(h, {
+      onProgress: (pending) => seen.push(pending),
+      getPeerName: () => undefined,
+    });
+
+    expect(seen[0]?.slice().sort()).toEqual(['Ann', 'Bo']);
+  });
+});
+
+/**
+ * The host opens a guest's WAV the moment the guest's audio channel arrives,
+ * before any byte. When nothing follows, the 0-byte file stays in the folder,
+ * so it has to be reported like every other file: a line, a size, a verdict
+ * and a place in the count. "No WAV master" is then left for a guest whose
+ * browser never opened one at all.
+ */
+describe('a guest WAV that received nothing is still reported', () => {
+  it('lists it with an empty verdict and a verification entry, and drops the missing-master warning', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+    await bindHostAudioChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+
+    const reports = await collectGuestReports(h, () => 'Ann');
+    const report = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostStartMs: 0,
+      guests: reports,
+      checks: await collectFileChecks(h),
+    });
+
+    expect(reports[0]?.wavFile).toBe('guest_rec.wav');
+    // There is a WAV master (the file), it just holds nothing.
+    expect(reports[0]?.noWav).toBe(false);
+    expect(report.data.fileList.find((f) => f.name === 'guest_rec.wav')).toMatchObject({
+      kind: 'audio',
+      bytes: 0,
+      verdict: { status: 'incomplete', text: expect.stringContaining('Empty. Nothing arrived from Ann') },
+    });
+    type Verification = { file: string; bytes: number | null; status?: string };
+    const verification = (JSON.parse(report.json) as { verification: Verification[] }).verification;
+    expect(verification).toContainEqual(
+      expect.objectContaining({ file: 'guest_rec.wav', bytes: 0, status: 'incomplete' })
+    );
+    expect(report.data.warnings.some((w) => w.includes('no WAV master'))).toBe(false);
+  });
+
+  it('still warns "no WAV master" for a guest with no WAV writer at all', async () => {
+    const h = await hostHandles([], [], []);
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a', undefined, 'Ann');
+
+    const reports = await collectGuestReports(h, () => 'Ann');
+    const report = buildSyncReport({
+      recordingId: 'rec',
+      hostStartMs: 0,
+      guests: reports,
+      checks: await collectFileChecks(h),
+    });
+
+    expect(reports[0]?.wavFile).toBeUndefined();
+    expect(reports[0]?.noWav).toBe(true);
+    expect(report.data.warnings).toContain('no WAV master for Ann');
   });
 });

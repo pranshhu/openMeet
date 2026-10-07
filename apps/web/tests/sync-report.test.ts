@@ -328,7 +328,9 @@ describe('post-session report', () => {
     ]);
   });
 
-  it('omits audio master for a WAV-less guest and notes "no WAV master for <name>"', () => {
+  // "No WAV master" is for a guest whose browser never opened a WAV at all
+  // (Safari). One that was opened is a file in the folder, empty or not.
+  it('omits the audio master for a guest with no WAV writer and notes "no WAV master for <name>"', () => {
     const r = buildSyncReport({
       recordingId: 'r_nowav',
       hostFile: 'host_r.mp4',
@@ -358,6 +360,47 @@ describe('post-session report', () => {
     expect(parsed.warnings.some((w) => w.includes('no WAV master for Bob'))).toBe(true);
     expect(r.data.warnings.some((w) => w.includes('no WAV master for Bob'))).toBe(true);
     expect(r.data.fileList.some((f) => f.name.includes('.wav') && f.name.includes('guest'))).toBe(false);
+  });
+
+  it('lists a guest WAV writer that received nothing with its size, verdict and verification entry', () => {
+    const r = buildSyncReport({
+      recordingId: 'r_emptywav',
+      hostFile: 'host_r.mp4',
+      hostStartMs: 1_000_000,
+      guests: [
+        {
+          slot: 0,
+          name: 'Bob',
+          file: 'guest_r.mp4',
+          wavFile: 'guest_r.wav',
+          startHostMs: 1_001_000,
+          rttMs: null,
+        },
+      ],
+      checks: new Map<string, FileCheck>([
+        ['guest_r.wav', { bytes: 0, received: { finalized: false, abandoned: false, sha256Written: 'a' } }],
+      ]),
+    });
+
+    const parsed = JSON.parse(r.json) as {
+      audioMasters: { guest: string | null };
+      verification: { file: string; bytes: number | null; status?: string }[];
+      warnings: string[];
+    };
+
+    expect(parsed.audioMasters.guest).toBe('guest_r.wav');
+    expect(parsed.warnings.some((w) => w.includes('no WAV master'))).toBe(false);
+    expect(r.data.fileList.find((f) => f.name === 'guest_r.wav')).toMatchObject({
+      kind: 'audio',
+      bytes: 0,
+      verdict: {
+        status: 'incomplete',
+        text: 'Empty. Nothing arrived from Bob. If they were recording, ask them for the backup their browser kept; it is listed in the lobby on their device.',
+      },
+    });
+    expect(parsed.verification).toContainEqual(
+      expect.objectContaining({ file: 'guest_r.wav', bytes: 0, status: 'incomplete' })
+    );
   });
 
   it('records start offset for screen segments relative to host recording start', () => {
