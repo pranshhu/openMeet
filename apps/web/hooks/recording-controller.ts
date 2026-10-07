@@ -11,7 +11,7 @@ import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { ClockSync } from '@/lib/clock-sync';
 import { presetForTrack } from '@/lib/quality';
-import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind } from '@openmeet/protocol';
+import { DATA_CHANNEL_RECORDING_SCREEN, recordingChannelKind, MAX_RECORDED_PEERS } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import type { PeerConnection } from '@/lib/peer';
@@ -83,6 +83,8 @@ export interface RecordingHandles {
   screenBackups?: BackupRecorder[] | undefined;
   screenChannel?: RTCDataChannel | undefined;
   screenReceivers?: Map<number, ChunkReceiver>;
+  /** Guest screen segments whose channel is still open, with the sharer's peerId. */
+  screenLive?: Map<number, string>;
   screenWriters?: FileWriter[];
   screenChannelRef?: { current: RTCDataChannel | null };
   screenEndedEarlyByFile?: Set<string>;
@@ -1086,10 +1088,12 @@ export async function bindHostScreenChannel(
     ...(onError ? { onError } : {}),
   });
   h.screenReceivers = new Map(h.screenReceivers ?? []).set(segment, receiver);
+  (h.screenLive ??= new Map()).set(segment, sharerPeerIdOrName ?? '');
   channel.onmessage = (ev: MessageEvent) => {
     void receiver.handleMessage(ev.data as string | ArrayBuffer);
   };
   channel.addEventListener('close', () => {
+    h.screenLive?.delete(segment);
     if (!receiver.receivedFinalized) {
       (h.screenEndedEarlyByFile ??= new Set()).add(writer.fileName);
     }
@@ -1212,4 +1216,96 @@ export function collectFileChecks(h: RecordingHandles): Map<string, FileCheck> {
   const out = new Map<string, FileCheck>();
   for (const w of allWriters(h)) out.set(w.fileName, { bytes: w.size });
   return out;
+}
+
+/** One recorded file's progress at one instant. The health panel reads these on a timer. */
+export interface TrackReading {
+  /** Stable for the life of the file, and never built from anything a peer chose. */
+  key: string;
+  /** Whose file, for a guest's track arriving at the host. Absent for this browser's own. */
+  who?: string;
+  track: 'camera' | 'wav' | 'screen';
+  /** Own track: bytes the recorder has produced. A guest's track on the host: bytes written. */
+  bytes: number;
+  /** The sender gave up streaming this file; the rest is only in its backup. */
+  stopped?: boolean;
+}
+
+/** Someone else in the room, as the health reading needs to know them. */
+export interface HealthPeer {
+  peerId: string;
+  name: string | null;
+  /** A guest whose browser can record: the host should be receiving its camera. */
+  expected: boolean;
+}
+
+/** Rows from one peer's channels: camera, WAV and live screens, with headroom.
+ *  One guest opening many channels must not push another guest's rows out. */
+const MAX_ROWS_PER_PEER = 4;
+
+/** The most channel rows a full room of recorded guests can show. */
+export const MAX_GUEST_TRACK_ROWS = MAX_RECORDED_PEERS * MAX_ROWS_PER_PEER;
+
+export function collectTrackHealth(h: RecordingHandles, peers: HealthPeer[]): TrackReading[] {
+  const own: TrackReading[] = [];
+  const camera = h.hostRecorder ?? h.guestRecorder;
+  if (camera) own.push({ key: 'own:camera', track: 'camera', bytes: camera.totalBytes });
+  const pcm = h.hostPcm ?? h.guestPcm;
+  if (pcm) own.push({ key: 'own:wav', track: 'wav', bytes: pcm.totalBytes });
+  if (h.screenRecorder) {
+    own.push({
+      key: `own:screen:${h.screenSegment ?? 0}`,
+      track: 'screen',
+      bytes: h.screenRecorder.totalBytes,
+    });
+  }
+
+  const guests: TrackReading[] = [];
+  const peerRows = new Map<string, number>();
+  const cameraPeers = new Set<string>();
+  const inRoom = (peerId: string | undefined) => peers.find((p) => p.peerId === peerId);
+  const received = (key: string, who: string, track: TrackReading['track'], r: ChunkReceiver) =>
+    guests.push({ key, who, track, bytes: r.bytesWritten, ...(r.isAbandoned ? { stopped: true } : {}) });
+  // The file of a guest who left, or who reloaded into a new slot, never
+  // grows again. Listed, it would read as a stalled track until the take
+  // ends and hide the next real one.
+  const slotRow = (slot: number, wav: boolean, r: ChunkReceiver) => {
+    const peer = inRoom(h.slotPeerIds?.get(slot));
+    if (!peer) return;
+    if (!wav) cameraPeers.add(peer.peerId);
+    const count = peerRows.get(peer.peerId) ?? 0;
+    if (count >= MAX_ROWS_PER_PEER) return;
+    peerRows.set(peer.peerId, count + 1);
+    const who = peer.name || (slot === 0 ? 'Guest' : `Guest ${slot + 1}`);
+    received(`g${slot}:${wav ? 'wav' : 'mp4'}`, who, wav ? 'wav' : 'camera', r);
+  };
+
+  // Slot 0's camera receiver is built before any guest exists; it is a track
+  // only once a channel has been bound to it.
+  if (h.receiver && h.channelRef?.current) slotRow(0, false, h.receiver);
+  for (const [key, entry] of h.guestReceivers?.entries() ?? []) {
+    const slot = h.guestSlots?.get(key.replace(/:(mp4|wav)$/, ''));
+    if (slot !== undefined) slotRow(slot, key.endsWith(':wav'), entry.receiver);
+  }
+  for (const [segment, peerId] of h.screenLive?.entries() ?? []) {
+    const peer = inRoom(peerId);
+    const r = h.screenReceivers?.get(segment);
+    if (!peer || !r) continue;
+    const count = peerRows.get(peer.peerId) ?? 0;
+    if (count >= MAX_ROWS_PER_PEER) continue;
+    peerRows.set(peer.peerId, count + 1);
+    received(`s${segment}`, peer.name || 'Guest', 'screen', r);
+  }
+  // Host only. A recorded guest with no file yet is the one failure the host
+  // has no other way to see, so it gets a row that stays at zero. At most one
+  // per person in the room, so these are not counted against the cap.
+  if (h.dir) {
+    for (const p of peers) {
+      if (p.expected && !cameraPeers.has(p.peerId)) {
+        guests.push({ key: `p:${p.peerId}`, who: p.name || 'Guest', track: 'camera', bytes: 0 });
+      }
+    }
+  }
+  guests.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return [...own, ...guests];
 }
