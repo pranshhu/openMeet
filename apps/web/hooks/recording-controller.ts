@@ -124,7 +124,7 @@ export interface RecordingHandles {
 
   // --- Call-audio copies ---
   // The host's own recording of each guest's incoming live audio, as a fallback
-  // for a guest track that never arrives.
+  // for a guest track that stops arriving or ends short.
   /** Every call copy this take has opened, in order. */
   callCopies?: CallCopy[];
   /** Set as the take starts ending: a stream arriving after that opens nothing. */

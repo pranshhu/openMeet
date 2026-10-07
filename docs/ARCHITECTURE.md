@@ -345,7 +345,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   copy with its offset from the host start and the guest's name — plus integrity verdicts,
   a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
-  per file, its delay from the host start and an `ffmpeg` command that writes a copy starting there,
+  per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
+  start and an `ffmpeg` command that writes a copy starting there,
   and a `frameRate` section: the requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as

@@ -8,6 +8,7 @@ import {
   endHostRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
+import { RECORDING_AUDIO_BPS } from '@openmeet/protocol';
 
 class FakeMediaRecorder {
   static instances: FakeMediaRecorder[] = [];
@@ -19,7 +20,7 @@ class FakeMediaRecorder {
   onstop: (() => void) | null = null;
   state = 'inactive';
 
-  constructor(public stream: MediaStream, public opts: { mimeType?: string }) {
+  constructor(public stream: MediaStream, public opts: { mimeType?: string; audioBitsPerSecond?: number }) {
     FakeMediaRecorder.instances.push(this);
   }
   start() {
@@ -122,6 +123,24 @@ describe('syncCallCopies', () => {
 
     expect(files.has('call1_rec.webm')).toBe(true);
     expect(files.size).toBe(1);
+  });
+
+  it('a call copy is encoded at the recorder’s audio bitrate', async () => {
+    const { dir } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    expect(FakeMediaRecorder.instances[0]!.opts.audioBitsPerSecond).toBe(RECORDING_AUDIO_BPS);
+  });
+
+  it('with no AAC encoder but Opus in MP4 (a Linux host) the file is call1_rec.m4a', async () => {
+    FakeMediaRecorder.supported = (m) => m !== 'audio/mp4;codecs=mp4a.40.2';
+    const { dir, files } = fakeDir();
+    const h = handles(dir);
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+    expect([...files.keys()]).toEqual(['call1_rec.m4a']);
+    expect(FakeMediaRecorder.instances[0]!.opts.mimeType).toBe('audio/mp4;codecs=opus');
   });
 
   it('with take: 2 on the handles the file is call1_rec_take2.m4a', async () => {

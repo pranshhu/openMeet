@@ -533,9 +533,7 @@ export function useRoom(slug: string) {
     capabilities: {},
     finalizingGuests: [],
   });
-  // Peer ids whose camera recording channel has arrived for the take in
-  // progress: a guest opens that channel from the handler that shows it the
-  // recording notice, so its arrival is the proof the guest was told.
+  // Peer ids whose camera recording channel has arrived for the take in progress.
   const [toldPeers, setToldPeers] = useState<string[]>([]);
 
   const signalRef = useRef<SignalClient | null>(null);

@@ -39,9 +39,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   and where the backup is. WAV masters and screen recordings are checked against
   what the guest sent, as camera files are.
 - Aligned copies: `sync.json` (`aligned`) and the session summary give an `ffmpeg`
-  command for each file that starts after the host's; it writes a copy starting at the
-  host's start, so every track can be placed at 00:00. WAV copies get real silence;
-  MP4 copies are not re-encoded.
+  command for each file that starts after the host's, except call-audio copies, which
+  carry their own `offsetMs`; it writes a copy starting at the host's start, so every
+  track can be placed at 00:00. WAV copies get real silence; MP4 copies are not
+  re-encoded.
 - A note during the call when your own microphone has sent no sound for 10
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be
@@ -50,10 +51,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much
   is still waiting to be sent.
-  data, and each guest sees their own.
 - The host keeps a call-audio copy of each recorded guest's live audio in the
   recording folder (`call<n>_<id>.m4a`): a call-quality fallback for a guest
-  track that never arrives, listed in the session summary and in
+  track that stops arriving or ends short, listed in the session summary and in
   `sync_<id>.json`.
 
 ### Changed
