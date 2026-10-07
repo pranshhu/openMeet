@@ -165,10 +165,174 @@ describe('host ingest routes by source peer', () => {
 
     await new Promise((r) => setTimeout(r));
 
-    const checks = collectFileChecks(h);
+    const checks = await collectFileChecks(h);
     expect(checks.get('guest2_rec.mp4')?.bytes).toBe(250);
     expect(checks.get('guest_rec.wav')?.bytes).toBe(40);
     expect(checks.size).toBe(2);
+  });
+
+  it("reports the sender's claim against the host's own digest, and no sender digest when unfinalized", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+
+    const a = fakeChannel();
+    const b = fakeChannel();
+    const w = fakeChannel();
+
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await bindHostAudioChannel(w, h, 'peer-b');
+    await sendChunk(b, 0, 0, 250);
+    await sendChunk(w, 0, 0, 40);
+
+    await new Promise((r) => setTimeout(r));
+
+    const own = await h.guestReceivers!.get('peer-b:mp4')!.receiver.digestHex();
+    // A claim that cannot be the digest of what the host wrote: the written
+    // digest must come from the host's own bytes, never from the sender.
+    const claimed = 'F'.repeat(64);
+    await b.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 250, sha256: claimed })
+    );
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.received).toEqual({
+      finalized: true,
+      abandoned: false,
+      sha256Sent: claimed,
+      sha256Written: own,
+    });
+    expect(checks.get('guest2_rec.wav')?.received).toEqual({
+      finalized: false,
+      abandoned: false,
+      sha256Sent: undefined,
+      sha256Written: await h.guestReceivers!.get('peer-b:wav')!.receiver.digestHex(),
+    });
+  });
+
+  it('reports abandoned: true when stream-abandoned is delivered', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+
+    const a = fakeChannel();
+    const b = fakeChannel();
+
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await sendChunk(b, 0, 0, 250);
+
+    await new Promise((r) => setTimeout(r));
+
+    await b.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'rec', lastIdx: 0 }));
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.received).toMatchObject({ finalized: false, abandoned: true });
+    expect(checks.get('guest2_rec.mp4')?.received?.sha256Sent).toBeUndefined();
+
+    // A sender can still finalize after giving up: each fact is carried on its own.
+    await b.deliver(JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 250 }));
+    expect((await collectFileChecks(h)).get('guest2_rec.mp4')?.received).toMatchObject({
+      finalized: true,
+      abandoned: true,
+    });
+  });
+
+  it("reports finalized with no sender digest when the sender's digest is missing or too long", async () => {
+    const h = await hostHandles([], [], []);
+
+    const b = fakeChannel();
+    const c = fakeChannel();
+
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await bindHostGuestChannel(c, h, 'peer-c');
+
+    // Neither message leaves a digest; both still say the sender finished.
+    await b.deliver(
+      JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'rec',
+        totalBytes: 250,
+        sha256: 'x'.repeat(65),
+      })
+    );
+    await c.deliver(JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 250 }));
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.received).toMatchObject({ finalized: true });
+    expect(checks.get('guest2_rec.mp4')?.received?.sha256Sent).toBeUndefined();
+    expect(checks.get('guest3_rec.mp4')?.received).toMatchObject({ finalized: true });
+    expect(checks.get('guest3_rec.mp4')?.received?.sha256Sent).toBeUndefined();
+  });
+
+  it("reports slot 0's WAV master with the sender's facts", async () => {
+    const h = await hostHandles([], [], []);
+
+    const wa = fakeChannel();
+
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostAudioChannel(wa, h, 'peer-a');
+
+    await wa.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 40, sha256: 'abc' })
+    );
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest_rec.wav')?.received).toMatchObject({ finalized: true, sha256Sent: 'abc' });
+  });
+
+  it('reports a guest file that received no bytes with the facts its receiver has', async () => {
+    const h = await hostHandles([], [], []);
+
+    const b = fakeChannel();
+    await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+
+    await new Promise((r) => setTimeout(r));
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')).toMatchObject({
+      bytes: 0,
+      received: {
+        finalized: false,
+        abandoned: false,
+        sha256Written: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+
+    // A guest with nothing to send still finalizes, with an empty digest.
+    await b.deliver(JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 0, sha256: '' }));
+    expect((await collectFileChecks(h)).get('guest2_rec.mp4')).toMatchObject({
+      bytes: 0,
+      received: { finalized: true, sha256Sent: '' },
+    });
+  });
+
+  it('preserves empty string sender digest as sha256Sent: "" when guest sends empty digest', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const slot0: Written[] = [];
+    const h = await hostHandles(opened, written, slot0);
+
+    const a = fakeChannel();
+    const b = fakeChannel();
+
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await sendChunk(b, 0, 0, 250);
+
+    await new Promise((r) => setTimeout(r));
+
+    await b.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 250, sha256: '' })
+    );
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.received?.sha256Sent).toBe('');
   });
 });
 

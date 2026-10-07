@@ -1853,12 +1853,12 @@ export function useRoom(slug: string) {
 
           const guestReports = await collectGuestReports(h, (peerId) => peerNameMap.get(peerId));
 
-          // Sizes decorate the report; failing to read them must not cost the take.
-          let checks: ReturnType<typeof collectFileChecks> = new Map();
+          // The checks decorate the report; failing to gather them must not cost the take.
+          let checks: Awaited<ReturnType<typeof collectFileChecks>> = new Map();
           try {
-            checks = collectFileChecks(h);
+            checks = await collectFileChecks(h);
           } catch (e) {
-            console.warn('openMeet: reading file sizes failed', e);
+            console.warn("openMeet: checking the take's files failed", e);
           }
 
           // Editor companion: start-offset alignment + lossless faststart remux commands.

@@ -52,6 +52,19 @@ export interface ScreenSegmentInput {
 export interface FileCheck {
   /** Size on the host's disk. */
   bytes: number;
+  /** Only for a file that arrived from another participant. */
+  received?:
+    | {
+        /** The sender said it had sent everything. */
+        finalized: boolean;
+        /** The sender gave up because its upload fell too far behind. */
+        abandoned: boolean;
+        /** Digest of what the sender sent, as the sender reported it. */
+        sha256Sent?: string | undefined;
+        /** Digest of what the host wrote. */
+        sha256Written: string;
+      }
+    | undefined;
 }
 
 export interface SyncReportInput {

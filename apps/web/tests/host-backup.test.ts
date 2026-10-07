@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { startHostRecording, endHostRecording } from '@/hooks/recording-controller';
+import { startHostRecording, endHostRecording, bindHostGuestChannel, collectFileChecks } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
 
 class FakeMediaRecorder {
@@ -248,5 +248,39 @@ describe('host backup recording', () => {
     });
     expect(handles3.videoFps).toBeUndefined();
     await endHostRecording(handles3);
+  });
+
+  it('slot 0 camera file carries sender facts and host file carries none', async () => {
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-facts',
+      localStream: fakeStream(),
+      dir: fakeDir() as never,
+    });
+    const ch = {
+      label: '',
+      binaryType: '',
+      readyState: 'open',
+      onmessage: null as ((ev: { data: unknown }) => void) | null,
+      send() {},
+    };
+    await bindHostGuestChannel(ch as unknown as RTCDataChannel, handles, 'peer-a');
+    ch.onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }) });
+    ch.onmessage?.({ data: new ArrayBuffer(4) });
+    ch.onmessage?.({
+      data: JSON.stringify({
+        type: 'recording-finalized',
+        recordingId: 'test-rec-facts',
+        totalBytes: 4,
+        sha256: 'abc',
+      }),
+    });
+    await endHostRecording(handles);
+    const checks = await collectFileChecks(handles);
+    expect(checks.get('host_test-rec-facts.mp4')).toBeDefined();
+    expect(checks.get('host_test-rec-facts.mp4')?.received).toBeUndefined();
+    expect(checks.get('guest_test-rec-facts.mp4')).toMatchObject({
+      bytes: 4,
+      received: { finalized: true, sha256Sent: 'abc' },
+    });
   });
 });

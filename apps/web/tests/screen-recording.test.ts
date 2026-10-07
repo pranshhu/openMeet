@@ -3,6 +3,7 @@ import {
   bindHostScreenChannel,
   collectScreenSegments,
   collectTrackHealth,
+  collectFileChecks,
   startScreenRecording,
   stopScreenRecording,
   type HealthPeer,
@@ -597,5 +598,40 @@ describe('screen recording', () => {
     await bindHostScreenChannel(c, h);
 
     expect(files).toEqual(['guest_screen_rec-continue_3.mp4']);
+  });
+
+  it('carries sender facts for a guest screen segment', async () => {
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'r-facts', dir: fakeDir(), hostStartMs: 1_000_000 };
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h);
+
+    const rec = (h.screenReceivers as Map<number, any>).get(1);
+    await rec.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }));
+    await rec.handleMessage(new ArrayBuffer(4));
+
+    await rec.handleMessage(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'r-facts', totalBytes: 4, sha256: 'abc' })
+    );
+    channel.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(async () => {
+      const checks = await collectFileChecks(h);
+      expect(checks.get('guest_screen_r-facts.mp4')?.received).toMatchObject({
+        finalized: true,
+        sha256Sent: 'abc',
+      });
+    });
+  });
+
+  it('gives a host screen segment an entry and no received facts', async () => {
+    installMediaRecorder();
+    const h2: RecordingHandles = { recordingId: 'r-own', dir: fakeDir(), hostStartMs: 1_000_000 };
+    await startScreenRecording(h2, fakeScreen(), 'host', null);
+    await stopScreenRecording(h2);
+    const checks = await collectFileChecks(h2);
+    expect(checks.get('host_screen_r-own.mp4')).toBeDefined();
+    expect(checks.get('host_screen_r-own.mp4')?.received).toBeUndefined();
   });
 });

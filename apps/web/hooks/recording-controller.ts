@@ -1330,10 +1330,36 @@ export function collectScreenSegments(
     });
 }
 
-/** The size of every file this take wrote, keyed by file name. */
-export function collectFileChecks(h: RecordingHandles): Map<string, FileCheck> {
+/**
+ * What the host knows about every file this take wrote, keyed by file name:
+ * its size and, for a file that arrived from a guest, what the sender
+ * reported against what was written.
+ */
+export async function collectFileChecks(h: RecordingHandles): Promise<Map<string, FileCheck>> {
+  const receivers = new Map<string, ChunkReceiver>();
+  const all = [
+    h.receiver,
+    ...[...(h.guestReceivers?.values() ?? [])].map((e) => e.receiver),
+    ...(h.screenReceivers?.values() ?? []),
+  ];
+  for (const r of all) if (r) receivers.set(r.fileName, r);
   const out = new Map<string, FileCheck>();
-  for (const w of allWriters(h)) out.set(w.fileName, { bytes: w.size });
+  for (const w of allWriters(h)) {
+    const r = receivers.get(w.fileName);
+    out.set(w.fileName, {
+      bytes: w.size,
+      ...(r
+        ? {
+            received: {
+              finalized: r.receivedFinalized,
+              abandoned: r.isAbandoned,
+              sha256Sent: r.senderSha256 ?? undefined,
+              sha256Written: await r.digestHex(),
+            },
+          }
+        : {}),
+    });
+  }
   return out;
 }
 

@@ -113,6 +113,11 @@ export class ChunkReceiver {
     return this._senderFrameRate;
   }
 
+  /** The file this receiver writes into. */
+  get fileName(): string {
+    return this.writer.fileName;
+  }
+
   /**
    * Wait for the sender's `recording-finalized`, or give up after `timeoutMs` of no progress.
    *

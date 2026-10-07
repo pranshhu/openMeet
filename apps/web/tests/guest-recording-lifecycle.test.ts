@@ -318,6 +318,13 @@ describe('guest recording lifecycle in useRoom', () => {
     );
   });
 
+  it('a guest take gathers no file checks: the checks belong to the host report', async () => {
+    const result = await recordingGuest();
+    await stopTake();
+    expect(result.current.state.phase).toBe('done');
+    expect(vi.mocked(collectFileChecks)).not.toHaveBeenCalled();
+  });
+
   it('clears disconnect banner when peer rejoins', async () => {
     const { result } = renderHook(() => useRoom('xyz-test-room'));
 
@@ -1031,6 +1038,18 @@ describe('host backup after a take in useRoom', () => {
     vi.mocked(collectFileChecks).mockImplementationOnce(() => {
       throw new Error('size read failed');
     });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result } = await hostTake();
+      expect(result.current.state.summary).not.toBeNull();
+      expect(result.current.state.recordingError).toBeNull();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('finalizes cleanly when collectFileChecks rejects', async () => {
+    vi.mocked(collectFileChecks).mockRejectedValueOnce(new Error('checks failed'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const { result } = await hostTake();
