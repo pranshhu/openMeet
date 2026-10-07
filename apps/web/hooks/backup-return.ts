@@ -1,7 +1,14 @@
-import { recordingChannelKind } from '@openmeet/protocol';
+import {
+  DC_BUFFERED_HIGH_WATERMARK,
+  DC_BUFFERED_LOW_WATERMARK,
+  DC_MAX_MESSAGE_BYTES,
+  recordingChannelKind,
+  type ChunkAck,
+} from '@openmeet/protocol';
 import { integrityVerdict, sanitizeText } from '@/lib/sync-report';
 import { parseBackupName, type BackupName } from '@/lib/backup-recorder';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
+import { ChunkSender } from '@/lib/chunk-sender';
 import { DiskFullError, FileWriter, type FsDirectoryHandle } from '@/lib/fs-writer';
 import { writeTakeSidecars } from './recording-controller';
 
@@ -543,5 +550,189 @@ export class BackupIntake {
         r.closing ? r.writer?.close() : this.endRecordFile(r)
       )
     );
+  }
+}
+
+/** How much of the file is read and handed to the sender at a time. */
+export const BACKUP_READ_BYTES = 1024 * 1024;
+
+// How often a waiting send looks again.
+const POLL_MS = 200;
+
+/** Guest side: one leftover backup on its way to the host. */
+export class BackupSend {
+  private readonly opts: { file: File; onChange?: (() => void) | undefined };
+  // One key per item, kept for as long as the item lives: it is what lets the
+  // host read a repeated offer on a rebuilt connection as the same sender, and
+  // what turns another participant's offer for the same name away.
+  private readonly key = crypto.randomUUID();
+  private current: BackupTransfer;
+  private sender: ChunkSender | null = null;
+  private channel: RTCDataChannel | null = null;
+  private paused = false;
+  private started = false;
+  private finished = false;
+  private settleDone: (result: 'saved' | 'failed') => void = () => {};
+  readonly done: Promise<'saved' | 'failed'>;
+
+  constructor(opts: { file: File; onChange?: () => void }) {
+    this.opts = opts;
+    this.current = {
+      id: opts.file.name,
+      kind: parseBackupName(opts.file.name)?.kind ?? 'camera',
+      size: opts.file.size,
+      status: 'offered',
+      percent: 0,
+    };
+    this.done = new Promise((resolve) => {
+      this.settleDone = resolve;
+    });
+  }
+
+  /** What to show for this send. A new object whenever it changes. */
+  get item(): BackupTransfer {
+    return this.current;
+  }
+
+  get settled(): boolean {
+    return this.finished;
+  }
+
+  /** The channel to the host for this file. */
+  attach(channel: RTCDataChannel): void {
+    if (this.finished) {
+      try {
+        channel.close();
+      } catch {
+        // Already closed.
+      }
+      return;
+    }
+    this.channel = channel;
+    channel.binaryType = 'arraybuffer';
+    this.sender = new ChunkSender({
+      recordingId: this.opts.file.name,
+      channel,
+      onBackpressure: (p) => {
+        this.paused = p;
+      },
+      onAbandon: () => this.settle('failed'),
+    });
+    channel.bufferedAmountLowThreshold = DC_BUFFERED_LOW_WATERMARK;
+    channel.onbufferedamountlow = () => this.sender?.drainQueue();
+    channel.onmessage = (ev: { data: unknown }) => this.onControl(channel, ev.data);
+
+    const offer = { type: 'backup_offer', size: this.opts.file.size, key: this.key };
+    if (channel.readyState === 'open') this.say(offer);
+    else channel.onopen = () => this.say(offer);
+  }
+
+  private say(msg: Record<string, unknown>): void {
+    const channel = this.channel;
+    if (channel?.readyState !== 'open') return;
+    try {
+      channel.send(JSON.stringify(msg));
+    } catch {
+      // Channel closed or broke between the ready check and the send.
+    }
+  }
+
+  private set(patch: { status?: BackupTransfer['status']; percent?: number }): void {
+    const status = patch.status ?? this.current.status;
+    const percent = patch.percent ?? this.current.percent;
+    if (status === this.current.status && percent === this.current.percent) return;
+    this.current = { ...this.current, status, percent };
+    this.opts.onChange?.();
+  }
+
+  private async wait(ready: () => boolean): Promise<void> {
+    while (!this.finished && !ready()) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      // `bufferedamountlow` fires only on a crossing; this catches a queue it missed.
+      this.sender?.drainQueue();
+    }
+  }
+
+  // The host acks a chunk only once it is written, so this is what stops a slow
+  // disk on the host from becoming unwritten buffers in its tab and, past
+  // 256 MiB unacked, a stream this side abandons.
+  private clear(): boolean {
+    const sender = this.sender!;
+    return (
+      !this.paused &&
+      (sender.lastSentIdx - sender.lastAckedIdx) * DC_MAX_MESSAGE_BYTES <= DC_BUFFERED_HIGH_WATERMARK
+    );
+  }
+
+  private settle(result: 'saved' | 'failed'): void {
+    if (this.finished) return;
+    this.finished = true;
+    this.set(result === 'saved' ? { status: 'saved', percent: 100 } : { status: 'failed' });
+    if (result === 'failed') {
+      this.say({
+        type: 'stream-abandoned',
+        recordingId: this.opts.file.name,
+        lastIdx: this.sender?.lastSentIdx ?? -1,
+      });
+    }
+    try {
+      this.channel?.close();
+    } catch {
+      // Already closed.
+    }
+    this.settleDone(result);
+  }
+
+  private onControl(channel: RTCDataChannel, data: unknown): void {
+    if (this.finished || typeof data !== 'string') return;
+    let msg: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (typeof parsed !== 'object' || parsed === null) return;
+      msg = parsed as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'ack') {
+      if (Number.isSafeInteger(msg.uptoIdx)) this.sender?.handleControl(msg as unknown as ChunkAck);
+      return;
+    }
+    if (msg.type === 'resume_offset') {
+      // The host's go-ahead, and the first one only: a second would start a
+      // second read of the same file over the first.
+      if (!Number.isSafeInteger(msg.lastIdx) || this.started) return;
+      this.started = true;
+      this.set({ status: 'active' });
+      void this.run().catch(() => this.settle('failed'));
+      return;
+    }
+    if (msg.type === 'recording-finalized') {
+      void (async () => {
+        const mine = await this.sender!.digestHex();
+        this.settle(
+          msg.sha256 === mine && msg.totalBytes === this.opts.file.size ? 'saved' : 'failed'
+        );
+      })().catch(() => this.settle('failed'));
+    }
+  }
+
+  private async run(): Promise<void> {
+    const { file } = this.opts;
+    for (let at = 0; at < file.size; at += BACKUP_READ_BYTES) {
+      const payload = await file.slice(at, at + BACKUP_READ_BYTES).arrayBuffer();
+      await this.wait(() => this.clear());
+      if (this.finished) return;
+      this.sender!.sendChunk({ header: { idx: 0, offset: at, size: payload.byteLength, ts: 0 }, payload });
+      this.set({ percent: Math.min(99, Math.floor(((at + payload.byteLength) * 100) / file.size)) });
+    }
+    const sha256 = await this.sender!.digestHex();
+    // Ordered and reliable: sent after the last fragment, it arrives after it.
+    await this.wait(() => !this.sender!.hasQueuedChunks);
+    if (!this.finished) this.say({ type: 'recording-finalized', recordingId: file.name, totalBytes: file.size, sha256 });
+  }
+
+  cancel(): void {
+    this.settle('failed');
   }
 }

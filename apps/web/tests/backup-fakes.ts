@@ -149,6 +149,44 @@ export function fakeChannel(label = ''): RTCDataChannel & FakeChannel {
   return ch as unknown as RTCDataChannel & FakeChannel;
 }
 
+/**
+ * Two channels wired to each other, as one DataChannel's two ends: what one
+ * sends arrives on the other's `onmessage` on a later microtask, so a reply
+ * never runs inside the sender's own `send()`. Closing either end closes both,
+ * after anything already sent has been delivered.
+ */
+export function fakePair(
+  label = '',
+  opts?: { drop?: (data: unknown, to: 'guest' | 'host') => boolean }
+): { guest: RTCDataChannel & FakeChannel; host: RTCDataChannel & FakeChannel } {
+  const guest = fakeChannel(label);
+  const host = fakeChannel(label);
+
+  const wire = (from: FakeChannel, to: FakeChannel, toName: 'guest' | 'host') => {
+    const send = from.send.bind(from);
+    from.send = (data: string | ArrayBuffer) => {
+      send(data);
+      if (opts?.drop?.(data, toName)) return;
+      queueMicrotask(() => {
+        if (to.readyState !== 'closed') to.deliver(data);
+      });
+    };
+    const close = from.close.bind(from);
+    from.close = () => {
+      if (from.readyState === 'closed') return;
+      // Queued deliveries run first, so the last message is not lost.
+      queueMicrotask(() => {
+        close();
+        if (to.readyState !== 'closed') to.close();
+      });
+    };
+  };
+  wire(guest, host, 'host');
+  wire(host, guest, 'guest');
+
+  return { guest, host };
+}
+
 export function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }

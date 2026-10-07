@@ -404,7 +404,10 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   closed first, then its digest and byte count are compared with the sender's, and a verified backup
   gets a `<name>.json` note beside it; a failed or cut-off transfer keeps the bytes that arrived with
   no note (an empty file is removed), and a dropped connection shows `stalled` until the sender asks
-  where to resume on a new channel.
+  where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
+  its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
+  1 MiB slices paced by `ChunkSender` backpressure and by the host's acks (16 MiB unacked is the
+  ceiling), and calls it saved only when the host's digest and byte count match its own.
 
 ---
 
