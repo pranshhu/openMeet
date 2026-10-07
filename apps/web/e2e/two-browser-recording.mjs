@@ -173,14 +173,18 @@ console.log('\n=== sync sidecar ===');
 if (!sync) {
   fail.push('no sync.json — the host never produced a sync report');
 } else {
-  // `integrity` is the human-readable verdict from integrityVerdict(): it says
-  // "verified" only when BOTH digests exist and match, which is the only proof
-  // the guest's bytes crossed the DataChannel unaltered.
+  // `integrity` is the overall line. It reads "Every file is complete." only
+  // when every file's verdict is complete, and a guest's file is complete only
+  // when its sender finished and BOTH digests match: the only proof its bytes
+  // crossed the DataChannel unaltered.
   console.log('  integrity  ', sync.integrity);
   console.log('  alignment  ', sync.alignment);
   console.log('  offset     ', sync.timeline?.guestMinusHostMs, 'ms');
-  if (!/^Integrity verified/.test(sync.integrity ?? '')) {
-    fail.push(`integrity not verified: ${sync.integrity}`);
+  if (sync.integrity !== 'Every file is complete.') {
+    fail.push(`not every file is complete: ${sync.integrity}`);
+    for (const v of sync.verification ?? []) {
+      if (v.status !== 'complete') fail.push(`${v.file}: ${v.detail}`);
+    }
   }
   for (const w of sync.warnings ?? []) console.log('  warning    ', w);
 }

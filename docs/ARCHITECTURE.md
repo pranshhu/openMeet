@@ -348,8 +348,10 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
-  button copies the invite link instead and the summary stays. The summary's file list names only
-  files that got bytes (a guest WAV only if written; unwritten host files for host companions are omitted; empty screen segments are deleted). Clock-sync needs the host to be
+  button copies the invite link instead and the summary stays. The summary's file list leaves out a guest WAV
+  that was never written, host files a host companion never opened and empty guest screen segments (deleted);
+  every file it lists shows its size and its verdict, one that holds no bytes reads Empty, and one warning
+  says so whenever any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. Phones present a photo/video (`presentFile`) or the rear camera (`presentRearCamera`); a real screen comes from a second device joined with "Present only".
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**

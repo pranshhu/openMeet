@@ -1240,7 +1240,6 @@ export async function collectGuestReports(
   if (h.receiver) {
     const peerId0 = h.slotPeerIds?.get(0);
     const name0 = peerId0 ? getPeerName?.(peerId0) : undefined;
-    const writtenSha0 = await h.receiver.digestHex();
     const wavWritten0 = (h.wavReceiver?.bytesWritten ?? 0) > 0;
     const abandoned0 = Boolean(h.receiver.isAbandoned || h.wavReceiver?.isAbandoned);
     const timedOut0 = Boolean(h.receiver.isTimedOut || h.wavReceiver?.isTimedOut);
@@ -1253,8 +1252,6 @@ export async function collectGuestReports(
       startHostMs: h.receiver.guestStartHostMs,
       rttMs: h.receiver.syncRttMs,
       trackFps: h.receiver.senderFrameRate,
-      ...(h.receiver.senderSha256 ? { sha256Sent: h.receiver.senderSha256 } : {}),
-      ...(writtenSha0 ? { sha256Written: writtenSha0 } : {}),
       noWav: !h.guestWavWriter || !wavWritten0,
       ...(abandoned0 ? { abandoned: true } : {}),
       ...(timedOut0 ? { timedOut: true } : {}),
@@ -1275,7 +1272,6 @@ export async function collectGuestReports(
     const peerId = h.slotPeerIds?.get(slot) || key;
     const name = getPeerName?.(peerId);
     const wavWritten = (wavEntry?.receiver.bytesWritten ?? 0) > 0;
-    const writtenSha = mp4Entry ? await mp4Entry.receiver.digestHex() : undefined;
     const wavFile = wavWritten ? (wavEntry?.writer?.fileName || guestName(slot, h.recordingId, h.take ?? 1, 'wav')) : undefined;
     const abandoned = Boolean(mp4Entry?.receiver.isAbandoned || wavEntry?.receiver.isAbandoned);
     const timedOut = Boolean(mp4Entry?.receiver.isTimedOut || wavEntry?.receiver.isTimedOut);
@@ -1289,8 +1285,6 @@ export async function collectGuestReports(
       startHostMs: mp4Entry?.receiver.guestStartHostMs ?? null,
       rttMs: mp4Entry?.receiver.syncRttMs ?? null,
       trackFps: mp4Entry?.receiver.senderFrameRate ?? null,
-      ...(mp4Entry?.receiver.senderSha256 ? { sha256Sent: mp4Entry.receiver.senderSha256 } : {}),
-      ...(writtenSha ? { sha256Written: writtenSha } : {}),
       noWav: !wavEntry || !wavWritten,
       ...(abandoned ? { abandoned: true } : {}),
       ...(timedOut ? { timedOut: true } : {}),

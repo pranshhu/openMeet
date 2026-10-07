@@ -136,7 +136,7 @@ describe('post-session report', () => {
   // and destroy exactly what the WAV exists to preserve.
   it('combines audio into .mov, losslessly', () => {
     const r = buildSyncReport({
-      ...base, hostWavFile: 'host_r.wav', guests: [{ ...guest, sha256Sent: 'x', sha256Written: 'x' }],
+      ...base, hostWavFile: 'host_r.wav', guests: [guest],
     });
     const j = JSON.parse(r.json) as { combine: { host: string } };
     expect(j.combine.host).toContain('_master.mov');
@@ -158,17 +158,105 @@ describe('post-session report', () => {
   it('collects the things that could have gone wrong into one warnings list', () => {
     const r = buildSyncReport({
       ...base,
-      guests: [{ ...guest, startHostMs: null, drained: false, sha256Sent: 'a', sha256Written: 'b' }],
+      guests: [{ ...guest, startHostMs: null, drained: false }],
     });
     const j = JSON.parse(r.json) as { warnings: string[] };
-    expect(j.warnings).toHaveLength(3); // mismatch + undrained + no clock sync
-    expect(j.warnings.join(' ')).toMatch(/MISMATCH/);
+    expect(j.warnings).toHaveLength(3); // roll-up + undrained + no clock sync
+    expect(j.warnings.join(' ')).toMatch(/Not every file is complete/);
     expect(j.warnings.join(' ')).toMatch(/drain window/);
   });
 
   it('has no warnings on a clean session', () => {
-    const r = buildSyncReport({ ...base, guests: [{ ...guest, drained: true, sha256Sent: 'a', sha256Written: 'a' }] });
-    expect((JSON.parse(r.json) as { warnings: string[] }).warnings).toEqual([]);
+    const r = buildSyncReport({
+      ...base,
+      guests: [{ ...guest, drained: true }],
+      checks: new Map<string, FileCheck>([
+        ['host_r.mp4', { bytes: 10 }],
+        [
+          'guest_r.mp4',
+          {
+            bytes: 10,
+            received: { finalized: true, abandoned: false, sha256Sent: 'a', sha256Written: 'a' },
+          },
+        ],
+      ]),
+    });
+    const parsed = JSON.parse(r.json) as { integrity: string; warnings: string[] };
+    expect(r.data.integrity).toEqual({ ok: true, text: 'Every file is complete.' });
+    expect(parsed.integrity).toBe('Every file is complete.');
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it('warns once with the counts when one file is not complete', () => {
+    const r = buildSyncReport({
+      ...base,
+      hostWavFile: 'host_r.wav',
+      guests: [{ ...guest, wavFile: 'guest_r.wav' }],
+      checks: new Map<string, FileCheck>([
+        ['host_r.mp4', { bytes: 10 }],
+        [
+          'guest_r.mp4',
+          {
+            bytes: 10,
+            received: { finalized: true, abandoned: false, sha256Sent: 'a', sha256Written: 'a' },
+          },
+        ],
+        ['host_r.wav', { bytes: 10 }],
+        ['guest_r.wav', { bytes: 10, received: { finalized: false, abandoned: false, sha256Written: 'a' } }],
+      ]),
+    });
+    const rollUp = "Not every file is complete and verified (1 of 4). Each file's verdict says why.";
+    const parsed = JSON.parse(r.json) as { integrity: string; warnings: string[] };
+    expect(r.data.warnings).toEqual([rollUp]);
+    expect(parsed.warnings).toEqual([rollUp]);
+    expect(r.data.integrity.ok).toBe(false);
+    expect(parsed.integrity).toBe(rollUp);
+  });
+
+  it('writes the camera file’s verdict as the guest’s integrity', () => {
+    const camera = (received: NonNullable<FileCheck['received']>) =>
+      buildSyncReport({
+        ...base,
+        guests: [{ ...guest, name: 'Bob' }],
+        checks: new Map<string, FileCheck>([['guest_r.mp4', { bytes: 10, received }]]),
+      });
+    const matched = camera({ finalized: true, abandoned: false, sha256Sent: 'a', sha256Written: 'a' });
+    expect((JSON.parse(matched.json) as { guests: { integrity: unknown }[] }).guests[0]?.integrity).toEqual({
+      ok: true,
+      text: 'Complete. Matches what Bob sent (SHA-256).',
+    });
+
+    const behind = camera({ finalized: true, abandoned: true, sha256Written: 'a' });
+    const integrity = (JSON.parse(behind.json) as { guests: { integrity: { ok: boolean; text: string } }[] })
+      .guests[0]?.integrity;
+    expect(integrity?.ok).toBe(false);
+    expect(integrity?.text).toContain('fell too far behind');
+  });
+
+  it('safely handles hostile participant names in guest camera integrity', () => {
+    const hostileNames = [
+      42 as never,
+      1e20 as never,
+      NaN as never,
+      -42 as never,
+      '',
+      {} as never,
+      '  ',
+      '\n\r\t"evil\'\n',
+    ];
+    for (const name of hostileNames) {
+      const r = buildSyncReport({
+        ...base,
+        guests: [{ ...guest, name }],
+        checks: new Map<string, FileCheck>([
+          ['guest_r.mp4', { bytes: 10, received: { finalized: true, abandoned: false, sha256Sent: 'a', sha256Written: 'a' } }],
+        ]),
+      });
+      const parsed = JSON.parse(r.json) as { guests: { integrity: { ok: boolean; text: string } }[] };
+      expect(parsed.guests[0]?.integrity.ok).toBe(true);
+      expect(typeof parsed.guests[0]?.integrity.text).toBe('string');
+      expect(parsed.guests[0]?.integrity.text).not.toContain('\n');
+    }
   });
 
   it('covers multiple guests (2 guests) with files, alignment, integrity, and commands', () => {
@@ -185,8 +273,6 @@ describe('post-session report', () => {
           wavFile: 'guest_r.wav',
           startHostMs: 1_001_500,
           rttMs: 20,
-          sha256Sent: 'bob_sha',
-          sha256Written: 'bob_sha',
         },
         {
           slot: 1,
@@ -195,8 +281,6 @@ describe('post-session report', () => {
           wavFile: 'guest2_r.wav',
           startHostMs: 1_003_200,
           rttMs: 24,
-          sha256Sent: 'carol_sha',
-          sha256Written: 'carol_sha',
         },
       ],
     });
@@ -247,8 +331,6 @@ describe('post-session report', () => {
           noWav: true,
           startHostMs: 1_001_000,
           rttMs: null,
-          sha256Sent: 'bob_sha',
-          sha256Written: 'bob_sha',
         },
       ],
     });
@@ -362,7 +444,7 @@ describe('post-session report', () => {
   it('keeps the two-person keys editors and scripts already read', () => {
     const r = buildSyncReport({
       ...base, hostWavFile: 'host_r.wav',
-      guests: [{ ...guest, wavFile: 'guest_r.wav', sha256Sent: 'a', sha256Written: 'a' }],
+      guests: [{ ...guest, wavFile: 'guest_r.wav' }],
     });
     const j = JSON.parse(r.json);
     expect(j.files).toEqual({ host: 'host_r.mp4', guest: 'guest_r.mp4' });
@@ -372,40 +454,48 @@ describe('post-session report', () => {
     expect(Object.keys(j.combine)).toEqual(['note', 'host', 'guest']);
   });
 
-  it('marks an abandoned or timed out guest file and warns host to use backup', () => {
+  it('marks an abandoned or timed out guest file and says so in its verdict', () => {
     const r = buildSyncReport({
       ...base,
       guests: [
-        { slot: 0, file: 'guest_r.mp4', startHostMs: 1_000, rttMs: 5, abandoned: true },
+        { slot: 0, name: 'Bob', file: 'guest_r.mp4', startHostMs: 1_000, rttMs: 5, abandoned: true },
       ],
+      checks: new Map<string, FileCheck>([
+        ['host_r.mp4', { bytes: 10 }],
+        ['guest_r.mp4', { bytes: 10, received: { finalized: true, abandoned: true, sha256Written: 'x' } }],
+      ]),
     });
     const parsed = JSON.parse(r.json);
     expect(parsed.guests[0].abandoned).toBe(true);
     expect(parsed.guests[0].endedEarly).toBe(true);
-    expect(parsed.warnings.some((w: string) => w.toLowerCase().includes('backup'))).toBe(true);
 
     const guestFile = r.data.fileList.find((f) => f.name === 'guest_r.mp4');
-    expect(guestFile?.detail).toMatch(/backup/i);
+    expect(guestFile?.verdict?.status).toBe('incomplete');
+    expect(guestFile?.verdict?.text).toMatch(/backup/);
+    expect(guestFile?.detail).toBeUndefined();
+    expect(r.data.warnings.some((w) => w.includes('ended early'))).toBe(false);
   });
 
-  it('marks an endedEarly screen segment in sync.json, warnings, and fileList pointing to backup', () => {
+  it('keeps an endedEarly screen segment in the JSON and says so in its verdict', () => {
     const r = buildSyncReport({
       ...base,
       guests: [guest],
       screenSegments: [
         { file: 'guest_screen_r.mp4', offsetMs: 3400, endedEarly: true },
       ],
+      checks: new Map<string, FileCheck>([
+        ['guest_screen_r.mp4', { bytes: 10, received: { finalized: false, abandoned: false, sha256Written: 'x' } }],
+      ]),
     });
     const parsed = JSON.parse(r.json);
     expect(parsed.screenSegments[0].endedEarly).toBe(true);
     expect(parsed.timeline.screenSegments[0].endedEarly).toBe(true);
-    expect(
-      parsed.warnings.some((w: string) => w.toLowerCase().includes('screen') && w.toLowerCase().includes('backup'))
-    ).toBe(true);
 
     const screenFile = r.data.fileList.find((f) => f.kind === 'screen');
-    expect(screenFile?.detail).toMatch(/ended early/i);
-    expect(screenFile?.detail).toMatch(/backup/i);
+    expect(screenFile?.verdict?.status).toBe('incomplete');
+    expect(screenFile?.verdict?.text).toMatch(/backup/);
+    expect(screenFile?.detail).toBe('+3400ms');
+    expect(r.data.warnings.some((w) => w.includes('ended early'))).toBe(false);
   });
 });
 
@@ -870,32 +960,6 @@ describe('verification and file sizes', () => {
     ]);
   });
 
-  // Slice -e replaces the camera-only warnings with a roll-up; until then the
-  // checks must not add a word of their own to them.
-  it('leaves the warnings and the integrity line as they were', () => {
-    const input = {
-      recordingId: 'rec',
-      hostFile: 'host_rec.mp4',
-      hostWavFile: 'host_rec.wav',
-      hostStartMs: 10_000,
-      guests: [
-        { slot: 0, name: 'Priya', file: 'guest_rec.mp4', wavFile: 'guest_rec.wav', startHostMs: null, rttMs: null },
-      ],
-    };
-    const withChecks = buildSyncReport({
-      ...input,
-      checks: new Map<string, FileCheck>([
-        ['guest_rec.wav', { bytes: 10, received: received({ finalized: false }) }],
-      ]),
-    });
-    const withoutChecks = buildSyncReport(input);
-    expect(withChecks.data.warnings).toEqual([
-      'Clock sync did not converge, so the start offset is unknown. Align by waveform.',
-      'Integrity not verified — one of the digests is missing.',
-    ]);
-    expect(withChecks.data.warnings).toEqual(withoutChecks.data.warnings);
-    expect(withChecks.data.integrity).toEqual(withoutChecks.data.integrity);
-  });
 });
 
 describe('aligned copies', () => {

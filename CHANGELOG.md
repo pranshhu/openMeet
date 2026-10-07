@@ -56,6 +56,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.
+- After a take, one warning says how many files are not complete, replacing the
+  single integrity line about the first guest's camera file and the "ended early"
+  notes. In the sync file, `integrity` and `guests[].integrity` carry the new
+  wording; the `endedEarly` flags are unchanged.
 
 ### Fixed
 

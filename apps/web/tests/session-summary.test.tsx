@@ -161,6 +161,19 @@ describe('SessionSummary', () => {
     expect(matches).toHaveLength(1);
   });
 
+  it('renders the roll-up warning once, not duplicated', () => {
+    const rollUp = "Not every file is complete and verified (1 of 2). Each file's verdict says why.";
+    render(
+      <SessionSummary
+        {...baseProps}
+        integrity={{ ok: false, text: rollUp }}
+        warnings={[rollUp]}
+      />
+    );
+    const matches = screen.getAllByText(rollUp);
+    expect(matches).toHaveLength(1);
+  });
+
   it('clarifies that media files are on disk and sync.json/backup are downloads', () => {
     render(<SessionSummary {...baseProps} />);
     expect(

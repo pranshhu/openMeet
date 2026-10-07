@@ -469,7 +469,7 @@ Known gaps, listed below:
   A guest's camera and WAV recording pick up again by themselves, from the last acknowledged
   chunk, into the same files on the host's disk. A screen share comes back for everyone and
   recording continues in a new numbered segment; the interrupted segment's tail is only in
-  the sharer's screen backup, and the session summary marks that segment "ended early".
+  the sharer's screen backup, and the session summary marks that segment incomplete.
 - **Taking the call over in a second tab during a take ends the first tab's files.**
   A second tab in the host's browser asks before it joins while a recording is running.
   If you join there anyway, the first tab's files end at the takeover (it shows "Press

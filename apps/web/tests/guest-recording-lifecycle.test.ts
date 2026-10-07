@@ -128,11 +128,20 @@ vi.mock('@/hooks/recording-controller', async () => {
     startHostRecording: vi.fn().mockImplementation(async () => ({
       recordingId: 'rec-host-1',
       hostStartMs: 1_000_000,
-      hostWriter: { fileName: 'host_rec-host-1.mp4' },
-      guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+      hostWriter: { fileName: 'host_rec-host-1.mp4', size: 1 },
+      guestWriter: { fileName: 'guest_rec-host-1.mp4', size: 1 },
       // Slot 0 was bound from Bob's socket; his name is only known from peer-joined.
       slotPeerIds: new Map([[0, 'p-bob']]),
-      receiver: { digestHex: async () => 'abc', senderSha256: 'abc', guestStartHostMs: 1_000_500, syncRttMs: 10, bytesWritten: 1 },
+      receiver: {
+        fileName: 'guest_rec-host-1.mp4',
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        receivedFinalized: true,
+        isAbandoned: false,
+        guestStartHostMs: 1_000_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
     })),
     endHostRecording: vi.fn().mockResolvedValue({ backup: null }),
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
@@ -540,6 +549,7 @@ describe('guest recording lifecycle in useRoom', () => {
         participant: 'Bob',
       })
     );
+    expect(result.current.state.summary?.integrity).toEqual({ ok: true, text: 'Every file is complete.' });
   });
 });
 
@@ -1791,6 +1801,11 @@ describe('host backup after a take in useRoom', () => {
     expect(
       parsedSync.verification.find((v: { file: string }) => v.file === 'guest_rec-v.mp4').detail
     ).toContain('Bob');
+
+    expect(result.current.state.summary?.warnings).toContain(
+      "Not every file is complete and verified (1 of 2). Each file's verdict says why."
+    );
+    expect(result.current.state.summary?.integrity.ok).toBe(false);
   });
 
   it('still finalizes and says so per file when the checks cannot be gathered', async () => {

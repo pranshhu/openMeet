@@ -27,9 +27,6 @@ export interface GuestSyncInput {
   wavFile?: string | undefined;
   startHostMs: number | null; // guest recorder start on the host clock, or null if sync failed
   rttMs: number | null;
-  /** sha256 of what the guest SENT vs what the host WROTE. */
-  sha256Sent?: string | undefined;
-  sha256Written?: string | undefined;
   /** Set when the guest's drain hit its cap with data still queued. */
   drained?: boolean | undefined;
   noWav?: boolean | undefined;
@@ -461,11 +458,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       }
     }
 
-    // Integrity
-    const integrity = integrityVerdict(g.sha256Sent, g.sha256Written);
-    if (!integrity.ok) {
-      warnings.push(guests.length === 1 ? integrity.text : `${displayName}: ${integrity.text}`);
-    }
+    // Integrity: the camera file's verdict, under the key scripts already read.
+    const camera = fileVerdict(input.checks?.get(g.file), whoOf(g.name, 'the guest'));
+    const integrity = { ok: camera.status === 'complete', text: camera.text };
 
     if (g.drained === false) {
       warnings.push(
@@ -478,14 +473,6 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     const endedEarly = Boolean(g.abandoned || g.timedOut || g.endedEarly);
     const abandoned = Boolean(g.abandoned);
     const timedOut = Boolean(g.timedOut);
-
-    if (endedEarly) {
-      warnings.push(
-        guests.length === 1
-          ? `The guest stream ${abandoned ? 'was abandoned due to backlog' : 'timed out'} and ended early — use the guest backup for the complete recording.`
-          : `${displayName} stream ${abandoned ? 'was abandoned due to backlog' : 'timed out'} and ended early — use their backup for the complete recording.`
-      );
-    }
 
     guestReports.push({
       slot,
@@ -508,30 +495,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     });
   }
 
-  for (const s of screenSegments) {
-    if (s.endedEarly) {
-      warnings.push(
-        `Screen segment ${s.file} ended early — use the sharer's screen backup for the complete recording.`
-      );
-    }
-  }
-
   const primaryGuestMinusHostMs = guestReports[0]?.offsetMs ?? null;
-
-  const overallIntegrity =
-    guests.length === 0
-      ? { ok: true, text: 'Integrity verified — bytes written match bytes sent (sha256).' }
-      : guests.length === 1
-        ? guestReports[0]!.integrity
-        : guestReports.every((g) => g.integrity.ok)
-          ? { ok: true, text: 'Integrity verified — bytes written match bytes sent (sha256).' }
-          : {
-              ok: false,
-              text: guestReports
-                .filter((g) => !g.integrity.ok)
-                .map((g) => `${g.name || `Guest ${g.slot + 1}`}: ${g.integrity.text}`)
-                .join(' '),
-            };
 
   const backupNote =
     "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant.";
@@ -544,7 +508,6 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       name: g.file,
       kind: 'video' as const,
       ...(g.name ? { participant: g.name } : {}),
-      ...(g.abandoned || g.timedOut || g.endedEarly ? { detail: 'ended early — use backup' } : {}),
     })),
     ...(input.hostWavFile ? [{ name: input.hostWavFile, kind: 'audio' as const }] : []),
     ...guests
@@ -553,14 +516,12 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         name: g.wavFile!,
         kind: 'audio' as const,
         ...(g.name ? { participant: g.name } : {}),
-        ...(g.abandoned || g.timedOut || g.endedEarly ? { detail: 'ended early — use backup' } : {}),
       })),
     ...screenSegments.map((s) => {
       const sharer = s.sharer;
       const parts = [
         sharer,
         `+${s.offsetMs}ms`,
-        s.endedEarly ? 'ended early — use backup' : undefined,
       ].filter(Boolean);
       return {
         name: s.file,
@@ -574,6 +535,16 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     const who = whoOf(f.participant, f.kind === 'screen' ? 'the sharer' : 'the guest');
     return { ...f, ...(c ? { bytes: c.bytes } : {}), verdict: fileVerdict(c, who) };
   });
+
+  const flagged = fileList.filter((f) => f.verdict?.status !== 'complete').length;
+  const overallIntegrity =
+    flagged === 0
+      ? { ok: true, text: 'Every file is complete.' }
+      : {
+          ok: false,
+          text: `Not every file is complete and verified (${flagged} of ${fileList.length}). Each file's verdict says why.`,
+        };
+  if (!overallIntegrity.ok) warnings.push(overallIntegrity.text);
 
   const screenRemuxCommands = screenFiles.map((f, i) => ({
     label: `Make screen segment ${i + 1} seekable`,

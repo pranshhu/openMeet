@@ -81,7 +81,7 @@ EOF
 | 2.4 | One folder prompt | Watch the host | Exactly **one** folder picker, not two | ☐ | |
 | 2.5 | Files appear | Record ~60 s, click **End & save** | 4 files: `host_*.mp4`, `host_*.wav`, `guest_*.mp4`, `guest_*.wav` | ☐ | |
 | 2.6 | All four play | Open each in a video player | All play; the guest MP4 is the one that crossed the network | ☐ | |
-| 2.7 | Integrity | Read the summary screen | "Integrity verified — bytes written match bytes sent" | ☐ | |
+| 2.7 | Integrity | Read the summary screen | "Every file is complete."; each guest file reads "Complete. Matches what <name> sent (SHA-256)." | ☐ | |
 | 2.8 | WAV is honest | Run the python snippet above on both WAVs | `declared data == actual data` | ☐ | |
 | 2.9 | Alignment | Read the summary | An offset in ms, not "align by waveform" | ☐ | |
 | 2.10 | Durations match | `ffprobe` each file | Within ~1 s of how long you recorded | ☐ | |
@@ -210,7 +210,7 @@ Also not covered automatically. Needs 3 browser profiles.
   between takes.
 - **A screen share across a full WebSocket reconnect continues in a new numbered
   segment.** Camera and WAV resume into the same files; the interrupted segment's
-  tail is only in the sharer's screen backup, and the summary marks it "ended early".
+  tail is only in the sharer's screen backup, and the summary marks it incomplete.
 - **A second host tab mid-take asks before it takes the call over.** If the host
   joins there anyway, the first tab's files end there; the rest of each guest's
   part is only in that guest's backup.
