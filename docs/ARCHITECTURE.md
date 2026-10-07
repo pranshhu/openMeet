@@ -413,7 +413,12 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
   its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
   1 MiB slices paced by `ChunkSender` backpressure and by the host's acks (16 MiB unacked is the
-  ceiling), and calls it saved only when the host's digest and byte count match its own.
+  ceiling), and calls it saved only when the host's digest and byte count match its own. Sends go
+  one at a time — each waits for the one before it (`after`) and for this guest's own take to end
+  (`hold`) — and a dropped connection shows `stalled` instead of failing: `attachBackupSends`
+  points every unfinished send at the rebuilt connection once it is connected, the send asks
+  `resume_query` on the replacement channel and replays from the host's answer through
+  `ChunkSender.rebind` + `resume`, and nothing goes out on that channel before the answer arrives.
 
 ---
 

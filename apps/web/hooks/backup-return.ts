@@ -561,7 +561,12 @@ const POLL_MS = 200;
 
 /** Guest side: one leftover backup on its way to the host. */
 export class BackupSend {
-  private readonly opts: { file: File; onChange?: (() => void) | undefined };
+  private readonly opts: {
+    file: File;
+    onChange?: (() => void) | undefined;
+    after?: Promise<unknown> | undefined;
+    hold?: (() => boolean) | undefined;
+  };
   // One key per item, kept for as long as the item lives: it is what lets the
   // host read a repeated offer on a rebuilt connection as the same sender, and
   // what turns another participant's offer for the same name away.
@@ -569,13 +574,23 @@ export class BackupSend {
   private current: BackupTransfer;
   private sender: ChunkSender | null = null;
   private channel: RTCDataChannel | null = null;
+  // The host has answered on the current channel. A replacement channel is dead
+  // air until it does: its queue holds fragments the old one never carried.
+  private ready = false;
   private paused = false;
   private started = false;
   private finished = false;
   private settleDone: (result: 'saved' | 'failed') => void = () => {};
   readonly done: Promise<'saved' | 'failed'>;
 
-  constructor(opts: { file: File; onChange?: () => void }) {
+  constructor(opts: {
+    file: File;
+    onChange?: () => void;
+    /** Sends go one at a time: this one starts reading once `after` settles. */
+    after?: Promise<unknown>;
+    /** True while a take is recording here: the transfer waits for it to end. */
+    hold?: () => boolean;
+  }) {
     this.opts = opts;
     this.current = {
       id: opts.file.name,
@@ -598,7 +613,7 @@ export class BackupSend {
     return this.finished;
   }
 
-  /** The channel to the host for this file. */
+  /** The channel to the host for this file. A replacement may be attached after a reconnect. */
   attach(channel: RTCDataChannel): void {
     if (this.finished) {
       try {
@@ -609,22 +624,35 @@ export class BackupSend {
       return;
     }
     this.channel = channel;
+    // Later calls only move the same sender: its digest, buffered fragments and
+    // acknowledged position are what the host's answer is about.
+    if (this.sender) this.sender.rebind(channel);
+    else
+      this.sender = new ChunkSender({
+        recordingId: this.opts.file.name,
+        channel,
+        onBackpressure: (p) => {
+          this.paused = p;
+        },
+        onAbandon: () => this.settle('failed'),
+      });
+    this.ready = false;
     channel.binaryType = 'arraybuffer';
-    this.sender = new ChunkSender({
-      recordingId: this.opts.file.name,
-      channel,
-      onBackpressure: (p) => {
-        this.paused = p;
-      },
-      onAbandon: () => this.settle('failed'),
-    });
     channel.bufferedAmountLowThreshold = DC_BUFFERED_LOW_WATERMARK;
     channel.onbufferedamountlow = () => this.sender?.drainQueue();
     channel.onmessage = (ev: { data: unknown }) => this.onControl(channel, ev.data);
+    channel.onclose = () => {
+      // A dropped connection is not an ending: the host keeps the bytes it wrote.
+      if (this.channel === channel && this.current.status === 'active') {
+        this.set({ status: 'stalled' });
+      }
+    };
 
-    const offer = { type: 'backup_offer', size: this.opts.file.size, key: this.key };
-    if (channel.readyState === 'open') this.say(offer);
-    else channel.onopen = () => this.say(offer);
+    const hello = this.started
+      ? { type: 'resume_query', recordingId: this.opts.file.name, key: this.key }
+      : { type: 'backup_offer', size: this.opts.file.size, key: this.key };
+    if (channel.readyState === 'open') this.say(hello);
+    else channel.onopen = () => this.say(hello);
   }
 
   private say(msg: Record<string, unknown>): void {
@@ -649,7 +677,9 @@ export class BackupSend {
     while (!this.finished && !ready()) {
       await new Promise((r) => setTimeout(r, POLL_MS));
       // `bufferedamountlow` fires only on a crossing; this catches a queue it missed.
-      this.sender?.drainQueue();
+      // Gated on the host's answer: a queue left from a dead channel must not go
+      // out on its replacement ahead of the replay that fills the gap.
+      if (this.ready) this.sender?.drainQueue();
     }
   }
 
@@ -659,7 +689,9 @@ export class BackupSend {
   private clear(): boolean {
     const sender = this.sender!;
     return (
+      this.ready &&
       !this.paused &&
+      !this.opts.hold?.() &&
       (sender.lastSentIdx - sender.lastAckedIdx) * DC_MAX_MESSAGE_BYTES <= DC_BUFFERED_HIGH_WATERMARK
     );
   }
@@ -684,7 +716,8 @@ export class BackupSend {
   }
 
   private onControl(channel: RTCDataChannel, data: unknown): void {
-    if (this.finished || typeof data !== 'string') return;
+    // A replacement took over: what the dead one says about this send is stale.
+    if (channel !== this.channel || this.finished || typeof data !== 'string') return;
     let msg: Record<string, unknown>;
     try {
       const parsed = JSON.parse(data) as unknown;
@@ -699,11 +732,15 @@ export class BackupSend {
       return;
     }
     if (msg.type === 'resume_offset') {
-      // The host's go-ahead, and the first one only: a second would start a
-      // second read of the same file over the first.
-      if (!Number.isSafeInteger(msg.lastIdx) || this.started) return;
-      this.started = true;
+      // The host's go-ahead on this channel, and with it where this side stands:
+      // every answer replays what the host is missing, so a replacement channel
+      // continues the file instead of starting it again.
+      if (!Number.isSafeInteger(msg.lastIdx)) return;
+      this.ready = true;
+      this.sender?.resume(msg.lastIdx as number);
       this.set({ status: 'active' });
+      if (this.started) return;
+      this.started = true;
       void this.run().catch(() => this.settle('failed'));
       return;
     }
@@ -719,6 +756,9 @@ export class BackupSend {
 
   private async run(): Promise<void> {
     const { file } = this.opts;
+    // One transfer at a time: the send ahead of this one owns the uplink, and
+    // its failure is not this one's.
+    await Promise.resolve(this.opts.after).catch(() => {});
     for (let at = 0; at < file.size; at += BACKUP_READ_BYTES) {
       const payload = await file.slice(at, at + BACKUP_READ_BYTES).arrayBuffer();
       await this.wait(() => this.clear());
@@ -728,11 +768,33 @@ export class BackupSend {
     }
     const sha256 = await this.sender!.digestHex();
     // Ordered and reliable: sent after the last fragment, it arrives after it.
-    await this.wait(() => !this.sender!.hasQueuedChunks);
-    if (!this.finished) this.say({ type: 'recording-finalized', recordingId: file.name, totalBytes: file.size, sha256 });
+    // Said again on every replacement channel until the verdict arrives: a
+    // channel that died with the last megabytes in flight took the first one with it.
+    let told: RTCDataChannel | null = null;
+    while (!this.finished) {
+      await this.wait(() => this.ready && !this.sender!.hasQueuedChunks && this.channel !== told);
+      if (this.finished) return;
+      told = this.channel;
+      this.say({ type: 'recording-finalized', recordingId: file.name, totalBytes: file.size, sha256 });
+    }
   }
 
   cancel(): void {
     this.settle('failed');
+  }
+}
+
+/** Point every unfinished send at `peer`, once it is connected. */
+export async function attachBackupSends(
+  peer: {
+    whenConnected(timeoutMs?: number): Promise<void>;
+    createBackupChannel(name: string): RTCDataChannel;
+  },
+  sends: BackupSend[]
+): Promise<void> {
+  // Chrome never negotiates a DataChannel created before a connection's first negotiation finishes.
+  await peer.whenConnected(Infinity);
+  for (const send of sends) {
+    if (!send.settled) send.attach(peer.createBackupChannel(send.item.id));
   }
 }
