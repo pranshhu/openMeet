@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   bindHostScreenChannel,
   collectScreenSegments,
+  collectTrackHealth,
   startScreenRecording,
   stopScreenRecording,
+  type HealthPeer,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 
@@ -405,5 +407,195 @@ describe('screen recording', () => {
     expect(segments).toHaveLength(2);
     expect(segments[0]?.sharer).toBe('Host Alice');
     expect(segments[1]?.sharer).toBe('Bob');
+  });
+
+  it('two channels bound in the same tick get two files', async () => {
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec-same-tick', dir: fakeDir() };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+
+    await Promise.all([
+      bindHostScreenChannel(c1, h, undefined, 'peer-b'),
+      bindHostScreenChannel(c2, h, undefined, 'peer-c'),
+    ]);
+
+    expect(files).toEqual(['guest_screen_rec-same-tick.mp4', 'guest_screen_rec-same-tick_2.mp4']);
+    expect(h.screenReceivers?.size).toBe(2);
+    expect([...(h.screenLive?.entries() ?? [])]).toEqual([
+      [1, 'peer-b'],
+      [2, 'peer-c'],
+    ]);
+    expect(h.screenWriters).toHaveLength(2);
+    expect(h.screenWriters?.map((w) => w.fileName)).toEqual([
+      'guest_screen_rec-same-tick.mp4',
+      'guest_screen_rec-same-tick_2.mp4',
+    ]);
+  });
+
+  it('bytes go to the right file when two channels bind in the same tick', async () => {
+    const writtenByFile = new Map<string, Uint8Array[]>();
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async (op: { type?: string; position?: number; data?: ArrayBuffer | ArrayBufferView }) => {
+            if (op?.data) {
+              const list = writtenByFile.get(name) ?? [];
+              const raw = op.data instanceof Uint8Array ? op.data : new Uint8Array(op.data as ArrayBuffer);
+              list.push(new Uint8Array(raw));
+              writtenByFile.set(name, list);
+            }
+          },
+          close: async () => {},
+        }),
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+
+    const h: RecordingHandles = { recordingId: 'rec-bytes', dir };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+
+    await Promise.all([
+      bindHostScreenChannel(c1, h, undefined, 'peer-b'),
+      bindHostScreenChannel(c2, h, undefined, 'peer-c'),
+    ]);
+
+    const chunk1 = new Uint8Array([1, 2, 3, 4]);
+    const chunk2 = new Uint8Array([5, 6, 7, 8]);
+    (c1 as any).onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: chunk1.byteLength, ts: 100 }) } as MessageEvent);
+    (c1 as any).onmessage?.({ data: chunk1.buffer } as MessageEvent);
+    (c2 as any).onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: chunk2.byteLength, ts: 100 }) } as MessageEvent);
+    (c2 as any).onmessage?.({ data: chunk2.buffer } as MessageEvent);
+
+    await vi.waitFor(() => {
+      expect(writtenByFile.get('guest_screen_rec-bytes.mp4')).toEqual([chunk1]);
+      expect(writtenByFile.get('guest_screen_rec-bytes_2.mp4')).toEqual([chunk2]);
+    });
+  });
+
+  it('an empty share ending does not remove the other share file', async () => {
+    const removed: string[] = [];
+    const dir = {
+      ...fakeDir(),
+      removeEntry: async (n: string) => {
+        removed.push(n);
+      },
+    };
+    const h: RecordingHandles = { recordingId: 'rec-empty-survive', dir };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+    (c1 as any).readyState = 'open';
+    (c2 as any).readyState = 'open';
+
+    await Promise.all([
+      bindHostScreenChannel(c1, h, undefined, 'peer-b'),
+      bindHostScreenChannel(c2, h, undefined, 'peer-c'),
+    ]);
+
+    const chunk = new Uint8Array([1, 2, 3, 4]);
+    (c2 as any).onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: chunk.byteLength, ts: 100 }) } as MessageEvent);
+    (c2 as any).onmessage?.({ data: chunk.buffer } as MessageEvent);
+
+    c1.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      expect(removed).toEqual(['guest_screen_rec-empty-survive.mp4']);
+    });
+    expect(h.screenWriters).toHaveLength(1);
+    expect(h.screenWriters?.[0]?.fileName).toBe('guest_screen_rec-empty-survive_2.mp4');
+    expect([...(h.screenLive?.entries() ?? [])]).toEqual([[2, 'peer-c']]);
+  });
+
+  it('the second share ending empty leaves the first share alone', async () => {
+    const removed: string[] = [];
+    const dir = { ...fakeDir(), removeEntry: async (n: string) => { removed.push(n); } };
+    const h: RecordingHandles = { recordingId: 'rec-second-empty', dir };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+    await Promise.all([
+      bindHostScreenChannel(c1, h, undefined, 'peer-b'),
+      bindHostScreenChannel(c2, h, undefined, 'peer-c'),
+    ]);
+    const chunk = new Uint8Array([1, 2, 3, 4]);
+    (c1 as any).onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }) } as MessageEvent);
+    (c1 as any).onmessage?.({ data: chunk.buffer } as MessageEvent);
+
+    c2.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => expect(removed).toEqual(['guest_screen_rec-second-empty_2.mp4']));
+    expect(h.screenWriters?.map((w) => w.fileName)).toEqual(['guest_screen_rec-second-empty.mp4']);
+    expect([...(h.screenLive?.entries() ?? [])]).toEqual([[1, 'peer-b']]);
+  });
+
+  it('files that open out of order keep each share on its own number', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const base = fakeDir();
+    const dir = {
+      getFileHandle: async (name: string) => {
+        if (name === 'guest_screen_rec-order.mp4') await gate; // the first file opens slowly
+        return base.getFileHandle(name);
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h: RecordingHandles = { recordingId: 'rec-order', dir };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+
+    const first = bindHostScreenChannel(c1, h, undefined, 'peer-b');
+    await bindHostScreenChannel(c2, h, undefined, 'peer-c');
+    release();
+    await first;
+
+    const chunk = new Uint8Array([9, 9, 9, 9]);
+    (c2 as any).onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }) } as MessageEvent);
+    (c2 as any).onmessage?.({ data: chunk.buffer } as MessageEvent);
+
+    const peers: HealthPeer[] = [
+      { peerId: 'peer-b', name: 'Bo', expected: false },
+      { peerId: 'peer-c', name: 'Cy', expected: false },
+    ];
+    await vi.waitFor(() =>
+      expect(collectTrackHealth(h, peers)).toEqual([
+        { key: 's1', who: 'Bo', track: 'screen', bytes: 0 },
+        { key: 's2', who: 'Cy', track: 'screen', bytes: 4 },
+      ])
+    );
+  });
+
+  it('sequential shares keep their names', async () => {
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec-seq', dir: fakeDir() };
+    const c1 = new EventTarget() as unknown as RTCDataChannel;
+    const c2 = new EventTarget() as unknown as RTCDataChannel;
+    const c3 = new EventTarget() as unknown as RTCDataChannel;
+
+    await bindHostScreenChannel(c1, h);
+    await bindHostScreenChannel(c2, h);
+    await bindHostScreenChannel(c3, h);
+
+    expect(files).toEqual([
+      'guest_screen_rec-seq.mp4',
+      'guest_screen_rec-seq_2.mp4',
+      'guest_screen_rec-seq_3.mp4',
+    ]);
+  });
+
+  it('handles that already hold segments continue after them', async () => {
+    files.length = 0;
+    const existingReceivers = new Map<number, any>([
+      [1, {}],
+      [2, {}],
+    ]);
+    const h: RecordingHandles = {
+      recordingId: 'rec-continue',
+      dir: fakeDir(),
+      screenReceivers: existingReceivers,
+    };
+    const c = new EventTarget() as unknown as RTCDataChannel;
+
+    await bindHostScreenChannel(c, h);
+
+    expect(files).toEqual(['guest_screen_rec-continue_3.mp4']);
   });
 });

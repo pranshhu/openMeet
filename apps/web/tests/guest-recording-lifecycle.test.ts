@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
+import { PeerConnection } from '@/lib/peer';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks } from '@/hooks/recording-controller';
 import { patchRecording } from '@/lib/api';
@@ -1669,5 +1670,29 @@ describe('host backup after a take in useRoom', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('two screen channels arriving together through the call each open their own file', async () => {
+    const opened: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string) => {
+        opened.push(name);
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      },
+      removeEntry: async () => {},
+    };
+    const screenChannel = () =>
+      Object.assign(new EventTarget(), { label: 'recording-screen-1', readyState: 'open' }) as unknown as RTCDataChannel;
+    const { recordingId } = await hostTake(() => {
+      const opts = vi.mocked(PeerConnection).mock.calls.at(-1)![0];
+      opts.onDataChannel?.(screenChannel());
+      opts.onDataChannel?.(screenChannel());
+    }, { dir });
+    await vi.waitFor(() =>
+      expect(opened.filter((n) => n.startsWith('guest_screen_'))).toEqual([
+        `guest_screen_${recordingId}.mp4`,
+        `guest_screen_${recordingId}_2.mp4`,
+      ])
+    );
   });
 });

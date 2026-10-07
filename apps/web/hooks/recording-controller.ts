@@ -102,6 +102,12 @@ export interface RecordingHandles {
   screenBackups?: BackupRecorder[] | undefined;
   screenChannel?: RTCDataChannel | undefined;
   screenReceivers?: Map<number, ChunkReceiver>;
+  /**
+   * Segment numbers handed out to guests' screen channels this take. A number
+   * is taken before the file opens, so two channels arriving together cannot
+   * share one.
+   */
+  guestScreenSegments?: number;
   /** Guest screen segments whose channel is still open, with the sharer's peerId. */
   screenLive?: Map<number, string>;
   screenWriters?: FileWriter[];
@@ -1182,7 +1188,7 @@ export async function bindHostScreenChannel(
 ): Promise<void> {
   channel.binaryType = 'arraybuffer';
   if (!h.dir) return;
-  const segment = (h.screenReceivers?.size ?? 0) + 1;
+  const segment = (h.guestScreenSegments = Math.max(h.guestScreenSegments ?? 0, h.screenReceivers?.size ?? 0) + 1);
   const writer = new FileWriter();
   await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment));
   h.screenWriters = [...(h.screenWriters ?? []), writer];
