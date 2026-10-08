@@ -23,6 +23,29 @@ export function safeNamePart(raw: unknown): string {
   return Array.from(cleaned).slice(0, NAME_PART_MAX).join('').replace(/^-+|-+$/g, '');
 }
 
+/**
+ * download= names for the copies a participant saves from the tab. They carry
+ * the room, the take and whose copy it is: three guests' backups all arriving
+ * as backup.mp4 can't be told apart, and a second take's sync.json has to
+ * visibly match its _take2 files. A guest isn't told the take number, so its
+ * names go without one rather than guess.
+ */
+export function downloadNamesFor(o: {
+  room: string;
+  take?: number | undefined;
+  localName: string;
+  role: string | null;
+}): { sync: string; chapters: string; backup: string; wav: string } {
+  const tag = `openmeet-${o.room}${o.take ? `-take${o.take}` : ''}`;
+  const who = safeNamePart(o.localName) || o.role || 'you';
+  return {
+    sync: `${tag}-sync.json`,
+    chapters: `${tag}-chapters.txt`,
+    backup: `${tag}-backup-${who}.mp4`,
+    wav: `${tag}-backup-${who}.wav`,
+  };
+}
+
 /** `guest2-sam-lee`, or the bare role when the name has nothing usable in it. */
 export function roleWithName(role: string, name: unknown): string {
   const safe = safeNamePart(name);

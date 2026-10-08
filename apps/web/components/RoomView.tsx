@@ -7,6 +7,7 @@ import { isFsAccessSupported } from '@/lib/fs-writer';
 import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
+import { downloadNamesFor } from '@/lib/file-names';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -224,12 +225,18 @@ export function RoomView({ slug }: { slug: string }) {
     // Leaving mid-take (or from the summary) finalizes the take, but these
     // files exist only as in-memory links in this tab. Offer them before Rejoin,
     // whose reload would lose them.
+    const names = downloadNamesFor({
+      room: slug,
+      take: state.takes[state.takes.length - 1]?.take,
+      localName: state.localName,
+      role: state.role,
+    });
     const files = (
       [
-        [state.syncReportUrl, 'sync.json', 'sync.json'],
-        [state.chaptersUrl, 'chapters.txt', 'chapters.txt'],
-        [state.backupBlobUrl, 'backup.mp4', 'Backup video'],
-        [state.wavBackupBlobUrl, 'backup.wav', 'Backup audio (WAV)'],
+        [state.syncReportUrl, names.sync, 'sync.json'],
+        [state.chaptersUrl, names.chapters, 'chapters.txt'],
+        [state.backupBlobUrl, names.backup, 'Backup video'],
+        [state.wavBackupBlobUrl, names.wav, 'Backup audio (WAV)'],
       ] as const
     ).filter(([url]) => url);
     return (

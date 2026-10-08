@@ -111,6 +111,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- Files downloaded from the screen shown after leaving a call are named for the
+  room, the take and the person, like the ones downloaded in the call, and a
+  name written with combining marks (Devanagari, Thai, Arabic) stays whole in a
+  download name.
 - A take that loses its crash copy part-way keeps saying so in its own status
   line until the take ends; the banner that first said it is shared, and the
   next message replaced it. A warning that arrives after a take has ended is

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { safeNamePart, roleWithName } from '@/lib/file-names';
+import { safeNamePart, roleWithName, downloadNamesFor } from '@/lib/file-names';
 
 describe('safeNamePart', () => {
   it('keeps letters and digits of any script, lowercased and hyphenated', () => {
@@ -53,5 +53,37 @@ describe('roleWithName', () => {
   it('falls back to the bare role when the name has nothing usable', () => {
     expect(roleWithName('host', '///')).toBe('host');
     expect(roleWithName('host', undefined)).toBe('host');
+  });
+});
+
+describe('downloadNamesFor', () => {
+  it('names a host download for the room, the take and the person', () => {
+    expect(downloadNamesFor({ room: 'abc-defg-hij', take: 2, localName: 'Alice', role: 'host' })).toEqual({
+      sync: 'openmeet-abc-defg-hij-take2-sync.json',
+      chapters: 'openmeet-abc-defg-hij-take2-chapters.txt',
+      backup: 'openmeet-abc-defg-hij-take2-backup-alice.mp4',
+      wav: 'openmeet-abc-defg-hij-take2-backup-alice.wav',
+    });
+  });
+
+  it('leaves the take out when it is not known', () => {
+    expect(downloadNamesFor({ room: 'abc-defg-hij', localName: 'Sam', role: 'guest' }).backup).toBe(
+      'openmeet-abc-defg-hij-backup-sam.mp4'
+    );
+  });
+
+  it('keeps a name written with combining marks whole', () => {
+    expect(downloadNamesFor({ room: 'r', localName: 'प्रांशु', role: 'guest' }).wav).toBe('openmeet-r-backup-प्रांशु.wav');
+  });
+
+  it('falls back to the role, then to "you", when the name has nothing usable', () => {
+    expect(downloadNamesFor({ room: 'r', localName: '///', role: 'guest' }).backup).toBe('openmeet-r-backup-guest.mp4');
+    expect(downloadNamesFor({ room: 'r', localName: '', role: null }).backup).toBe('openmeet-r-backup-you.mp4');
+  });
+
+  it('cuts a very long name to 32 characters, like the recording files do', () => {
+    expect(downloadNamesFor({ room: 'r', localName: 'a'.repeat(40), role: null }).wav).toBe(
+      `openmeet-r-backup-${'a'.repeat(32)}.wav`
+    );
   });
 });
