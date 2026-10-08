@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
   WS_CLOSE_CAPACITY_FULL,
@@ -22,6 +23,7 @@ import { getScreenStream, presentFile, presentRearCamera } from '@/lib/screen';
 import { pickRecordingMime, UnsupportedCodecError } from '@/lib/recorder';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
+import { isFsAccessSupported, pickRecordingDirectory } from '@/lib/fs-writer';
 import { MediaBoard } from '@/lib/media-board';
 import { getHostToken } from '@/lib/host-token';
 import { getOrCreateClientId } from '@/lib/client-id';
@@ -61,6 +63,7 @@ import {
   type RecordingHandles,
   type TrackReading,
 } from './recording-controller';
+import { BackupIntake, refuseBackup, type BackupTransfer } from './backup-return';
 
 export type RoomPhase =
   | 'checking'
@@ -199,6 +202,8 @@ export interface RoomState {
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
   /** List of guests the host is still receiving tail data from during finalize. */
   finalizingGuests: string[];
+  /** Backups on their way from a guest to the host: incoming on the host, outgoing on a guest. */
+  backupTransfers: BackupTransfer[];
 }
 
 /** One reading of how this device is coping with the take it is recording. */
@@ -532,6 +537,7 @@ export function useRoom(slug: string) {
     lowPower: false,
     capabilities: {},
     finalizingGuests: [],
+    backupTransfers: [],
   });
   // Peer ids whose camera recording channel has arrived for the take in progress.
   const [toldPeers, setToldPeers] = useState<string[]>([]);
@@ -588,6 +594,11 @@ export function useRoom(slug: string) {
   // activation, so a second take could not prompt again from a non-click path.
   const boardRef = useRef<MediaBoard | null>(null);
   const dirRef = useRef<import('@/lib/fs-writer').FsDirectoryHandle | null>(null);
+  const backupIntakeRef = useRef<BackupIntake | null>(null);
+  // The offers the host was last shown, as handed back by the intake: accept
+  // takes those and only those, so an offer that arrives after the click does
+  // not get a file the host never saw.
+  const backupShownRef = useRef<BackupTransfer[]>([]);
   const takeRef = useRef(0);
   // Anything that went wrong during a take — a recording error or connection
   // warning, even one that later cleared — means its backup may hold the only
@@ -1132,6 +1143,28 @@ export function useRoom(slug: string) {
           },
           onDataChannel: (channel) => {
             const peerName = remotePeersRef.current.find((p) => p.peerId === remotePeerId)?.name ?? undefined;
+            if (recordingChannelKind(channel.label).base === DATA_CHANNEL_BACKUP) {
+              // Only a host that can write to a folder has anywhere to put it. Anyone
+              // else says so, or the sender would wait for an answer that never comes.
+              if (roleRef.current !== 'host' || !isFsAccessSupported()) {
+                refuseBackup(channel);
+                return;
+              }
+              const intake = (backupIntakeRef.current ??= new BackupIntake({
+                room: slug,
+                onChange: (items) => {
+                  backupShownRef.current = items;
+                  setState((s) => ({ ...s, backupTransfers: items }));
+                },
+              }));
+              intake.offer(channel, {
+                peerId: remotePeerId,
+                name: remotePeersRef.current.find((r) => r.peerId === remotePeerId)?.name ?? null,
+              });
+              // The return matters: a backup is an earlier recording the host
+              // takes by hand, not a guest's camera for the take in progress.
+              return;
+            }
             // Two recording channels now arrive: video on `recording`, the
             // uncompressed WAV master on `recording-audio`. Route by label.
             if (channel.label.startsWith(DATA_CHANNEL_RECORDING_SCREEN)) {
@@ -1613,6 +1646,26 @@ export function useRoom(slug: string) {
     }));
   }, []);
 
+  /** Host: save every offered backup into the recording folder. Must run inside a click. */
+  const acceptBackups = useCallback(async () => {
+    const intake = backupIntakeRef.current;
+    if (!intake) return;
+    // A folder already chosen this session is reused, so a take and the backups
+    // returned for it sit together; otherwise this click opens the prompt.
+    let dir = dirRef.current;
+    if (!dir) {
+      try {
+        dir = await pickRecordingDirectory();
+      } catch {
+        return; // the prompt was dismissed: the offers stay, and Save can be pressed again
+      }
+      dirRef.current = dir;
+    }
+    await intake.accept(dir, backupShownRef.current);
+  }, []);
+
+  const declineBackups = useCallback(() => backupIntakeRef.current?.decline(), []);
+
   /**
    * What each file of the running take has recorded or received so far. The
    * track panel calls this on its own timer, so a chunk arriving never
@@ -2085,6 +2138,7 @@ export function useRoom(slug: string) {
 
   /** Let go of the room, every connection, the camera and the mic. */
   const release = useCallback(() => {
+    void backupIntakeRef.current?.close();
     signalRef.current?.close();
     boardRef.current?.close();
     boardRef.current = null;
@@ -2150,6 +2204,9 @@ export function useRoom(slug: string) {
   // best-effort beats the previous guaranteed loss.
   useEffect(() => {
     const commit = () => {
+      // A transfer can be running with no take at all, and its file reaches the
+      // folder only when it is closed, so this must not wait for the take below.
+      void backupIntakeRef.current?.close();
       const h = recordingRef.current;
       if (!h) return;
       // EVERY writer, not just the host's and the first guest's. A live
@@ -2165,6 +2222,7 @@ export function useRoom(slug: string) {
   useEffect(() => {
     return () => {
       // Same reason as pagehide: never unmount holding an open writer.
+      void backupIntakeRef.current?.close();
       const h = recordingRef.current;
       if (h) for (const w of allWriters(h)) void w.close();
       signalRef.current?.close();
@@ -2197,6 +2255,8 @@ export function useRoom(slug: string) {
     toggleScreenShare,
     startRecording,
     endRecording,
+    acceptBackups,
+    declineBackups,
     addMarker,
     openMediaBoard,
     newTake,

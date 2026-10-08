@@ -270,20 +270,23 @@ State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
-`capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`,
+`capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
+backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
-stream); stop = `removeTrack` + renegotiate, idempotent.
+stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
+`BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
-  `recording-audio`, or prefix `recording-screen`). Guest **creates** the recording DataChannels;
+  `recording-audio` / `backup`, or prefix `recording-screen`). Guest **creates** the recording
+  DataChannels;
   host **receives** them. `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PeerConnection } from '@/lib/peer';
-import { DATA_CHANNEL_RECORDING, DATA_CHANNEL_RECORDING_AUDIO } from '@openmeet/protocol';
+import {
+  DATA_CHANNEL_BACKUP,
+  DATA_CHANNEL_RECORDING,
+  DATA_CHANNEL_RECORDING_AUDIO,
+} from '@openmeet/protocol';
 
 class FakePC {
   ontrack: unknown = null;
@@ -96,5 +100,16 @@ describe('PeerConnection recording DataChannel', () => {
     pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_RECORDING}#x` } });
     pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_RECORDING_AUDIO}#x` } });
     expect(onDataChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards a returned backup channel, and still drops other and control channels', () => {
+    const onDataChannel = vi.fn();
+    const { peer, pc } = make({ onDataChannel });
+    peer.start();
+    pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_BACKUP}#x.mp4` } });
+    pc.ondatachannel!({ channel: { label: 'other' } });
+    pc.ondatachannel!({ channel: { label: 'control' } });
+    expect(onDataChannel).toHaveBeenCalledTimes(1);
+    expect(onDataChannel).toHaveBeenCalledWith({ label: `${DATA_CHANNEL_BACKUP}#x.mp4` });
   });
 });

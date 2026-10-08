@@ -7,6 +7,7 @@ import type {
 } from '@openmeet/protocol';
 import { sendEncoding, type SendKind } from './send-quality';
 import {
+  DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
@@ -144,10 +145,12 @@ export class PeerConnection {
       // Video and uncompressed audio arrive on separate channels so each carries
       // exactly one file. The consumer routes on label. A label may carry a
       // stable key after '#' (see recordingChannelKind) — filter on the base.
+      // `backup` carries a leftover backup going back to the host.
       const { base } = recordingChannelKind(ev.channel.label);
       if (
         base === DATA_CHANNEL_RECORDING ||
         base === DATA_CHANNEL_RECORDING_AUDIO ||
+        base === DATA_CHANNEL_BACKUP ||
         ev.channel.label.startsWith(DATA_CHANNEL_RECORDING_SCREEN)
       ) {
         this.opts.onDataChannel?.(ev.channel);
