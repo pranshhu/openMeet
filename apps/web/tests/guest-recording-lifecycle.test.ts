@@ -3096,18 +3096,41 @@ describe('role-assigned describes the whole room', () => {
     expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host-2']);
   });
 
-  it('leaves a connection alone when the same id is listed again', async () => {
+  it('rebuilds the connection when the same id is listed again', async () => {
     const result = await joinedGuest();
-    const hostPeer = peersFor('p-host')[0]!;
+    const oldHost = peersFor('p-host')[0]!;
+    expect(oldHost.setLocalStream).toHaveBeenCalledTimes(1);
 
     act(() => {
       emitSignal('role-assigned', roleAssigned([host('p-host')]));
     });
 
-    expect(hostPeer.close).not.toHaveBeenCalled();
-    expect(hostPeer.setLocalStream).toHaveBeenCalledTimes(1);
-    expect(peersFor('p-host')).toHaveLength(1);
+    // This message answers a join, so the far end closed its side of the old
+    // connection when this tab's socket dropped: only a fresh one can offer,
+    // and the old one is never handed its tracks a second time.
+    expect(oldHost.close).toHaveBeenCalled();
+    expect(peersFor('p-host')).toHaveLength(2);
+    const newHost = peersFor('p-host')[1]!;
+    expect(newHost.setLocalStream).toHaveBeenCalledTimes(1);
+    expect(oldHost.setLocalStream).toHaveBeenCalledTimes(1);
     expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+  });
+
+  it('rebuilds a held peer and opens the new one, each set up once', async () => {
+    const result = await joinedGuest();
+    const oldHost = peersFor('p-host')[0]!;
+    const bo = { peerId: 'p-bo', ordinal: 2, role: 'guest', displayName: 'Bo' };
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([host('p-host'), bo]));
+    });
+
+    expect(oldHost.close).toHaveBeenCalled();
+    expect(peersFor('p-host')).toHaveLength(2);
+    expect(peersFor('p-host')[1]!.setLocalStream).toHaveBeenCalledTimes(1);
+    expect(peersFor('p-bo')).toHaveLength(1);
+    expect(peersFor('p-bo')[0]!.setLocalStream).toHaveBeenCalledTimes(1);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host', 'p-bo']);
   });
 
   it('rebuilds the connection held for a peer that stayed when it has failed', async () => {
@@ -3178,6 +3201,20 @@ describe('role-assigned describes the whole room', () => {
     expect(result.current.state.phase).toBe('waiting');
   });
 
+  it('drops an entry of the peer list that is not a peer id', async () => {
+    const result = await joinedGuest();
+    const before = vi.mocked(PeerConnection).mock.calls.length;
+
+    act(() => {
+      emitSignal('role-assigned', roleAssigned([{ peerId: 5, ordinal: 2, role: 'guest' }, host('p-host')]));
+    });
+
+    // The Room's list is not trusted: an entry without an id is nobody, and
+    // connecting to it would put a nameless tile in the room.
+    expect(vi.mocked(PeerConnection).mock.calls.length).toBe(before + 1);
+    expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+  });
+
   it('rebinds a recording guest onto the connection it opens for the host’s new id', async () => {
     await joinedGuest();
     await act(async () => {
@@ -3198,6 +3235,28 @@ describe('role-assigned describes the whole room', () => {
     const newHost = peersFor('p-host-2')[0]!;
     expect(sender.rebind).toHaveBeenCalledTimes(1);
     expect(sender.rebind).toHaveBeenCalledWith(newHost.createRecordingChannel.mock.results[0]!.value);
+  });
+
+  it('rebinds a recording guest onto the rebuilt connection for the same host id', async () => {
+    await joinedGuest();
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-x',
+        kind: 'camera',
+        filename: 'guest_rec-x.mp4',
+      });
+    });
+    const sender = vi.mocked(startGuestRecording).mock.results.at(-1)!.value.sender;
+
+    await act(async () => {
+      emitSignal('role-assigned', roleAssigned([host('p-host')]));
+    });
+
+    const rebuiltHost = peersFor('p-host')[1]!;
+    expect(sender.rebind).toHaveBeenCalledTimes(1);
+    expect(sender.rebind).toHaveBeenCalledWith(rebuiltHost.createRecordingChannel.mock.results[0]!.value);
   });
 });
 

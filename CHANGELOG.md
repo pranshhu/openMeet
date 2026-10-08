@@ -116,6 +116,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   arriving.
 - A backup that failed to arrive can be sent again without the host dismissing
   it first.
+- When one person's connection to the service drops and returns, the call comes
+  back at once instead of after half a minute.
 
 ### Security
 

@@ -1386,18 +1386,14 @@ export function useRoom(slug: string) {
         // Deriving it from role made every peer polite whenever the host token
         // didn't reach the tab (invite link opened directly, new tab, private
         // mode) — routine — and no all-polite set can complete a handshake.
-        // Keep only what this message opened, so the set-up below adds tracks
-        // once: a live connection already holds its senders, and handing it
-        // over again is the InvalidAccessError that leaves both sides waiting
-        // for an offer. A failed or closed one is the exception — its peer's
-        // socket never dropped, so replacing it is the only way back for the
-        // pair after the ICE failure that triggered the reconnect.
-        const started: PeerConnection[] = [];
-        for (const other of peers) {
-          const held = peersRef.current.get(other.peerId);
-          if (held && held.connectionState !== 'failed' && held.connectionState !== 'closed') continue;
-          started.push(startPeer(other.peerId, other.ordinal, other.role, other.companion));
-        }
+        // This message only ever answers a join, and a join makes the far end
+        // close the connection it held for this tab and wait for a fresh
+        // offer, so EVERY listed connection is rebuilt — the id it still
+        // holds was closed at the far end the moment this tab's socket
+        // dropped. Tracks are added once because every connection in
+        // `started` is new: handing a live one over again is the
+        // InvalidAccessError that leaves both sides waiting for an offer.
+        const started = peers.map((other) => startPeer(other.peerId, other.ordinal, other.role, other.companion));
         // Everyone already here → negotiate now and leave the waiting room.
         // Otherwise wait for 'peer-joined'.
         const anyoneHere = peers.length > 0;

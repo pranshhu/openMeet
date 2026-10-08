@@ -474,11 +474,12 @@ unfinished send to each new connection to the host.
    guest resumes streaming into the same host files from the last acked chunk with no gap.**
    `role-assigned` lists the whole room as it stands, so every connection to an id the
    Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
-   sends `peer-left` for the sockets it lost — and only the connections that message opened are
-   negotiated on it. When sharing screen, a reconnect finishes the old screen segment and starts a new
-   numbered segment on the rebuilt connection, with each segment backed up locally in OPFS. Host
-   rebinds new channel to existing receiver, found by a stable key (see below), not by the DO's
-   fresh-per-socket peerId.
+   sends `peer-left` for the sockets it lost — and every connection it lists is rebuilt, because the
+   far end closed its side when this tab's socket dropped and waits for a fresh offer; only the
+   connections that message opened are negotiated on it. When sharing screen, a reconnect finishes
+   the old screen segment and starts a new numbered segment on the rebuilt connection, with each
+   segment backed up locally in OPFS. Host rebinds new channel to existing receiver, found by a
+   stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
