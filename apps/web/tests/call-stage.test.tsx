@@ -2106,3 +2106,118 @@ describe('interrupted take notice', () => {
     expect(screen.queryByText('Recording was interrupted. This browser still has the take.')).toBeNull();
   });
 });
+
+describe('CallStage: who is recorded', () => {
+  const carol = { peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' as const };
+  const dan = { peerId: 'p-dan', name: 'Dan', stream: null, role: 'guest' as const, notRecorded: true };
+  const withGuests = { ...baseProps, remoteStream: {} as MediaStream, remotePeers: [carol, dan] };
+
+  it('lists the guests and asks the Room to record or drop each one', () => {
+    const onSetPeerRecorded = vi.fn();
+    render(<CallStage {...withGuests} onSetPeerRecorded={onSetPeerRecorded} />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(arrow);
+    expect(arrow).toHaveAttribute('aria-expanded', 'true');
+
+    const menu = screen.getByRole('menu', { name: 'Who is recorded' });
+    expect(within(menu).getByRole('menuitemcheckbox', { name: 'Carol' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(menu).getByRole('menuitemcheckbox', { name: 'Dan' })).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'Carol' }));
+    expect(onSetPeerRecorded).toHaveBeenLastCalledWith('p-carol', false);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Dan' }));
+    expect(onSetPeerRecorded).toHaveBeenLastCalledWith('p-dan', true);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+  });
+
+  it('offers no arrow to a guest, while the room records, with no choosable guest, or with no host wiring', () => {
+    render(<CallStage {...withGuests} role="guest" canRecord={false} onSetPeerRecorded={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    cleanup();
+
+    render(<CallStage {...withGuests} roomRecording onSetPeerRecorded={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p-prod', name: 'Pia', stream: null, role: 'producer' },
+          { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true },
+        ]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+
+    render(<CallStage {...withGuests} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('offers a Present-only guest that is already set, so the host can tick it back', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true, notRecorded: true },
+        ]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose who is recorded' }));
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Vic' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('offers the arrow between takes, beside the Record button', () => {
+    render(<CallStage {...withGuests} phase="done" onSetPeerRecorded={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose who is recorded' })).toBeInTheDocument();
+  });
+
+  it('keeps the arrow closed while a resume or a save runs', () => {
+    render(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} recoveryBusy />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toBeDisabled();
+    fireEvent.click(arrow);
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+  });
+
+  it('closes on Escape back to the arrow, on Record, and when another menu opens', () => {
+    const onRecord = vi.fn();
+    render(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} onRecord={onRecord} onSwitchMic={vi.fn()} />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    fireEvent.click(arrow);
+    const row = screen.getByRole('menuitemcheckbox', { name: 'Carol' });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(arrow);
+
+    fireEvent.click(arrow);
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    expect(onRecord).toHaveBeenCalled();
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+
+    fireEvent.click(arrow);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Select microphone' }));
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+  });
+});

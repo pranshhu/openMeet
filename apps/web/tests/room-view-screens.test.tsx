@@ -329,6 +329,45 @@ describe('recording', () => {
     }
   });
 
+  // The arrow lives in CallStage; the send it triggers is the hook's, so this
+  // is the wiring between them.
+  it('sets who is recorded through the hook', () => {
+    Object.assign(state, {
+      phase: 'in-call',
+      role: 'host',
+      peerRecording: false,
+      notRecorded: false,
+      remoteStream: {} as MediaStream,
+      remotePeers: [{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true });
+    vi.stubGlobal('showDirectoryPicker', () => {});
+    hook.setPeerRecorded = vi.fn();
+    try {
+      render(<RoomView slug="abc-defg-hij" />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Choose who is recorded' }));
+      fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Carol' }));
+
+      expect(hook.setPeerRecorded).toHaveBeenCalledWith('p-carol', false);
+    } finally {
+      Reflect.deleteProperty(globalThis, 'MediaRecorder');
+      Reflect.deleteProperty(globalThis, 'showDirectoryPicker');
+    }
+  });
+
   // The panel lives in CallStage, but the reading is the hook's: this is the
   // wiring between them, so a broken pass-through leaves the panel unmounted.
   it('hands the call the room’s track readings', () => {

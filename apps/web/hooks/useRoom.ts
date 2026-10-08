@@ -2218,6 +2218,11 @@ export function useRoom(slug: string) {
     }));
   }, []);
 
+  /** Host: choose whether one guest is recorded in the takes that follow. The Room's answer updates the state. */
+  const setPeerRecorded = useCallback((peerId: string, recorded: boolean) => {
+    signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
+  }, []);
+
   const toggleScreenShare = useCallback(
     async (source?: File | 'rear-camera') => {
       const peer = peerRef.current;
@@ -2768,6 +2773,7 @@ export function useRoom(slug: string) {
     switchCamera,
     switchMic,
     sendChat,
+    setPeerRecorded,
     toggleScreenShare,
     startRecording,
     resumeRecording,

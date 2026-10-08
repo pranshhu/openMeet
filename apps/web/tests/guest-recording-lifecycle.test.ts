@@ -808,6 +808,12 @@ describe('guest recording lifecycle in useRoom', () => {
     expect(result.current.state.markers).toHaveLength(0);
   });
 
+  it('asks the Room to set whether one guest is recorded', async () => {
+    const result = await recordingGuest();
+    act(() => result.current.setPeerRecorded('p-guest', false));
+    expect(signalSent).toContainEqual({ type: 'peer-recorded', peerId: 'p-guest', recorded: false });
+  });
+
   it('never marks a guest backup finalized: the host copy is not known to be saved', async () => {
     handlesWithBackup();
     await recordingGuest();
