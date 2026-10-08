@@ -356,6 +356,143 @@ describe('CallStage recording-capability labels', () => {
     expect(screen.getByRole('img', { name: 'Sharing screen' })).toBeInTheDocument();
   });
 
+  // The line is said to everyone: a guest set as not recorded can be heard
+  // through someone else's microphone, so it is a state of the room, not a
+  // private setting.
+  it('tells every viewer which guest is not being recorded', () => {
+    const peers = [
+      { peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true },
+      { peerId: 'p-dan', name: 'Dan', stream: null },
+    ];
+    const { unmount } = render(<CallStage {...baseProps} role="guest" remotePeers={peers} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Carol is not being recorded.');
+    unmount();
+
+    render(<CallStage {...baseProps} role="host" remotePeers={peers} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Carol is not being recorded.');
+  });
+
+  it('lists two guests who are not being recorded as a plural', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        remotePeers={[
+          { peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true },
+          { peerId: 'p-dan', name: 'Dan', stream: null, notRecorded: true },
+        ]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Carol, Dan are not being recorded.');
+  });
+
+  it('calls a guest who joined with no name A guest', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        remotePeers={[{ peerId: 'p-carol', name: null, stream: null, notRecorded: true }]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('A guest is not being recorded.');
+  });
+
+  it('says nothing about not being recorded when nobody is set', () => {
+    render(<CallStage {...baseProps} role="guest" remotePeers={[{ peerId: 'p-dan', name: 'Dan', stream: null }]} />);
+    expect(screen.queryByText(/not being recorded|set you as not recorded/)).toBeNull();
+    // No empty line and no blank row either.
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('tells the viewer the host set as not recorded exactly what is left out', () => {
+    const copy =
+      'The host has set you as not recorded — your camera, microphone, screen and chat messages are left out of the recording.';
+    const { unmount } = render(<CallStage {...baseProps} role="guest" notRecorded />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+    unmount();
+
+    // After a take it was recorded in: its own capture is off, and the take
+    // that is running now leaves it out.
+    render(<CallStage {...baseProps} role="guest" phase="done" roomRecording notRecorded />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+  });
+
+  it('puts the viewer’s sentence and the others’ in one line, one space apart', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        notRecorded
+        remotePeers={[{ peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true }]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'left out of the recording. Carol is not being recorded.'
+    );
+  });
+
+  it('tells the viewer set as not recorded what the running recording leaves out', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording notRecorded />);
+    expect(
+      screen.getByText('This call is now being recorded. Your camera, microphone, screen and chat are left out.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the consent toast as it was for a recorded guest and for the host', () => {
+    const { unmount } = render(<CallStage {...baseProps} role="guest" roomRecording />);
+    expect(screen.getByText('This call and chat are now being recorded')).toBeInTheDocument();
+    unmount();
+
+    render(<CallStage {...baseProps} role="host" roomRecording />);
+    expect(screen.getByText('Recording started')).toBeInTheDocument();
+  });
+
+  // The added sentence is longer than a phone's width, so the pill has to
+  // become the same soft card the finalizing toast uses.
+  it('lets the longer consent toast wrap as a card, not a pill', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording notRecorded />);
+    const alert = screen.getByRole('alert');
+    expect(alert.className).toMatch(/\bmax-w-md\b/);
+    expect(alert.className).toMatch(/\brounded-3xl\b/);
+    expect(alert.className).not.toMatch(/\brounded-full\b/);
+  });
+
+  it('does not warn the host about a guest they chose not to record', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null, notRecorded: true }]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    expect(screen.getByText('Bob is not being recorded.')).toBeInTheDocument();
+    expect(screen.queryByText('Bob won’t be recorded — their browser can’t record MP4.')).toBeNull();
+  });
+
+  // A state, not a problem: neutral colour, and after the yellow line a host
+  // must not miss.
+  it('keeps the not-recorded line neutral and after the capability warning', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p1', name: 'Bob', stream: null },
+          { peerId: 'p2', name: 'Carol', stream: null, notRecorded: true },
+        ]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    const warning = screen.getByText('Bob won’t be recorded — their browser can’t record MP4.');
+    const line = screen.getByText('Carol is not being recorded.');
+    expect(line.className).toMatch(/text-white\/80/);
+    expect(line.className).not.toMatch(/text-\[#fdd663\]/);
+    expect(warning.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('renders "Mark this moment" for guests during recording, but not "End & save recording"', () => {
     render(<CallStage {...baseProps} role="guest" phase="recording" />);
     expect(screen.getByLabelText(/Mark this moment/)).toBeInTheDocument();
@@ -1967,5 +2104,135 @@ describe('interrupted take notice', () => {
 
     expect(screen.getByText('Saved 1 file to your folder.').getAttribute('role')).toBe('status');
     expect(screen.queryByText('Recording was interrupted. This browser still has the take.')).toBeNull();
+  });
+});
+
+describe('CallStage: who is recorded', () => {
+  const carol = { peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' as const };
+  const dan = { peerId: 'p-dan', name: 'Dan', stream: null, role: 'guest' as const, notRecorded: true };
+  const withGuests = { ...baseProps, remoteStream: {} as MediaStream, remotePeers: [carol, dan] };
+
+  it('lists the guests and asks the Room to record or drop each one', () => {
+    const onSetPeerRecorded = vi.fn();
+    render(<CallStage {...withGuests} onSetPeerRecorded={onSetPeerRecorded} />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(arrow);
+    expect(arrow).toHaveAttribute('aria-expanded', 'true');
+
+    const menu = screen.getByRole('menu', { name: 'Who is recorded' });
+    expect(within(menu).getByRole('menuitemcheckbox', { name: 'Carol' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(menu).getByRole('menuitemcheckbox', { name: 'Dan' })).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'Carol' }));
+    expect(onSetPeerRecorded).toHaveBeenLastCalledWith('p-carol', false);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Dan' }));
+    expect(onSetPeerRecorded).toHaveBeenLastCalledWith('p-dan', true);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+  });
+
+  it('offers no arrow to a guest, while the room records, with no choosable guest, or with no host wiring', () => {
+    render(<CallStage {...withGuests} role="guest" canRecord={false} onSetPeerRecorded={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    cleanup();
+
+    render(<CallStage {...withGuests} roomRecording onSetPeerRecorded={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p-prod', name: 'Pia', stream: null, role: 'producer' },
+          { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true },
+        ]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+
+    render(<CallStage {...withGuests} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('offers a Present-only guest that is already set, so the host can tick it back', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true, notRecorded: true },
+        ]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose who is recorded' }));
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Vic' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('offers the arrow between takes, beside the Record button', () => {
+    render(<CallStage {...withGuests} phase="done" onSetPeerRecorded={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose who is recorded' })).toBeInTheDocument();
+  });
+
+  it('keeps the arrow closed while a resume or a save runs', () => {
+    render(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} recoveryBusy />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toBeDisabled();
+    fireEvent.click(arrow);
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+  });
+
+  it('offers no arrow while an interrupted take can still be resumed or saved', () => {
+    // After a host reload the guests are still capturing that take; who is
+    // recorded must not change under them.
+    const { rerender } = render(
+      <CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={{ take: 1, canResume: true }} />
+    );
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+
+    rerender(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={{ take: 1, canResume: false }} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+
+    rerender(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={null} />);
+    expect(screen.getByRole('button', { name: 'Choose who is recorded' })).toBeInTheDocument();
+  });
+
+  it('closes on Escape back to the arrow, on Record, and when another menu opens', () => {
+    const onRecord = vi.fn();
+    render(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} onRecord={onRecord} onSwitchMic={vi.fn()} />);
+
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    fireEvent.click(arrow);
+    const row = screen.getByRole('menuitemcheckbox', { name: 'Carol' });
+    row.focus();
+    fireEvent.keyDown(row, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(arrow);
+
+    fireEvent.click(arrow);
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    expect(onRecord).toHaveBeenCalled();
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
+
+    fireEvent.click(arrow);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Select microphone' }));
+    expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
   });
 });

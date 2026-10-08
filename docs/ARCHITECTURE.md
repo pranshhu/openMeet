@@ -788,3 +788,17 @@ unfinished send to each new connection to the host.
 - **A take saved from the lobby after a crash still lists the first guest's camera file when no
   guest was recorded.** The crash copy notes that file at Record; the save reports it as failed,
   nothing committed.
+- **A take saved from the lobby after a crash holds what a guest sent before they were set as not
+  recorded.** The lobby has no connection to the room; it rebuilds what the crash copy holds.
+- **A guest whose browser blocks session storage is forgotten on a reload.** The Room remembers a
+  guest set as not recorded by the tab's id, which lives in session storage (`lib/client-id.ts`);
+  without it every reload is a new id, so the guest arrives as recorded and the host sets them
+  again.
+- **After a host reload the Room would accept a change to who is recorded while guests still
+  capture the interrupted take.** Its `recording` flag is cleared when the last host socket
+  leaves. The call screen does not offer the control while that take can still be resumed or saved
+  (`resumeOffer`), so the host's page never sends it then. If the setting does arrive while a
+  guest's browser is capturing, that capture ends there, as on the host's stop.
+- **A guest whose stream to the host has died keeps recording its own backup for up to 30 s after
+  the take ends.** `endGuestRecording` stops the backups only once the senders have drained or
+  given up (`DRAIN_NO_PROGRESS_TIMEOUT_MS`).

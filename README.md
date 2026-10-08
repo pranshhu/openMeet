@@ -57,7 +57,8 @@ retention policy to trust, because there's nothing retained.
   30 fps, and 50 or 60 where the camera offers them
 - Raw audio — echo cancellation, noise suppression and AGC are all **off** (see
   [Headphones](#headphones-really))
-- Host-driven: the host presses Record once and everyone in the room is captured
+- Host-driven: the host presses Record once and everyone in the room is captured,
+  except anyone the host has set as not recorded
 
 **During the session**
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
@@ -358,7 +359,7 @@ All in the one folder the host picks, per take:
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
-| `chat_<id>.txt` | Chat log from the take window (when messages sent) |
+| `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out the messages of anyone set as not recorded |
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
@@ -376,7 +377,15 @@ to `avc1` by the remux commands below, which is what editors expect.
 
 ## Recording and consent
 
-The host starts recording for everyone. Participants see a pre-join disclosure
+The host starts recording for everyone. From the arrow beside Record the host can
+set a guest as not recorded before a take: that guest stays in the call, and their
+camera, microphone, screen and chat messages are left out of every take until the
+host changes it or everyone has left the room — their browser records nothing and
+the host saves no file from them, from the next take on, though a backup of an
+earlier take that they send back is still offered to the host. Everyone in the
+call is told who is not recorded. A recorded participant who listens on speakers,
+or who shares a screen with its sound or with the call window on it, can still
+pick up that guest's voice or picture. Participants see a pre-join disclosure
 plus an on-screen notice and REC pill. Files (including in-call chat) land only on the
 host's disk, plus a backup in each participant's own browser storage and a crash copy of
 each take's guest recordings in the host's browser storage, removed when the take ends

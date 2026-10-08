@@ -134,6 +134,8 @@ export function CallStage({
   onSaveRecording,
   takeNotice,
   recoveryBusy = false,
+  notRecorded,
+  onSetPeerRecorded,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -221,6 +223,10 @@ export function CallStage({
   takeNotice?: string | null;
   /** A Resume or a Save of the interrupted take is running, so neither can be pressed, nor Record. */
   recoveryBusy?: boolean;
+  /** The host set this viewer as not recorded. */
+  notRecorded?: boolean;
+  /** Host: choose whether one guest is recorded in the takes that follow. */
+  onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -232,6 +238,7 @@ export function CallStage({
   const [micMenuOpen, setMicMenuOpen] = useState(false);
   const [camMenuOpen, setCamMenuOpen] = useState(false);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
+  const [recordMenuOpen, setRecordMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
   // A mic that gates to silence makes this note wrong for a setup that is
   // fine, so each kind can be sent away.
@@ -276,13 +283,14 @@ export function CallStage({
   }, []);
 
   useEffect(() => {
-    if (!micMenuOpen && !camMenuOpen && !presentMenuOpen) return;
+    if (!micMenuOpen && !camMenuOpen && !presentMenuOpen && !recordMenuOpen) return;
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest('[data-picker-container]')) return;
       setMicMenuOpen(false);
       setCamMenuOpen(false);
       setPresentMenuOpen(false);
+      setRecordMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
@@ -293,6 +301,7 @@ export function CallStage({
       setMicMenuOpen(false);
       setCamMenuOpen(false);
       setPresentMenuOpen(false);
+      setRecordMenuOpen(false);
     };
     window.addEventListener('click', onDocClick);
     window.addEventListener('keydown', onKey);
@@ -300,7 +309,7 @@ export function CallStage({
       window.removeEventListener('click', onDocClick);
       window.removeEventListener('keydown', onKey);
     };
-  }, [micMenuOpen, camMenuOpen, presentMenuOpen]);
+  }, [micMenuOpen, camMenuOpen, presentMenuOpen, recordMenuOpen]);
 
   const currentMicId = activeMicId ?? localStream?.getAudioTracks()[0]?.getSettings?.().deviceId;
   const currentCamSettings = localStream?.getVideoTracks()[0]?.getSettings?.();
@@ -462,8 +471,15 @@ export function CallStage({
   const isHost = role === 'host';
   // Name tags truncate, so the one warning a host must not miss gets a line of its own.
   const unrecordable = isHost
-    ? remotePeers.filter((p) => capabilities[p.peerId]?.mp4 === false).map((p) => p.name ?? 'A guest')
+    ? remotePeers
+        .filter((p) => !p.notRecorded && capabilities[p.peerId]?.mp4 === false)
+        .map((p) => p.name ?? 'A guest')
     : [];
+  // Said to everyone, on a line of its own like the warning above: name tags truncate.
+  const notRecordedNames = remotePeers.filter((p) => p.notRecorded).map((p) => p.name ?? 'A guest');
+  // Guests the host can choose. A present-only device is listed only while it
+  // is set, so a guest who was set and came back that way can be ticked again.
+  const choosable = remotePeers.filter((p) => p.role === 'guest' && (!p.companion || p.notRecorded));
   const phone = isPhone();
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
@@ -505,6 +521,7 @@ export function CallStage({
   // click: no second folder prompt, and the user activation still holds.
   const canRecordNext = isHost && canRecord && !!remote;
   const handleRecord = () => {
+    setRecordMenuOpen(false);
     requestProblemNotifications();
     onRecord();
   };
@@ -636,6 +653,18 @@ export function CallStage({
       {unrecordable.length > 0 && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {unrecordable.join(', ')} won’t be recorded — their browser can’t record MP4.
+        </p>
+      )}
+      {(notRecorded || notRecordedNames.length > 0) && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
+        >
+          {notRecorded &&
+            'The host has set you as not recorded — your camera, microphone, screen and chat messages are left out of the recording.'}
+          {notRecorded && notRecordedNames.length > 0 && ' '}
+          {notRecordedNames.length > 0 &&
+            `${notRecordedNames.join(', ')} ${notRecordedNames.length === 1 ? 'is' : 'are'} not being recorded.`}
         </p>
       )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
@@ -779,7 +808,12 @@ export function CallStage({
                 With the teleprompter open (Record is its main moment) the top
                 band is its controls, so on desktop both toasts drop to the
                 stage's bottom centre, clear of the name tag and the PiP. */}
-            <RecordingNotice recording={roomRecording} host={role === 'host'} className={toastPlace} />
+            <RecordingNotice
+              recording={roomRecording}
+              host={role === 'host'}
+              notRecorded={!!notRecorded}
+              className={toastPlace}
+            />
             {/* Saving takes up to ~45 s while the last seconds arrive. Leave is
                 off until it finishes, so this says why and what to do. */}
             {phase === 'finalizing' && (
@@ -870,6 +904,7 @@ export function CallStage({
                       onClick={() => {
                         setMicMenuOpen((o) => !o);
                         setCamMenuOpen(false);
+                        setRecordMenuOpen(false);
                       }}
                       aria-label="Select microphone"
                       title="Select microphone"
@@ -932,6 +967,7 @@ export function CallStage({
                       onClick={() => {
                         setCamMenuOpen((o) => !o);
                         setMicMenuOpen(false);
+                        setRecordMenuOpen(false);
                       }}
                       aria-label="Select camera"
                       title="Select camera"
@@ -1115,14 +1151,63 @@ export function CallStage({
                 </>
               )}
               {((phase === 'in-call' && canRecord) || (phase === 'done' && canRecordNext)) && (
-                <ControlButton
-                  icon="record"
-                  text="Record"
-                  label="Start recording"
-                  variant="record"
-                  disabled={recoveryBusy}
-                  onClick={phase === 'done' ? recordNextTake : handleRecord}
-                />
+                <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">
+                  <ControlButton
+                    icon="record"
+                    text="Record"
+                    label="Start recording"
+                    variant="record"
+                    disabled={recoveryBusy}
+                    onClick={phase === 'done' ? recordNextTake : handleRecord}
+                  />
+                  {/* Not while an interrupted take can still be resumed or saved: the
+                      guests are still capturing it, and who is recorded must not change
+                      under a capture in progress. */}
+                  {onSetPeerRecorded && !roomRecording && !resumeOffer && choosable.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={recoveryBusy}
+                        onClick={() => {
+                          setRecordMenuOpen((o) => !o);
+                          setMicMenuOpen(false);
+                          setCamMenuOpen(false);
+                        }}
+                        aria-label="Choose who is recorded"
+                        title="Choose who is recorded"
+                        aria-haspopup="menu"
+                        aria-expanded={recordMenuOpen}
+                        className="inline-flex h-12 w-11 items-center justify-center rounded-r-full sm:w-9 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Icon name={recordMenuOpen ? 'arrow_drop_down' : 'arrow_drop_up'} size={18} />
+                      </button>
+                      {recordMenuOpen && (
+                        <div
+                          role="menu"
+                          aria-label="Who is recorded"
+                          className="absolute bottom-full right-0 z-30 mb-2 max-h-60 min-w-56 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
+                        >
+                          <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
+                            Who is recorded
+                          </div>
+                          {choosable.map((p) => (
+                            <button
+                              key={p.peerId}
+                              type="button"
+                              role="menuitemcheckbox"
+                              aria-checked={!p.notRecorded}
+                              onClick={() => onSetPeerRecorded(p.peerId, Boolean(p.notRecorded))}
+                              className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                            >
+                              <span className="truncate">{p.name ?? 'Guest'}</span>
+                              {!p.notRecorded && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
               {phase === 'recording' && (
                 <>

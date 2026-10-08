@@ -92,6 +92,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   folder checks) follow a camera that delivers 50 or 60 fps.
 - A Stereo choice in the lobby for a person with a stereo microphone, remembered
   in that browser. Without it audio is recorded in mono.
+- The host can set a guest as not recorded before a take, from the arrow beside
+  **Record**: that guest stays in the call, their browser records nothing and the
+  host saves no file from them, from the next take on; a backup of an earlier take
+  that they send back is still offered to the host, and everyone is told who is
+  not recorded.
 
 ### Changed
 
