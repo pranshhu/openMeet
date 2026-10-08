@@ -42,7 +42,11 @@ export interface PresentedFile {
   stop: () => void;
 }
 
-export async function presentFile(file: File): Promise<PresentedFile> {
+/**
+ * Present a photo or a video file as a stream. `monitor` also plays a video's
+ * sound on this device, for a presenter who has to hear the clip to talk over it.
+ */
+export async function presentFile(file: File, monitor = false): Promise<PresentedFile> {
   const canvas = document.createElement('canvas');
   canvas.width = CANVAS_WIDTH;
   canvas.height = CANVAS_HEIGHT;
@@ -102,8 +106,9 @@ export async function presentFile(file: File): Promise<PresentedFile> {
   video.autoplay = true;
 
   // Extract sound via Web Audio API: createMediaElementSource -> createMediaStreamDestination.
-  // Not connecting to audioCtx.destination ensures the video plays muted locally while its audio
-  // track is sent to the presented stream.
+  // The element's own output is taken over by the graph, so the video is silent on this device
+  // unless `monitor` also connects it to audioCtx.destination; its audio track is sent to the
+  // presented stream either way.
   let audioCtx: AudioContext | null = null;
   let audioTrack: MediaStreamTrack | null = null;
   try {
@@ -115,6 +120,7 @@ export async function presentFile(file: File): Promise<PresentedFile> {
       const source = audioCtx.createMediaElementSource(video);
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
+      if (monitor) source.connect(audioCtx.destination);
       const track = dest.stream.getAudioTracks()[0];
       if (track) {
         audioTrack = track;
@@ -160,6 +166,11 @@ export async function presentFile(file: File): Promise<PresentedFile> {
     typeof (canvas as any).captureStream === 'function'
       ? (canvas as any).captureStream(30)
       : new MediaStream();
+
+  // A video is motion, not text: marked here, it is sent to the call at its own
+  // frame rate instead of at the few frames a second a shared screen gets.
+  const frames = stream.getVideoTracks?.()[0];
+  if (frames) frames.contentHint = 'motion';
 
   if (audioTrack) {
     stream.addTrack(audioTrack);
