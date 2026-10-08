@@ -5431,6 +5431,19 @@ describe('the host and a guest set as not recorded', () => {
     });
   });
 
+  it('refuses a channel that arrives in the same turn as the setting', async () => {
+    await hostInRoom([dan]);
+    let channel!: RTCDataChannel;
+    // One turn: the Room's answer and the channel, with no render in between.
+    act(() => {
+      emitSignal('peer-recorded', { type: 'peer-recorded', peerId: 'p-dan', recorded: false });
+      channel = channelFrom('p-dan', 'recording#k3');
+    });
+
+    expect(channel.close).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(bindHostGuestChannel)).not.toHaveBeenCalled();
+  });
+
   it('closes a channel that waited through the reload once its guest is set as not recorded', async () => {
     vi.mocked(findTakeJournals).mockResolvedValue([journal]);
     const { result } = await hostInRoom([dan]);

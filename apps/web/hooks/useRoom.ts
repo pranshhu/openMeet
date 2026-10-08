@@ -1694,6 +1694,11 @@ export function useRoom(slug: string) {
           setState((s) => ({ ...s, notRecorded }));
           return;
         }
+        // The host's check reads this ref when a channel arrives; the effect that
+        // mirrors state into it runs a render later, and a channel may not wait.
+        remotePeersRef.current = remotePeersRef.current.map((r) =>
+          r.peerId === m.peerId ? { ...r, notRecorded } : r
+        );
         setState((s) => ({
           ...s,
           remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
