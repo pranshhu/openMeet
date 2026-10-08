@@ -26,6 +26,8 @@ import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { isFsAccessSupported, pickRecordingDirectory } from '@/lib/fs-writer';
 import { MediaBoard } from '@/lib/media-board';
 import { getHostToken } from '@/lib/host-token';
+import { journalSpaceCheck } from '@/lib/preflight';
+import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
 import type { MicWarning } from '@/lib/mic-watch';
@@ -1928,11 +1930,30 @@ export function useRoom(slug: string) {
       takeRef.current += 1;
       // Nobody is proven told for this take until its recording channel arrives.
       setToldPeers([]);
+      // Storage the browser cannot describe is storage this take cannot promise;
+      // Record runs either way and the folder recording is untouched.
+      let journal = false;
+      try {
+        // The folder prompt that follows needs the click to be recent, and Record must never
+        // hang on a storage question: no answer within a second is no promise.
+        const estimate = await Promise.race([
+          navigator.storage?.estimate?.(),
+          new Promise<undefined>((resolve) => setTimeout(resolve, 1000)),
+        ]);
+        journal = journalSpaceCheck(
+          estimate?.quota,
+          estimate?.usage,
+          presetForTrack(localStream.getVideoTracks()[0])
+        );
+      } catch {
+        /* estimate() failed; the take records without the crash copy */
+      }
       recordingRef.current = await startHostRecording({
         recordingId,
         localStream: withBoardAudio(localStream, boardRef.current),
         micStream: localStream,
         take: takeRef.current,
+        journal,
         room: slug,
         ...(dirRef.current ? { dir: dirRef.current } : {}),
         // Deliberately NOT phase:'error'. That unmounts CallStage, removing the

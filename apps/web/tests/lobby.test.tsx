@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
+import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
 import type { TakeJournal } from '@/lib/take-journal';
@@ -727,6 +728,48 @@ describe('Lobby', () => {
     } finally {
       localStorage.removeItem('om_quality');
     }
+  });
+
+  // The host's storage holds the take's crash journal; a guest's does not, so
+  // only the host is told the take will have no crash copy.
+  it('tells a host when the take cannot keep a crash copy, and never a guest', async () => {
+    localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+    try {
+      vi.stubGlobal('navigator', {
+        userAgent: 'test',
+        mediaDevices: {
+          getUserMedia: vi.fn().mockResolvedValue(cam720Stream()),
+          enumerateDevices: vi.fn().mockResolvedValue(DEVICES),
+        },
+        storage: { estimate: vi.fn().mockResolvedValue({ quota: 1e9, usage: 0 }) },
+      });
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(/without that copy/)).toBeInTheDocument());
+      unmount();
+
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(/under an hour at this quality/)).toBeInTheDocument());
+      expect(screen.queryByText(/without that copy/)).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+    }
+  });
+
+  // Lobby's isHost starts false and is set by its own effect, so a panel that
+  // is already on screen has to learn the host flag later.
+  it('re-runs the disk check when the host flag arrives after the first render', async () => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      storage: { estimate: vi.fn().mockResolvedValue({ quota: 1e9, usage: 0 }) },
+    });
+    const { rerender } = render(
+      <PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost={false} />
+    );
+    await waitFor(() => expect(screen.getByText(/under an hour at this quality/)).toBeInTheDocument());
+    expect(screen.queryByText(/without that copy/)).toBeNull();
+    rerender(<PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost />);
+    await waitFor(() => expect(screen.getByText(/without that copy/)).toBeInTheDocument());
   });
 
   it('does not promise 24-bit uncompressed audio when this browser cannot capture a WAV master', async () => {

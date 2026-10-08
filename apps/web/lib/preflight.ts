@@ -24,14 +24,16 @@ export interface Check {
  *
  * The figure is the browser's storage quota (navigator.storage.estimate), not
  * free space on the disk the recordings are saved to, so it is named as such.
- * Only this device's backup lives there — its camera MP4 plus a WAV master,
- * budgeted as stereo — whoever joins; the host's copies of everyone's tracks go
- * to the recording folder instead (folderCheck).
+ * A guest's storage holds only its own backup — its camera MP4 plus a WAV
+ * master, budgeted as stereo — and the host's copies of everyone's tracks go to
+ * the recording folder instead (folderCheck). A host's storage also holds the
+ * take's crash journal, which is why `host` counts it against the same quota.
  */
 export function diskCheck(
   quota: number | undefined,
   usage: number | undefined,
-  preset: QualityPreset
+  preset: QualityPreset,
+  host = false
 ): Check {
   if (quota === undefined) {
     return {
@@ -44,25 +46,51 @@ export function diskCheck(
   const perHour = bytesPerHour(preset, 2);
   const hours = free / perHour;
   const gb = (n: number) => `${(n / 1e9).toFixed(1)} GB of browser storage available (for backups)`;
-  if (hours < 1) {
-    return {
-      id: 'disk',
-      level: 'fail',
-      message: `Only ${gb(free)}\u00a0— under an hour at this quality. Free up space or lower the quality.`,
-    };
-  }
-  if (hours < 3) {
-    return {
-      id: 'disk',
-      level: 'warn',
-      message: `${gb(free)}\u00a0— about ${hours.toFixed(1)} hours at this quality.`,
-    };
-  }
-  return {
-    id: 'disk',
-    level: 'ok',
-    message: `${gb(free)}\u00a0— roughly ${Math.floor(hours)} hours at this quality.`,
-  };
+  const level: CheckLevel = hours < 1 ? 'fail' : hours < 3 ? 'warn' : 'ok';
+  const base =
+    level === 'fail'
+      ? `Only ${gb(free)}\u00a0— under an hour at this quality. Free up space or lower the quality.`
+      : level === 'warn'
+        ? `${gb(free)}\u00a0— about ${hours.toFixed(1)} hours at this quality.`
+        : `${gb(free)}\u00a0— roughly ${Math.floor(hours)} hours at this quality.`;
+  // Appended in one place, so every level and prefix above stays character for
+  // character. Only a host carries the take's journal in this storage, and an
+  // unreadable quota returned early: "not enough" would be a different claim.
+  const noProtection =
+    host && !journalSpaceCheck(quota, usage, preset)
+      ? ' Not enough browser storage to protect this take against a crash — it records to your folder without that copy.'
+      : '';
+  return { id: 'disk', level, message: base + noProtection };
+}
+
+/**
+ * The browser storage a crash journal would take for an hour: every guest's camera MP4
+ * and stereo WAV. The host's own tracks are already covered by its backups.
+ */
+export function journalSpaceNeed(preset: QualityPreset, guests = MAX_RECORDED_PEERS - 1): number {
+  return bytesPerHour(preset, 2) * Math.max(0, guests);
+}
+
+/** A take keeps a crash copy when at least this many minutes of it fit in browser storage. */
+export const JOURNAL_FLOOR_MINUTES = 10;
+
+/**
+ * Whether a take can also keep a crash copy: this device's own backup plus the room's
+ * journal, for JOURNAL_FLOOR_MINUTES, out of the same quota. Chrome reports a fixed 10 GiB
+ * of free quota whatever the disk holds, so the floor is what that figure passes at every
+ * preset; a longer floor would switch the copy off for everyone. Unknown storage means no
+ * promise.
+ */
+export function journalSpaceCheck(
+  quota: number | undefined,
+  usage: number | undefined,
+  preset: QualityPreset,
+  guests = MAX_RECORDED_PEERS - 1
+): boolean {
+  if (quota === undefined || !Number.isFinite(quota)) return false;
+  const free = Math.max(0, quota - (usage ?? 0));
+  const perHour = bytesPerHour(preset, 2) + journalSpaceNeed(preset, guests);
+  return free >= (perHour * JOURNAL_FLOOR_MINUTES) / 60;
 }
 
 /**

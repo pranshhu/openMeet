@@ -6,6 +6,8 @@ import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, type RecordingHandles } from '@/hooks/recording-controller';
 import { patchRecording } from '@/lib/api';
 import { buildSyncReport } from '@/lib/sync-report';
+import { bytesPerHour, presetById } from '@/lib/quality';
+import { JOURNAL_FLOOR_MINUTES } from '@/lib/preflight';
 import type { ServerMessage } from '@openmeet/protocol';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
@@ -982,6 +984,65 @@ describe('host backup after a take in useRoom', () => {
       result.current.newTake();
     });
     expect(result.current.state.unprotectedRecording).toBe(false);
+  });
+
+  // The harness's video track has no getSettings, so the take is measured at
+  // the 1080p default: the host's own backup plus three guests, for ten minutes.
+  const floor = (bytesPerHour(presetById('1080p'), 2) * 4 * JOURNAL_FLOOR_MINUTES) / 60;
+
+  /** jsdom has no navigator.storage; these tests give it one for a single take. */
+  function stubStorage(estimate: () => Promise<StorageEstimate>) {
+    Object.defineProperty(navigator, 'storage', { value: { estimate }, configurable: true });
+    return () => {
+      delete (navigator as { storage?: unknown }).storage;
+    };
+  }
+
+  // No storage API at all (jsdom's state, and older builds): an answer that
+  // does not exist is no promise of a crash copy, and the take still records.
+  it('starts the take without a journal when the browser has no storage API', async () => {
+    await hostTake();
+    expect(vi.mocked(startHostRecording).mock.calls[0]?.[0]?.journal).toBe(false);
+  });
+
+  it('starts the take without a journal when browser storage is short', async () => {
+    const restore = stubStorage(vi.fn().mockResolvedValue({ quota: floor - 1, usage: 0 }));
+    try {
+      await hostTake();
+      expect(vi.mocked(startHostRecording).mock.calls[0]?.[0]?.journal).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('keeps the journal when the free quota holds the floor', async () => {
+    const restore = stubStorage(vi.fn().mockResolvedValue({ quota: floor, usage: 0 }));
+    try {
+      await hostTake();
+      expect(vi.mocked(startHostRecording).mock.calls[0]?.[0]?.journal).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('records without a journal when the storage question never answers', async () => {
+    const restore = stubStorage(vi.fn().mockReturnValue(new Promise<StorageEstimate>(() => {})));
+    try {
+      await hostTake();
+      expect(vi.mocked(startHostRecording).mock.calls[0]?.[0]?.journal).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('records without a journal when the storage estimate rejects', async () => {
+    const restore = stubStorage(vi.fn().mockRejectedValue(new Error('no storage')));
+    try {
+      await hostTake();
+      expect(vi.mocked(startHostRecording).mock.calls[0]?.[0]?.journal).toBe(false);
+    } finally {
+      restore();
+    }
   });
 
   // A full disk makes the errored writer reject its close, so the finalize
@@ -2635,6 +2696,9 @@ describe('host backup after a take in useRoom', () => {
       vi.mocked(startHostRecording).mockImplementationOnce(() => new Promise((r) => { open = r; }));
       let starting: Promise<void> = Promise.resolve();
       act(() => { starting = result.current.startRecording(); });
+      // Record settles the storage question before it calls startHostRecording,
+      // so the file-open promise is only in `open` after that settles.
+      await act(async () => {});
       act(() => { recordingChannelFrom('p-guest')?.(channel('recording')); });
       await act(async () => {
         open({ recordingId: 'rec-host-1' } as never);
