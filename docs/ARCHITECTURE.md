@@ -590,10 +590,13 @@ unfinished send to each new connection to the host.
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
+  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
-  present-only companion publishes no camera or mic, so neither can claim a guest slot.
+  present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
+  channel arriving from a peer the host set as not recorded is closed before any file is opened
+  (`isNotRecordedPeer`, in `useRoom`'s `onDataChannel`), so the host does not depend on that guest's
+  browser staying quiet.
 - **The slot key is the channel-label key, not the raw peerId, when one is present.** The DO mints a
   fresh `peerId` per socket, so a full WS reconnect changes it; if `bindHostGuestChannel`/
   `bindHostAudioChannel` keyed slots on `peerId` directly, a reconnected guest would land on a brand
