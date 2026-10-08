@@ -660,7 +660,8 @@ unfinished send to each new connection to the host.
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings are delegated from the real track. A switched-to camera is asked for the
     frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
-  - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) with the initial mic's channel count,
+  - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
+    was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
     When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and

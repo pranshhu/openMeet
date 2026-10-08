@@ -195,6 +195,44 @@ describe('lobby', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('hands the lobby’s audio channel choice to join', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    const mic = { kind: 'audio', stop: vi.fn(), getSettings: () => ({ channelCount: 2 }) };
+    const cam = { kind: 'video', stop: vi.fn(), getSettings: () => ({ width: 1280, height: 720 }) };
+    const theStream = {
+      getTracks: () => [mic, cam],
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => [cam],
+    } as unknown as MediaStream;
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(theStream),
+        enumerateDevices: vi.fn().mockResolvedValue([
+          { kind: 'videoinput', deviceId: 'cam1', label: 'Webcam' },
+          { kind: 'audioinput', deviceId: 'mic1', label: 'Mic' },
+        ]),
+      },
+    });
+    hook.join = vi.fn();
+    Object.assign(state, { phase: 'lobby' });
+    try {
+      render(<RoomView slug="abc-defg-hij" />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      fireEvent.change(await screen.findByLabelText('Audio channels'), { target: { value: 'stereo' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+
+      await waitFor(() =>
+        expect(hook.join).toHaveBeenCalledWith(theStream, 'Alice', false, false, undefined, true)
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      localStorage.removeItem('om_stereo');
+    }
+  });
 });
 
 describe('recording', () => {

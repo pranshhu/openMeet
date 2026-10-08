@@ -1032,7 +1032,8 @@ export function useRoom(slug: string) {
       displayName: string,
       asProducer = false,
       asCompanion = false,
-      initialScreenStream?: MediaStream
+      initialScreenStream?: MediaStream,
+      stereo = false
     ) => {
       companionRef.current = asCompanion;
       // A present-only companion or a producer has no camera or mic: wrapping its empty
@@ -1043,6 +1044,7 @@ export function useRoom(slug: string) {
         : new SwitchableMedia(lobbyStream, {
             isRecording: () => phaseRef.current === 'recording',
             onMicWarning: (micWarning) => setState((s) => ({ ...s, micWarning })),
+            stereo,
             onTrackReplaced: (kind, newTrack, oldTrack) => {
               for (const p of peersRef.current.values()) {
                 if (kind === 'video') {

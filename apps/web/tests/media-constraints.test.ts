@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RECORDING_CONSTRAINTS } from '@/lib/media';
+import { RECORDING_CONSTRAINTS, recordedChannels } from '@/lib/media';
 
 /**
  * The recorded master is whatever getUserMedia hands us, so browser-default
@@ -21,6 +21,42 @@ describe('RECORDING_CONSTRAINTS audio', () => {
 
   it('requests 48kHz so the WAV master matches the studio standard', () => {
     expect(audio.sampleRate).toEqual({ ideal: 48_000 });
+  });
+
+  // The graph mixes down; asking the device for one channel would leave
+  // nothing for a stereo take to record.
+  it('asks the device for two channels', () => {
+    expect(audio.channelCount).toEqual({ ideal: 2 });
+  });
+});
+
+describe('recordedChannels', () => {
+  const mic = (settings: MediaTrackSettings) =>
+    ({ getSettings: () => settings }) as unknown as MediaStreamTrack;
+
+  it('records one channel when stereo was not asked for, even from a two-channel mic', () => {
+    expect(recordedChannels(mic({ channelCount: 2 }), false)).toBe(1);
+  });
+
+  it('records two channels when stereo was asked for and the mic reports two', () => {
+    expect(recordedChannels(mic({ channelCount: 2 }), true)).toBe(2);
+  });
+
+  it('records one channel when stereo was asked for but the mic reports one', () => {
+    expect(recordedChannels(mic({ channelCount: 1 }), true)).toBe(1);
+  });
+
+  it('records one channel when the mic reports no channel count', () => {
+    expect(recordedChannels(mic({}), true)).toBe(1);
+  });
+
+  it('records one channel when there is no mic at all', () => {
+    expect(recordedChannels(null, true)).toBe(1);
+    expect(recordedChannels(null, false)).toBe(1);
+  });
+
+  it('records two channels from a mic that reports more than two', () => {
+    expect(recordedChannels(mic({ channelCount: 4 }), true)).toBe(2);
   });
 });
 
