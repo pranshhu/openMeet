@@ -3228,6 +3228,28 @@ describe('role-assigned describes the whole room', () => {
     expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
   });
 
+  it.each(['new', 'connecting', 'disconnected'])(
+    'rebuilds the connection when the same id is listed again and the held one is %s',
+    async (held) => {
+      const result = await joinedGuest();
+      const oldHost = peersFor('p-host')[0]!;
+      oldHost.connectionState = held;
+
+      act(() => {
+        emitSignal('role-assigned', roleAssigned([host('p-host')]));
+      });
+
+      // The far end closed its side whatever state this one reports, so a
+      // connection that is still negotiating or has just lost its path is
+      // rebuilt like a connected one.
+      expect(oldHost.close).toHaveBeenCalled();
+      expect(peersFor('p-host')).toHaveLength(2);
+      expect(peersFor('p-host')[1]!.setLocalStream).toHaveBeenCalledTimes(1);
+      expect(oldHost.setLocalStream).toHaveBeenCalledTimes(1);
+      expect(result.current.state.remotePeers.map((p) => p.peerId)).toEqual(['p-host']);
+    }
+  );
+
   it('rebuilds a held peer and opens the new one, each set up once', async () => {
     const result = await joinedGuest();
     const oldHost = peersFor('p-host')[0]!;

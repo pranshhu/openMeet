@@ -162,12 +162,37 @@ describe('BackupNotice', () => {
     );
   });
 
-  it('keeps the Stop button safe to press with no handler', () => {
-    show({ transfers: [item({ status: 'active', percent: 40 })] });
+  it('stops only what is arriving and leaves a stalled transfer to its own Dismiss', () => {
+    const onStop = vi.fn();
+    show({
+      transfers: [
+        item({ id: BACKUP, status: 'stalled', percent: 40, from: 'Asha' }),
+        item({ id: BACKUP_2, status: 'active', percent: 50, from: 'Bo' }),
+      ],
+      onStop,
+    });
+
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(screen.getByRole('status').textContent).toBe(
-      'Receiving 1 backup file — 40%. Keep this tab open.Stop'
-    );
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onStop).toHaveBeenCalledWith(BACKUP_2);
+  });
+
+  it('keeps the Stop button safe to press with no handler', () => {
+    // A throw out of a React event handler is reported on window, not out of
+    // fireEvent, so the window listener is what catches it.
+    const onError = vi.fn((e: ErrorEvent) => e.preventDefault());
+    window.addEventListener('error', onError);
+    try {
+      show({ transfers: [item({ status: 'active', percent: 40 })] });
+      const stopButton = screen.getByRole('button', { name: 'Stop' });
+      expect(() => fireEvent.click(stopButton)).not.toThrow();
+      expect(onError).not.toHaveBeenCalled();
+      expect(screen.getByRole('status').textContent).toBe(
+        'Receiving 1 backup file — 40%. Keep this tab open.Stop'
+      );
+    } finally {
+      window.removeEventListener('error', onError);
+    }
   });
 
   it('keeps the moving percent out of the spoken row', () => {
@@ -452,6 +477,19 @@ describe('BackupNotice', () => {
     });
     expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual([
       'Receiving 1 backup file — 40%. Keep this tab open.Stop',
+      '1 backup file saved to your recording folder and verified.Dismiss',
+    ]);
+  });
+
+  it('announces a saved backup while another transfer is stalled', () => {
+    show({
+      transfers: [
+        item({ id: BACKUP, status: 'stalled', percent: 40, from: 'Asha' }),
+        item({ id: BACKUP_2, status: 'saved', percent: 100, from: 'Bo' }),
+      ],
+    });
+    expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual([
+      'A backup stopped at 40%. It continues when Asha reconnects.Dismiss',
       '1 backup file saved to your recording folder and verified.Dismiss',
     ]);
   });
