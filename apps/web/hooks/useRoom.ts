@@ -734,6 +734,13 @@ export function useRoom(slug: string) {
     };
     markersRef.current = [...markersRef.current, marker];
     setState((s) => ({ ...s, markers: markersRef.current }));
+    // The recovered take reads its markers from the notes, and the notes are
+    // this browser's own storage, so the copy stops at the same cap the relayed
+    // markers obey: a long take must not grow take.json without bound, and the
+    // take's own list keeps every marker regardless.
+    recordingRef.current?.journal?.note((n) => {
+      if (n.markers.length < MAX_RELAYED_MARKERS) n.markers = [...n.markers, marker];
+    });
     return true;
   }, []);
 

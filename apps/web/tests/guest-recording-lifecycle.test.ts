@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useRoom } from '@/hooks/useRoom';
+import { useRoom, MAX_RELAYED_MARKERS } from '@/hooks/useRoom';
 import { PeerConnection } from '@/lib/peer';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, type RecordingHandles } from '@/hooks/recording-controller';
@@ -839,10 +839,21 @@ describe('host backup after a take in useRoom', () => {
   });
   afterEach(() => vi.clearAllMocks());
 
-  /** Runs one host take; `during` gets the recorder's onError to misbehave with. */
+  /**
+   * Runs one host take. `during` gets the recorder's onError and the hook's
+   * result; `after` runs in its own act while the take is still recording, so
+   * it sees the state an earlier act queued.
+   */
   async function hostTake(
-    during?: (onError: (e: unknown) => void) => void,
-    extra: Record<string, unknown> = {}
+    during?: (
+      onError: (e: unknown) => void,
+      hook: { current: ReturnType<typeof useRoom> }
+    ) => void | Promise<void>,
+    extra: Record<string, unknown> = {},
+    peers: { peerId: string; ordinal: number; role: string; displayName: string | null }[] = [
+      { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Guest' },
+    ],
+    after?: () => void
   ) {
     const backup = { stop: vi.fn().mockResolvedValue(new Blob(['b'])), markFinalized: vi.fn().mockResolvedValue(undefined) };
     const wavBackup = { stop: vi.fn().mockResolvedValue(null), markFinalized: vi.fn().mockResolvedValue(undefined) };
@@ -878,7 +889,7 @@ describe('host backup after a take in useRoom', () => {
         role: 'host',
         peerId: 'p-host',
         ordinal: 1,
-        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Guest' }],
+        peers,
         recording: false,
       });
     });
@@ -886,13 +897,50 @@ describe('host backup after a take in useRoom', () => {
       await result.current.startRecording();
     });
     expect(result.current.state.phase).toBe('recording');
-    if (during) act(() => during(onError));
+    if (during) await act(async () => { await during(onError, result); });
+    if (after) await act(async () => after());
     await act(async () => {
       await result.current.endRecording();
     });
     expect(result.current.state.phase).toBe('done');
     return { backup, wavBackup, screenBackup, hostWriter, result, recordingId };
   }
+
+  /** The take notes a fake journal owns, in the shape take.json holds. */
+  function fakeNotes() {
+    return {
+      room: 'xyz-test-room',
+      recordingId: 'rec-host-1',
+      take: 1,
+      hostStartMs: 1_000_000,
+      files: [] as { file: string; kind: 'camera' | 'wav' | 'screen'; slot?: number; key?: string; who?: string }[],
+      backups: [],
+      markers: [] as { atMs: number; label: string; from: 'host' | 'guest' | 'producer'; name?: string }[],
+    };
+  }
+
+  /** Stands in for the browser-storage journal: note() edits the notes in place. */
+  const fakeJournal = (notes: ReturnType<typeof fakeNotes>) => ({
+    note: (change: (n: typeof notes) => void) => change(notes),
+    file: () => ({
+      append: vi.fn(),
+      commit: vi.fn().mockResolvedValue(undefined),
+      position: vi.fn().mockResolvedValue(null),
+      parts: vi.fn().mockResolvedValue([]),
+      dead: false,
+    }),
+  });
+
+  /** The slot-0 receiver the mocked startHostRecording hands a host take. */
+  const guestReceiver = (fileName: string) => ({
+    fileName,
+    digestHex: async () => 'abc',
+    senderSha256: 'abc',
+    receivedFinalized: true,
+    isAbandoned: false,
+    bytesWritten: 1,
+    answerResume: vi.fn(),
+  });
 
   // The handles say whether this browser could keep a crash copy; the call has
   // to show it, and the take after it must start from a clean slate.
@@ -1849,6 +1897,202 @@ describe('host backup after a take in useRoom', () => {
     const chapters = new TextDecoder().decode(writtenFiles.get('chapters_rec-host-1000-markers.txt')?.data);
     expect(chapters).toContain('Host own marker');
     expect(chapters).not.toContain('m-1001');
+  });
+
+  // The take's own marker list is lost with the tab, so the notes are the only
+  // record a recovered take has of what was marked and by whom.
+  it('copies a relayed marker into the crash journal notes', async () => {
+    const notes = fakeNotes();
+    await hostTake(
+      () =>
+        emitSignal('marker', {
+          type: 'marker',
+          label: 'one',
+          from: 'guest',
+          fromName: 'Bob',
+        }),
+      { journal: fakeJournal(notes) }
+    );
+
+    expect(notes.markers).toEqual([
+      { atMs: expect.any(Number), label: 'one', from: 'guest', name: 'Bob' },
+    ]);
+  });
+
+  it('bounds the notes markers without dropping the take’s own', async () => {
+    const notes = fakeNotes();
+    notes.markers = Array.from({ length: MAX_RELAYED_MARKERS - 1 }, (_, i) => ({
+      atMs: i,
+      label: `m-${i}`,
+      from: 'guest' as const,
+    }));
+    const { result } = await hostTake(
+      () => {
+        emitSignal('marker', { type: 'marker', label: 'last', from: 'guest' });
+        emitSignal('marker', { type: 'marker', label: 'overflow', from: 'guest' });
+      },
+      { journal: fakeJournal(notes) }
+    );
+
+    expect(notes.markers.map((m) => m.label)).toEqual([
+      ...Array.from({ length: MAX_RELAYED_MARKERS - 1 }, (_, i) => `m-${i}`),
+      'last',
+    ]);
+    expect(result.current.state.markers.map((m) => m.label)).toEqual(['last', 'overflow']);
+  });
+
+  it('names the guest on the note its camera file opened', async () => {
+    const notes = fakeNotes();
+    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
+    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+
+    await hostTake(
+      () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
+      {
+        channelRef: { current: null },
+        journal: fakeJournal(notes),
+        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+        receiver: guestReceiver('guest_rec-host-1.mp4'),
+      }
+    );
+
+    await vi.waitFor(() =>
+      expect(notes.files).toEqual([
+        {
+          file: 'guest_rec-host-1.mp4',
+          kind: 'camera',
+          slot: 0,
+          key: 'p-guest',
+          who: 'Guest',
+        },
+      ])
+    );
+  });
+
+  it('leaves who off the note while the guest has no name', async () => {
+    const notes = fakeNotes();
+    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
+    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+
+    await hostTake(
+      () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
+      {
+        channelRef: { current: null },
+        journal: fakeJournal(notes),
+        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+        receiver: guestReceiver('guest_rec-host-1.mp4'),
+      },
+      [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: null }]
+    );
+
+    await vi.waitFor(() =>
+      expect(notes.files).toEqual([
+        {
+          file: 'guest_rec-host-1.mp4',
+          kind: 'camera',
+          slot: 0,
+          key: 'p-guest',
+        },
+      ])
+    );
+  });
+
+  it('names the guest on the note its WAV file opened', async () => {
+    const notes = fakeNotes();
+    const { dir } = fakeDirectory();
+    const channel = {
+      label: 'recording-audio',
+      readyState: 'open',
+      send: vi.fn(),
+    } as unknown as RTCDataChannel;
+
+    const { recordingId, result } = await hostTake(
+      () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
+      { dir, journal: fakeJournal(notes) }
+    );
+
+    await vi.waitFor(() =>
+      expect(notes.files).toEqual([
+        {
+          file: `guest_${recordingId}.wav`,
+          kind: 'wav',
+          key: 'p-guest',
+          slot: 0,
+          who: 'Guest',
+        },
+      ])
+    );
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  it('leaves the screen note naming the guest by socket peerId', async () => {
+    const notes = fakeNotes();
+    const { dir } = fakeDirectory();
+    const channel = {
+      label: 'recording-screen-1',
+      readyState: 'open',
+      send: vi.fn(),
+      addEventListener: vi.fn(),
+    } as unknown as RTCDataChannel;
+
+    const { recordingId, result } = await hostTake(
+      () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
+      { dir, journal: fakeJournal(notes) }
+    );
+
+    await vi.waitFor(() =>
+      expect(notes.files).toEqual([
+        {
+          file: `guest_screen_${recordingId}.mp4`,
+          kind: 'screen',
+          segment: 1,
+          startedAtMs: expect.any(Number),
+          who: 'p-guest',
+        },
+      ])
+    );
+    expect(result.current.state.recordingError).toBeNull();
+  });
+
+  // The host's own marker comes from the button, not a relay, and the notes are
+  // the only record a recovered take has of it.
+  it('copies the host own marker into the crash journal notes', async () => {
+    const notes = fakeNotes();
+
+    await hostTake(
+      (_onError, hook) => hook.current.addMarker('host mark'),
+      { journal: fakeJournal(notes) }
+    );
+
+    expect(notes.markers).toEqual([
+      { atMs: expect.any(Number), label: 'host mark', from: 'host', name: 'Host Hana' },
+    ]);
+  });
+
+  // A channel can arrive from a peer the room no longer lists. The name is
+  // simply unknown then, and the bind still has to run with `who` absent.
+  it('leaves who off the note when the socket peer is no longer listed', async () => {
+    const notes = fakeNotes();
+    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
+    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+
+    await hostTake(
+      () => emitSignal('peer-left', { type: 'peer-left', peerId: 'p-guest' }),
+      {
+        channelRef: { current: null },
+        journal: fakeJournal(notes),
+        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+        receiver: guestReceiver('guest_rec-host-1.mp4'),
+      },
+      undefined,
+      () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel)
+    );
+
+    await vi.waitFor(() =>
+      expect(notes.files).toEqual([
+        { file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0, key: 'p-guest' },
+      ])
+    );
   });
 
   it('retries buildSyncReport without markers if the first call throws', async () => {
