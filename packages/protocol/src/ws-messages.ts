@@ -94,6 +94,12 @@ export type ClientRecordingCapability = {
   note?: BrowserNote;
 };
 
+/**
+ * The host chooses whether one guest is recorded in the takes that follow.
+ * Acted on only from the host, and never while a take is running.
+ */
+export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
 export type ClientMessage =
   | ClientJoin
   | ClientWebrtcOffer
@@ -107,7 +113,8 @@ export type ClientMessage =
   | ClientMarker
   | ClientLeave
   | ClientPing
-  | ClientRecordingCapability;
+  | ClientRecordingCapability
+  | ClientPeerRecorded;
 
 export interface PeerInfo {
   peerId: string;
@@ -115,6 +122,12 @@ export interface PeerInfo {
   displayName: string | null;
   ordinal: number;
   companion?: boolean;
+  /**
+   * The host set this guest as not recorded, so it is left out of the takes
+   * that follow. Present only when true: absent means recorded, which is also
+   * what a client deployed around this Worker reads.
+   */
+  notRecorded?: boolean;
 }
 
 export type ServerRoleAssigned = {
@@ -152,6 +165,14 @@ export type ServerRoleAssigned = {
    * pre-existing behaviour — rather than throwing.
    */
   recording?: boolean;
+  /**
+   * This connection: the host set this guest as not recorded. It is delivered
+   * on a reconnect or a reload too, because the choice is remembered by the
+   * tab's client id rather than by the peer id this socket was minted with.
+   * Present only when true, and optional for wire compatibility like
+   * `recording` above.
+   */
+  notRecorded?: boolean;
 };
 export type ServerPeerJoined = {
   type: 'peer-joined';
@@ -161,6 +182,8 @@ export type ServerPeerJoined = {
   peerId: string;
   ordinal: number;
   companion?: boolean;
+  /** The host has this guest set as not recorded. Present only when true. */
+  notRecorded?: boolean;
 };
 export type ServerMarker = {
   type: 'marker';
@@ -226,6 +249,12 @@ export type ServerRecordingCapability = {
   fromPeerId: string;
 };
 
+/**
+ * The Room's own answer to a host's ClientPeerRecorded, sent to every peer
+ * in the room, the host included. Not a relay: it carries no `from`.
+ */
+export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -242,7 +271,8 @@ export type ServerMessage =
   | ServerRoomClosed
   | ServerPong
   | ServerError
-  | ServerRecordingCapability;
+  | ServerRecordingCapability
+  | ServerPeerRecorded;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -258,6 +288,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'leave',
   'ping',
   'recording-capability',
+  'peer-recorded',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -277,6 +308,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'pong',
   'error',
   'recording-capability',
+  'peer-recorded',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {
