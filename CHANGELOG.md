@@ -89,6 +89,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A take that loses its crash copy part-way keeps saying so in its own status
+  line until the take ends; the banner that first said it is shared, and the
+  next message replaced it. A warning that arrives after a take has ended is
+  not shown over the saved take.
 - After **Resume recording**, the screen recordings from before the reload are
   put back in the folder from the crash copy and listed in the summary and
   `sync_<id>.json` with their size and sharer; one that cannot be rebuilt whole

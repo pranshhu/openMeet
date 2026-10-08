@@ -534,6 +534,15 @@ export function startConnectWatchdog(
 export const MAX_RELAYED_MARKERS = 1000;
 export const MAX_MARKER_LABEL_LENGTH = 200;
 
+/**
+ * Whether a take's warning says its crash copy is gone. The text is matched as
+ * well as the journal's flag because one file's crash copy can stop, on a
+ * commit that never answers, without the whole journal dying.
+ */
+function lostCrashCopy(msg: string, journal?: { dead: boolean } | null): boolean {
+  return msg.startsWith('Crash protection stopped') || journal?.dead === true;
+}
+
 export function useRoom(slug: string) {
   const [state, setState] = useState<RoomState>({
     phase: 'checking',
@@ -1793,10 +1802,8 @@ export function useRoom(slug: string) {
           if (handles && recordingRef.current !== handles) return;
           // The banner is shared and the next problem replaces it, so a lost
           // crash copy is also said in the take's own status line, which stays
-          // until the take ends. The text is matched as well as the journal's
-          // flag because one file's crash copy can stop without the whole
-          // journal dying.
-          const lost = msg.startsWith('Crash protection stopped') || journal.dead === true;
+          // until the take ends.
+          const lost = lostCrashCopy(msg, journal);
           setState((s) => ({ ...s, recordingError: msg, ...(lost ? { unprotectedRecording: true } : {}) }));
         },
       });
@@ -2245,7 +2252,10 @@ export function useRoom(slug: string) {
       } catch {
         /* estimate() failed; the take records without the crash copy */
       }
-      recordingRef.current = await startHostRecording({
+      // Declared before the call: the warning callback has to tell a take that
+      // is still starting (no handles yet) from one that has ended.
+      let handles: RecordingHandles | null = null;
+      recordingRef.current = handles = await startHostRecording({
         recordingId,
         localStream: withBoardAudio(localStream, boardRef.current),
         micStream: localStream,
@@ -2257,7 +2267,17 @@ export function useRoom(slug: string) {
         // only button that closes the file handle — so a transient disk error
         // used to destroy the whole recording.
         onError: (e) => setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) })),
-        onWarn: (msg) => setState((s) => ({ ...s, recordingError: msg })),
+        onWarn: (msg) => {
+          // A commit to the crash copy can give up some seconds after End &
+          // save closed the files; a warning for a take that has ended must
+          // not put a banner over the saved take or mark the one after it.
+          if (handles && recordingRef.current !== handles) return;
+          // The banner is shared and the next problem replaces it, so a lost
+          // crash copy is also said in the take's own status line, which stays
+          // until the take ends.
+          const lost = lostCrashCopy(msg, handles?.journal);
+          setState((s) => ({ ...s, recordingError: msg, ...(lost ? { unprotectedRecording: true } : {}) }));
+        },
       });
       dirRef.current = recordingRef.current?.dir ?? dirRef.current;
       hostStartRef.current = recordingRef.current?.hostStartMs ?? Date.now();

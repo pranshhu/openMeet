@@ -1000,6 +1000,51 @@ describe('host backup after a take in useRoom', () => {
     expect(result.current.state.unprotectedRecording).toBe(false);
   });
 
+  it('says in the take’s own line when one file’s crash copy stops part-way', async () => {
+    const journal = { note: vi.fn(), finish: vi.fn(), dead: false };
+    const { result } = await startHostTake({ journal });
+    const warn = vi.mocked(startHostRecording).mock.calls[0]![0].onWarn!;
+
+    // A warning of another kind, with the crash copy alive, is only a banner.
+    act(() => warn('Local storage is unavailable — backup lives in memory only.'));
+    expect(result.current.state.recordingError).toBe('Local storage is unavailable — backup lives in memory only.');
+    expect(result.current.state.unprotectedRecording).toBe(false);
+
+    // The receiver's words when a commit never answers: the journal lives on.
+    act(() => warn('Crash protection stopped for this take — browser storage would not take it.'));
+    expect(journal.dead).toBe(false);
+    expect(result.current.state.unprotectedRecording).toBe(true);
+
+    // The banner is shared; the status line outlives the next message.
+    act(() => warn('Local storage is unavailable — backup lives in memory only.'));
+    expect(result.current.state.unprotectedRecording).toBe(true);
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('reads a dead crash copy from the journal whatever the warning says', async () => {
+    const journal = { note: vi.fn(), finish: vi.fn(), dead: false };
+    const { result } = await startHostTake({ journal });
+    const warn = vi.mocked(startHostRecording).mock.calls[0]![0].onWarn!;
+    journal.dead = true;
+    act(() => warn('Local storage is unavailable — backup lives in memory only.'));
+    expect(result.current.state.unprotectedRecording).toBe(true);
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('ignores a crash-copy warning that arrives after its take has ended', async () => {
+    const journal = { note: vi.fn(), finish: vi.fn(), dead: false };
+    const { result } = await hostTake(undefined, { journal });
+    const warn = vi.mocked(startHostRecording).mock.calls[0]![0].onWarn!;
+    const before = result.current.state.recordingError;
+    act(() => warn('Crash protection stopped for this take — browser storage would not take it.'));
+    expect(result.current.state.recordingError).toBe(before);
+    expect(result.current.state.unprotectedRecording).toBe(false);
+  });
+
   it('clears the unprotected flag when the next take starts', async () => {
     const { result } = await hostTake(undefined, { unprotected: true });
     expect(result.current.state.unprotectedRecording).toBe(true);
