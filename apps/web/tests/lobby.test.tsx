@@ -30,14 +30,18 @@ function fakeStream(): MediaStream {
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
-function cam720Stream(frameRate = 30, sampleRate = 48000): MediaStream {
+function cam720Stream(frameRate = 30, sampleRate = 48000, maxFrameRate?: number): MediaStream {
   const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate }) };
   const video = {
     kind: 'video',
     enabled: true,
     stop: vi.fn(),
     getSettings: () => ({ width: 1280, height: 720, frameRate }),
-    getCapabilities: () => ({ width: { max: 1280 }, height: { max: 720 } }),
+    getCapabilities: () => ({
+      width: { max: 1280 },
+      height: { max: 720 },
+      ...(maxFrameRate === undefined ? {} : { frameRate: { max: maxFrameRate } }),
+    }),
   };
   return {
     getTracks: () => [audio, video],
@@ -1894,6 +1898,7 @@ describe('Lobby', () => {
     }
 
     it('offers 24, 25, 29.97 and 30 fps, starting at 30', async () => {
+      gum().mockResolvedValue(cam720Stream(30, undefined, 30));
       const picker = await renderWithPicker();
       expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
         'Frame rate: 24 fps',
@@ -1903,6 +1908,71 @@ describe('Lobby', () => {
       ]);
       expect(picker).toHaveValue('30');
       expect(lastVideo().frameRate).toEqual({ ideal: 30 });
+    });
+
+    it('adds 50 and 60 on a camera that reaches them, and asks for the pick', async () => {
+      gum().mockResolvedValue(cam720Stream(30, undefined, 60));
+      const picker = await renderWithPicker();
+      expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+        'Frame rate: 24 fps',
+        'Frame rate: 25 fps',
+        'Frame rate: 29.97 fps',
+        'Frame rate: 30 fps',
+        'Frame rate: 50 fps',
+        'Frame rate: 60 fps',
+      ]);
+
+      fireEvent.change(picker, { target: { value: '60' } });
+      await waitFor(() => expect(localStorage.getItem('om_fps')).toBe('60'));
+      expect(lastVideo().frameRate).toEqual({ ideal: 60 });
+    });
+
+    it('shows a remembered rate the camera cannot reach as the best it can do, without a false alarm', async () => {
+      localStorage.setItem('om_fps', '60');
+      gum().mockResolvedValue(cam720Stream(30, undefined, 30));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      await screen.findByText(/Capturing 1280x720/);
+      expect(screen.getByLabelText('Frame rate')).toHaveValue('30');
+      // The pick stays in state and is still what the camera is asked for.
+      expect(firstVideo().frameRate).toEqual({ ideal: 60 });
+      expect(screen.queryByText(/This camera gives/)).toBeNull();
+      expect(screen.queryByText(/need a faster computer/)).toBeNull();
+    });
+
+    it('measures a shortfall against the rate the picker shows', async () => {
+      localStorage.setItem('om_fps', '60');
+      gum().mockResolvedValue(cam720Stream(15, undefined, 30));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      expect(
+        await screen.findByText('This camera gives 15 fps at this quality, not 30.')
+      ).toBeInTheDocument();
+    });
+
+    it('states the cost when the camera delivers a high rate', async () => {
+      localStorage.setItem('om_fps', '60');
+      gum().mockResolvedValue(cam720Stream(59.94005994, undefined, 60));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      const note = await screen.findByText(
+        '50 and 60 fps need a faster computer and make the video files larger. If the picture stutters, pick a lower frame rate.'
+      );
+      expect(note).toHaveAttribute('role', 'status');
+      expect(screen.getByLabelText('Frame rate')).toHaveValue('60');
+      expect(screen.queryByText(/This camera gives/)).toBeNull();
+    });
+
+    it('follows what the camera delivers, not the pick, for the cost note', async () => {
+      localStorage.setItem('om_fps', '60');
+      gum().mockResolvedValue(cam720Stream(30, undefined, 60));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      expect(
+        await screen.findByText('This camera gives 30 fps at this quality, not 60.')
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText('Frame rate')).toHaveValue('60');
+      expect(screen.queryByText(/need a faster computer/)).toBeNull();
     });
 
     it('asks the camera for the picked rate and remembers it', async () => {

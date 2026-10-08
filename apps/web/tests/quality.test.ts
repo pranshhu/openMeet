@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { RECORDING_AUDIO_BPS, STREAM_BACKLOG_CAP_BYTES } from '@openmeet/protocol';
 import {
-  QUALITY_PRESETS, presetById, presetForTrack, supportedPresets,
+  QUALITY_PRESETS, presetById, presetForTrack, supportedPresets, supportedFrameRates,
   bytesPerHour, formatPerHour, describeTrack, DEFAULT_QUALITY_ID,
   cleanFps, frameRateFrom,
   DEFAULT_BITRATE_ID, atBitrate, bitrateLevels, cameraVideoBps, chooseBitrate,
@@ -49,6 +49,31 @@ describe('supportedPresets', () => {
   it('offers everything when capabilities are unavailable rather than guessing', () => {
     expect(supportedPresets(track())).toHaveLength(QUALITY_PRESETS.length);
     expect(supportedPresets(undefined)).toHaveLength(QUALITY_PRESETS.length);
+  });
+});
+
+describe('supportedFrameRates', () => {
+  it('hides rates the camera cannot reach', () => {
+    expect(supportedFrameRates(track({ frameRate: { max: 30 } }))).toEqual([24, 25, 29.97, 30]);
+    expect(supportedFrameRates(track({ frameRate: { max: 25 } }))).toEqual([24, 25]);
+    expect(supportedFrameRates(track({ frameRate: { max: 10 } }))).toEqual([24]);
+  });
+
+  // Half a frame of slack: a 59.94 camera does 60, a 29.97 one does 30.
+  it('rounds a near-miss rate up to the option it can hold', () => {
+    expect(supportedFrameRates(track({ frameRate: { max: 29.97 } }))).toEqual([24, 25, 29.97, 30]);
+    expect(supportedFrameRates(track({ frameRate: { max: 59.94 } }))).toEqual([24, 25, 29.97, 30, 50, 60]);
+  });
+
+  it('lists 50 and 60 only where the camera reaches them', () => {
+    expect(supportedFrameRates(track({ frameRate: { max: 60 } }))).toEqual([24, 25, 29.97, 30, 50, 60]);
+    expect(supportedFrameRates(track({ frameRate: { max: 50 } }))).toEqual([24, 25, 29.97, 30, 50]);
+  });
+
+  it('offers everything when capabilities are unavailable rather than guessing', () => {
+    expect(supportedFrameRates(track())).toEqual([24, 25, 29.97, 30, 50, 60]);
+    expect(supportedFrameRates(track({ width: { max: 640 } }))).toEqual([24, 25, 29.97, 30, 50, 60]);
+    expect(supportedFrameRates(undefined)).toEqual([24, 25, 29.97, 30, 50, 60]);
   });
 });
 
@@ -193,6 +218,8 @@ describe('frameRateFrom', () => {
   it('takes a stored rate that is on offer', () => {
     expect(frameRateFrom('25')).toBe(25);
     expect(frameRateFrom('29.97')).toBe(29.97);
+    expect(frameRateFrom('50')).toBe(50);
+    expect(frameRateFrom('60')).toBe(60);
   });
 
   // A stale or hand-edited value must not become `frameRate: { ideal: NaN }`:

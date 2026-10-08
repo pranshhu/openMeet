@@ -189,6 +189,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.16 | Track alert over the open panel | Record, open the track list, then pull the recording folder's drive (or fill it) on a phone about 360 px wide | The red banner is fully readable above the open list | ☐ | |
 | 8.17 | Frame-rate picker | Pick 25 fps in the lobby, record 30 s, `ffprobe` the MP4 | The lobby's "Capturing" line read `@ 25fps`; `avg_frame_rate` is about 25 | ☐ | |
 | 8.18 | Bitrate picker | In the lobby pick **Bitrate: High**, join, record 30 s of a moving picture, End & save; do the same at **Standard**; `ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate` each camera MP4. Do it once on each of Linux, macOS and Windows | The High file holds about 1.5 times the video bitrate of the Standard file, on both the host's and the guest's file. Note the figure itself per system: on Linux a 30 fps file holds about half the figure the picker names (see Known limitations) | ☐ | |
+| 8.19 | 50 / 60 fps | On a camera that offers it, pick 1080p and 60 fps, record 30 s, `ffprobe` the MP4 and open it in an editor | The lobby showed the cost note; `avg_frame_rate` is about 60 and the video bit rate is well above a 30 fps take's (about 1.5 times where the encoder uses the real frame rate, about 3 times on Linux); it plays and scrubs. A camera capped at 30 lists no 50 or 60 | ☐ | |
 
 ## 9 — Deploy
 
