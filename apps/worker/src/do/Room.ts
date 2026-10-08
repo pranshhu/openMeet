@@ -65,6 +65,7 @@ interface SessionRow {
   sessionId: string | null;
   recording: boolean;
   recordingCount?: number;
+  notRecorded?: string[];
 }
 
 /**
@@ -80,13 +81,16 @@ const MAX_PRODUCERS = 2;
  * joins; both also sit in the socket attachment, which is limited to 2048
  * bytes at two bytes a character outside Latin-1. A recording id is a UUID
  * and a filename `host_<uuid>.mp4`, and a take is one row, so no honest
- * session comes near the other three.
+ * session comes near the other three. A room seats four recorded guests, so
+ * sixteen remembered tabs is generous: past that, the oldest is forgotten and
+ * arrives as recorded the next time it connects.
  */
 const MAX_DISPLAY_NAME_LENGTH = 64;
 const MAX_USER_AGENT_LENGTH = 512;
 const MAX_RECORDING_ID_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 255;
 const MAX_RECORDINGS_PER_SESSION = 256;
+const MAX_NOT_RECORDED_CLIENTS = 16;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -106,6 +110,9 @@ export class Room implements DurableObject {
   // own capture, exactly like one that was here when Record was pressed.
   private recording = false;
   private recordingCount = 0;
+  // Client ids of the guests the host set as not recorded. By client id, not
+  // peerId: a peerId is minted per socket and does not survive a reconnect.
+  private notRecorded: string[] = [];
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -130,6 +137,7 @@ export class Room implements DurableObject {
         this.sessionId = session.sessionId;
         this.recording = session.recording;
         this.recordingCount = session.recordingCount ?? 0;
+        this.notRecorded = session.notRecorded ?? [];
       }
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
@@ -175,6 +183,7 @@ export class Room implements DurableObject {
       sessionId: this.sessionId,
       recording: this.recording,
       recordingCount: this.recordingCount,
+      notRecorded: this.notRecorded,
     } satisfies SessionRow);
   }
 
@@ -414,6 +423,7 @@ export class Room implements DurableObject {
           peerId: p.peerId,
           ordinal: p.ordinal,
           recording: this.recording,
+          ...(this.isNotRecorded(p) ? { notRecorded: true } : {}),
           // Everyone already here, so a late joiner can open a connection to
           // each of them rather than only learning about future arrivals.
           peers: this.allPeers()
@@ -424,6 +434,7 @@ export class Room implements DurableObject {
               displayName: pp.displayName,
               ordinal: pp.ordinal,
               ...(pp.companion ? { companion: true } : {}),
+              ...(this.isNotRecorded(pp) ? { notRecorded: true } : {}),
             })),
         });
         this.broadcastExcept(ws, {
@@ -434,6 +445,7 @@ export class Room implements DurableObject {
           peerId: p.peerId,
           ordinal: p.ordinal,
           ...(p.companion ? { companion: true } : {}),
+          ...(this.isNotRecorded(p) ? { notRecorded: true } : {}),
         });
         break;
       case 'ping':
@@ -596,7 +608,14 @@ export class Room implements DurableObject {
         // capture already in progress.
         if (p.role !== 'host' || this.recording || typeof parsed.recorded !== 'boolean') break;
         const target = this.joinedPeers().find(({ p: pp }) => pp.peerId === parsed.peerId)?.p;
-        if (target?.role !== 'guest') break;
+        // Only a guest whose tab sent a client id: that id is what the choice is
+        // remembered by, and a choice that cannot be remembered is not announced.
+        if (target?.role !== 'guest' || !target.clientId) break;
+        const others = this.notRecorded.filter((id) => id !== target.clientId);
+        this.notRecorded = parsed.recorded
+          ? others
+          : [...others, target.clientId].slice(-MAX_NOT_RECORDED_CLIENTS);
+        await this.saveSession();
         // To everyone, the host too: its screen follows this answer, not its own click.
         for (const { ws: to } of this.joinedPeers()) {
           this.send(to, { type: 'peer-recorded', peerId: target.peerId, recorded: parsed.recorded });
@@ -689,6 +708,7 @@ export class Room implements DurableObject {
       this.sessionId = null;
       this.recording = false;
       this.recordingCount = 0;
+      this.notRecorded = [];
       await this.saveSession();
     }
   }
@@ -732,6 +752,11 @@ export class Room implements DurableObject {
   private anyHostPresent(): boolean {
     for (const { p } of this.allPeers()) if (p.role === 'host') return true;
     return false;
+  }
+
+  /** The host set this guest as not recorded. Looked up by client id, so it holds across a reconnect. */
+  private isNotRecorded(p: PeerAttachment): boolean {
+    return p.role === 'guest' && !!p.clientId && this.notRecorded.includes(p.clientId);
   }
 
   private send(ws: WebSocket, msg: ServerMessage): void {

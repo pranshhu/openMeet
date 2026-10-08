@@ -122,6 +122,12 @@ export interface PeerInfo {
   displayName: string | null;
   ordinal: number;
   companion?: boolean;
+  /**
+   * The host set this guest as not recorded, so it is left out of the takes
+   * that follow. Present only when true: absent means recorded, which is also
+   * what a client deployed around this Worker reads.
+   */
+  notRecorded?: boolean;
 }
 
 export type ServerRoleAssigned = {
@@ -159,6 +165,14 @@ export type ServerRoleAssigned = {
    * pre-existing behaviour — rather than throwing.
    */
   recording?: boolean;
+  /**
+   * This connection: the host set this guest as not recorded. It is delivered
+   * on a reconnect or a reload too, because the choice is remembered by the
+   * tab's client id rather than by the peer id this socket was minted with.
+   * Present only when true, and optional for wire compatibility like
+   * `recording` above.
+   */
+  notRecorded?: boolean;
 };
 export type ServerPeerJoined = {
   type: 'peer-joined';
@@ -168,6 +182,8 @@ export type ServerPeerJoined = {
   peerId: string;
   ordinal: number;
   companion?: boolean;
+  /** The host has this guest set as not recorded. Present only when true. */
+  notRecorded?: boolean;
 };
 export type ServerMarker = {
   type: 'marker';

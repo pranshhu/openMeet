@@ -2383,7 +2383,7 @@ describe('Room DO — only a joined socket is in the room', () => {
       const slug = 'pnr-host-aaa';
       await seedRoom(slug, 'tok-pnr-host');
       const h = await enter(slug, 'H', { hostToken: 'tok-pnr-host' });
-      const a = await enter(slug, 'A');
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
       const b = await enter(slug, 'B');
       const p = await enter(slug, 'P', { producer: true });
 
@@ -2414,7 +2414,7 @@ describe('Room DO — only a joined socket is in the room', () => {
       const slug = 'pnr-take-aaa';
       await seedRoom(slug, 'tok-pnr-take');
       const h = await enter(slug, 'H', { hostToken: 'tok-pnr-take' });
-      const a = await enter(slug, 'A');
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
       const rec = crypto.randomUUID();
 
       h.ws.send(started(rec));
@@ -2437,7 +2437,7 @@ describe('Room DO — only a joined socket is in the room', () => {
       const slug = 'pnr-ignr-aaa';
       await seedRoom(slug, 'tok-pnr-ignore');
       const h = await enter(slug, 'H', { hostToken: 'tok-pnr-ignore' });
-      const a = await enter(slug, 'A');
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
       const p = await enter(slug, 'P', { producer: true });
 
       h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: 'no' }));
@@ -2464,7 +2464,7 @@ describe('Room DO — only a joined socket is in the room', () => {
       const slug = 'pnr-unjo-ina';
       await seedRoom(slug, 'tok-pnr-unjoined');
       const h = await enter(slug, 'H', { hostToken: 'tok-pnr-unjoined' });
-      const a = await enter(slug, 'A');
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
       const lurker = await openWs(slug);
       const idle = collect(lurker);
       const lurkerId = await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (_i, state) =>
@@ -2491,5 +2491,296 @@ describe('Room DO — only a joined socket is in the room', () => {
       [h.ws, a.ws].forEach((w) => w.close());
       lurker.close();
     });
+
+    it('tells a later joiner, and the guest itself across its own reconnect', async () => {
+      const slug = 'pnr-late-aaa';
+      await seedRoom(slug, 'tok-pnr-late');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-late' });
+      const a = await enter(slug, 'A', { clientId: 'tab-alpha' });
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+
+      // A guest arriving after the choice is told about it in its own snapshot.
+      const c = await enter(slug, 'C');
+      expect(c.me.peers.find((p) => p.peerId === a.me.peerId)?.notRecorded).toBe(true);
+      expect(c.me.peers.filter((p) => p.notRecorded).map((p) => p.peerId)).toEqual([a.me.peerId]);
+
+      // The same tab comes back on a new socket, and a peerId is minted per
+      // socket, so only the client id it joins with can carry the choice.
+      a.ws.close();
+      await until(() => ofType(h.heard, 'peer-left').some((m) => m.peerId === a.me.peerId));
+      const a2 = await enter(slug, 'A', { clientId: 'tab-alpha' });
+      expect(a2.me.notRecorded).toBe(true);
+      await until(() => ofType(h.heard, 'peer-joined').some((m) => m.peerId === a2.me.peerId));
+      expect(ofType(h.heard, 'peer-joined').filter((m) => m.peerId === a2.me.peerId)).toEqual([
+        {
+          type: 'peer-joined',
+          role: 'guest',
+          displayName: 'A',
+          userAgent: 'ua',
+          peerId: a2.me.peerId,
+          ordinal: a2.me.ordinal,
+          notRecorded: true,
+        },
+      ]);
+      // The id itself never leaves the Room: a peer who knew it could present
+      // it and have that tab's socket closed.
+      expect(JSON.stringify([c.me, a2.me, ...h.heard])).not.toContain('tab-alpha');
+
+      [h.ws, c.ws, a2.ws].forEach((w) => w.close());
+    });
+
+    it('clears the flag when the host sets the guest as recorded again', async () => {
+      const slug = 'pnr-back-aaa';
+      await seedRoom(slug, 'tok-pnr-back');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-back' });
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').some((m) => !m.recorded));
+      a.ws.close();
+      await until(() => ofType(h.heard, 'peer-left').some((m) => m.peerId === a.me.peerId));
+      const flagged = await enter(slug, 'A', { clientId: 'c-a' });
+      expect(flagged.me.notRecorded).toBe(true);
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: flagged.me.peerId, recorded: true }));
+      await until(() => ofType(flagged.heard, 'peer-recorded').some((m) => m.recorded));
+      flagged.ws.close();
+      await until(() => ofType(h.heard, 'peer-left').some((m) => m.peerId === flagged.me.peerId));
+      const clear = await enter(slug, 'A', { clientId: 'c-a' });
+      expect(clear.me.notRecorded).toBeUndefined();
+
+      [h.ws, clear.ws].forEach((w) => w.close());
+    });
+
+    it('refuses a guest whose tab sent no client id, because it could not be remembered', async () => {
+      const slug = 'pnr-noid-aaa';
+      await seedRoom(slug, 'tok-pnr-noid');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-noid' });
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
+      const b = await enter(slug, 'B');
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: b.me.peerId, recorded: false }));
+      await settle();
+      for (const w of [h, a, b]) expect(ofType(w.heard, 'peer-recorded')).toEqual([]);
+
+      // A valid request on the same socket, after the refused one.
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+      expect(ofType(a.heard, 'peer-recorded')).toEqual([
+        { type: 'peer-recorded', peerId: a.me.peerId, recorded: false },
+      ]);
+
+      [h.ws, a.ws, b.ws].forEach((w) => w.close());
+    });
+
+    it('remembers at most sixteen tabs, forgetting the oldest', async () => {
+      const slug = 'pnr-boun-tea';
+      await seedRoom(slug, 'tok-pnr-bound');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-bound' });
+
+      // One tab at a time: each leaves before the next arrives, so only the
+      // remembered list grows, never the room.
+      for (let i = 0; i < 17; i++) {
+        const g = await enter(slug, 'G', { clientId: `c-${i}` });
+        h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: g.me.peerId, recorded: false }));
+        await until(() => ofType(g.heard, 'peer-recorded').length > 0);
+        g.ws.close();
+        await until(() => ofType(h.heard, 'peer-left').length >= i + 1);
+      }
+
+      const oldest = await enter(slug, 'G0', { clientId: 'c-0' });
+      expect(oldest.me.notRecorded, 'the tab remembered first is forgotten').toBeUndefined();
+      const newest = await enter(slug, 'G16', { clientId: 'c-16' });
+      expect(newest.me.notRecorded, 'the tab remembered last is still remembered').toBe(true);
+      // c-0 is the only other guest in the room, and its entry carries no flag.
+      expect(newest.me.peers.map((p) => p.notRecorded ?? null)).toEqual([null, null]);
+
+      [h.ws, oldest.ws, newest.ws].forEach((w) => w.close());
+    }, 30_000);
+
+    it('forgets the setting when the session ends', async () => {
+      const slug = 'pnr-ends-aaa';
+      await seedRoom(slug, 'tok-pnr-ends');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-ends' });
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+
+      // The setting is live in this session: the same tab comes back flagged.
+      a.ws.close();
+      await until(() => ofType(h.heard, 'peer-left').length > 0);
+      const back = await enter(slug, 'A', { clientId: 'c-a' });
+      expect(back.me.notRecorded).toBe(true);
+
+      back.ws.close();
+      h.ws.close();
+      await until(async () => (await sessionOf(slug))?.ended_at != null);
+
+      // A new gathering is a new session, and starts with nobody set.
+      const h2 = await enter(slug, 'H', { hostToken: 'tok-pnr-ends' });
+      const a2 = await enter(slug, 'A', { clientId: 'c-a' });
+      expect(a2.me.notRecorded).toBeUndefined();
+
+      [h2.ws, a2.ws].forEach((w) => w.close());
+    }, 15_000);
+
+    it('survives an eviction: a fresh Room still flags the guest', async () => {
+      const slug = 'pnr-hibe-aaa';
+      const hostToken = 'tok-pnr-hibernate';
+      await seedRoom(slug, hostToken);
+      const h = await enter(slug, 'H', { hostToken });
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+
+      const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(slug));
+      const late = await runInDurableObject(stub, async (_instance, state) => {
+        // A second Room over the same state: what the runtime does when it
+        // re-instantiates an evicted actor, which has no instance fields left.
+        const fresh = new Room(state, env);
+        await new Promise((r) => setTimeout(r, 50));
+
+        const beforeSockets = new Set(state.getWebSockets());
+        const res = await fresh.fetch(
+          new Request(`https://test/ws/r/${slug}`, { headers: { Upgrade: 'websocket' } })
+        );
+        const clientWs = res.webSocket!;
+        clientWs.accept();
+        const serverWs = state.getWebSockets().find((s) => !beforeSockets.has(s));
+        if (!serverWs) throw new Error('expected a newly accepted socket');
+
+        const reply = new Promise<ServerMessage & { type: 'role-assigned' }>((resolve, reject) => {
+          clientWs.addEventListener('message', (e: MessageEvent) => {
+            try {
+              const msg = JSON.parse(e.data as string) as ServerMessage;
+              if (msg.type === 'role-assigned') resolve(msg as ServerMessage & { type: 'role-assigned' });
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+        await fresh.webSocketMessage(
+          serverWs,
+          JSON.stringify({ type: 'join', displayName: 'Late', userAgent: 'ua' })
+        );
+        return reply;
+      });
+
+      expect(late.peers.find((p) => p.peerId === a.me.peerId)?.notRecorded).toBe(true);
+      expect(late.peers.filter((p) => p.notRecorded).map((p) => p.peerId)).toEqual([a.me.peerId]);
+
+      [h.ws, a.ws].forEach((w) => w.close());
+    }, 15_000);
+
+    it('loads a session row written before the setting existed as an empty list', async () => {
+      const slug = 'pnr-oldr-owa';
+      await seedRoom(slug, 'tok-pnr-oldrow');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-oldrow' });
+      const a = await enter(slug, 'A', { clientId: 'c-a' });
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+
+      const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(slug));
+      const late = await runInDurableObject(stub, async (_instance, state) => {
+        const stored = (await state.storage.get<Record<string, unknown>>('session'))!;
+        const withKey = { ...stored };
+        delete stored.notRecorded;
+        await state.storage.put('session', stored);
+
+        // A join driven through a fresh instance's own methods, as in the
+        // eviction test: real WS dispatch would reach the resident Room.
+        const joinThroughFreshRoom = async (clientId: string) => {
+          const fresh = new Room(state, env);
+          await new Promise((r) => setTimeout(r, 50));
+          const beforeSockets = new Set(state.getWebSockets());
+          const res = await fresh.fetch(
+            new Request(`https://test/ws/r/${slug}`, { headers: { Upgrade: 'websocket' } })
+          );
+          const clientWs = res.webSocket!;
+          clientWs.accept();
+          const serverWs = state.getWebSockets().find((s) => !beforeSockets.has(s));
+          if (!serverWs) throw new Error('expected a newly accepted socket');
+
+          const reply = new Promise<ServerMessage & { type: 'role-assigned' }>((resolve, reject) => {
+            clientWs.addEventListener('message', (e: MessageEvent) => {
+              try {
+                const msg = JSON.parse(e.data as string) as ServerMessage;
+                if (msg.type === 'role-assigned') resolve(msg as ServerMessage & { type: 'role-assigned' });
+              } catch (err) {
+                reject(err);
+              }
+            });
+          });
+          await fresh.webSocketMessage(
+            serverWs,
+            JSON.stringify({ type: 'join', displayName: 'Late', userAgent: 'ua', clientId })
+          );
+          return reply;
+        };
+
+        const older = await joinThroughFreshRoom('c-late-1');
+        await state.storage.put('session', withKey);
+        const remembered = await joinThroughFreshRoom('c-late-2');
+        return { older, remembered };
+      });
+
+      expect(late.older.notRecorded).toBeUndefined();
+      expect(late.older.peers.some((p) => p.notRecorded)).toBe(false);
+      // With the key back, the same guest is flagged again: the empty snapshot
+      // above is the missing key, not a field nothing ever sets.
+      expect(late.remembered.peers.find((p) => p.peerId === a.me.peerId)?.notRecorded).toBe(true);
+
+      [h.ws, a.ws].forEach((w) => w.close());
+    }, 15_000);
+
+    it('does not wipe the list when a join creates the session again', async () => {
+      const slug = 'pnr-keep-aaa';
+      await seedRoom(slug, 'tok-pnr-keep');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-keep' });
+      const a = await enter(slug, 'A', { clientId: 'tab-alpha' });
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+
+      const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(slug));
+      const late = await runInDurableObject(stub, async (_instance, state) => {
+        // The state a Room is left in when an earlier insertSession threw: the
+        // choice is stored, no session is open, so the next join creates one.
+        const stored = (await state.storage.get<Record<string, unknown>>('session'))!;
+        await state.storage.put('session', { ...stored, sessionId: null });
+
+        const fresh = new Room(state, env);
+        await new Promise((r) => setTimeout(r, 50));
+        const beforeSockets = new Set(state.getWebSockets());
+        const res = await fresh.fetch(
+          new Request(`https://test/ws/r/${slug}`, { headers: { Upgrade: 'websocket' } })
+        );
+        const clientWs = res.webSocket!;
+        clientWs.accept();
+        const serverWs = state.getWebSockets().find((s) => !beforeSockets.has(s));
+        if (!serverWs) throw new Error('expected a newly accepted socket');
+
+        const reply = new Promise<ServerMessage & { type: 'role-assigned' }>((resolve, reject) => {
+          clientWs.addEventListener('message', (e: MessageEvent) => {
+            try {
+              const msg = JSON.parse(e.data as string) as ServerMessage;
+              if (msg.type === 'role-assigned') resolve(msg as ServerMessage & { type: 'role-assigned' });
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+        await fresh.webSocketMessage(
+          serverWs,
+          JSON.stringify({ type: 'join', displayName: 'Late', userAgent: 'ua', clientId: 'tab-late' })
+        );
+        return reply;
+      });
+
+      expect(late.peers.find((p) => p.peerId === a.me.peerId)?.notRecorded).toBe(true);
+
+      [h.ws, a.ws].forEach((w) => w.close());
+    }, 15_000);
   });
 });

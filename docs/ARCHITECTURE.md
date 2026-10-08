@@ -83,7 +83,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   no remote audio, and shares the 2 unrecorded slots with producers (does not use a recorded seat;
   role is still host/guest); the DO enforces the per-role caps at `join`. "Present only" is never
   offered to a producer: `?producer=1` wins over `?present=1`. `role-assigned` (peers)
-  and `peer-joined` echo `companion?: boolean`.
+  and `peer-joined` echo `companion?: boolean` and `notRecorded?: boolean` (the host set that guest
+  as not recorded; `role-assigned` carries it for the joining connection too).
 
 **Chunk wire format** — each chunk = **TWO ordered DataChannel sends**: (1) a JSON **string**
 header `{idx,offset,size,ts}` (`encodeChunkHeader` = `JSON.stringify`), then (2) the binary
@@ -162,10 +163,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `join`/`ping` answered and nothing else; one flagged `left` (replaced, or after its own `leave`)
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
-  `room`, `session`, `nextOrdinal`) and reloaded in the constructor via `blockConcurrencyWhile`, so
-  a woken instance picks up exactly where the evicted one left off. The client's `{"type":"ping"}`
-  heartbeat is answered `{"type":"pong"}` by `setWebSocketAutoResponse` without waking the DO; the
-  `ping` case in the message switch stays as a fallback.
+  `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
+  as not recorded, at most 16, emptied when the session ends) and reloaded in the constructor via
+  `blockConcurrencyWhile`, so a woken instance picks up exactly where the evicted one left off.
+  The client's `{"type":"ping"}` heartbeat is answered `{"type":"pong"}` by
+  `setWebSocketAutoResponse` without waking the DO; the `ping` case in the message switch stays as
+  a fallback.
 - **Expiry is enforced mid-call by `alarm()`, not only at connect.** Every successful `join` arms
   `storage.setAlarm(expiresAt)` for the same `expiresAt` just passed to `touchRoom`. `alarm()`
   re-reads the room row: if it still exists and `expires_at > Date.now()` (a later join extended
@@ -188,7 +191,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
   `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
-  joined guest; the DO then sends `peer-recorded` to every joined peer, the host included.
+  joined guest that sent a client id; the DO remembers the guest by that id — until the host
+  changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
+  sends `peer-recorded` to every joined peer, the host included.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
