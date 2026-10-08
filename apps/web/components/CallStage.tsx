@@ -1160,7 +1160,10 @@ export function CallStage({
                     disabled={recoveryBusy}
                     onClick={phase === 'done' ? recordNextTake : handleRecord}
                   />
-                  {onSetPeerRecorded && !roomRecording && choosable.length > 0 && (
+                  {/* Not while an interrupted take can still be resumed or saved: the
+                      guests are still capturing it, and who is recorded must not change
+                      under a capture in progress. */}
+                  {onSetPeerRecorded && !roomRecording && !resumeOffer && choosable.length > 0 && (
                     <>
                       <button
                         type="button"

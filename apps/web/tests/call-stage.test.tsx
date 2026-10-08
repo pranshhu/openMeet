@@ -2197,6 +2197,21 @@ describe('CallStage: who is recorded', () => {
     expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
   });
 
+  it('offers no arrow while an interrupted take can still be resumed or saved', () => {
+    // After a host reload the guests are still capturing that take; who is
+    // recorded must not change under them.
+    const { rerender } = render(
+      <CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={{ take: 1, canResume: true }} />
+    );
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+
+    rerender(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={{ take: 1, canResume: false }} />);
+    expect(screen.queryByRole('button', { name: 'Choose who is recorded' })).toBeNull();
+
+    rerender(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} resumeOffer={null} />);
+    expect(screen.getByRole('button', { name: 'Choose who is recorded' })).toBeInTheDocument();
+  });
+
   it('closes on Escape back to the arrow, on Record, and when another menu opens', () => {
     const onRecord = vi.fn();
     render(<CallStage {...withGuests} onSetPeerRecorded={vi.fn()} onRecord={onRecord} onSwitchMic={vi.fn()} />);
