@@ -4873,6 +4873,35 @@ describe('resuming a crashed take from inside the call', () => {
     });
   });
 
+  it('stops naming a sharer once their new share is being recorded', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal({ files: twoGuestFiles })]);
+    await assignHost({ peers: [vera, walt, companion] });
+    channelFrom('p-vera', 'recording#RV');
+    channelFrom('p-vera', 'recording-screen-2');
+    channelFrom('p-screen', 'recording-screen-1');
+    vi.mocked(resumeHostRecording).mockResolvedValue(resumed);
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+    expect(result.current.state.recordingError).toBe(
+      'The screen share from Vera, Deck is not being recorded until they stop sharing and share again.'
+    );
+
+    // Vera stops and shares again: that share is bound, so only Deck is named.
+    channelFrom('p-vera', 'recording-screen-3');
+    expect(result.current.state.recordingError).toBe(
+      'The screen share from Deck is not being recorded until they stop sharing and share again.'
+    );
+    // Deck shares again too: nothing is left to say.
+    channelFrom('p-screen', 'recording-screen-2');
+    expect(result.current.state.recordingError).toBeNull();
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
   it('names no sharer whose connection has gone or whose screen channel has closed', async () => {
     const { result } = await hostAfterReload();
     vi.mocked(findTakeJournals).mockResolvedValue([takeJournal({ files: twoGuestFiles })]);

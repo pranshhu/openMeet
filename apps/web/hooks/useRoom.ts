@@ -539,6 +539,13 @@ export const MAX_MARKER_LABEL_LENGTH = 200;
  * well as the journal's flag because one file's crash copy can stop, on a
  * commit that never answers, without the whole journal dying.
  */
+/** The host's line for screen shares a resume could not take up, or null when there is none. */
+function unrecordedScreenLine(names: string[]): string | null {
+  return names.length > 0
+    ? `The screen share from ${names.join(', ')} is not being recorded until they stop sharing and share again.`
+    : null;
+}
+
 function lostCrashCopy(msg: string, journal?: { dead: boolean } | null): boolean {
   return msg.startsWith('Crash protection stopped') || journal?.dead === true;
 }
@@ -614,6 +621,10 @@ export function useRoom(slug: string) {
   // starts closes the offer, which only a new join brings back, and a join
   // rebuilds every connection.
   const idleScreensRef = useRef(new WeakMap<PeerConnection, RTCDataChannel>());
+  // The sharers a resume named as not recorded, by peer id, and the line that
+  // names them: a sharer who shares again is recorded, so the line must go.
+  const unrecordedScreensRef = useRef(new Map<string, string>());
+  const screenLineRef = useRef<string | null>(null);
   const recordingRef = useRef<RecordingHandles | null>(null);
   // The host take this guest is following, learned from `recording-started` or
   // from the host's acks. A host that resumes re-announces the same take.
@@ -1315,6 +1326,21 @@ export function useRoom(slug: string) {
               // and without it the screen file silently never opens while the
               // guest keeps streaming into nothing.
               if (recNow) {
+                // This sharer was named as not recorded after a resume. A new
+                // share is recorded, so the line stops naming them.
+                if (unrecordedScreensRef.current.delete(remotePeerId)) {
+                  const old = screenLineRef.current;
+                  const next = (screenLineRef.current = unrecordedScreenLine([
+                    ...unrecordedScreensRef.current.values(),
+                  ]));
+                  if (old) {
+                    setState((s) =>
+                      s.recordingError?.includes(old)
+                        ? { ...s, recordingError: s.recordingError.replace(old, next ?? '').trim() || null }
+                        : s
+                    );
+                  }
+                }
                 void bindHostScreenChannel(
                   channel,
                   recNow,
@@ -1837,17 +1863,15 @@ export function useRoom(slug: string) {
       // A screen share that was already running sent its channel before the
       // take was back, and nothing binds that channel: the share is recorded
       // again only once it is restarted, so the host is told whose it is.
-      const unrecorded: string[] = [];
+      const unrecorded = new Map<string, string>();
       for (const [id, connection] of peersRef.current) {
         const screen = idleScreensRef.current.get(connection);
         // A share that has stopped closed its channel.
         if (!screen || screen.readyState === 'closed') continue;
-        unrecorded.push(remotePeersRef.current.find((r) => r.peerId === id)?.name || 'a participant');
+        unrecorded.set(id, remotePeersRef.current.find((r) => r.peerId === id)?.name || 'a participant');
       }
-      const screenLine =
-        unrecorded.length > 0
-          ? `The screen share from ${unrecorded.join(', ')} is not being recorded until they stop sharing and share again.`
-          : null;
+      unrecordedScreensRef.current = unrecorded;
+      const screenLine = (screenLineRef.current = unrecordedScreenLine([...unrecorded.values()]));
       // The take after this one must not reuse its number: the summary lists
       // takes by it.
       takeRef.current = Math.max(takeRef.current, h.take ?? 0);

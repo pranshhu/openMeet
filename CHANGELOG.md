@@ -121,11 +121,14 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   the resume itself reported stays on screen, a guest whose connection arrives
   while the resume is running is still recorded, and the host keeps a call-audio
   copy of the guests it resumed.
-- When the host saves an interrupted take instead of resuming it, from the call
-  or from the lobby, the guests are told the take has ended and stop recording.
+- When the host saves an interrupted take instead of resuming it, the guests'
+  recording stops and each is pointed to the backup their own browser kept:
+  at once for a save from the call, and when the host next joins the room for a
+  save or a delete from the lobby.
 - A screen share that was already running when the host reloaded is named on the
   host's screen after a resume, because it is recorded again only once that
-  person stops sharing and shares again.
+  person stops sharing and shares again. The line stops naming them once
+  their new share is being recorded.
 - Browser storage that stops answering during a take no longer holds back the
   guests' recordings: after 15 seconds crash protection stops for that file, the
   call says so, and the recording carries on.

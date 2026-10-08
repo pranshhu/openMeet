@@ -438,9 +438,11 @@ screen share that was already running when the host reloaded is recorded again o
 that person stops sharing and shares again; the host is told whose it is. The host's own
 camera and WAV master become a second file after a resume, `host_<id>_resumed.mp4` and
 `host_<id>_resumed.wav`; the part before the crash is copied into the folder from the take's
-backup in the background and listed in the summary once it is there. If the host presses
-**Save what was recorded** instead, or saves or deletes the recording from the lobby, the
-guests are told the take has ended and stop recording. While a take
+backup in the background and listed in the summary once it is there; it comes from the host's
+own backup, so its camera file can end a few seconds before the reload. If the host presses
+**Save what was recorded** instead, the guests' recording stops and each is pointed to the
+backup their own browser kept; after a save or a delete from the lobby that happens when the
+host next joins the room. While a take
 runs, the guests' bytes are also kept in this browser every few seconds, so the copy is a
 few seconds behind, usually three to four and up to about eight at the very start of a
 take; a take that cannot keep that copy, or loses it part-way, says so on screen until the

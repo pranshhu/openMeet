@@ -686,6 +686,17 @@ unfinished send to each new connection to the host.
   told whose share it is after the resume. The part before the reload is put back from the crash
   copy. The host's own screen, if it was presenting, is likewise recorded only from the next
   share, and the lobby's Save does not copy the host's own screen backup into the folder.
+- **A screen recording that finished before a reload reads as rebuilt and as ended early.** The
+  crash cut the take, so no finish signal for it was kept; the file itself is whole when the
+  guest had stopped that share.
+- **The host's own camera file from before a reload can end a few seconds early.** It is copied
+  from the host's backup, which is written in two-second pieces, and it is listed as recorded on
+  this computer; the audio master beside it runs to the reload.
+- **A guest is not told that its running screen share is not being recorded after a resume;**
+  only the host has that line. After a resume the host's timer starts again from 0:00.
+- **After a save or a delete from the lobby the guests are stopped only when the host joins.**
+  The lobby has no connection to the room, so until then a guest still reads that the host can
+  resume, and keeps recording into its own backup.
 - **Call-audio copies from before a reload are not listed in a resumed take's report.** The copy
   after the resume takes a new file name; the earlier file stays in the folder as the crash left it.
 - **A file whose crash copy stopped on a commit that never answered still looks resumable.** Only
