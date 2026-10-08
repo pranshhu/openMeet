@@ -87,6 +87,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   disk estimates follow it.
 - The lobby's size figures (per-hour estimates, bitrate labels, storage and
   folder checks) follow a camera that delivers 50 or 60 fps.
+- A Stereo choice in the lobby for a person with a stereo microphone, remembered
+  in that browser. Without it audio is recorded in mono.
 
 ### Changed
 
