@@ -101,3 +101,12 @@ export function describeTrack(track: MediaStreamTrack | undefined): string | nul
   const fps = s.frameRate ? ` @ ${Math.round(s.frameRate)}fps` : '';
   return `${s.width}x${s.height}${fps}`;
 }
+
+/**
+ * A frame rate fit for a report or an ffmpeg command: a number from 1 to 120,
+ * to three decimals. Anything else is null, so "not reported" and "nonsense"
+ * read the same downstream.
+ */
+export function cleanFps(v: unknown): number | null {
+  return typeof v === 'number' && v >= 1 && v <= 120 ? Math.round(v * 1000) / 1000 : null;
+}

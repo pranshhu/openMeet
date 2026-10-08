@@ -31,4 +31,15 @@ describe('takeName', () => {
     }
     expect(names.size).toBe(12); // 3 takes x 2 roles x 2 formats, no collisions
   });
+
+  it('names sidecar session files for take 1 and take 3', () => {
+    expect(takeName('sync', 'id1', 1, 'json')).toBe('sync_id1.json');
+    expect(takeName('sync', 'id1', 3, 'json')).toBe('sync_id1_take3.json');
+
+    expect(takeName('chapters', 'id1', 1, 'txt')).toBe('chapters_id1.txt');
+    expect(takeName('chapters', 'id1', 3, 'txt')).toBe('chapters_id1_take3.txt');
+
+    expect(takeName('chat', 'id1', 1, 'txt')).toBe('chat_id1.txt');
+    expect(takeName('chat', 'id1', 3, 'txt')).toBe('chat_id1_take3.txt');
+  });
 });

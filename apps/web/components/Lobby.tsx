@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import {
   MediaDeviceMissingError,
   MediaManager,
@@ -22,11 +23,17 @@ import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
-import { backupRoom, findBackups, deleteBackup, isScreenBackup } from '@/lib/backup-recorder';
+import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
+import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
+import { pickRecordingDirectory } from '@/lib/fs-writer';
+import { saveRecoveredTake, type SaveResult } from '@/lib/take-recovery';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
 import type { CheckLevel } from '@/lib/preflight';
+import { isTakeLockHeld } from '@/lib/take-lock';
+import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
+import { formatBytes } from '@/lib/sync-report';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -38,7 +45,7 @@ export function RecordingDisclosure({ isHost, presenting = false }: { isHost: bo
         </>
       ) : (
         <>
-          The host can record this call. If they do, your {presenting ? 'shared screen is' : 'camera and mic are'} written
+          The host can record this call. If they do, your {presenting ? 'shared screen and chat are' : 'camera, mic and chat are'} written
           straight to <strong>their computer</strong>&nbsp;— nothing is uploaded to a server,
           and you’ll be told on screen the moment it starts.
         </>
@@ -96,9 +103,16 @@ function formatSize(bytes: number): string {
 const focusRing = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]';
 const primaryBtn = `rounded-full bg-[#0b57d0] px-6 py-3 text-[15px] font-medium text-white shadow-sm transition-colors enabled:hover:bg-[#0842a0] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 
+const TAKEOVER_PROMPT =
+  'Another tab in this browser is recording this room.\n\n' +
+  'Joining here takes over as host, and that recording’s files end at this point. ' +
+  'To keep the recording whole, cancel, press End & save in the other tab, then join here.\n\n' +
+  'Join here anyway?';
+
 export function Lobby({
   slug,
   onJoin,
+  onSendBackups,
   producer = false,
   present = false,
 }: {
@@ -109,6 +123,8 @@ export function Lobby({
     companion?: boolean,
     screenStream?: MediaStream
   ) => void;
+  /** Guest: queue leftover backups for the host, in the call or before it. */
+  onSendBackups?: (files: File[]) => void;
   /** Unrecorded observer: publishes nothing, so no camera or mic is opened. */
   producer?: boolean;
   /** Join as a screen-sharing companion only: no camera/mic acquisition. */
@@ -133,11 +149,13 @@ export function Lobby({
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
-  const [audioRate, setAudioRate] = useState<number | null>(null);
   const [checkLevel, setCheckLevel] = useState<CheckLevel>('ok');
   const [backups, setBackups] = useState<BackupItem[]>([]);
   const backupsRef = useRef<BackupItem[]>([]);
   backupsRef.current = backups;
+  // Names, not rows: a backup deleted after being chosen no longer counts.
+  const [toSend, setToSend] = useState<string[]>([]);
+  const [journals, setJournals] = useState<TakeJournal[]>([]);
   const [isHost, setIsHost] = useState(false);
   const guestGuidance = !producer && !isHost ? guestRecordingGuidance() : null;
   const mmRef = useRef<MediaManager | null>(null);
@@ -145,6 +163,16 @@ export function Lobby({
   // must not stop it on unmount (the lobby unmounts the instant we enter the
   // call), or the call would receive dead tracks.
   const handedOffRef = useRef(false);
+  // A press that is being answered, or that already handed the stream over.
+  // The check below is awaited, so a second press could otherwise join twice.
+  const joiningRef = useRef(false);
+  // Same shape as joiningRef: opening the folder prompt is awaited, so a second
+  // press could otherwise start a second save over the same journal.
+  const savingRef = useRef(false);
+  // From the chosen folder to the end of the rebuild, which can take minutes:
+  // Save and Delete wait, so neither runs under it.
+  const [saving, setSaving] = useState(false);
+  const [saveNote, setSaveNote] = useState<{ text: string; problem: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -165,8 +193,36 @@ export function Lobby({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void findTakeJournals().then(async (found) => {
+      // The anchored directory name is the identity deleteTakeJournal
+      // re-checks, and the notes carry the directory's room when they could
+      // not be read. A slug that is only the tail of another room's name
+      // must not open that room's journal.
+      const mine = found.filter(
+        (j) => j.notes.room === slug && j.dirName.endsWith(`-${slug}`)
+      );
+      const held = mine.length > 0 && (await isTakeLockHeld(slug));
+      if (!cancelled) setJournals(held ? [] : mine);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  useEffect(() => {
     setIsHost(!!getHostToken(slug));
   }, [slug]);
+
+  const chosen = backups.filter((b) => toSend.includes(b.file.name));
+  // A host's own screen backup has the same name shape as a guest's, so only a
+  // visitor gets the button, and only for a backup recorded in this room.
+  const canSendRow = (name: string) => !isHost && parseBackupName(name)?.room === slug;
+  const hasSendableRow = backups.some((b) => canSendRow(b.file.name));
+
+  function toggleSend(fileName: string) {
+    setToSend((prev) => (prev.includes(fileName) ? prev.filter((n) => n !== fileName) : [...prev, fileName]));
+  }
 
   async function removeBackup(fileName: string) {
     // It may be the only copy of someone's recording.
@@ -185,6 +241,59 @@ export function Lobby({
     });
   }
 
+  /**
+   * The rows were read when the page opened. A take another tab has started
+   * or resumed since then may be writing into the same crash copy, so the
+   * room's lock is asked again right before anything touches it.
+   */
+  async function recordingElsewhere(): Promise<boolean> {
+    if (!(await isTakeLockHeld(slug))) return false;
+    setJournals([]);
+    setSaveNote({
+      text: 'Another tab in this browser is recording this room, so nothing was changed here. End that recording, then reload this page.',
+      problem: true,
+    });
+    return true;
+  }
+
+  async function removeUnsaved(j: TakeJournal) {
+    if (!window.confirm('Delete this unsaved recording? It can’t be recovered.')) return;
+    if (await recordingElsewhere()) return;
+    await deleteTakeJournal(j.dirName);
+    setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
+  }
+
+  async function saveUnsaved(j: TakeJournal) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      // A cancelled prompt is a no-op, not a failure: the journal stays.
+      const folder = await pickRecordingDirectory().catch(() => null);
+      if (!folder) return;
+      // After the prompt, which stays open for as long as the host likes.
+      if (await recordingElsewhere()) return;
+      setSaveNote(null);
+      setSaving(true);
+      const result: SaveResult = await saveRecoveredTake(j, folder);
+      const saved = result.files.filter((f) => f.source !== 'failed').length;
+      const unsaved = result.unsaved ?? [];
+      const lines = [`Saved ${saved} ${saved === 1 ? 'file' : 'files'} to your folder.`];
+      if (unsaved.length > 0) lines.push(`Not saved: ${unsaved.join(', ')}.`);
+      if (result.json === null) lines.push('The sync file could not be written.');
+      if (result.kept) {
+        // Something is still only in this browser: the row stays so the host
+        // can save again.
+        lines.push('The unsaved recording is still here: try again, or choose another folder.');
+      } else {
+        setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
+      }
+      setSaveNote({ text: lines.join(' '), problem: result.kept === true || unsaved.length > 0 });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
   function startPreview(mm: MediaManager, quality: string) {
     setPreviewError(null);
     mm.acquire(deviceConstraints('', '', quality))
@@ -198,10 +307,6 @@ export function Lobby({
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
         setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
         setActual(describeTrack(s.getVideoTracks()[0]));
-        // The REQUESTED rate is `ideal`, so the device is free to ignore it —
-        // and does. Claiming 48kHz while writing a 44.1kHz WAV is the same
-        // class of lie as quoting requested resolution instead of actual.
-        setAudioRate(typeof micSettings.sampleRate === 'number' ? micSettings.sampleRate : null);
       })
       .catch((e: unknown) => setPreviewError(previewProblem(e)));
   }
@@ -274,13 +379,33 @@ export function Lobby({
     setTimeout(() => setCopied(false), 1500);
   }
 
+  /**
+   * Joining from this tab takes the host seat, and a take that another tab of
+   * this browser is recording ends where it is. Asked right before the stream
+   * is handed over, so the answer is about this moment and not about page load.
+   */
+  async function okToTakeSeat(): Promise<boolean> {
+    if (joiningRef.current) return false;
+    joiningRef.current = true;
+    // A no clears it and leaves the lobby as it was. A yes is the hand-over.
+    joiningRef.current = !(await isTakeLockHeld(slug)) || window.confirm(TAKEOVER_PROMPT);
+    return joiningRef.current;
+  }
+
   async function handlePresentOnly() {
     if (!name.trim()) return;
     try {
       const screenStream = await getScreenStream();
+      // After the picker, not before it: the picker needs the click's user
+      // activation, and a dialog left open outlasts that.
+      if (!(await okToTakeSeat())) {
+        screenStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       handedOffRef.current = true;
       mmRef.current?.stop();
       stream?.getTracks().forEach((t) => t.stop());
+      if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
       onJoin(emptyStream(), name.trim(), true, screenStream);
     } catch (e) {
       if (e instanceof Error && e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
@@ -513,10 +638,12 @@ export function Lobby({
           <h1 className="text-[28px] font-normal leading-tight tracking-tight">Ready to join?</h1>
           <form
             className="flex w-full flex-col gap-6"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
               if (!stream || !name.trim()) return;
+              if (!(await okToTakeSeat())) return;
               handedOffRef.current = true;
+              if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               onJoin(stream, name.trim());
             }}
           >
@@ -573,8 +700,18 @@ export function Lobby({
                 Backups on this device
               </h2>
               <p className="mt-1 text-[13px] leading-relaxed text-[#5f6368]">
-                Safety copies of recordings made in this browser. If a recording is missing a part, download
-                the matching backup — guests, send it to the host. They stay here until you delete them.
+                {hasSendableRow ? (
+                  <>
+                    Safety copies of recordings made in this browser. If the host’s recording is missing your
+                    part, press Send to host on the matching backup and join — it goes straight to their
+                    computer. They stay here until you delete them.
+                  </>
+                ) : (
+                  <>
+                    Safety copies of recordings made in this browser. If a recording is missing a part, download
+                    the matching backup — guests, send it to the host. They stay here until you delete them.
+                  </>
+                )}
               </p>
               <ul className="mt-3 divide-y divide-[#e1e5ea]">
                 {backups.map((b) => {
@@ -586,6 +723,8 @@ export function Lobby({
                   const details = `from ${new Date(b.file.lastModified).toLocaleString()}${room ? ` in room ${room}` : ''}`;
                   const what = `${isScreen ? 'screen backup' : `backup${typeLabel}`} ${details}`;
                   const title = `${isScreen ? 'Screen backup' : `Recording backup${typeLabel}`} ${details}`;
+                  const sendable = canSendRow(b.file.name);
+                  const isChosen = toSend.includes(b.file.name);
                   return (
                     <li
                       key={b.file.name}
@@ -593,9 +732,9 @@ export function Lobby({
                     >
                       <p className="min-w-0">
                         <span>{title}</span>
-                        <span className="whitespace-nowrap text-[#5f6368]"> · {formatSize(b.file.size)}</span>
+                        <span className="whitespace-nowrap text-[#5f6368]"> · {formatBytes(b.file.size)}</span>
                       </p>
-                      <div className="-ml-4 flex shrink-0 items-center gap-1">
+                      <div className="-ml-4 flex shrink-0 flex-wrap items-center gap-1">
                         <a
                           href={b.url}
                           download={b.file.name}
@@ -604,6 +743,18 @@ export function Lobby({
                         >
                           Download
                         </a>
+                        {sendable && (
+                          <button
+                            type="button"
+                            aria-pressed={isChosen}
+                            aria-label={`Send to host: ${what}`}
+                            disabled={!isChosen && chosen.length >= MAX_BACKUP_OFFERS_PER_PEER}
+                            onClick={() => toggleSend(b.file.name)}
+                            className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium transition-colors hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${isChosen ? 'bg-[#0b57d0]/10 ' : ''}text-[#0b57d0] ${focusRing}`}
+                          >
+                            {isChosen ? 'Will send to host' : 'Send to host'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => void removeBackup(b.file.name)}
@@ -617,7 +768,78 @@ export function Lobby({
                   );
                 })}
               </ul>
+              {chosen.length > 0 && (
+                <p role="status" className="mt-2 text-[13px] leading-relaxed text-[#5f6368]">
+                  {`Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes.${
+                    chosen.length >= MAX_BACKUP_OFFERS_PER_PEER
+                      ? ` You can send ${MAX_BACKUP_OFFERS_PER_PEER} at a time.`
+                      : ''
+                  }`}
+                </p>
+              )}
             </section>
+          )}
+          {/* Beside Join, like the backups: a host back after a browser crash
+              has to see the interrupted take without scrolling, and only when
+              no tab here still records this room — a live take is not unsaved. */}
+          {journals.length > 0 && (
+            <section
+              aria-labelledby="unsaved-title"
+              className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
+            >
+              <h2 id="unsaved-title" className="text-sm font-medium text-[#202124]">
+                Unsaved recording
+              </h2>
+              <p className="mt-1 text-[13px] leading-relaxed text-[#5f6368]">
+                A recording made in this browser was interrupted before it was saved to a folder.
+              </p>
+              <ul className="mt-3 divide-y divide-[#e1e5ea]">
+                {journals.map((j) => (
+                  <li key={j.dirName} className="flex flex-col gap-1 py-2.5 text-[13px] text-[#202124]">
+                    <p className="min-w-0">
+                      <span>Recording from {new Date(j.notes.hostStartMs).toLocaleString()}</span>
+                      <span className="whitespace-nowrap text-[#5f6368]"> · {formatSize(j.bytes)}</span>
+                    </p>
+                    <div className="-ml-4 flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void saveUnsaved(j)}
+                        disabled={saving}
+                        aria-label={`Save the unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()} to a folder`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${focusRing}`}
+                      >
+                        Save to folder
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeUnsaved(j)}
+                        disabled={saving}
+                        aria-label={`Delete unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()}`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#b3261e] transition-colors enabled:hover:bg-[#b3261e]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${focusRing}`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {saving && (
+            <p role="status" className="w-full text-left text-[13px] leading-relaxed text-[#5f6368]">
+              Saving the recording to your folder. Keep this tab open until it finishes.
+            </p>
+          )}
+          {/* Outside the section: a successful save removes the last row, and the
+              line it leaves behind has to outlive it. A problem is an alert, so
+              it is read out even when the host has looked away. */}
+          {saveNote && (
+            <p
+              role={saveNote.problem ? 'alert' : 'status'}
+              className={`w-full text-left text-[13px] leading-relaxed break-words ${saveNote.problem ? 'text-[#b3261e]' : 'text-[#5f6368]'}`}
+            >
+              {saveNote.text}
+            </p>
           )}
         </div>
 
@@ -683,9 +905,8 @@ export function Lobby({
           {actual && (
             <p className="mt-2 text-center text-xs text-[#5f6368]">
               Capturing {actual} · audio{' '}
-              {audioRate ? `${(audioRate / 1000).toFixed(audioRate % 1000 ? 1 : 0)}kHz` : ''}
               {/* Only the WAV master is uncompressed; without it audio is the MP4's. */}
-              {isPcmCaptureSupported() ? '/24-bit uncompressed' : ' (compressed)'}
+              {isPcmCaptureSupported() ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit uncompressed` : '(compressed)'}
             </p>
           )}
           {stream && (

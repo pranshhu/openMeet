@@ -1,10 +1,13 @@
+import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import { DEFAULT_QUALITY_ID, presetForTrack } from './quality';
 import { cameraConstraints, micConstraints } from './media';
+import { watchMic, type MicWarning } from './mic-watch';
 
 export interface SwitchableMediaOptions {
   qualityId?: string;
   isRecording?: () => boolean;
   onTrackReplaced?: (kind: 'audio' | 'video', newTrack: MediaStreamTrack, oldTrack: MediaStreamTrack) => void;
+  onMicWarning?: (warning: MicWarning | null) => void;
 }
 
 /**
@@ -28,7 +31,7 @@ export function isPhone(): boolean {
  * Builds ONE stable output stream from the lobby stream:
  * - Video: MediaStreamTrackGenerator fed by current camera via MediaStreamTrackProcessor.
  *   One persistent writer; switching cancels old reader, closes stray frames, starts reader on new camera.
- * - Audio: AudioContext({ sampleRate: first mic's rate }) -> source(mic) -> MediaStreamAudioDestinationNode.
+ * - Audio: AudioContext({ sampleRate: WAV_SAMPLE_RATE }) -> source(mic) -> MediaStreamAudioDestinationNode.
  *   Fixed channel count and sample rate; Chrome resamples on mic swap without sample-rate glitching.
  *
  * In iOS Safari (where MSTG is missing): keeps raw tracks and uses replaceTrack on peers.
@@ -46,6 +49,8 @@ export class SwitchableMedia {
   private audioCtx: AudioContext | null = null;
   private destinationNode: MediaStreamAudioDestinationNode | null = null;
   private audioSourceNode: MediaStreamAudioSourceNode | null = null;
+  private levelTap: ChannelSplitterNode | null = null;
+  private stopMicWatch: (() => void) | null = null;
   private qualityId: string;
   private options: SwitchableMediaOptions;
 
@@ -84,10 +89,6 @@ export class SwitchableMedia {
 
     // --- Stable Audio ---
     const micSettings = rawMicTrack?.getSettings?.() ?? {};
-    const sampleRate =
-      typeof micSettings.sampleRate === 'number' && micSettings.sampleRate > 0
-        ? micSettings.sampleRate
-        : 48000;
     const channelCount =
       typeof micSettings.channelCount === 'number' && micSettings.channelCount > 0
         ? micSettings.channelCount
@@ -95,10 +96,13 @@ export class SwitchableMedia {
           ? 1
           : 2;
 
+    // One rate for every microphone and every take. The AAC muxer and the WAV
+    // writer lock their rate on the first frame, and a device is free to run at
+    // 44.1 kHz or, over Bluetooth, 16 kHz; the source node resamples to this.
     const AudioContextClass =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioCtx = new AudioContextClass({ sampleRate });
+    this.audioCtx = new AudioContextClass({ sampleRate: WAV_SAMPLE_RATE });
     // Resume context if suspended
     if (this.audioCtx.state === 'suspended') {
       void this.audioCtx.resume().catch(() => {});
@@ -111,6 +115,23 @@ export class SwitchableMedia {
     if (rawMicTrack) {
       this.audioSourceNode = this.audioCtx.createMediaStreamSource(new MediaStream([rawMicTrack]));
       this.audioSourceNode.connect(this.destinationNode);
+      if (options.onMicWarning) {
+        try {
+          const splitter = this.audioCtx.createChannelSplitter(2);
+          const analysers = [this.audioCtx.createAnalyser(), this.audioCtx.createAnalyser()];
+          analysers.forEach((analyser, channel) => splitter.connect(analyser, channel));
+          this.audioSourceNode.connect(splitter);
+          this.levelTap = splitter;
+          this.stopMicWatch = watchMic(
+            analysers,
+            () => this._currentMicTrack?.enabled === true,
+            options.onMicWarning
+          );
+        } catch {
+          // Warning tap is a courtesy on the join path; an AudioContext missing
+          // splitter/analyser nodes still joins and records without throwing.
+        }
+      }
     }
 
     const stableAudioTrack = this.destinationNode.stream.getAudioTracks()[0];
@@ -277,6 +298,7 @@ export class SwitchableMedia {
       this.audioSourceNode.disconnect();
       const newSource = this.audioCtx.createMediaStreamSource(new MediaStream([newTrack]));
       newSource.connect(this.destinationNode);
+      if (this.levelTap) newSource.connect(this.levelTap);
       this.audioSourceNode = newSource;
     }
 
@@ -302,6 +324,8 @@ export class SwitchableMedia {
   }
 
   stop(): void {
+    this.stopMicWatch?.();
+    this.stopMicWatch = null;
     if (this.currentVideoReader) {
       try {
         this.currentVideoReader.cancel();

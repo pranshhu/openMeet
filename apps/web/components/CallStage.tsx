@@ -7,16 +7,24 @@ import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import type { MediaBoard } from '@/lib/media-board';
-import type { RemotePeer } from '@/hooks/useRoom';
+import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
+import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
 import { ChatPanel, chatSenderLabel, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
+import { RecordingHealth } from './RecordingHealth';
 import { RecordingNotice } from './RecordingNotice';
+import { BackupNotice } from './BackupNotice';
+import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
+import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
+import { useTakeGuard } from '@/hooks/use-take-guard';
+import { useOverloadWatch } from '@/hooks/use-overload-watch';
+import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -81,8 +89,10 @@ export function CallStage({
   backupUrl,
   wavBackupUrl,
   recordingError,
+  micWarning = null,
   recordUnavailableReason,
   syncReportUrl,
+  sidecarsSaved,
   drained = true,
   onToggleMic,
   onToggleCam,
@@ -108,6 +118,21 @@ export function CallStage({
   activeCamId,
   isFallbackMedia = false,
   presentingRearCamera = false,
+  readLoad,
+  readTrackHealth,
+  lowPower = false,
+  onSetLowPower,
+  unprotectedRecording,
+  backupTransfers,
+  onAcceptBackups,
+  onDeclineBackups,
+  onDismissBackup,
+  onStopBackup,
+  resumeOffer,
+  onResumeRecording,
+  onSaveRecording,
+  takeNotice,
+  recoveryBusy = false,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -136,10 +161,12 @@ export function CallStage({
   backupUrl: string | null;
   wavBackupUrl: string | null;
   syncReportUrl: string | null;
+  sidecarsSaved?: boolean;
   /** Guest: every chunk of the last take reached the host before the drain cap. */
   drained?: boolean;
   // Non-fatal: shown as a banner without ending the call.
   recordingError: string | null;
+  micWarning?: MicWarning | null;
   // Why Record is disabled, if it is. Computed by the caller so the capability
   // rules live in one place — and so the message names the ACTUAL cause rather
   // than always blaming the File System Access API.
@@ -168,6 +195,31 @@ export function CallStage({
   activeCamId?: string | undefined;
   isFallbackMedia?: boolean;
   presentingRearCamera?: boolean;
+  /** One reading of how this device is coping; polled only while a take records. */
+  readLoad?: () => Promise<LoadSample>;
+  /** Read on a timer by the track panel; it must keep its identity between renders. */
+  readTrackHealth?: () => TrackReading[];
+  /** This device is sending everyone a smaller live picture to spare its processor. */
+  lowPower?: boolean;
+  onSetLowPower?: (on: boolean) => void;
+  /** The running take has no crash copy in this browser, so say so. */
+  unprotectedRecording?: boolean;
+  /** Returned backups: what the guests are sending back, and the host's answer. */
+  backupTransfers?: BackupTransfer[];
+  onAcceptBackups?: () => void;
+  onDeclineBackups?: () => void;
+  /** The host gave up on a dead returned backup. */
+  onDismissBackup?: (id: string) => void;
+  /** The host ended a returned backup that was still running. */
+  onStopBackup?: (id: string) => void;
+  /** A take in this room ended without its files and its crash copy is here. */
+  resumeOffer?: { take: number; canResume: boolean } | null;
+  onResumeRecording?: () => void;
+  onSaveRecording?: () => void;
+  /** One line after an interrupted take was saved from inside the call. */
+  takeNotice?: string | null;
+  /** A Resume or a Save of the interrupted take is running, so neither can be pressed, nor Record. */
+  recoveryBusy?: boolean;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -180,7 +232,20 @@ export function CallStage({
   const [camMenuOpen, setCamMenuOpen] = useState(false);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  // A mic that gates to silence makes this note wrong for a setup that is
+  // fine, so each kind can be sent away.
+  const [micDismissed, setMicDismissed] = useState<MicWarning[]>([]);
+  // A take is where a dead mic costs the most, so each take starts with the note
+  // armed. The updater hands back the same array when nothing was dismissed, so
+  // starting a take costs no extra render.
+  useEffect(() => {
+    if (phase === 'recording') setMicDismissed((d) => (d.length ? [] : d));
+  }, [phase]);
+  const micNote = micWarning && !micDismissed.includes(micWarning) ? micWarning : null;
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
+  const isTakeActive = phase === 'recording' || phase === 'finalizing';
+  const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
+  const overloaded = useOverloadWatch(phase === 'recording', readLoad, lowPower);
 
   // The invite link is only in the waiting room otherwise, and the host leaves
   // that as soon as the first guest arrives. origin+pathname drops ?producer=1
@@ -333,13 +398,20 @@ export function CallStage({
     return () => clearTimeout(t);
   }, [popup]);
 
-  // While the page is hidden, prefix document.title with the unread count.
+  // While the page is hidden, prefix document.title with REC during a take and unread count.
   useEffect(() => {
     const updateTitle = () => {
       const raw = document.title;
-      const base = raw.replace(/^\(\d+\)\s*/, '');
-      if (document.hidden && unread > 0) {
-        document.title = `(${unread}) ${base || 'openMeet'}`;
+      const base = raw.replace(/^(?:● REC )?(?:\(\d+\)\s*)?/, '');
+      if (document.hidden) {
+        const takePrefix = isTakeActive ? '● REC ' : '';
+        const unreadPrefix = unread > 0 ? `(${unread}) ` : '';
+        const prefix = `${takePrefix}${unreadPrefix}`;
+        if (prefix) {
+          document.title = `${prefix}${base || 'openMeet'}`;
+        } else {
+          document.title = base;
+        }
       } else {
         document.title = base;
       }
@@ -349,9 +421,9 @@ export function CallStage({
     document.addEventListener('visibilitychange', updateTitle);
     return () => {
       document.removeEventListener('visibilitychange', updateTitle);
-      document.title = document.title.replace(/^\(\d+\)\s*/, '');
+      document.title = document.title.replace(/^(?:● REC )?(?:\(\d+\)\s*)?/, '');
     };
-  }, [unread]);
+  }, [unread, isTakeActive]);
 
   const [prompterOpen, setPrompterOpen] = useState(false);
   const [board, setBoard] = useState<MediaBoard | null>(null);
@@ -377,6 +449,11 @@ export function CallStage({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, onMark]);
+
+  useProblemAlert({
+    active: phase === 'recording' || phase === 'finalizing',
+    message: recordingError,
+  });
 
   const [spotlight, setSpotlight] = useState<'local' | 'remote'>('remote');
 
@@ -433,9 +510,13 @@ export function CallStage({
   // startRecording reads refs and reuses the folder, so both run inside the one
   // click: no second folder prompt, and the user activation still holds.
   const canRecordNext = isHost && canRecord && !!remote;
+  const handleRecord = () => {
+    requestProblemNotifications();
+    onRecord();
+  };
   const recordNextTake = () => {
     onNewTake();
-    onRecord();
+    handleRecord();
   };
 
   const toastPlace = prompterOpen ? 'top-3 sm:top-auto sm:bottom-3' : 'top-3';
@@ -472,7 +553,7 @@ export function CallStage({
           recording" is the one status that must not be silent. */}
       <div
         data-testid="status-bar"
-        className="flex items-center gap-3 px-4 py-3.5 text-sm min-[861px]:px-14"
+        className="relative flex items-center gap-3 px-4 py-3.5 text-sm min-[861px]:px-14"
         aria-live="polite"
       >
         {/* Top-left at the waiting room's inset, so the mark stays put when the
@@ -497,6 +578,10 @@ export function CallStage({
             {markerCount} marker{markerCount === 1 ? '' : 's'}
           </span>
         )}
+        {phase === 'recording' && unprotectedRecording && (
+          <span role="status" className="text-[#fdd663]">This take isn’t protected if the browser crashes.</span>
+        )}
+        {phase === 'recording' && readTrackHealth && <RecordingHealth read={readTrackHealth} />}
         {/* The host's downloads live in the summary; here is only the verdict.
             A guest has no summary, so its backups stay on this line. */}
         {phase === 'done' && !roomRecording && (
@@ -514,7 +599,7 @@ export function CallStage({
               // The drain hit its cap or the sender gave up: the host's copy may
               // be short, and only this guest's backup has the rest.
               <span className="text-[#fdd663]">
-                {`Some of your recording may not have reached the host${backupUrl ? ' — download your backup and send it to them.' : '.'}`}
+                {`Some of your recording may not have reached the host${backupUrl ? ' — rejoin and press Send to host on your backup, or download it.' : '.'}`}
               </span>
             )}
             {!(isHost && summary) && backupUrl && (
@@ -564,6 +649,101 @@ export function CallStage({
           {recordUnavailableReason}
         </p>
       )}
+      {backgroundNote && (
+        <div
+          role="status"
+          className="mb-1 flex max-w-[92vw] items-center gap-2 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          <span>{backgroundNote}</span>
+          <button
+            type="button"
+            onClick={dismissBackgroundNote}
+            className="rounded-full px-2 py-0.5 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {batteryNote && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          {batteryNote}
+        </p>
+      )}
+      {resumeOffer && (
+        <div role="status" aria-busy={recoveryBusy} className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          <span>Recording was interrupted. This browser still has the take.</span>
+          {resumeOffer.canResume && (
+            <button
+              type="button"
+              onClick={onResumeRecording}
+              disabled={recoveryBusy}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-7"
+            >
+              Resume recording
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onSaveRecording}
+            disabled={recoveryBusy}
+            className={`${guestLink} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            Save what was recorded
+          </button>
+        </div>
+      )}
+      {takeNotice && (
+        <p role="status" className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          {takeNotice}
+        </p>
+      )}
+      {micNote && (
+        <div className="mb-1 flex max-w-[92vw] items-center gap-2 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          <span role="alert">{MIC_WARNING_TEXT[micNote]}</span>
+          <button
+            type="button"
+            aria-label="Dismiss microphone warning"
+            onClick={() => setMicDismissed((d) => [...d, micNote])}
+            className="rounded-full px-2 py-0.5 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {(overloaded || lowPower) && (
+        <div
+          role="status"
+          className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          <span>
+            {!lowPower
+              ? 'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+              : overloaded
+                ? 'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+                : 'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => onSetLowPower?.(!lowPower)}
+            className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-7"
+          >
+            {lowPower ? 'Turn off low-power mode' : 'Turn on low-power mode'}
+          </button>
+        </div>
+      )}
+
+      <BackupNotice
+        role={role}
+        transfers={backupTransfers ?? []}
+        takeActive={isTakeActive}
+        onAccept={onAcceptBackups}
+        onDecline={onDeclineBackups}
+        onDismiss={onDismissBackup}
+        onStop={onStopBackup}
+      />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the
@@ -577,7 +757,7 @@ export function CallStage({
         ) && (
           <div
             role="alert"
-            className="mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
+            className="relative z-50 mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
           >
             {recordingError}
           </div>
@@ -586,7 +766,7 @@ export function CallStage({
       {deviceError && (
         <div
           role="alert"
-          className="mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
+          className="relative z-50 mx-5 mb-1 rounded-md border border-[#f28b82]/40 bg-[#f28b82]/10 px-4 py-2.5 text-sm text-[#f6aea9]"
         >
           {deviceError}
         </div>
@@ -946,7 +1126,8 @@ export function CallStage({
                   text="Record"
                   label="Start recording"
                   variant="record"
-                  onClick={phase === 'done' ? recordNextTake : onRecord}
+                  disabled={recoveryBusy}
+                  onClick={phase === 'done' ? recordNextTake : handleRecord}
                 />
               )}
               {phase === 'recording' && (
@@ -1021,6 +1202,7 @@ export function CallStage({
                 wavBackupUrl={wavBackupUrl}
                 downloadNames={downloadNames}
                 takes={takes}
+                sidecarsSaved={sidecarsSaved ?? false}
                 // Nobody left to record: invite someone and keep the summary.
                 // newTake would drop to the waiting room and lose it, sync.json
                 // with it. Once a guest is back, the button records again.

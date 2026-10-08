@@ -72,7 +72,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `type` discriminant**, not payload shape.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
-  `recording_meta` (last three = recording clock-sync). Recording acks flow here, **not** over WS.
+  `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
+  channel and carries the file size and the sender's key). Recording acks flow here, **not**
+  over WS.
 - `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
@@ -99,7 +101,8 @@ defaults, and the 1080p entry of `lib/quality.ts` `QUALITY_PRESETS` (720p–4K),
 `lib/media.ts` `RECORDING_CONSTRAINTS`).
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
-`recording-screen-<n>` (the host matches the prefix). WS close codes: `4001` capacity-full,
+`recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
+going back to the host). WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over).
 
@@ -121,7 +124,8 @@ DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each opti
   (`TURN_CRED_LIMITER`, same shape as `ROOM_CREATE_LIMITER`). Mint failure → 502 (`turn_unavailable`).
 - `GET|PATCH /api/recordings/:id` → host-token auth, cookie or `Authorization: Bearer` (does
   **not** check room expiry).
-  PATCH always returns 200 even on no-op; no field validation.
+  PATCH validates field values (400 `invalid_field` on bad fields, 200 on no-op);
+  setting status to `finalized` stamps `finalized_at` with server time.
 - `GET /api/sponsors` → 200 JSON sponsor wall data read from Polar (`POLAR_ACCESS_TOKEN`,
   `POLAR_PRODUCT_ID`, `SPONSOR_CHECKOUT_URL`, optional `POLAR_API_BASE`). Filtered to customers
   with `metadata.sponsor_approved` (`true` or `"true"`) and total ≥ 2500 cents ($25). Returns
@@ -141,8 +145,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
   `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
   WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
-  instance `Map`; `allPeers()` derives the live peer list from `state.getWebSockets()` (skipping
-  sockets flagged `left: true`) instead. `slug`/`hostToken`, `sessionId`/`recording`, and
+  instance `Map`; `allPeers()` derives the live socket list from `state.getWebSockets()` (skipping
+  sockets flagged `left: true`) instead, and `joinedPeers()` narrows it to the sockets whose `join`
+  was admitted — the room itself, which is all that relays, broadcasts and `peerCount` look at, and
+  what session end counts. A socket that hasn't joined, or was refused at the cap, gets its own
+  `join`/`ping` answered and nothing else; one flagged `left` (replaced, or after its own `leave`)
+  has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `nextOrdinal`) and reloaded in the constructor via `blockConcurrencyWhile`, so
   a woken instance picks up exactly where the evicted one left off. The client's `{"type":"ping"}`
@@ -162,14 +170,18 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
-- `recording-started` is **persisted to D1 AND relayed** — it is what starts every guest's capture.
+- `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture),
+  but **persisted to D1 only by the host** (`insertRecording`, capped at 256 rows per session).
+  A take announced again under its own id — a host resuming after a reload — keeps the row it
+  already has, file name and start time from the first announcement, and spends no second slot.
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
-  **persisted, not relayed**. The DO tracks `recording: boolean` and reports it in `role-assigned`
-  so a peer joining mid-recording catches up. (`insertRecording`
-  / `updateRecordingProgress`, best-effort `.catch(()=>{})`).
+  **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
+  `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
-  attachment's `left` flag: `markParticipantLeft`; if `allPeers().length===0 && sessionId` →
-  `endSession` (`host-left`/`guest-left`). Rooms are reusable (TTL is extended on join, not
+  attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
+  !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
+  the session and its `recording` flag across a cookie-path host reconnect, which replaces the old
+  socket before the new one has joined. Rooms are reusable (TTL is extended on join, not
   one-shot; each gathering starts a new session).
 
 ### lib + db
@@ -228,7 +240,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
-  Leftover backups are listed in the join panel, beside Join.
+  Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
+  room can choose it with **Send to host**; the choice is handed to the hook on join.
+  A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save
+  to folder and Delete; both are disabled while a save runs, and a save that left something out
+  says so in an alert and keeps the row.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
@@ -244,7 +260,19 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
   full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP.
+  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
+  tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
+  every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
+  reports a live encoder as limited by the CPU) and shows a notice for the rest of the take once
+  the device is not keeping up; the notice offers low-power mode (`useRoom().setLowPower`), which
+  makes `sendEncoding` send a quarter-size camera picture at the floor bitrate and a shared screen
+  at 4 fps on every connection, leaves every recorder alone, and stays on until turned off.
+  Switching the mode starts the readings over, and while it is on only lost audio counts.
+  `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
+  host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
+  transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
+  held back while a take records or saves.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -252,19 +280,27 @@ State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
-`capabilities` (per-peer MP4/WAV from `recording-capability`), `remoteScreenStream`, `screenSharing`.
+`capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
+backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
+`micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
+null; `CallStage` shows it as a note that can be dismissed until the next take starts).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
-stream); stop = `removeTrack` + renegotiate, idempotent.
+stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
+`BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
+`sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
+unfinished send to each new connection to the host.
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
-  `recording-audio`, or prefix `recording-screen`). Guest **creates** the recording DataChannels;
-  host **receives** them. `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
+  `recording-audio` / `backup`, or prefix `recording-screen`). Guest **creates** the recording
+  DataChannels;
+  host **receives** them; the guest also creates one `backup#<file name>` channel per returned backup
+  (`createBackupChannel`). `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
@@ -278,24 +314,44 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   **synchronously** in `ondataavailable`, serializes `blob.arrayBuffer()` via a `tail` promise
   chain to preserve order; skips empty blobs.
 - `chunk-sender.ts` (guest egress): `sendChunk` → `hash.update` → `buffer.add` → `enqueueOrSend`.
-  Backpressure: `bufferedAmount>16MiB` → queue + pause recorder; drains + resumes at ≤8MiB
-  (hysteresis). Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
+  Backpressure: `bufferedAmount>16MiB` → queue, drains at ≤8MiB (hysteresis). The pause half exists
+  (`setPaused`, `onBackpressure`) but no take-time caller passes the hook — the three `new
+  ChunkSender` calls in `recording-controller.ts` pass none — so no recorder is ever paused by it.
+  Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
   own header `idx`/`offset`; `rawSend` = one fragment's two-frame header+payload. Ack truncates
   retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
   `drain()` polls 100ms until empty or 30s cap.
-- `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; **drops
-  `header.idx <= lastIdx`** (idempotent dedupe); `writer.write(offset, data)`; acks every 5
-  chunks / 10s; `answerResume` replies `resume_offset{lastByte,lastIdx}`.
+- `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
+  takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
+  and `resume_offset` is sent so the guest resends from the last fragment written, at most once
+  every 2 s, and after five such answers leave the gap unfilled the asking stops and the gap is
+  reported once; the extents are the frame that arrived, not the size its header claims, and a
+  fragment starting more than 64 MiB past the bytes the guest actually sent is refused and reported
+  once, so the file cannot run more than that past what really arrived —
+  while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
+  `writer.write(offset, data)`; `maxBytes` holds a sender to a size it declared; a bounded receiver
+  also refuses a chunk whose declared size is not its payload's length, takes chunks only in order
+  and stops at its first refusal; acks every 5 chunks / 10s (with a journal file attached, after
+  each journal commit instead, so an ack means the bytes are in a closed journal part; a commit
+  window holds at most 8 separate runs of bytes, so a sender that scatters its offsets further is
+  acknowledged from the folder write for the runs the journal did not take; a journal that fails,
+  or a commit that does not answer within 15 s, falls back to the folder-write ack for that file
+  with one warning, and the take goes on); `answerResume` replies
+  `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
+  where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
   `QuotaExceededError`→`DiskFullError`.
-- `retransmit-buffer.ts`: FIFO capped at 32MiB by bytes; always keeps ≥1 item; `truncate(idx)`,
-  `since(idx)`.
+- `retransmit-buffer.ts`: FIFO keeping every chunk that was not acked; it stores a `cap` and never
+  reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
   the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
-  so it stays idempotent / updatable. Two independent digests (guest=sent, host=written) compared at
-  finalize for integrity.
+  so it stays idempotent / updatable. The running state is read when a commit is queued, together
+  with the index it is filed under, and committed with that journal position, so a resumed file's
+  digest still covers the whole take. Two independent digests
+  (guest=sent, host=written) compared at finalize for every guest file (camera, WAV, each screen
+  segment).
 - `backup-recorder.ts`: a 2nd MediaRecorder over the same stream, on **both** host
   (`startHostRecording`) and guest (`beginGuestRecording`), plus a WAV master backup (its own
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
@@ -304,25 +360,72 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   A failed write is retried once and then the rest of the take continues in RAM with a warning
   banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. After a
-  clean host take (no recording error or connection warning) `markFinalized()` drops a `finalized`
-  marker and the next lobby's `findBackups()` deletes that directory. Guest backups are **never**
-  auto-deleted (a guest can't know the host's file was saved); they stay listed in the lobby until
-  deleted by hand. Each screen segment has its own backup (`openmeet-backup-screen-…`) fed the
-  segment recorder's chunks via `writeChunk` — no second screen encode; the host's are finalized
-  with its camera/WAV backups after a clean take.
+  clean host take (no recording error or connection warning, and neither the host's camera file nor
+  its WAV master came out empty) `markFinalized()` drops a `finalized` marker and the next lobby's
+  `findBackups()` deletes that directory. Guest backups are **never** auto-deleted (a guest can't know
+  the host's file was saved); they stay listed in the lobby until deleted by hand. Each screen segment
+  has its own backup (`openmeet-backup-screen-…`) fed the segment recorder's chunks via `writeChunk` —
+  no second screen encode; the host's are finalized with its camera/WAV backups after a clean take.
+  While a take runs, its guest files are also kept in a crash journal (`lib/take-journal.ts`): one
+  directory per take (`openmeet-take-<startMs>-<slug>`) holding each file's acknowledged bytes in
+  small closed parts. A journal whose part failed twice leaves a `dead` mark that the next open
+  reads back, so a take whose crash copy stopped part-way is not offered for a resume.
+  `findTakeJournals` lists what a crash left; a directory with no part and no usable record is
+  removed, but not while a tab holds that room's take lock, because a live take's directory is
+  empty until its first commit. The lobby's Save to folder is `saveRecoveredTake`
+  (`lib/take-recovery.ts`): it rebuilds every file directory the journal holds, named in
+  `take.json` or not (`fileNames`), copies in the host's own backups, writes the sync file, and
+  removes the journal only when every part reached the folder and the sync file was written;
+  otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
+  file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
+  header does not match its length gets its two size fields set from the length
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
+  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  a resume gives the host's own WAV the same repair through `copyBackupInto`. A take reopened from that journal replays the parts into the same folder files
+  and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
+  zero, and the hash state the commit stored beside its position lets the digest cover the part
+  before the resume as well. A screen file already in the folder is never replaced — the resumed host
+  probes for a free segment number instead — and screen notes are bounded at 48 while camera and WAV
+  notes are never refused by that bound. A resumed take opens `host_<id>_resumed.mp4`/`.wav` for the
+  host's own tracks; the first part is copied in from the take's backup in the background and
+  enters `hostParts` (and the file checks, with its size) once that copy is in the folder.
+  `resumeHostRecording` keeps what the folder already holds: after a reload the folder is a few
+  seconds ahead of the crash copy (the closing page commits every file), so those bytes are carried
+  into the reopened file before the crash copy is replayed over them; a file that cannot be carried
+  is left untouched (`keptFiles`) and never reopened in that take. A replay that stops short marks
+  the file (`shortFiles`): it gets no stored hash state and reads incomplete. A guest's clock-sync
+  numbers reach its note through the receiver's `onMeta` and are read back at a resume or a save.
+  Guest screen notes are rebuilt from the crash copy and listed (`resumedScreens`); a call-audio
+  copy opened after a resume asks the folder for a free number (`freeNumber`, shared with the screen
+  files), and each number is claimed before it is asked about.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
-  `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
+  `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta (and hands the pair it
+  accepted to its optional `onMeta`); at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry — plus integrity verdicts, lossless `+faststart` remux and WAV-pairing commands),
-  surfaced in the session summary as "Download sync.json" (downloaded as
+  the host start, with `sharer` display name on each entry, `callCopies.files[]`, each call-audio
+  copy with its offset from the host start and the guest's name, and `hostParts[]`, each file of the
+  host's own track with its offset from the start — a resumed take's own track is two files, and a
+  file that continued after a reload reads "not verified" when the crash copy kept no hash state, so
+  no single digest covers it — plus integrity verdicts,
+  a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
+  `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
+  per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
+  start and an `ffmpeg` command that writes a copy starting there,
+  and a `frameRate` section: the requested rate, each camera file's track-reported rate where known,
+  and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
+  recording folder alongside chapters and chat sidecars and surfaced in the session summary as
+  "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
-  button copies the invite link instead and the summary stays. The summary's file list names only
-  files that got bytes (a guest WAV only if written; unwritten host files for host companions are omitted; empty screen segments are deleted). Clock-sync needs the host to be
+  button copies the invite link instead and the summary stays. The summary's file list leaves out a
+  guest WAV that was never opened, host files a host companion never opened and empty guest screen
+  segments (deleted); every file it lists shows its verdict and, when it was checked, its size (a
+  file that was never created has no check, so no size); one that holds no bytes reads Empty, and
+  one warning says so whenever any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. Phones present a photo/video (`presentFile`) or the rear camera (`presentRearCamera`); a real screen comes from a second device joined with "Present only".
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
@@ -334,6 +437,31 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
   `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  After the folder writers are open it opens that take's crash journal and hands each guest receiver
+  its journal file; when storage could not take one the handles say `unprotected` and the take
+  records as before. `useRoom` mirrors that into `unprotectedRecording`, and sets the same flag
+  when the take's warning callback hears the receiver's "Crash protection stopped" warning (one
+  file's crash copy can stop on a commit that never answers while the journal lives) or finds the
+  journal dead, so the take's own status line outlives the shared banner; a warning for a take
+  that has ended is ignored. In the call, Resume and Save of an interrupted take share one
+  in-flight flag (`recoveryBusy`: neither runs twice or beside the other, Record waits, and the tab
+  holds the take lock from the click). The channels waiting for a resume are one camera and one
+  audio entry per connection, never a producer's or a present-only device's, and no screen channel.
+  A resume restores the take's markers from the notes, binds a channel that arrived while it ran,
+  and marks the guests it bound as told so their call-audio copy starts. A save that removes the
+  crash copy sends `recording-stop`, and a host that joins with no crash copy to continue stops
+  guests still recording the old take, once per connection.
+  While a take runs the host also keeps a **call-audio copy** of every guest who is being recorded
+  (`syncCallCopies`, driven by one effect in `useRoom`): an audio-only `MediaRecorder` on the guest's
+  incoming live track (`pickCallAudioMime`: AAC or Opus in MP4, else WebM/Opus), written to
+  `call<n>_<id>.m4a`, one file per stretch of one guest's stream (a reconnect starts the next), at
+  most `CALL_COPY_MAX_FILES` per take and `CALL_COPY_MAX_PER_PEER` per connection, so one guest's
+  reconnects cannot spend the other guests' files; the first refusal is logged and recorded as
+  `callCopiesCapped` in the sync file. Never for a producer, a companion or a guest whose browser
+  cannot record. A guest's copy starts when that guest's camera recording channel arrives for the
+  take, because a guest opens that channel from the handler that shows it the recording notice: the
+  channel arriving is the proof the guest was told, and there is no second notice. It adds no video
+  encoder, and its failures are logged, never raised as a recording error.
   Sender↔recorder backpressure cycle broken via `recorderRef` box. `rolePicker` defaults unknown
   role → `host`.
 - `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the
@@ -342,6 +470,30 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   take already recording when the board is first opened keeps a mic-only MP4 (a running
   `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
   board says so for that take.
+- `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
+  the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
+  An accepted backup can be restarted only by the key of the offer that created it; another key can
+  take a name while it holds a waiting offer whose channel is gone, or a failed one whose file was
+  already ended. The host can stop a running transfer (`stop`), which answers its sender and keeps
+  the part that arrived. Nothing is written until the
+  host accepts, and a Save covers only the offers that were on screen when it was clicked; each
+  accepted file is opened under a free name that never replaces an existing file in the folder
+  (`…_2.<ext>`). An accepted
+  transfer is written through a `ChunkReceiver` bounded to the size its sender declared, and answers a
+  `resume_query` only with the key of the offer that holds it. On the sender's finalize the file is
+  closed first, then its digest and byte count are compared with the sender's, and a verified backup
+  gets a `<name>.json` note beside it; a failed or cut-off transfer keeps the bytes that arrived with
+  no note (an empty file is removed), and a dropped connection shows `stalled` until the sender asks
+  where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
+  its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
+  1 MiB slices paced by `ChunkSender` backpressure and by the host's acks (16 MiB unacked is the
+  ceiling), and calls it saved only when the host's digest and byte count match its own and it has
+  sent the whole file. Sends go
+  one at a time — each waits for the one before it (`after`) and for this guest's own take to end
+  (`hold`) — and a dropped connection shows `stalled` instead of failing: `attachBackupSends`
+  points every unfinished send at the rebuilt connection once it is connected, the send asks
+  `resume_query` on the replacement channel and replays from the host's answer through
+  `ChunkSender.rebind` + `resume`, and nothing goes out on that channel before the answer arrives.
 
 ---
 
@@ -357,26 +509,41 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
    auto-runs `beginGuestRecording`, opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
-   FileWriter at offset; acks every 5 chunks/10s; backpressure via watermarks.
-   Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s per file,
-   `GUEST_TAIL_TIMEOUT_MS`) for each guest's
-   `recording-finalized` before closing writers — closing early truncates the guest's tail.
+   FileWriter at offset; acks every 5 chunks/10s (with a journal attached, after each journal
+   commit instead); backpressure via watermarks.
+   Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
+   file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
+   `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
+   guest that keeps sending cannot hold the save open.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
-   `buffer.since(lastIdx)`; idempotent dedupe; 32MiB cap (beyond → BackupRecorder only).
+   `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
+   until they pass `STREAM_BACKLOG_CAP_BYTES` (256 MiB), after which the stream is abandoned and the
+   guest's own backup keeps the rest. A take also keeps a crash journal in browser storage: small
+   closed parts, an ack meaning the journal already holds those bytes, so the lobby can rebuild a
+   take from it after the tab closes. A resumed take continues each guest's file where the journal
+   stopped, while the host's own camera and WAV become a second file (`host_<id>_resumed.*`).
    **Full WS reconnect rebuilds the PeerConnection; `startPeer` (`useRoom.ts`) calls
    `rebindGuestRecording` for the guest's connection to the host, which recreates the camera
    (and WAV, if present) recording DataChannels, `ChunkSender.rebind()`s the existing senders onto
    them (queue, retransmit buffer, hash and indices all survive), and fires `resume_query` on each
-   `open` — so the guest resumes streaming into the same host files from the last acked chunk with
-   no gap.** When sharing screen, a reconnect finishes the old screen segment and starts a new
-   numbered segment on the rebuilt connection, with each segment backed up locally in OPFS. Host
-   rebinds new channel to existing receiver, found by a stable key (see below), not by the DO's
-   fresh-per-socket peerId.
+   `open`, holding the replay until the host reports its position (five seconds at most) — so the
+   guest resumes streaming into the same host files from the last acked chunk with no gap.**
+   `role-assigned` lists the whole room as it stands, so every connection to an id the
+   Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
+   sends `peer-left` for the sockets it lost — and every connection it lists is rebuilt, because the
+   far end closed its side when this tab's socket dropped and waits for a fresh offer; only the
+   connections that message opened are negotiated on it. When sharing screen, a reconnect finishes
+   the old screen segment and starts a new numbered segment on the rebuilt connection, with each
+   segment backed up locally in OPFS. Host rebinds new channel to existing receiver, found by a
+   stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
    `Stage` presenting mode renders it (+ a `presence` flag). Backup (host's or guest's own) → object
-   URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete).
+   URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete), where a
+   guest can also pick one to return: the choice rides the join into `sendBackups`, travels as
+   `backup#<name>` over the DataChannel, and lands on the host's **Save to folder**, which checks its
+   SHA-256, writes `backup_<name>_<kind>_<time>` and puts a note file beside it saying how to align it.
 6. **TURN/ICE** — `POST /api/turn-cred` → operator `TURN_URLS`, real Cloudflare TURN, or STUN-only
    stub; if the request fails, the client falls back to the STUN stub. **No symmetric-NAT
    detection / `iceTransportPolicy:'relay'`** — relies on native ICE fallback to the relay
@@ -394,12 +561,15 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
 - Chunk header is **JSON-over-string**, not binary; a chunk header must never contain a `type` key
   (receiver distinguishes control vs header by `type` presence).
 - Two ack systems: DataChannel `ack` (`uptoIdx/uptoOffset`) vs WS `recording-ack` — the WS one and
-  `recording-completed.lastIdx` are defined in protocol but **the DO never produces/consumes them**;
-  real acks are DataChannel-side.
+  `recording-completed` (kept in protocol only for older tabs) are defined in protocol but **the DO
+  never produces/consumes them**; real acks are DataChannel-side.
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  guest. Slot 0 keeps the original `guest_<id>.*` names.
+  guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
+  (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
+  (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
+  present-only companion publishes no camera or mic, so neither can claim a guest slot.
 - **The slot key is the channel-label key, not the raw peerId, when one is present.** The DO mints a
   fresh `peerId` per socket, so a full WS reconnect changes it; if `bindHostGuestChannel`/
   `bindHostAudioChannel` keyed slots on `peerId` directly, a reconnected guest would land on a brand
@@ -416,7 +586,13 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   first, and every other peer whose role is host is closed with `4006` (`WS_CLOSE_REPLACED`,
   `'replaced'`). This lets a reconnecting host or second tab take over. A take running in the
   replaced tab is not torn down (`phaseOnFatalClose` holds the phase and asks for End & save), but
-  its files end there — see Known gaps.
+  its files end there — see Known gaps. The Room itself never refuses a host. A second tab
+  is asked earlier, in its own lobby: while a host's take is live its tab holds a Web Lock
+  (`lib/take-lock.ts`), and `Lobby` asks before it hands the stream to `join` while another tab
+  holds it. It asks the same lock again before it saves or deletes an unsaved recording, because
+  its rows were read when the page opened. The host token exists only in the browser that created the room, so the tabs that
+  can take the seat are the tabs that share that lock. Only a join through the lobby is asked:
+  a tab already in the call that reconnects is not, and neither is a producer link.
 - **Negotiation is presence-gated and joiner-offers** (`useRoom`): exactly one side offers first per
   pair — the joiner. On `role-assigned` when peers are present (`peerCount>=2`), the joiner adds its tracks
   (or recvonly audio/video transceivers if joining as a producer) and triggers the initial offer.
@@ -446,14 +622,18 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   `recordCapability` and the lobby's browser notes say so before anyone records.
   WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
   import, flaky Premiere), and WebM→MP4 needs a lossy transcode.
-- **Guest recording RAM is bounded** — `sha256.ts` streams (incremental, O(1)) and
-  `backup-recorder.ts` spills to OPFS, so guest memory is ~the 2s timeslice + the 32MiB retransmit
-  cap, not the recording length. Raising `RECORDING_VIDEO_BPS` is bounded by disk, not RAM. The only
-  buffer that grows on failure is the retransmit buffer, capped at 32MiB (beyond that,
-  BackupRecorder/OPFS only).
+- **Guest recording RAM is one timeslice, plus everything the host has not acked** — `sha256.ts`
+  streams (incremental, O(1)) and `backup-recorder.ts` spills to OPFS, so the recorder itself holds
+  one timeslice; but the retransmit buffer keeps every chunk that was not acked and reads no byte
+  cap, and a backed-up DataChannel does not pause the recorder. The only bound is
+  `STREAM_BACKLOG_CAP_BYTES` (256 MiB, `constants.ts`) checked in `ChunkSender.sendChunk`, after
+  which that stream is abandoned and the guest's backup keeps the rest. Raising
+  `RECORDING_VIDEO_BPS` is bounded by disk, not RAM.
 - `DiskFullError` surfaces as a `recordingError` **banner**, deliberately NOT `phase:'error'` —
   switching phase unmounts `CallStage`, which takes "End & save" with it, and that button is the
-  only thing that closes the file handle.
+  only thing that closes the file handle. CallStage plays two short beeps and, if the tab is
+  hidden and notifications are permitted, shows a system notification so the problem is noticed
+  right away.
 - Worker vitest `isolatedStorage:false` is intentional (SQLite DO + live WS hold SHM locks);
   reset DB state manually in tests.
 - `@openmeet/protocol` resolves via tsconfig `paths` + vitest `alias` — breaking either breaks all
@@ -471,9 +651,17 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings are delegated from the real track.
-  - Audio is an `AudioContext` locked to the initial mic's sample rate (default 48000) and channel count,
+  - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) with the initial mic's channel count,
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and
+    one `AnalyserNode` per channel, beside the path to the destination node and never in it; `watchMic`
+    (`lib/mic-watch.ts`) polls them every 300 ms and reports `'silent'` once no channel has carried a
+    sample above -80 dBFS for 10 s while the mic is on in the app (the raw track's `enabled`), reports
+    `'clipping'` once three polls have seen a sample above 0.98 on any channel with no clean 10 s between
+    them (0.98 is the level the lobby's `micCheck` uses, `MIC_CLIP_PEAK`), and `null` again when sound returns,
+    the clipping clears or the mic is turned off; and the tap reads the microphone as it arrives, before the
+    destination mixes channels.
   - **iOS Safari fallback**: where `MediaStreamTrackGenerator` is missing, raw tracks are kept directly,
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with
@@ -487,15 +675,67 @@ stream); stop = `removeTrack` + renegotiate, idempotent.
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
   connection, with each segment backed up locally in OPFS.
-- **A second host tab mid-take ends the first tab's files.** The new tab takes the host
-  seat (4006 to the old one); the old tab keeps its phase and shows "Press End & save to
-  keep this recording", but its files stop at the takeover, and the rest of each guest's
-  part exists only in that guest's backup. The new tab records only from its own new take.
+- **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
+  host's browser asks before it joins while a take is live. If the host joins there anyway,
+  the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
+  shows "Press End & save to keep this recording", but its files stop at the takeover, and
+  the rest of each guest's part exists only in that guest's backup. The new tab records
+  only from its own new take.
+- **A screen share that is running when the host reloads is not recorded again until it is
+  restarted.** Its channel arrived while no take was running and nothing binds it; the host is
+  told whose share it is after the resume. The part before the reload is put back from the crash
+  copy. The host's own screen, if it was presenting, is likewise recorded only from the next
+  share, and the lobby's Save does not copy the host's own screen backup into the folder.
+- **A screen recording that finished before a reload reads as rebuilt and as ended early.** The
+  crash cut the take, so no finish signal for it was kept; the file itself is whole when the
+  guest had stopped that share.
+- **The host's own camera file from before a reload can end a few seconds early.** It is copied
+  from the host's backup, which is written in two-second pieces, and it is listed as recorded on
+  this computer; the audio master beside it runs to the reload.
+- **A guest is not told that its running screen share is not being recorded after a resume;**
+  only the host has that line. After a resume the host's timer starts again from 0:00.
+- **After a save or a delete from the lobby the guests are stopped only when the host joins.**
+  The lobby has no connection to the room, so until then a guest still reads that the host can
+  resume, and keeps recording into its own backup.
+- **Call-audio copies from before a reload are not listed in a resumed take's report.** The copy
+  after the resume takes a new file name; the earlier file stays in the folder as the crash left it.
+- **A file whose crash copy stopped on a commit that never answered still looks resumable.** Only
+  a journal that gave up as a whole is marked; that file's guest was acknowledged from the folder
+  write after the stop, so a resume of it cannot continue past the crash copy's end.
+- **A crash copy can only be reached from the lobby of its own room.** If the room has expired
+  the copy stays in browser storage until the site's data is cleared.
+- **For a moment after Record, a lobby in another tab can remove an empty crash copy.** The take
+  lock is held from the recording phase, and the copy's directory is created just before it; the
+  take then says its crash protection stopped.
+- **A flood of markers from other participants can keep the host's later markers out of the crash
+  copy.** The notes hold at most `MAX_RELAYED_MARKERS` markers in all; the live take's own list is
+  not affected, only what a resume or a save after a crash reads back.
+- **A sharer who rejoins gets a new share of the screen entries in the crash copy.** The count of
+  12 is kept per connection; the take's 48 still holds.
+- **With several guests in the room, none is told when the host drops.** The "keep this tab
+  open, the host can resume" line is shown to a guest left alone; with others still present the
+  call simply continues, and their recordings carry on for a resume all the same.
+- **Resume copies each guest file once more.** The folder's bytes are carried into the reopened
+  file and the crash copy is replayed over them, so a long take takes a while to resume and needs
+  the file's size free on the disk.
+- **A resumed take's own track is two files, and openMeet does not join them.** The pre-crash part
+  is recovered from the take's backup and the rest is written to `host_<id>_resumed.*`; both are
+  listed with their offsets in `hostParts` and `aligned`, and an editor places them itself.
 - **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
   running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
   markers; takes started later include them. The WAV master is mic-only by design.
 - **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
   timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- **A participant who rejoins gets a new id and a new share of the call-copy files,**
+  so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
+- A guest that leaves and rejoins gets a new `peerId` and so a fresh key allowance, so a
+  determined guest can still use up the take's slots; a guest who reloads or joins late can
+  then be refused, and their recording is kept only in that guest's own backup.
+- Guest screen-share channels are not bounded per guest: each segment a guest opens becomes
+  a file in the host's folder.
+- **A returned backup is not held back during a take.** The host does not pause an incoming
+  transfer while it records; a recorded guest's own tab waits, and a sender that does not wait
+  makes the host write while it records.

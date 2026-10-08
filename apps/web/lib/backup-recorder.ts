@@ -14,13 +14,13 @@ interface OpfsWritable {
   write(data: Blob | BufferSource): Promise<void>;
   close(): Promise<void>;
 }
-interface OpfsFileHandle {
+export interface OpfsFileHandle {
   createWritable(opts?: { keepExistingData?: boolean }): Promise<OpfsWritable>;
   getFile(): Promise<File>;
   name?: string;
   kind?: string;
 }
-interface OpfsDir {
+export interface OpfsDir {
   getFileHandle(name: string, opts?: { create?: boolean }): Promise<OpfsFileHandle>;
   getDirectoryHandle?(name: string, opts?: { create?: boolean }): Promise<OpfsDir>;
   removeEntry?(name: string, opts?: { recursive?: boolean }): Promise<void>;
@@ -47,6 +47,32 @@ export function isScreenBackup(name: string): boolean {
   return /^openmeet-backup-(?:host-)?screen/.test(name);
 }
 
+export interface BackupName {
+  kind: 'camera' | 'audio' | 'screen';
+  /** When the backup's recorder started, on the clock of the device that made it. */
+  startedMs: number;
+  room: string;
+  ext: 'mp4' | 'wav';
+}
+
+/**
+ * The parts of a backup's file name, or null for anything else: a host's
+ * camera or WAV backup, an older name with no room, a name this app never
+ * wrote.
+ */
+export function parseBackupName(name: string): BackupName | null {
+  const m = /^openmeet-backup-(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
+  if (!m) return null;
+  const prefix = m[1];
+  const startedMs = Number(m[2]);
+  const room = m[3]!;
+  const ext = m[4] as 'mp4' | 'wav';
+  const kind: BackupName['kind'] = prefix === 'audio-' ? 'audio' : prefix === 'screen-' ? 'screen' : 'camera';
+  if (kind === 'audio' && ext !== 'wav') return null;
+  if ((kind === 'camera' || kind === 'screen') && ext !== 'mp4') return null;
+  return { kind, startedMs, room, ext };
+}
+
 function chunkFileName(idx: number): string {
   return `${String(idx).padStart(6, '0')}.part`;
 }
@@ -62,7 +88,7 @@ function getUniqueBackupDirName(prefix: string): string {
   return `${prefix}-${now}`;
 }
 
-async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsDir>> {
+export async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsDir>> {
   const entries: Array<OpfsFileHandle | OpfsDir> = [];
   const iterable = typeof dir.values === 'function'
     ? dir.values()
@@ -86,7 +112,7 @@ async function getDirEntries(dir: OpfsDir): Promise<Array<OpfsFileHandle | OpfsD
   return entries;
 }
 
-function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is OpfsDir {
+export function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is OpfsDir {
   if (handle.kind === 'directory') return true;
   if (handle.kind === 'file') return false;
   return typeof (handle as OpfsDir).getDirectoryHandle === 'function' ||
@@ -119,7 +145,7 @@ async function patchWavHeader(parts: Blob[]): Promise<BlobPart[] | null> {
   }
 }
 
-async function assembleBackupFromDir(
+export async function assembleBackupFromDir(
   dir: OpfsDir,
   dirName: string,
   preferredExt?: string,
@@ -283,7 +309,7 @@ export interface BackupRecorderOpts {
   onError?: (err: unknown) => void;
 }
 
-function defaultOpfsRoot(): OpfsRootGetter | null {
+export function defaultOpfsRoot(): OpfsRootGetter | null {
   const storage = (globalThis.navigator as { storage?: { getDirectory?: () => Promise<OpfsDir> } })
     ?.storage;
   return storage?.getDirectory ? () => storage.getDirectory!() : null;
@@ -316,6 +342,16 @@ export class BackupRecorder {
 
   constructor(opts: BackupRecorderOpts) {
     this.opts = opts;
+  }
+
+  /** The OPFS directory this backup writes its parts into, or null before the open finished or when storage was unusable. */
+  get dirName(): string | null {
+    return this.backupDirName;
+  }
+
+  /** Resolves when the storage probe finished, whether or not storage was usable. */
+  whenOpen(): Promise<void> {
+    return (this.openPromise ?? Promise.resolve()).catch(() => {});
   }
 
   isWav(): boolean {

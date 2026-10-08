@@ -76,15 +76,16 @@ EOF
 | # | Test | How | Expect | ✅ | Notes |
 |---|---|---|---|:--:|---|
 | 2.1 | Only the host can start | Look at the guest's control bar | **No** Record button; a line saying the host starts recording | ☐ | |
-| 2.2 | Consent notice | Host clicks **Record** | Guest sees "This call is now being recorded" toast **and** a persistent REC pill | ☐ | |
+| 2.2 | Consent notice | Host clicks **Record** | Guest sees "This call and chat are now being recorded" toast **and** a persistent REC pill | ☐ | |
 | 2.3 | Guest auto-starts | Watch the guest after 2.2 | Guest's own bar shows recording controls — nobody clicked anything there | ☐ | |
 | 2.4 | One folder prompt | Watch the host | Exactly **one** folder picker, not two | ☐ | |
-| 2.5 | Files appear | Record ~60 s, click **End & save** | 4 files: `host_*.mp4`, `host_*.wav`, `guest_*.mp4`, `guest_*.wav` | ☐ | |
-| 2.6 | All four play | Open each in a video player | All play; the guest MP4 is the one that crossed the network | ☐ | |
-| 2.7 | Integrity | Read the summary screen | "Integrity verified — bytes written match bytes sent" | ☐ | |
+| 2.5 | Files appear | Record ~60 s, click **End & save** | `host_*.mp4`, `host_*.wav`, `guest_*.mp4`, `guest_*.wav`, `call1_*.m4a` | ☐ | |
+| 2.6 | All of them play | Open each in a video player | All play; the guest MP4 is the one that crossed the network | ☐ | |
+| 2.7 | Integrity | Read the summary screen | "Every file is complete."; each guest file reads "Complete. Matches what <name> sent (SHA-256)." | ☐ | |
 | 2.8 | WAV is honest | Run the python snippet above on both WAVs | `declared data == actual data` | ☐ | |
 | 2.9 | Alignment | Read the summary | An offset in ms, not "align by waveform" | ☐ | |
 | 2.10 | Durations match | `ffprobe` each file | Within ~1 s of how long you recorded | ☐ | |
+| 2.11 | Call copy has the guest's voice | Play `call1_*.m4a` from the take above (VLC, or drop it on a browser tab) | The guest is audible from start to end, at call quality | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -100,6 +101,14 @@ kept saying "Recording".
 | 3.5 | Long recording | Record **5+ minutes** | No gaps or freezes mid-file. Scrub through the whole guest MP4 | ☐ | |
 | 3.6 | Very long WAV *(optional, slow)* | Record **4+ hours** | WAV reports its real duration, not ~51 min | ☐ | |
 | 3.7 | Disk pressure | Fill the host disk to near-full, then record | A visible disk error — not a silent stop | ☐ | |
+| 3.8 | Return a backup | Guest records a take, host ends it, guest leaves, reopens the link, presses **Send to host** on the row and joins; host presses **Save to folder** | `backup_…mp4` and `backup_…json` in the folder; the mp4 plays; both sides say saved and verified | ☐ | |
+| 3.9 | Return a backup across a reconnect | During a large transfer, turn the guest's network off for 10 s | The transfer continues and still verifies | ☐ | |
+| 3.10 | Save from the lobby after a host crash | Record 30 s, close the host tab, reopen the room, press **Save to folder** on the **Unsaved recording** row | The guests' files and the host's own copies land in the folder with `sync_…json` beside them; the 2.8 snippet on each WAV prints `declared data == actual data` | ☐ | |
+| 3.11 | **Resume recording** | With the guests still connected, reload the host tab and press **Resume recording** in the in-call notice | The same take id is re-announced, and the host's copies of the guests' files continue from where they stopped; after the take the folder holds `host_<id>.mp4` and `host_<id>_resumed.mp4`, and the summary lists both, the markers placed before the reload, and any screen recording from before it | ☐ | |
+| 3.12 | Guest tab through the host's reload | Keep the guest tab open while the host reloads and resumes | The guest's next fragments land after the resume, and its own backup is untouched | ☐ | |
+| 3.13 | Save to a folder that is too small | After a host crash (as in the row *Save from the lobby after a host crash*), press **Save to folder** and pick a folder on a drive with less free space than the row's size | The lobby names the files that were not saved and the **Unsaved recording** row stays; a second **Save to folder** into a folder with room puts every file there and the row goes | ☐ | |
+| 3.14 | Save instead of resuming | With a guest still connected, reload the host tab mid-take, join again and press **Save what was recorded** | The files land in the folder and the notice goes; the guest's page leaves **Recording** by itself. Pressing **Resume recording** or **Save what was recorded** twice does nothing the second time | ☐ | |
+| 3.15 | Screen share across a resume | A guest is sharing a screen when the host tab is reloaded; the host joins again and presses **Resume recording** | The host is told that person's screen is not recorded until they stop and share again; after they do, and after **End & save**, the screen file from before the reload and the new one are both in the folder and in the summary | ☐ | |
 
 ## 4 — Multiple takes
 
@@ -153,6 +162,10 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.5 | ICE failure | Join from two networks with no TURN configured | A clear "could not connect" message, not an endless spinner | ☐ | |
 | 7.6 | Host opens a second tab | Not recording, open the room again in a second tab of the host's profile | The first tab shows "You joined from another tab or device" with **Use this tab instead** | ☐ | |
 | 7.7 | Leaving | After a take, host clicks **Leave call** | "You left the call" with **Rejoin**, **Back to home** and download links for sync.json, chapters and backups; closing the tab asks first | ☐ | |
+| 7.8 | Host opens a second tab mid-take | Recording, open the room again in a second tab of the host's profile and press **Join now** | A dialog says another tab is recording this room. **Cancel** leaves the first tab recording; after **End & save** there, **Join now** goes straight in. (**OK** takes the call over: the first tab shows the End & save banner) | ☐ | |
+| 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
+| 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
+| 7.11 | One side reconnects | With a call running, move the guest's computer from Wi-Fi to a phone hotspot (or back) | The call is back within a few seconds on both sides, one tile per person, and no "Negotiation failed" message | ☐ | |
 
 ## 8 — Extras
 
@@ -168,6 +181,12 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.8 | Camera switch mid-take | Chromium: record, switch camera from the call's camera menu, record on | Recording doesn't stop; the MP4 plays through the switch without corruption, even if the resolution changed | ☐ | |
 | 8.9 | Mic switch mid-take | Chromium: record, switch to a mic with a different sample rate (a Bluetooth headset is usually 16 or 24 kHz), record on | MP4 and WAV both play at normal speed and pitch through the switch; each WAV's duration matches its own MP4 | ☐ | |
 | 8.10 | Switch mid-take on Safari / iPhone | Record, try to switch camera or mic on that side | "Switch after this take"; the take carries on; switching works once it ends | ☐ | |
+| 8.11 | Track panel | Host and one guest, record, click **Tracks OK** in the top bar | The host's Camera and WAV master say **OK**, the guest's say **Receiving**, each size grows about every 2 s; opening it moves nothing; **Esc** closes it | ☐ | |
+| 8.12 | Track panel stays quiet when nothing is wrong | During a take: mute the guest's mic for 30 s, turn the guest's camera off for 30 s, share a screen that does not change for 30 s | The indicator reads **Tracks starting** for a moment when the share begins and **Tracks OK** otherwise | ☐ | |
+| 8.13 | Track panel flags a stalled track | During a take, disable the guest's wifi for 30 s, then re-enable it | Within about 20 s the indicator reads **Check tracks** and the guest's rows read **Not receiving for …** (or give way to one row at 0.0 MB while the guest reconnects); it returns to **Tracks OK** once the guest is back. A guest that rejoins faster than every 15 s restarts its own row, so it shows **Tracks starting** instead | ☐ | |
+| 8.14 | Track panel on a phone | Join as a guest from a phone about 360 px wide, get recorded, tap the mark beside the clock | The top bar stays on one line; the list opens under it, inside the screen | ☐ | |
+| 8.15 | Guest's track panel | As the guest in a take, open the indicator; then disable the guest's wifi for 30 s and re-enable it | Camera and WAV master read **Reaching the host**; within about 20 s of the drop they read **Not reaching the host for …**; once reconnected they return to **Reaching the host** (after a moment of **… MB still to send**) | ☐ | |
+| 8.16 | Track alert over the open panel | Record, open the track list, then pull the recording folder's drive (or fill it) on a phone about 360 px wide | The red banner is fully readable above the open list | ☐ | |
 
 ## 9 — Deploy
 
@@ -185,9 +204,9 @@ Also not covered automatically. Needs 3 browser profiles.
 
 | # | Test | How | Expect | ✅ | Notes |
 |---|---|---|---|:--:|---|
-| 10.1 | Guest cannot forge integrity | From the guest console, send `recording-completed` with a made-up `recordingId` | D1 row unchanged | ☐ | |
+| 10.1 | Guest cannot forge integrity | From the guest console, send `recording-completed` for the host's `recordingId` | D1 row unchanged (message is ignored; guests write nothing to D1) | ☐ | |
 | 10.2 | Malformed slug | `curl -i "$WORKER/ws/r/NOT_A_SLUG" -H "Upgrade: websocket"` | 400, no Durable Object created | ☐ | |
-| 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth | 401 | ☐ | |
+| 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 
 ---
@@ -203,9 +222,10 @@ Also not covered automatically. Needs 3 browser profiles.
   between takes.
 - **A screen share across a full WebSocket reconnect continues in a new numbered
   segment.** Camera and WAV resume into the same files; the interrupted segment's
-  tail is only in the sharer's screen backup, and the summary marks it "ended early".
-- **A second host tab mid-take takes the call over.** The first tab's files end
-  there; the rest of each guest's part is only in that guest's backup.
+  tail is only in the sharer's screen backup, and the summary marks it incomplete.
+- **A second host tab mid-take asks before it takes the call over.** If the host
+  joins there anyway, the first tab's files end there; the rest of each guest's
+  part is only in that guest's backup.
 - **The media board, if first opened during a take, isn't in that take's MP4.**
   Pads still play live and drop markers; the next take includes them.
 - **Clock sync needs the host recording within ~8 s of the guest.** Otherwise

@@ -55,6 +55,25 @@ export function pickRecordingMime(): string | null {
 }
 
 /**
+ * Audio-only containers for the host's copy of a guest's call audio, best editor
+ * import first: AAC in MP4 where the platform has an AAC encoder, Opus in MP4 on
+ * Linux, and WebM/Opus as the one every Chromium has.
+ */
+const CALL_AUDIO_MIME_CANDIDATES = [
+  'audio/mp4;codecs=mp4a.40.2',
+  'audio/mp4;codecs=opus',
+  'audio/webm;codecs=opus',
+] as const;
+
+/** First of them this browser can encode, or null. Probed, like pickRecordingMime. */
+export function pickCallAudioMime(): string | null {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return null;
+  }
+  return CALL_AUDIO_MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m)) ?? null;
+}
+
+/**
  * Whether this browser can record at all. With no argument it asks the real
  * question — "is ANY supported codec available?" — rather than testing one
  * hardcoded string that happens to fail on Linux.

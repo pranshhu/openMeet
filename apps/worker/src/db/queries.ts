@@ -122,10 +122,13 @@ export async function markParticipantLeft(
     .run();
 }
 
-export async function insertRecording(db: D1Database, row: RecordingRow): Promise<void> {
-  await db
+// Returns false when the row is already there: a host that reloads mid-take
+// resumes the same file and announces the same id again, and that is not an
+// error to write down twice.
+export async function insertRecording(db: D1Database, row: RecordingRow): Promise<boolean> {
+  const result = await db
     .prepare(
-      'INSERT INTO recordings (id, session_id, participant_id, kind, filename, total_bytes, last_offset, sha256, status, started_at, finalized_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO recordings (id, session_id, participant_id, kind, filename, total_bytes, last_offset, sha256, status, started_at, finalized_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING'
     )
     .bind(
       row.id,
@@ -141,6 +144,7 @@ export async function insertRecording(db: D1Database, row: RecordingRow): Promis
       row.finalized_at
     )
     .run();
+  return result.meta.changes > 0;
 }
 
 export async function getRecordingById(

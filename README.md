@@ -48,8 +48,8 @@ retention policy to trust, because there's nothing retained.
 **Recording**
 - Separate full-quality file per participant — nobody's track is degraded by anyone
   else's connection
-- **Uncompressed 24-bit WAV** master per person, alongside the MP4, captured at
-  whatever rate the device actually delivers
+- **Uncompressed 24-bit WAV** master per person, alongside the MP4, at 48 kHz
+  whatever rate the microphone itself runs at
 - Screen share recorded as its **own** track, one file per sharing stretch, with the
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K
@@ -68,12 +68,23 @@ retention policy to trust, because there's nothing retained.
   screen share (phones present a photo/video or the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
+- A sound when a recording problem appears during a take, and a system
+  notification when the tab is in the background
+- A note in the call when your own microphone has sent no sound for 10 seconds
+  (unplugged, muted on the device, wrong input) or keeps clipping
+- Screen kept awake during a take, REC badge when the tab is hidden, and
+  warnings if the tab was in the background or the battery is low
+- A notice during a take when this device is struggling to keep up, with a low-power
+  mode that sends the others a smaller live picture and leaves the recording alone
+- A live track panel during a take: every camera, WAV and screen file with its size
+  growing, and a warning when one stops getting data
 
 **Afterwards**
 - A session summary beside the stage, with one-click **Record another take**
-- `sync.json` with the start-time offset between tracks, a SHA-256 integrity verdict,
-  and ready-to-run `ffmpeg` commands for remuxing and for pairing each video with its
-  WAV master, downloaded from the summary
+- `sync.json` with the start-time offset between tracks, the size of every file and a
+  verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
+  for pairing each video with its WAV master and for aligned copies that start at
+  00:00, downloaded from the summary
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -96,8 +107,9 @@ GUEST browser  ──WebRTC (media tracks + recording DataChannels)──▶  HO
 
 Chunks carry an absolute byte **offset**, not a sequence number, so the receiver writes
 each one straight to its final position. Nothing is reassembled in memory on either
-side, retransmits are idempotent, and a crash leaves a file that's correct up to the
-last chunk written.
+side, and retransmits are idempotent. The browser puts a file in the folder only when it
+is closed, so a take cut short by a crash is rebuilt from a copy kept in the browser: see
+[If the host's browser crashes](#if-the-hosts-browser-crashes).
 
 | Package | What |
 |---|---|
@@ -340,12 +352,16 @@ All in the one folder the host picks, per take:
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
 | `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
+| `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
+| `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
+| `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
+| `chapters_<id>.txt` | Chapter markers (when marked) |
+| `chat_<id>.txt` | Chat log from the take window (when messages sent) |
 
-`<id>` is new for every take, and camera and WAV files from the second take on also
-end in `_take<n>` (`host_<id>_take2.mp4`). `sync.json` names whose screen each
+`<id>` is new for every take, and files from the second take on also
+end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
 screen file is. The MP4's audio track is the convenience copy;
-the WAV is the master. `sync.json` and `chapters.txt` are **not** in the folder — see
-[After the session](#after-the-session).
+the WAV is the master.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
@@ -358,36 +374,86 @@ to `avc1` by the remux commands below, which is what editors expect.
 ## Recording and consent
 
 The host starts recording for everyone. Participants see a pre-join disclosure
-plus an on-screen notice and REC pill. Files land only on the host's disk, plus a
-backup in each participant's own browser storage; nothing is uploaded. **The host
-is responsible for getting consent where the law requires it**
-(all-party-consent jurisdictions, GDPR).
+plus an on-screen notice and REC pill. Files (including in-call chat) land only on the
+host's disk, plus a backup in each participant's own browser storage and a crash copy of
+each take's guest recordings in the host's browser storage, removed when the take ends
+cleanly (see [If the host's browser crashes](#if-the-hosts-browser-crashes)); nothing is
+uploaded. During a take the host also records each recorded guest's live call audio
+into the host's folder, a copy that starts only after that guest's browser has begun
+its own recording. **The host is responsible for getting consent where the law requires
+it** (all-party-consent jurisdictions, GDPR).
 
 ---
 
 ## After the session
 
-`sync.json` and `chapters.txt` are not written to the recording folder. They exist
-only in the host's tab: download them from the session summary beside the stage
-(**Download sync.json**, **Download chapters**, saved as
-`openmeet-<room>-take<n>-sync.json` and `…-chapters.txt`) before you close the tab or
-record again. If the host leaves the call, the screen that follows offers them too.
+`sync_<id>.json`, `chapters_<id>.txt` and `chat_<id>.txt` are saved in the recording
+folder next to the recordings. The session summary beside the stage also provides
+download links (**Download sync.json**, **Download chapters**, saved as
+`openmeet-<room>-take<n>-sync.json` and `…-chapters.txt`). If the host leaves the call,
+the screen that follows offers them too.
 
 1. **Remux:** Run the `+faststart` remux commands in `sync.json` (`seekability`) so clips are seekable:
    `ffmpeg -i "<file>.mp4" -c copy -tag:v avc1 -movflags +faststart "<file>_seekable.mp4"`
-2. **Timeline:** Import everything and offset each guest clip by its `offsetMs` in `timeline.guests` (`timeline.guestMinusHostMs` in a two-person session); screen segments carry their own offset in `timeline.screenSegments`. If an offset is null, align by waveform.
+2. **Timeline:** Import everything and offset each guest clip by its `offsetMs` in `timeline.guests` (`timeline.guestMinusHostMs` in a two-person session); screen segments carry their own offset in `timeline.screenSegments`. For a take whose host reloaded, `hostParts` lists the host's own files, each with its offset from the start. If an offset is null, align by waveform.
+   Or run the aligned-copy commands first (`aligned` in `sync.json`, also under Editor
+   commands in the summary): each writes an `_aligned` copy that starts at the host's
+   start, so the copies and the host's files all go at 00:00. WAV copies get real silence;
+   MP4 copies are not re-encoded (the delay is stored in the file), and an editor that
+   ignores it still needs the offset. Call-audio copies are listed under
+   `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
+   no clock sync applies.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
-   Leftover backups are listed in the lobby, with Download and Delete. A guest's backup is never deleted
+   Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
+   browser, press **Send to host** on a backup there and join while the host is in the room; the host presses
+   **Save to folder** in the in-call notice, and the file lands in the recording folder as
+   `backup_<name>_<camera|audio|screen>_<UTC start>.<ext>` (`_2`, `_3` when that name is taken), with a `.json`
+   beside it once its SHA-256 matched. The offsets in `sync_<id>.json` do not apply to it — its own `.json` says how
+   to align it. A returned backup with no `.json` beside it did not finish. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.
    The host's own backup is cleared at their next lobby visit after a take that ended cleanly.
+4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
 
 ### If the host's browser crashes
 
 Chrome keeps File System Access writes in a temporary file until the file is closed, so
-after a crash the host's files are missing or empty; each participant's camera MP4 and
-WAV master are in their own browser's backup, listed in the openMeet lobby with
-Download. The last few seconds before a crash may be missing, because backups are
-saved every couple of seconds.
+after a crash the host's files are missing or empty. The lobby then lists the take as
+**Unsaved recording**: **Save to folder** rebuilds the guests' files from this browser's
+crash copy, copies in the host's own camera file and WAV master from its backups, and
+writes `sync_<id>.json` and the chapters beside them. If a file cannot be written in full
+(a full disk, a folder that lost permission), the lobby names it and keeps the recording
+listed, so it can be saved again; the browser's copy is removed only once everything it
+holds is in the folder. The last few seconds before
+the crash may be missing (up to about eight when it comes in the first seconds of a
+take), and a guest's own backup still holds the rest — the participant
+copies are listed in the openMeet lobby with **Download**, or **Send to host** to return
+one while the host is in the room. If the guests are still in the call, the host does not
+have to save at all: **Resume recording** in the in-call notice continues the same take
+under its own id, and the guests' files carry on from where they stopped. What the folder
+already held of each file is kept, the chapter markers from before the reload stay, and
+screen recordings from before it are put back and listed. Each guest's file is still checked
+against what that guest sent when the crash copy kept the checksum state for it; otherwise
+it reads "not verified" and says why, and a file with a known hole reads "Incomplete". A
+screen share that was already running when the host reloaded is recorded again only once
+that person stops sharing and shares again; the host is told whose it is. The host's own
+camera and WAV master become a second file after a resume, `host_<id>_resumed.mp4` and
+`host_<id>_resumed.wav`; the part before the crash is copied into the folder from the take's
+backup in the background and listed in the summary once it is there; it comes from the host's
+own backup, so its camera file can end a few seconds before the reload. If the host presses
+**Save what was recorded** instead, the guests' recording stops and each is pointed to the
+backup their own browser kept; after a save or a delete from the lobby that happens when the
+host next joins the room. While a take
+runs, the guests' bytes are also kept in this browser every few seconds, so the copy is a
+few seconds behind, usually three to four and up to about eight at the very start of a
+take; a take that cannot keep that copy, or loses it part-way, says so on screen until the
+take ends and records as usual. A take whose copy stopped part-way is not offered in the call after
+a reload; the lobby still lists what the copy holds. The copy is removed when the take
+ends cleanly, and kept for the lobby when a file could not be closed.
+
+An unsaved recording holds the guests' camera, microphone and screen recordings, their
+names and the chapter markers, in this browser on the host's computer and nowhere else. It
+stays there until it is saved or deleted in the lobby of the room it was recorded in, or
+until the site's data is cleared in the browser.
 
 ---
 
@@ -450,11 +516,12 @@ Known gaps, listed below:
   A guest's camera and WAV recording pick up again by themselves, from the last acknowledged
   chunk, into the same files on the host's disk. A screen share comes back for everyone and
   recording continues in a new numbered segment; the interrupted segment's tail is only in
-  the sharer's screen backup, and the session summary marks that segment "ended early".
-- **Opening the room as host in a second tab during a take hands the call to the new
-  tab.** The first tab's files end at the takeover (it shows "Press End & save to keep
-  this recording"), and the rest of each guest's part exists only in that guest's
-  in-browser backup. The new tab records only from its own new take.
+  the sharer's screen backup, and the session summary marks that segment incomplete.
+- **Taking the call over in a second tab during a take ends the first tab's files.**
+  A second tab in the host's browser asks before it joins while a recording is running.
+  If you join there anyway, the first tab's files end at the takeover (it shows "Press
+  End & save to keep this recording"), and the rest of each guest's part exists only in
+  that guest's in-browser backup. The new tab records only from its own new take.
 - **The media board, if first opened during a take, isn't in that take's MP4.** A
   running recorder can't swap its audio track, so pads still play live and drop chapter
   markers, but their audio reaches the MP4 only from the next take. The WAV master is

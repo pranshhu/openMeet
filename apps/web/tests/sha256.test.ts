@@ -73,4 +73,77 @@ describe('StreamingSha256', () => {
     ref.update(new TextEncoder().encode('abc'));
     expect(await h.digestHex()).toBe(await ref.digestHex());
   });
+
+  it('continues from a restored state across three updates as it does from one', async () => {
+    const bytes = new Uint8Array(200);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + 7) & 0xff;
+    const whole = new StreamingSha256();
+    whole.update(bytes);
+    const expected = await whole.digestHex();
+
+    let h = new StreamingSha256();
+    h.update(bytes.subarray(0, 70));
+    h = StreamingSha256.fromJSON(JSON.parse(JSON.stringify(h.toJSON())))!;
+    h.update(bytes.subarray(70, 135));
+    h = StreamingSha256.fromJSON(JSON.parse(JSON.stringify(h.toJSON())))!;
+    h.update(bytes.subarray(135));
+    expect(await h.digestHex()).toBe(expected);
+  });
+
+  it('returns null from fromJSON for anything that is not a running state', async () => {
+    const good = new StreamingSha256();
+    good.update(new Uint8Array([1, 2, 3]));
+    const state = JSON.parse(JSON.stringify(good.toJSON()));
+
+    const cases: unknown[] = [
+      { ...state, words: state.words.slice(1) },
+      { ...state, words: [...state.words, 0] },
+      { ...state, words: [...state.words.slice(1), 1.5] },
+      { ...state, words: [...state.words.slice(1), -1] },
+      { ...state, words: [...state.words.slice(1), 2 ** 32] },
+      { ...state, length: 65, remainder: new Array(65).fill(0) },
+      { ...state, length: state.length + 1 },
+      { ...state, remainder: [256, 0, 0] },
+      { ...state, remainder: [-1, 0, 0] },
+      { ...state, remainder: [1.5, 0, 0] },
+      { ...state, length: -64, remainder: [] },
+      { ...state, length: 1.5 },
+      { ...state, length: 2 ** 53, remainder: [] },
+      null,
+      'x',
+      {},
+    ];
+    for (const value of cases) {
+      expect(StreamingSha256.fromJSON(value)).toBeNull();
+    }
+    expect(await StreamingSha256.fromJSON(state)!.digestHex()).toBe(await good.digestHex());
+  });
+
+  it('leaves a live digest unchanged when restore refuses a value', async () => {
+    const h = new StreamingSha256();
+    h.update(new TextEncoder().encode('abc'));
+    const before = await h.digestHex();
+
+    for (const value of [null, 'x', {}, { words: [1], remainder: [], length: 0 }]) {
+      expect(h.restore(value)).toBe(false);
+    }
+    expect(await h.digestHex()).toBe(before);
+
+    h.update(new TextEncoder().encode('d'));
+    const reference = new StreamingSha256();
+    reference.update(new TextEncoder().encode('abcd'));
+    expect(await h.digestHex()).toBe(await reference.digestHex());
+  });
+
+  it('keeps the state bounded however much is hashed', async () => {
+    for (const n of [200, 1_000_000]) {
+      const h = new StreamingSha256();
+      h.update(new Uint8Array(n));
+      const state = h.toJSON();
+      expect(state.words).toHaveLength(8);
+      expect(state.remainder.length).toBeLessThanOrEqual(64);
+      expect(state.length).toBe(n);
+      expect(JSON.stringify(state).length).toBeLessThan(1024);
+    }
+  });
 });

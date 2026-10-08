@@ -204,7 +204,10 @@ describe('CallStage device pickers', () => {
     fireEvent.click(screen.getByText('Logitech 4K Pro'));
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Camera is busy');
+      const banner = screen.getByRole('alert');
+      expect(banner).toHaveTextContent('Camera is busy');
+      expect(banner.className).toMatch(/\brelative\b/);
+      expect(banner.className).toMatch(/\bz-50\b/);
     });
   });
 

@@ -8,6 +8,7 @@ import { wavHeader } from '@/lib/wav';
 import { SignalClient } from '@/lib/signal';
 import {
   decodeChunkHeader,
+  encodeChunkHeader,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_HEARTBEAT_TIMEOUT_MS,
 } from '@openmeet/protocol';
@@ -162,6 +163,41 @@ describe('endHostRecording — waits per FILE, not just the camera', () => {
       await vi.advanceTimersByTimeAsync(45_000);
       await endPromise;
       expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Fragments are progress by the per-file rule, so a guest that keeps sending
+  // decides when the host may close its file. The take's hard cap ends that.
+  it('caps the guest wait when fragments keep arriving', async () => {
+    vi.useFakeTimers();
+    try {
+      const recv = receiver();
+      const h: RecordingHandles = {
+        recordingId: 'r',
+        receiver: recv,
+        channelRef: { current: { readyState: 'open' } as RTCDataChannel },
+      };
+      let done = false;
+      const endPromise = endHostRecording(h).then(() => { done = true; });
+
+      // One fragment every 10 s: the 45 s no-progress rule never fires, so only
+      // the overall cap can end the wait.
+      for (let i = 0; i < 12; i++) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        await recv.handleMessage(encodeChunkHeader({ idx: i, offset: i * 4, size: 4, ts: 1 }));
+        await recv.handleMessage(new Uint8Array(4).buffer);
+        // 40 s in: an honest guest still draining its tail keeps its grace.
+        if (i === 3) expect(done, 'gave up on a guest that was still sending').toBe(false);
+        // 60 s in: still making progress, so only the two-minute cap may end
+        // this wait.
+        if (i === 5) expect(done, 'gave up before the hard cap').toBe(false);
+      }
+
+      expect(done).toBe(true);
+      expect(recv.isTimedOut).toBe(true);
+      await endPromise;
     } finally {
       vi.useRealTimers();
     }
@@ -396,7 +432,7 @@ describe('SignalClient — the heartbeat enforces a reply deadline', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     try {
       const c = new SignalClient({
-        wsBase: 'ws://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
+        wsBase: 'wss://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
         wsFactory: () => new FakeWs() as never,
       });
       c.connect();
@@ -421,7 +457,7 @@ describe('SignalClient — the heartbeat enforces a reply deadline', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     try {
       const c = new SignalClient({
-        wsBase: 'ws://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
+        wsBase: 'wss://x', slug: 'aaa-bbbb-ccc', displayName: 'n', userAgent: 'u',
         wsFactory: () => new FakeWs() as never,
       });
       c.connect();
@@ -473,6 +509,86 @@ describe('endGuestRecording — never sends finalized while chunks are still que
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('endGuestRecording — sends frame rate on camera channel only when known', () => {
+  it('sends frameRate on the camera channel and omits it on the WAV channel or when unset', async () => {
+    const channel = { readyState: 'open', send: vi.fn() };
+    const wavChannel = { readyState: 'open', send: vi.fn() };
+    const screenChannel = { readyState: 'open', send: vi.fn(), close: vi.fn() };
+    const sender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const wavSender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const screenSender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 3,
+    };
+    const screenRecorder = { stopAndFlush: async () => {} };
+
+    const handles = {
+      recordingId: 'r',
+      videoFps: 25,
+      channel,
+      sender,
+      wavChannel,
+      wavSender,
+      screenChannel,
+      screenSender,
+      screenRecorder,
+    } as never;
+
+    await endGuestRecording(handles);
+
+    const camSent = JSON.parse(channel.send.mock.calls.at(-1)?.[0]);
+    expect(camSent).toMatchObject({ type: 'recording-finalized', frameRate: 25 });
+
+    const wavSent = JSON.parse(wavChannel.send.mock.calls.at(-1)?.[0]);
+    expect(wavSent.type).toBe('recording-finalized');
+    expect('frameRate' in wavSent).toBe(false);
+
+    const screenSent = JSON.parse(screenChannel.send.mock.calls.at(-1)?.[0]);
+    expect(screenSent.type).toBe('recording-finalized');
+    expect('frameRate' in screenSent).toBe(false);
+
+    const channelNoFps = { readyState: 'open', send: vi.fn() };
+    const handlesNoFps = {
+      recordingId: 'r',
+      channel: channelNoFps,
+      sender,
+    } as never;
+
+    await endGuestRecording(handlesNoFps);
+    const camNoFpsSent = JSON.parse(channelNoFps.send.mock.calls.at(-1)?.[0]);
+    expect(camNoFpsSent.type).toBe('recording-finalized');
+    expect('frameRate' in camNoFpsSent).toBe(false);
+
+    const channelZeroFps = { readyState: 'open', send: vi.fn() };
+    const handlesZeroFps = {
+      recordingId: 'r',
+      videoFps: 0,
+      channel: channelZeroFps,
+      sender,
+    } as never;
+
+    await endGuestRecording(handlesZeroFps);
+    const camZeroFpsSent = JSON.parse(channelZeroFps.send.mock.calls.at(-1)?.[0]);
+    expect(camZeroFpsSent.type).toBe('recording-finalized');
+    expect('frameRate' in camZeroFpsSent).toBe(false);
   });
 });
 
@@ -533,4 +649,3 @@ describe('endHostRecording — patches WAV header on incomplete or abandoned tak
     expect(riffSizeView.getUint32(0, true)).toBe(996);
   });
 });
-

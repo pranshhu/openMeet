@@ -94,6 +94,10 @@ export const DATA_CHANNEL_RECORDING_SCREEN = 'recording-screen';
 // and no changes to ChunkSender/ChunkReceiver.
 export const DATA_CHANNEL_RECORDING_AUDIO = 'recording-audio';
 
+// A leftover backup going back to the host after its take: one channel per
+// file, labelled `backup#<the backup's file name>`.
+export const DATA_CHANNEL_BACKUP = 'backup';
+
 /**
  * Recording channel labels may carry a stable key after a `#`:
  * `recording#<key>` / `recording-audio#<key>`. The DO mints a fresh peerId per

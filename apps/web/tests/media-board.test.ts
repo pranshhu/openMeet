@@ -9,10 +9,12 @@ function fakeCtx() {
   const destTrack = { kind: 'audio', id: 'mixed' } as MediaStreamTrack;
   const started: string[] = [];
   const sources: { onended: (() => void) | null }[] = [];
+  const dest = { stream: { getAudioTracks: () => [destTrack] } };
   const ctx = {
     started,
     sources,
-    createMediaStreamDestination: () => ({ stream: { getAudioTracks: () => [destTrack] } }),
+    dest,
+    createMediaStreamDestination: () => dest,
     createMediaStreamSource: vi.fn(() => ({ connect: vi.fn() })),
     createBufferSource: () => {
       const node = {
@@ -45,12 +47,35 @@ const file = (name: string) =>
 describe('MediaBoard', () => {
   it('mixes the mic into its output so the peer hears both', () => {
     const { ctx } = mkBoard();
-    expect(ctx.createMediaStreamSource).toHaveBeenCalled();
+    const micNode = ctx.createMediaStreamSource.mock.results[0]!.value as { connect: unknown };
+    expect(micNode.connect).toHaveBeenCalledWith(ctx.dest);
   });
 
   it('exposes a mixed output track distinct from the mic', () => {
     const { board } = mkBoard();
     expect(board.outputTrack?.id).toBe('mixed');
+  });
+
+  it('runs the mix audio context at 48 kHz', () => {
+    const Ctor = vi.fn(function () { return fakeCtx(); });
+    const mic = {
+      getAudioTracks: () => [{ kind: 'audio', getSettings: () => ({ sampleRate: 44100 }) }],
+    } as unknown as MediaStream;
+    new MediaBoard(mic, Ctor as never);
+    expect(Ctor).toHaveBeenCalledWith({ sampleRate: 48000 });
+  });
+
+  it('falls back to global AudioContext when ctxCtor is omitted', () => {
+    const origCtx = (globalThis as any).AudioContext;
+    const globalCtor = vi.fn(function () { return fakeCtx(); });
+    (globalThis as any).AudioContext = globalCtor;
+    try {
+      const mic = { getAudioTracks: () => [{ kind: 'audio' }] } as unknown as MediaStream;
+      new MediaBoard(mic);
+      expect(globalCtor).toHaveBeenCalledWith({ sampleRate: 48000 });
+    } finally {
+      (globalThis as any).AudioContext = origCtx;
+    }
   });
 
   it('loads pads with their real duration', async () => {
@@ -69,6 +94,15 @@ describe('MediaBoard', () => {
     // second play stops the first before starting again
     expect(ctx.started).toEqual(['start', 'stop', 'start']);
     expect(board.isPlaying(pad.id)).toBe(true);
+  });
+
+  it('plays pads both to the mix destination and to the local destination', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('a.wav'));
+    board.play(pad.id);
+    const srcNode = ctx.sources[0] as any;
+    expect(srcNode.connect).toHaveBeenCalledWith(ctx.dest);
+    expect(srcNode.connect).toHaveBeenCalledWith(ctx.destination);
   });
 
   it('stop is a no-op for a pad that is not playing', async () => {

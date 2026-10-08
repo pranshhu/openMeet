@@ -1,17 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Role } from '@openmeet/protocol';
 import { Icon } from './Icon';
+import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage } from '@/lib/sync-report';
 
-export interface ChatMessage {
-  from: Role;
-  text: string;
-  ts: number;
-  fromPeerId?: string;
-  fromName?: string;
-  self?: boolean;
-}
+export type { ChatMessage };
 
 export function chatSenderLabel(m: Pick<ChatMessage, 'from' | 'fromName' | 'self'>): string {
   return m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
@@ -116,6 +109,7 @@ export function ChatPanel({
             ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
+            maxLength={MAX_CHAT_MESSAGE_LENGTH}
             placeholder="Send a message"
             aria-label="Message"
             className="flex-1 bg-transparent py-2.5 text-base text-white placeholder:text-white/70 focus:outline-none sm:text-sm"

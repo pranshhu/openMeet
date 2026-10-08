@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
+import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
+import { formatBytes } from '@/lib/sync-report';
+import type { TakeJournal } from '@/lib/take-journal';
+import type { FsDirectoryHandle } from '@/lib/fs-writer';
+
+const JOURNAL_A = 'openmeet-take-1759824000000-xyz-abcd-pqr';
+const JOURNAL_B = 'openmeet-take-1759800000000-klm-nopq-rst';
+const JOURNAL_C = 'openmeet-take-1759752000000-klm-nopq-rst';
 
 function fakeStream(): MediaStream {
   const tracks = [{ kind: 'audio', enabled: true, stop: vi.fn() }, { kind: 'video', enabled: true, stop: vi.fn() }];
@@ -14,8 +22,8 @@ function fakeStream(): MediaStream {
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
-function cam720Stream(): MediaStream {
-  const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate: 48000 }) };
+function cam720Stream(sampleRate = 48000): MediaStream {
+  const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate }) };
   const video = {
     kind: 'video',
     enabled: true,
@@ -66,7 +74,7 @@ describe('Lobby', () => {
     expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
     fireEvent.click(screen.getByRole('button', { name: /join/i }));
-    expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice');
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
   });
 
   // On a phone the page is one column in DOM order. With the device pickers
@@ -103,6 +111,7 @@ describe('Lobby', () => {
     );
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/permission/i)).toBeInTheDocument());
+    expect(screen.queryByText(/Capturing/)).not.toBeInTheDocument();
   });
 
   it('renders recording backup, allows download and delete, and revokes URL on unmount', async () => {
@@ -148,6 +157,25 @@ describe('Lobby', () => {
     findBackupsSpy.mockRestore();
     deleteBackupSpy.mockRestore();
     confirm.mockRestore();
+  });
+
+  it('shows a backup’s size the way the in-call notices do', async () => {
+    const bytes = 754_146;
+    const fakeFile = new File([new Uint8Array(bytes)], 'openmeet-backup.mp4', {
+      lastModified: 1700000000000,
+    });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue([fakeFile]);
+
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText(/Recording backup \(MP4\) from/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(`· ${formatBytes(bytes)}`)).toBeInTheDocument();
+    expect(screen.queryByText('· 1 MB')).not.toBeInTheDocument();
+
+    findBackupsSpy.mockRestore();
   });
 
   it('lists screen backups as a screen backup with download and delete controls', async () => {
@@ -203,7 +231,7 @@ describe('Lobby', () => {
       const title = await screen.findByText(`Recording backup (MP4) from ${when}`);
       // Under a heading that says what these are.
       expect(screen.getByRole('heading', { name: 'Backups on this device' })).toBeInTheDocument();
-      expect(title.parentElement?.textContent).toMatch(/· 1 MB$/);
+      expect(title.parentElement?.textContent).toMatch(new RegExp(`· ${formatBytes(fakeFile.size)}$`));
 
       fireEvent.click(screen.getByRole('button', { name: /delete/i }));
       expect(confirm).toHaveBeenCalled();
@@ -239,9 +267,576 @@ describe('Lobby', () => {
     findBackupsSpy.mockRestore();
   });
 
+  /** A journal as findTakeJournals hands it back: the lobby reads only these fields. */
+  function fakeJournal(
+    dirName: string,
+    notes: { room: string; hostStartMs: number },
+    bytes: number,
+    notesOk = true
+  ): TakeJournal {
+    return { dirName, notes, notesOk, bytes } as unknown as TakeJournal;
+  }
+
+  /** A lobby holding one unsaved recording of this room, with the journal listing mocked. */
+  async function renderUnsaved() {
+    const hostStartMs = 1759824000000;
+    const when = new Date(hostStartMs).toLocaleString();
+    const journal = fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs }, 2_500_000_000);
+    const findJournalsSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'findTakeJournals')
+      .mockResolvedValue([journal]);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByText(`Recording from ${when}`);
+    return { journal, when, findJournalsSpy };
+  }
+
+  const saveButton = (when: string) =>
+    screen.getByRole('button', { name: `Save the unsaved recording from ${when} to a folder` });
+
+  it('lists this room’s unfinished recording and hides another room’s', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal(JOURNAL_B, { room: 'klm-nopq-rst', hostStartMs: 1759800000000 }, 1_000_000),
+      // Readable, but it names this room from another room's directory.
+      fakeJournal(JOURNAL_C, { room: 'xyz-abcd-pqr', hostStartMs: 1759752000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      const row = await screen.findByText(`Recording from ${when}`);
+      expect(screen.getAllByRole('heading', { name: 'Unsaved recording' })).toHaveLength(1);
+      expect(
+        screen.getByText('A recording made in this browser was interrupted before it was saved to a folder.')
+      ).toBeInTheDocument();
+      expect(row.parentElement?.textContent).toMatch(/· 2\.5 GB$/);
+      expect(screen.queryByText(`Recording from ${new Date(1759800000000).toLocaleString()}`)).not.toBeInTheDocument();
+      expect(screen.queryByText(`Recording from ${new Date(1759752000000).toLocaleString()}`)).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('puts the unsaved recording under the backups list and before the device checks', async () => {
+    const fakeFile = new File(['content'], 'openmeet-backup.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([fakeFile]);
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const backups = await screen.findByRole('heading', { name: 'Backups on this device' });
+      const unsaved = await screen.findByRole('heading', { name: 'Unsaved recording' });
+      const checklist = await screen.findByText(/Wear headphones/);
+      const invite = screen.getByRole('button', { name: /copy invite link/i });
+      expect(invite.compareDocumentPosition(unsaved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(backups.compareDocumentPosition(unsaved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(unsaved.compareDocumentPosition(checklist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      findBackupsSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('shows no unsaved recording when this browser holds none', async () => {
+    const { request } = takeHeldElsewhere();
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      // Nothing to hide, so the room's lock is never asked for.
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('lists every unfinished recording of this room', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal('openmeet-take-1759812000000-xyz-abcd-pqr', { room: 'xyz-abcd-pqr', hostStartMs: 1759812000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const first = await screen.findByText(`Recording from ${new Date(1759824000000).toLocaleString()}`);
+      const second = screen.getByText(`Recording from ${new Date(1759812000000).toLocaleString()}`);
+      expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getAllByRole('button', { name: /delete unsaved recording/i })).toHaveLength(2);
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('does not open another room’s journal when the slug is only its tail', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_B, { room: 'klm-nopq-rst', hostStartMs: 1759800000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="nopq-rst" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /delete unsaved recording/i })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('re-reads the journals when the room changes', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    try {
+      const { rerender } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await screen.findByRole('heading', { name: 'Unsaved recording' });
+      findJournalsSpy.mockResolvedValue([]);
+      rerender(<Lobby slug="klm-nopq-rst" onJoin={vi.fn()} />);
+      await waitFor(() =>
+        expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument()
+      );
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('ignores a slow journal response from a previous room', async () => {
+    let resolveFirst!: (value: TakeJournal[]) => void;
+    const slowFirst = new Promise<TakeJournal[]>((res) => {
+      resolveFirst = res;
+    });
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals')
+      .mockReturnValueOnce(slowFirst)
+      .mockResolvedValueOnce([]);
+
+    try {
+      const { rerender } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      rerender(<Lobby slug="klm-nopq-rst" onJoin={vi.fn()} />);
+      await settle();
+
+      await act(async () => {
+        resolveFirst([
+          fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+        ]);
+      });
+      await settle();
+
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('hides the unsaved recording while another tab records this room', async () => {
+    const { request } = takeHeldElsewhere();
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+      fakeJournal('openmeet-take-1759812000000-xyz-abcd-pqr', { room: 'xyz-abcd-pqr', hostStartMs: 1759812000000 }, 1_000_000),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /delete unsaved recording/i })).not.toBeInTheDocument();
+      // One lock for the room, not one per row.
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0]![0]).toBe('openmeet-take:xyz-abcd-pqr');
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('asks before deleting an unsaved recording, and keeps it when the user says no', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    const deleteJournalSpy = vi.spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal').mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      await screen.findByText(`Recording from ${when}`);
+      fireEvent.click(screen.getByRole('button', { name: /delete unsaved recording/i }));
+      expect(confirm).toHaveBeenCalledWith('Delete this unsaved recording? It can’t be recovered.');
+      await settle();
+      expect(deleteJournalSpy).not.toHaveBeenCalled();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+      deleteJournalSpy.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it('deletes the unsaved recording when the user confirms', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    const deleteJournalSpy = vi.spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal').mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      await screen.findByText(`Recording from ${when}`);
+      fireEvent.click(screen.getByRole('button', { name: `Delete unsaved recording from ${when}` }));
+      await waitFor(() => {
+        expect(deleteJournalSpy).toHaveBeenCalledWith(JOURNAL_A);
+        expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+      });
+    } finally {
+      findJournalsSpy.mockRestore();
+      deleteJournalSpy.mockRestore();
+      confirm.mockRestore();
+    }
+  });
+
+  it('asks for a folder once and reports the files it saved', async () => {
+    // Removal that must fail this test: the save handler, or the setJournals filter.
+    const { journal, when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [{ name: 'guest_r.mp4', bytes: 1024, source: 'journal' }],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByText('Saved 1 file to your folder.');
+
+      expect(line).toHaveAttribute('role', 'status');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(pickSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledWith(journal, folder);
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('changes nothing when the folder prompt is cancelled', async () => {
+    // Removal that must fail this test: the if (!folder) return.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const abort = Object.assign(new Error('cancelled'), { name: 'AbortError' });
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockRejectedValue(abort);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      await waitFor(() => expect(pickSpy).toHaveBeenCalledTimes(1));
+      await settle();
+
+      expect(saveSpy).not.toHaveBeenCalled();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('does not start a second save while one is running', async () => {
+    // Removal that must fail this test: the savingRef guard.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    let answer!: (dir: FsDirectoryHandle) => void;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      fireEvent.click(saveButton(when));
+      answer(folder);
+      await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+      await settle();
+
+      expect(pickSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('keeps the row and says so when the sync file could not be written', async () => {
+    // Removal that must fail this test: the result.json === null branch.
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [{ name: 'guest_r.mp4', bytes: 1024, source: 'journal' }],
+      json: null,
+      chapters: false,
+      kept: true,
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByRole('alert');
+
+      expect(line.textContent).toBe(
+        'Saved 1 file to your folder. The sync file could not be written. The unsaved recording is still here: try again, or choose another folder.'
+      );
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('keeps the row and names the files that were not saved', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [
+        { name: 'guest_r.mp4', bytes: 1024, source: 'journal' },
+        { name: 'host_r.mp4', bytes: 2048, source: 'backup' },
+        { name: 'guest2_r.mp4', bytes: 512, source: 'failed', reason: 'rebuilt only in part' },
+        { name: 'guest2_r.wav', bytes: 0, source: 'failed', reason: 'nothing was committed' },
+      ],
+      json: 'sync_rec-1.json',
+      chapters: false,
+      kept: true,
+      unsaved: ['guest2_r.mp4'],
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByRole('alert');
+
+      expect(line.textContent).toBe(
+        'Saved 2 files to your folder. Not saved: guest2_r.mp4. ' +
+          'The unsaved recording is still here: try again, or choose another folder.'
+      );
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+      // The row can be saved again.
+      expect(saveButton(when)).not.toBeDisabled();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('says so when the host’s own file could not be copied, though the rest was saved', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [
+        { name: 'guest_r.mp4', bytes: 1024, source: 'journal' },
+        { name: 'host_r.mp4', bytes: 0, source: 'failed', reason: 'backup unavailable' },
+      ],
+      json: 'sync_rec-1.json',
+      chapters: false,
+      unsaved: ['host_r.mp4'],
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByRole('alert');
+
+      expect(line.textContent).toBe('Saved 1 file to your folder. Not saved: host_r.mp4.');
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('holds Save and Delete back while a rebuild runs, and says it is running', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    let finish!: (result: { files: []; json: string; chapters: boolean }) => void;
+    const saveSpy = vi
+      .spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake')
+      .mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const deleteSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+      .mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const deleteButton = () => screen.getByRole('button', { name: `Delete unsaved recording from ${when}` });
+    try {
+      fireEvent.click(saveButton(when));
+      const running = await screen.findByText(
+        'Saving the recording to your folder. Keep this tab open until it finishes.'
+      );
+
+      expect(running).toHaveAttribute('role', 'status');
+      expect(saveButton(when)).toBeDisabled();
+      expect(deleteButton()).toBeDisabled();
+      fireEvent.click(deleteButton());
+      await settle();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(deleteSpy).not.toHaveBeenCalled();
+
+      await act(async () => { finish({ files: [], json: 'sync_rec-1.json', chapters: false }); });
+      expect(screen.queryByText(/^Saving the recording/)).not.toBeInTheDocument();
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      deleteSpy.mockRestore();
+      confirm.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  for (const press of ['save', 'delete'] as const) {
+    it(`does not ${press} under a take another tab started after this page opened`, async () => {
+      const { request } = takeHeldElsewhere();
+      let recording = false;
+      request.mockImplementation(async (name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+        cb(recording && name === 'openmeet-take:xyz-abcd-pqr' ? null : {})
+      );
+      const { when, findJournalsSpy } = await renderUnsaved();
+      const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+      const pickSpy = vi
+        .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+        .mockResolvedValue(folder);
+      const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+        files: [],
+        json: 'sync_rec-1.json',
+        chapters: false,
+      });
+      const deleteSpy = vi
+        .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+        .mockResolvedValue(undefined);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      try {
+        // The row was listed with the lock free; a take starts in another tab.
+        recording = true;
+        fireEvent.click(
+          press === 'save'
+            ? saveButton(when)
+            : screen.getByRole('button', { name: `Delete unsaved recording from ${when}` })
+        );
+        const line = await screen.findByRole('alert');
+
+        expect(line.textContent).toBe(
+          'Another tab in this browser is recording this room, so nothing was changed here. ' +
+            'End that recording, then reload this page.'
+        );
+        expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+        expect(saveSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).not.toHaveBeenCalled();
+      } finally {
+        pickSpy.mockRestore();
+        saveSpy.mockRestore();
+        deleteSpy.mockRestore();
+        confirm.mockRestore();
+        findJournalsSpy.mockRestore();
+      }
+    });
+  }
+
+  it('still deletes an unsaved recording beside Save', async () => {
+    // Removal that must fail this test: the Delete button's onClick.
+    const { journal, when, findJournalsSpy } = await renderUnsaved();
+    const deleteSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+      .mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: `Delete unsaved recording from ${when}` }));
+      await waitFor(() => expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument());
+
+      expect(deleteSpy).toHaveBeenCalledWith(journal.dirName);
+    } finally {
+      deleteSpy.mockRestore();
+      confirm.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('lists an unfinished recording whose record cannot be read', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 1_000_000, false),
+    ]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const when = new Date(1759824000000).toLocaleString();
+      const row = await screen.findByText(`Recording from ${when}`);
+      expect(row.parentElement?.textContent).toMatch(/· 1 MB$/);
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('shows no unsaved recording on the producer or present-only pages', async () => {
+    const findJournalsSpy = vi.spyOn(await import('@/lib/take-journal'), 'findTakeJournals').mockResolvedValue([
+      fakeJournal(JOURNAL_A, { room: 'xyz-abcd-pqr', hostStartMs: 1759824000000 }, 2_500_000_000),
+    ]);
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+      await waitFor(() => expect(findJournalsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+      unmount();
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Unsaved recording' })).not.toBeInTheDocument();
+    } finally {
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('shows no backups on the producer or present-only pages', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+      await waitFor(() => expect(findBackupsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Backups on this device' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+      unmount();
+
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Backups on this device' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
   it('shows guest recording disclosure when viewer is not host', async () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     expect(screen.getByText(/The host can record this call/i)).toBeInTheDocument();
+    expect(screen.getByText(/camera, mic and chat are/i)).toBeInTheDocument();
     expect(screen.queryByText(/You can record this call/i)).not.toBeInTheDocument();
     // Let the in-flight getUserMedia/enumerateDevices chain settle so it
     // doesn't update state after the test (and its act() scope) has returned.
@@ -334,20 +929,64 @@ describe('Lobby', () => {
     }
   });
 
+  // The host's storage holds the take's crash journal; a guest's does not, so
+  // only the host is told the take will have no crash copy.
+  it('tells a host when the take cannot keep a crash copy, and never a guest', async () => {
+    localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+    try {
+      vi.stubGlobal('navigator', {
+        userAgent: 'test',
+        mediaDevices: {
+          getUserMedia: vi.fn().mockResolvedValue(cam720Stream()),
+          enumerateDevices: vi.fn().mockResolvedValue(DEVICES),
+        },
+        storage: { estimate: vi.fn().mockResolvedValue({ quota: 1e9, usage: 0 }) },
+      });
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(/without that copy/)).toBeInTheDocument());
+      unmount();
+
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(/under an hour at this quality/)).toBeInTheDocument());
+      expect(screen.queryByText(/without that copy/)).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+    }
+  });
+
+  // Lobby's isHost starts false and is set by its own effect, so a panel that
+  // is already on screen has to learn the host flag later.
+  it('re-runs the disk check when the host flag arrives after the first render', async () => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      storage: { estimate: vi.fn().mockResolvedValue({ quota: 1e9, usage: 0 }) },
+    });
+    const { rerender } = render(
+      <PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost={false} />
+    );
+    await waitFor(() => expect(screen.getByText(/under an hour at this quality/)).toBeInTheDocument());
+    expect(screen.queryByText(/without that copy/)).toBeNull();
+    rerender(<PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost />);
+    await waitFor(() => expect(screen.getByText(/without that copy/)).toBeInTheDocument());
+  });
+
   it('does not promise 24-bit uncompressed audio when this browser cannot capture a WAV master', async () => {
     (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream());
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     const line = await screen.findByText(/Capturing 1280x720/);
     expect(line.textContent).not.toMatch(/uncompressed/i);
+    expect(line.textContent).toMatch(/audio \(compressed\)/);
+    expect(line.textContent).not.toMatch(/kHz/);
   });
 
   it('states 24-bit uncompressed audio when the WAV master is available', async () => {
     vi.stubGlobal('MediaStreamTrackProcessor', class {});
     try {
-      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream());
+      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream(44100));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
       const line = await screen.findByText(/Capturing 1280x720/);
-      expect(line.textContent).toMatch(/48kHz\/24-bit uncompressed/);
+      expect(line.textContent).toMatch(/audio 48kHz\/24-bit uncompressed/);
     } finally {
       delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
     }
@@ -633,7 +1272,143 @@ describe('Lobby', () => {
     expect(onJoin).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: 'Alice' } });
     fireEvent.submit(input.closest('form')!);
-    expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice');
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+  });
+
+  /** A browser where another tab holds this room's take lock. */
+  function takeHeldElsewhere() {
+    const stream = fakeStream();
+    const request = vi.fn(async (name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+      cb(name === 'openmeet-take:xyz-abcd-pqr' ? null : {})
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+      locks: { request },
+    });
+    return { stream, request };
+  }
+  const settle = () => act(async () => {});
+
+  it('asks before joining while another tab records this room, and stays in the lobby on a no', async () => {
+    const { stream } = takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(confirm.mock.calls[0]![0]).toMatch(/^Another tab in this browser is recording this room\./);
+      expect(confirm.mock.calls[0]![0]).toMatch(/press End & save in the other tab/);
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      for (const t of stream.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+      fireEvent.click(join);
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      // Still the lobby's stream: leaving the page turns the camera off.
+      unmount();
+      for (const t of stream.getTracks()) expect(t.stop).toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('joins when the person answers yes', async () => {
+    const { stream } = takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+      await waitFor(() => expect(onJoin).toHaveBeenCalled());
+      expect(onJoin.mock.calls[0]!.slice(0, 2)).toEqual([stream, 'Alice']);
+      // The stream is handed over once, however often Join is pressed after that.
+      fireEvent.click(join);
+      await settle();
+      expect(onJoin).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('Present only asks after the screen picker, and gives the screen back on a no', async () => {
+    const { stream } = takeHeldElsewhere();
+    const track = { kind: 'video', stop: vi.fn() };
+    const getDisplayMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    });
+    navigator.mediaDevices.getDisplayMedia = getDisplayMedia;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Bob' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /join now/i })).not.toBeDisabled());
+      fireEvent.click(screen.getByRole('button', { name: /present only/i }));
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      expect(getDisplayMedia.mock.invocationCallOrder[0]!).toBeLessThan(confirm.mock.invocationCallOrder[0]!);
+      await settle();
+      expect(onJoin).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalled();
+      // The camera preview is still live, and still the lobby's to turn off.
+      for (const t of stream.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+      unmount();
+      for (const t of stream.getTracks()) expect(t.stop).toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('does not ask a producer', async () => {
+    takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} producer />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Pat' } });
+      fireEvent.click(screen.getByRole('button', { name: /join now/i }));
+      await settle();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(onJoin).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('joins once when Join is pressed twice before the check answers', async () => {
+    const { request } = takeHeldElsewhere();
+    // Every check stays open until the test answers it: "not held".
+    const answers: (() => void)[] = [];
+    request.mockImplementation(
+      (_name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+        new Promise((resolve) => {
+          answers.push(() => resolve(cb({})));
+        })
+    );
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    const join = screen.getByRole('button', { name: /join now/i });
+    await waitFor(() => expect(join).not.toBeDisabled());
+    fireEvent.click(join);
+    fireEvent.click(join);
+    for (const answer of answers) answer();
+    await settle();
+    expect(onJoin).toHaveBeenCalledTimes(1);
   });
 
   it('mirrors the self-preview, but not a rear camera', async () => {
@@ -674,6 +1449,247 @@ describe('Lobby', () => {
   });
 
   // On a phone the checklist is below Join, so a silent mic would go unseen.
+  // A room used every week collects old backups, and sending all of them
+  // unasked could be many gigabytes.
+  it('offers Send to host on this room’s guest backups only', async () => {
+    const mine = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const otherRoom = new File(['b'], 'openmeet-backup-1700000001000-abc-defg-hij.mp4', { lastModified: 1700000001000 });
+    const noRoom = new File(['c'], 'openmeet-backup.mp4', { lastModified: 1700000002000 });
+    const hostOwn = new File(['d'], 'openmeet-backup-host-1700000003000-xyz-abcd-pqr.mp4', { lastModified: 1700000003000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue([mine, otherRoom, noRoom, hostOwn]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const send = await screen.findByRole('button', { name: /^Send to host:/ });
+      expect(send).toHaveAccessibleName(/^Send to host: backup \(MP4\) from .* in room xyz-abcd-pqr$/);
+      expect(send).toHaveAttribute('type', 'button');
+      expect(send).not.toHaveClass('bg-[#0b57d0]/10');
+      expect(screen.getAllByRole('button', { name: /^Send to host:/ })).toHaveLength(1);
+      // Between the row's other two controls, and wrapping with them on a phone.
+      const row = send.closest('li')!;
+      const download = within(row).getByRole('link', { name: /^Download / });
+      const remove = within(row).getByRole('button', { name: /^Delete / });
+      expect(download.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(send.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(send.parentElement!.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+      unmount();
+
+      // A host's own screen backup has a guest's name shape; the token is what
+      // keeps the button off it.
+      localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      await screen.findByRole('heading', { name: 'Backups on this device' });
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('marks a chosen backup and says it will go to the host, and undoes both on a second press', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const send = await screen.findByRole('button', { name: /^Send to host:/ });
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+
+      fireEvent.click(send);
+      expect(send).toHaveTextContent('Will send to host');
+      expect(send).toHaveAttribute('aria-pressed', 'true');
+      expect(send).toHaveClass('bg-[#0b57d0]/10');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes.'
+      );
+
+      fireEvent.click(send);
+      expect(send).toHaveTextContent('Send to host');
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends the chosen backup to the host just before joining', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(join);
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).toHaveBeenCalledWith([file]);
+      expect(onSendBackups.mock.invocationCallOrder[0]!).toBeLessThan(onJoin.mock.invocationCallOrder[0]!);
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends nothing when no backup was chosen', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      await screen.findByRole('button', { name: /^Send to host:/ });
+      fireEvent.click(join);
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).not.toHaveBeenCalled();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('drops a chosen backup that was deleted before joining', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    const deleteBackupSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'deleteBackup').mockResolvedValue(undefined);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Delete / }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull());
+
+      fireEvent.click(join);
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+      deleteBackupSpy.mockRestore();
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends the chosen backup when the guest joins Present only', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const track = { kind: 'video', stop: vi.fn() };
+    navigator.mediaDevices.getDisplayMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    });
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Bob' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /join now/i })).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(screen.getByRole('button', { name: /present only/i }));
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Bob', true, expect.anything()));
+      expect(onSendBackups).toHaveBeenCalledWith([file]);
+      expect(onSendBackups.mock.invocationCallOrder[0]!).toBeLessThan(onJoin.mock.invocationCallOrder[0]!);
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends no backup when the takeover question is answered no', async () => {
+    takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(join);
+
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(onSendBackups).not.toHaveBeenCalled();
+      expect(onJoin).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('stops at eight chosen backups at a time, and says so', async () => {
+    const files = Array.from(
+      { length: 9 },
+      (_, i) => new File([`f${i}`], `openmeet-backup-${1700000000000 + i}-xyz-abcd-pqr.mp4`, { lastModified: 1700000000000 + i })
+    );
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue(files);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const buttons = await screen.findAllByRole('button', { name: /^Send to host:/ });
+      expect(buttons).toHaveLength(9);
+
+      for (const button of buttons.slice(0, 8)) fireEvent.click(button);
+      expect(buttons[8]).toBeDisabled();
+      expect(buttons[8]).toHaveClass('disabled:cursor-not-allowed', 'disabled:opacity-50');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes. You can send 8 at a time.'
+      );
+
+      fireEvent.click(buttons[0]!);
+      expect(buttons[8]).not.toBeDisabled();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('tells a guest with a backup of this room to press Send to host, and leaves the host’s own text alone', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      expect(await screen.findByText(/press Send to host on the matching backup and join/)).toBeInTheDocument();
+      unmount();
+
+      localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      expect(await screen.findByText(/guests, send it to the host/)).toBeInTheDocument();
+      expect(screen.queryByText(/press Send to host on the matching backup and join/)).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      findBackupsSpy.mockRestore();
+    }
+  });
+
   it('points to the checks from the Join panel when the mic stays silent', async () => {
     class FakeAudioContext {
       createMediaStreamSource() { return { connect() {} }; }

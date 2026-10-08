@@ -79,9 +79,11 @@ export function PreflightPanel({
   useEffect(() => {
     void navigator.storage
       ?.estimate?.()
-      .then((e) => setDisk(diskCheck(e.quota, e.usage, presetById(qualityId))))
-      .catch(() => setDisk(diskCheck(undefined, undefined, presetById(qualityId))));
-  }, [qualityId]);
+      .then((e) => setDisk(diskCheck(e.quota, e.usage, presetById(qualityId), host)))
+      .catch(() => setDisk(diskCheck(undefined, undefined, presetById(qualityId), host)));
+    // `host` is false on the first render and set by Lobby's own effect, so the
+    // check has to re-run when it arrives — a host's disk line differs.
+  }, [qualityId, host]);
 
   useEffect(() => {
     let cancelled = false;

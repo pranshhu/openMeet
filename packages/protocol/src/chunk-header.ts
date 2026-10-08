@@ -46,6 +46,8 @@ export interface ChunkAck {
 export interface ChunkResumeQuery {
   type: 'resume_query';
   recordingId: string;
+  /** For a returned backup: the key of the offer that holds it. */
+  key?: string;
 }
 
 export interface ChunkResumeOffset {
@@ -65,6 +67,12 @@ export interface ChunkRecordingFinalized {
    * Without this the host only ever had one side of it.
    */
   sha256?: string;
+  /**
+   * What the sender's camera track reported as its frame rate when the recorder
+   * started. Camera files only. A figure from the sender's browser: the
+   * receiver bounds it before using it.
+   */
+  frameRate?: number;
 }
 
 // Clock-sync (guest <-> host) over the recording DataChannel. The two peers each
@@ -100,6 +108,18 @@ export interface StreamAbandoned {
   lastIdx: number;
 }
 
+// First message on a `backup#<name>` channel: how big the file is. The host
+// answers `resume_offset` once it has a file open, and the bytes follow as
+// ordinary chunks. `key` is a random value the sending tab makes once for this
+// backup and repeats on every channel it opens for it, so the host can tell
+// the same sender on a rebuilt connection from another participant using
+// the same name.
+export interface BackupOffer {
+  type: 'backup_offer';
+  size: number;
+  key: string;
+}
+
 export type DataChannelControlMessage =
   | ChunkAck
   | ChunkResumeQuery
@@ -108,4 +128,5 @@ export type DataChannelControlMessage =
   | ClockPing
   | ClockPong
   | RecordingMeta
-  | StreamAbandoned;
+  | StreamAbandoned
+  | BackupOffer;

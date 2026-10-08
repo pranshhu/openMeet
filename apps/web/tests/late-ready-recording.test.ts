@@ -112,7 +112,7 @@ vi.mock('@/hooks/recording-controller', async () => {
       return {
         recordingId: 'rec-test-1',
         guestRecorder: { totalBytes: 100, stopAndFlush: vi.fn() },
-        sender: { lastAckedIdx: 5, drain: vi.fn().mockResolvedValue(true), rebind: vi.fn() },
+        sender: { lastAckedIdx: 5, drain: vi.fn().mockResolvedValue(true), rebind: vi.fn(), hold: vi.fn() },
       };
     }),
   };
@@ -204,10 +204,9 @@ describe('late-ready guest recording (no 15s give-up)', () => {
     // Now startGuestRecording is called and streaming begins
     expect(startGuestRecordingCalled).toBe(true);
     expect(result.current.state.phase).toBe('recording');
-    expect(signalSent).toContainEqual(
+    expect(signalSent).not.toContainEqual(
       expect.objectContaining({
         type: 'recording-started',
-        kind: 'camera',
       })
     );
   });

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PeerConnection } from '@/lib/peer';
-import { DATA_CHANNEL_RECORDING, DATA_CHANNEL_RECORDING_AUDIO } from '@openmeet/protocol';
+import {
+  DATA_CHANNEL_BACKUP,
+  DATA_CHANNEL_RECORDING,
+  DATA_CHANNEL_RECORDING_AUDIO,
+} from '@openmeet/protocol';
 
 class FakePC {
   ontrack: unknown = null;
@@ -82,6 +86,14 @@ describe('PeerConnection recording DataChannel', () => {
     expect(pc.created).toHaveLength(1);
   });
 
+  it('createBackupChannel opens an ordered channel labelled backup#<name>', () => {
+    const { peer, pc } = make();
+    peer.start();
+    const ch = peer.createBackupChannel('x.mp4');
+    expect((ch as unknown as { label: string }).label).toBe(`${DATA_CHANNEL_BACKUP}#x.mp4`);
+    expect(pc.created[0]!.opts).toMatchObject({ ordered: true });
+  });
+
   it('createRecordingChannel(key) suffixes the label with #<key>', () => {
     const { peer } = make();
     peer.start();
@@ -96,5 +108,16 @@ describe('PeerConnection recording DataChannel', () => {
     pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_RECORDING}#x` } });
     pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_RECORDING_AUDIO}#x` } });
     expect(onDataChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards a returned backup channel, and still drops other and control channels', () => {
+    const onDataChannel = vi.fn();
+    const { peer, pc } = make({ onDataChannel });
+    peer.start();
+    pc.ondatachannel!({ channel: { label: `${DATA_CHANNEL_BACKUP}#x.mp4` } });
+    pc.ondatachannel!({ channel: { label: 'other' } });
+    pc.ondatachannel!({ channel: { label: 'control' } });
+    expect(onDataChannel).toHaveBeenCalledTimes(1);
+    expect(onDataChannel).toHaveBeenCalledWith({ label: `${DATA_CHANNEL_BACKUP}#x.mp4` });
   });
 });

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Icon } from './Icon';
-import { formatTimecode } from '@/lib/sync-report';
+import { formatBytes, formatTimecode } from '@/lib/sync-report';
 
 /**
  * What you have, whether it's intact, and what to run next.
@@ -14,6 +14,12 @@ import { formatTimecode } from '@/lib/sync-report';
 
 import type { SummaryFile } from '@/lib/sync-report';
 export type { SummaryFile };
+
+const VERDICT_TONE = {
+  complete: 'text-[#81c995]',
+  unverified: 'text-[#fdd663]',
+  incomplete: 'text-[#f6aea9]',
+} as const;
 
 export function SessionSummary({
   files,
@@ -28,6 +34,7 @@ export function SessionSummary({
   wavBackupUrl,
   downloadNames,
   takes,
+  sidecarsSaved = false,
   onNewTake,
   nextTakeLabel = 'Record another take',
   onDiscardTake,
@@ -46,6 +53,7 @@ export function SessionSummary({
   /** The download= names, so a take's files can be told apart once saved. */
   downloadNames: { sync: string; chapters: string; backup: string; wav: string };
   takes: { take: number; durationMs: number; discarded: boolean }[];
+  sidecarsSaved?: boolean | undefined;
   onNewTake: () => void;
   nextTakeLabel?: string;
   onDiscardTake: (take: number) => void;
@@ -62,6 +70,7 @@ export function SessionSummary({
     video: 'Camera',
     audio: 'Audio master (uncompressed)',
     screen: 'Screen',
+    call: 'Call audio copy, lower quality',
   };
   const lastTake = takes[takes.length - 1];
   const secondary =
@@ -93,8 +102,14 @@ export function SessionSummary({
         </div>
         <p className="mt-2 text-white/70">
           {files.length} {files.length === 1 ? 'file is' : 'files are'} in the folder you chose. Nothing was uploaded.{' '}
-          {chaptersUrl ? 'sync.json and the chapters exist' : 'sync.json exists'} only in this tab — download{' '}
-          {chaptersUrl ? 'them' : 'it'} before you close the tab or record again.
+          {sidecarsSaved ? (
+            'The sync file and any chapters or chat for this take are saved there too.'
+          ) : (
+            <>
+              {chaptersUrl ? 'sync.json and the chapters exist' : 'sync.json exists'} only in this tab — download{' '}
+              {chaptersUrl ? 'them' : 'it'} before you close the tab or record again.
+            </>
+          )}
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
           <button
@@ -157,8 +172,12 @@ export function SessionSummary({
               <code className="min-w-0 break-words text-xs text-white/85">{f.name}</code>
               <span className="text-xs text-white/60">
                 {KIND[f.kind]}
+                {f.bytes !== undefined ? ` · ${formatBytes(f.bytes)}` : ''}
                 {f.detail ? ` (${f.detail})` : ''}
               </span>
+              {f.verdict && (
+                <span className={`min-w-0 break-words text-xs ${VERDICT_TONE[f.verdict.status]}`}>{f.verdict.text}</span>
+              )}
             </li>
           ))}
         </ul>
@@ -167,7 +186,7 @@ export function SessionSummary({
       {alignment && (
         <section>
           <h3 className="mb-1 font-medium text-white/80">Alignment</h3>
-          {/* One line per guest. */}
+          {/* One line per guest, then the note on aligned copies when there are any. */}
           <p className="whitespace-pre-line text-white/60">{alignment}</p>
         </section>
       )}

@@ -1,6 +1,8 @@
+import { Profiler } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup, waitFor, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
+import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
 
 const baseProps = {
   role: 'host' as const,
@@ -86,7 +88,7 @@ describe('CallStage layout', () => {
   // still keeps it off the Recording pill in the status bar.
   it('shows the consent toast over the stage column, below the status bar and its Recording pill', () => {
     render(<CallStage {...baseProps} role="guest" roomRecording />);
-    const toast = screen.getByText('This call is now being recorded');
+    const toast = screen.getByText('This call and chat are now being recorded');
     const pill = screen.getByText('Recording');
     const column = screen.getByTestId('stage-column');
     expect(pill.compareDocumentPosition(toast) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -384,6 +386,49 @@ describe('CallStage recording-capability labels', () => {
     expect(end.querySelector('svg circle')).toBeNull();
   });
 
+  // A take with no crash copy has to say so while it runs; one that has a copy,
+  // or a call that is not recording, must stay quiet.
+  it('tells the host when the running take has no crash copy', () => {
+    render(<CallStage {...baseProps} phase="recording" unprotectedRecording />);
+    const line = within(screen.getByTestId('status-bar')).getByRole('status');
+    expect(line).toHaveTextContent('This take isn’t protected if the browser crashes.');
+    expect(line.className).toMatch(/text-\[#fdd663\]/);
+  });
+
+  it('shows no crash-copy line for a protected take or outside a take', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="recording" />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+    rerender(<CallStage {...baseProps} phase="in-call" unprotectedRecording />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+  });
+
+  it('shows no crash-copy line when finalizing or done even if unprotected', () => {
+    const { rerender } = render(
+      <CallStage {...baseProps} phase="finalizing" unprotectedRecording />
+    );
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+    rerender(<CallStage {...baseProps} phase="done" unprotectedRecording />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+  });
+
+  // The warning belongs after the marker count, so a marker and a lost crash
+  // copy read in the order they matter, not the other way round.
+  it('keeps the crash-copy line after the marker count', () => {
+    render(<CallStage {...baseProps} phase="recording" markerCount={1} unprotectedRecording />);
+    const bar = screen.getByTestId('status-bar');
+    const markers = within(bar).getByText('1 marker');
+    const line = within(bar).getByRole('status');
+    expect(markers.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("gives the guest's recovery button the words its banner tells them to press", () => {
     render(
       <CallStage
@@ -459,10 +504,10 @@ describe('CallStage recording-capability labels', () => {
   // A guest can't see the host's disk, and the drain can give up at its cap:
   // "Saved" there was a promise the app couldn't keep, and gave no reason to
   // send the backup that holds the rest.
-  it('tells a guest whose last seconds may not have arrived to send their backup', () => {
+  it('tells a guest whose last seconds may not have arrived to rejoin and send their backup', () => {
     render(<CallStage {...baseProps} role="guest" phase="done" drained={false} backupUrl="blob:backup" />);
     expect(
-      screen.getByText(/may not have reached the host — download your backup and send it to them/)
+      screen.getByText(/may not have reached the host — rejoin and press Send to host on your backup, or download it/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/Sent to the host/)).toBeNull();
     expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
@@ -934,11 +979,108 @@ describe('CallStage chat preview pop-up and title updates', () => {
     }
   });
 
+  it('prefixes document.title with ● REC while hidden during a take, including unread count', () => {
+    document.title = 'openMeet';
+    const originalHidden = document.hidden;
+    try {
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      const { rerender, unmount } = render(<CallStage {...baseProps} phase="recording" />);
+
+      expect(document.title).toBe('● REC openMeet');
+
+      rerender(
+        <CallStage
+          {...baseProps}
+          phase="recording"
+          messages={[remoteMsg('One'), remoteMsg('Two'), remoteMsg('Three')]}
+        />
+      );
+      expect(document.title).toBe('● REC (3) openMeet');
+
+      Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(document.title).toBe('openMeet');
+
+      Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(document.title).toBe('● REC (3) openMeet');
+
+      unmount();
+      expect(document.title).toBe('openMeet');
+    } finally {
+      Object.defineProperty(document, 'hidden', { value: originalHidden, writable: true, configurable: true });
+      document.title = 'openMeet';
+    }
+  });
+
+  it('shows background and battery notes with role status, and dismiss button works', async () => {
+    class FakeBattery extends EventTarget {
+      charging = false;
+      level = 0.08;
+    }
+    const fakeBattery = new FakeBattery();
+    Object.defineProperty(navigator, 'getBattery', {
+      value: vi.fn().mockResolvedValue(fakeBattery),
+      configurable: true,
+      writable: true,
+    });
+    let hidden = false;
+    Object.defineProperty(document, 'hidden', {
+      get: () => hidden,
+      configurable: true,
+    });
+
+    try {
+      vi.useFakeTimers();
+      render(<CallStage {...baseProps} phase="recording" />);
+      await act(async () => {});
+
+      // Battery note is shown with role status
+      const batteryNotice = screen
+        .getByText(/Battery at 8% and not charging/)
+        .closest('[role="status"]')!;
+      expect(batteryNotice).toBeInTheDocument();
+      expect(batteryNotice.className).toMatch(/text-\[#fdd663\]/);
+      expect(batteryNotice.getAttribute('role')).toBe('status');
+
+      // Hide tab for 5s
+      act(() => {
+        hidden = true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        vi.advanceTimersByTime(5000);
+        hidden = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+
+      const bgNotice = screen
+        .getByText(/This tab was in the background for 5 s/)
+        .closest('[role="status"]')!;
+      expect(bgNotice).toBeInTheDocument();
+      expect(bgNotice.className).toMatch(/text-\[#fdd663\]/);
+      expect(bgNotice.getAttribute('role')).toBe('status');
+
+
+      // Dismiss button removes background note
+      const dismissBtn = screen.getByRole('button', { name: 'Dismiss' });
+      act(() => {
+        fireEvent.click(dismissBtn);
+      });
+      expect(screen.queryByText(/This tab was in the background/)).toBeNull();
+      // Battery note still present
+      expect(screen.getByText(/Battery at 8% and not charging/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      Reflect.deleteProperty(navigator, 'getBattery');
+    }
+  });
+
+
   it('shows no pop-up for messages that were already there on mount', () => {
     render(<CallStage {...baseProps} messages={[remoteMsg('Old message', 'Bob')]} />);
     expect(screen.queryByRole('status')).toBeNull();
   });
 });
+
 
 
 
@@ -1160,5 +1302,652 @@ describe('CallStage media board', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Media board' }));
     expect(screen.getByText(/Load intros, stingers or ad reads/)).toBeInTheDocument();
     expect(screen.queryByText(/This take keeps your mic only/)).toBeNull();
+  });
+});
+
+describe('CallStage keep-up notice', () => {
+  it('says so when the device stops keeping up during a take', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      render(<CallStage {...baseProps} phase="recording" readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      const text = screen.getByText(
+        'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+      );
+      expect(text).toBeInTheDocument();
+      expect(text.closest('[role="status"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['in-call', 'finalizing'] as const)(
+    'does not read or warn outside a take (%s)',
+    async (phase) => {
+      vi.useFakeTimers();
+      try {
+        let lost = 0;
+        const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+        render(<CallStage {...baseProps} phase={phase} readLoad={readLoad} />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+        expect(readLoad).not.toHaveBeenCalled();
+        expect(
+          screen.queryByText(
+            'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+          )
+        ).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('offers low-power mode when the device is struggling', async () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.fn();
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const onToggleCam = vi.fn();
+      render(<CallStage {...baseProps} phase="recording" onSetLowPower={spy} onToggleCam={onToggleCam} readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+      const btn = screen.getByRole('button', { name: 'Turn on low-power mode' });
+      expect(btn).toHaveAttribute('type', 'button');
+      fireEvent.click(btn);
+      expect(spy).toHaveBeenCalledWith(true);
+      expect(onToggleCam).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says the mode is on, between takes too, and turns it off', () => {
+    const spy = vi.fn();
+    render(<CallStage {...baseProps} phase="in-call" lowPower onSetLowPower={spy} />);
+    const text = screen.getByText(
+      'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+    );
+    expect(text.closest('[role="status"]')).not.toBeNull();
+    const btn = screen.getByRole('button', { name: 'Turn off low-power mode' });
+    fireEvent.click(btn);
+    expect(spy).toHaveBeenCalledWith(false);
+  });
+
+  it.each(['in-call', 'finalizing', 'done'] as const)(
+    'says the mode is on outside a take (%s)',
+    (phase) => {
+      render(<CallStage {...baseProps} phase={phase} lowPower />);
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+    }
+  );
+
+  it('says what is left when low-power mode was not enough', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      render(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Turn off low-power mode' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the camera alone when the mode is turned off while still struggling', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const onToggleCam = vi.fn();
+      render(
+        <CallStage
+          {...baseProps}
+          phase="recording"
+          lowPower
+          readLoad={readLoad}
+          onToggleCam={onToggleCam}
+          onSetLowPower={vi.fn()}
+        />
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Turn off low-power mode' }));
+      expect(onToggleCam).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forgets the earlier trouble once the mode is turned on', async () => {
+    vi.useFakeTimers();
+    try {
+      let step = 150;
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += step), cpuLimited: false }));
+      const { rerender } = render(<CallStage {...baseProps} phase="recording" readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'This device is struggling to keep up, so the recording may skip. Close other apps and tabs.'
+        )
+      ).toBeInTheDocument();
+      const button = screen.getByRole('button', { name: 'Turn on low-power mode' });
+      button.focus();
+
+      step = 0;
+      rerender(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Turn off low-power mode' }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goes back to the plain sentence once the take is over', async () => {
+    vi.useFakeTimers();
+    try {
+      let lost = 0;
+      const readLoad = vi.fn(async () => ({ audioDroppedMs: (lost += 150), cpuLimited: false }));
+      const { rerender } = render(<CallStage {...baseProps} phase="recording" lowPower readLoad={readLoad} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(
+        screen.getByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeInTheDocument();
+      rerender(<CallStage {...baseProps} phase="done" lowPower readLoad={readLoad} />);
+      expect(
+        screen.getByText(
+          'Low-power mode is on: the others see you in lower quality. Your recording is unchanged.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'Low-power mode is on, but this device is still struggling. Turn your camera off to protect the audio, and pick a lower quality before you join next time.'
+        )
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('CallStage mic warning', () => {
+  it('shows above the stage as an alert, in a call and in a take, and only when there is a warning', () => {
+    const { unmount } = render(<CallStage {...baseProps} phase="in-call" micWarning="silent" />);
+    const alertInCall = screen.getByRole('alert');
+    expect(alertInCall.tagName).toBe('SPAN');
+    expect(alertInCall).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    const dismissBtn = screen.getByRole('button', { name: 'Dismiss microphone warning' });
+    expect(dismissBtn).toHaveAttribute('type', 'button');
+    expect(dismissBtn).toHaveTextContent('Dismiss');
+    expect(alertInCall.contains(dismissBtn)).toBe(false);
+    const pill = alertInCall.closest('div');
+    expect(pill?.className).toContain('max-w-[92vw]');
+    expect(pill?.className).toContain('text-[#fdd663]');
+    const stageColInCall = screen.getByTestId('stage-column');
+    expect(stageColInCall.contains(alertInCall)).toBe(false);
+    expect(alertInCall.compareDocumentPosition(stageColInCall) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+
+    const { unmount: unmountRec } = render(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    const alertRec = screen.getByRole('alert');
+    expect(alertRec.tagName).toBe('SPAN');
+    expect(alertRec).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    const stageColRec = screen.getByTestId('stage-column');
+    expect(stageColRec.contains(alertRec)).toBe(false);
+    expect(alertRec.compareDocumentPosition(stageColRec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmountRec();
+
+    render(<CallStage {...baseProps} phase="recording" />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Dismiss microphone warning' })).toBeNull();
+  });
+
+  it('dismiss outlasts the moment', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning="silent" />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+  });
+
+  it('arms again when a new take starts, and shows beside a recording problem', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="in-call" micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="recording" micWarning="silent" recordingError="Disk is full" />);
+    const alerts = screen.getAllByRole('alert');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    expect(alerts[1]).toHaveTextContent('Disk is full');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="finalizing" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="done" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+
+    rerender(<CallStage {...baseProps} phase="in-call" micWarning="silent" recordingError={null} />);
+    expect(screen.queryByText(MIC_WARNING_TEXT.silent)).toBeNull();
+  });
+
+  it('does not gate the warning on role, micOn state, or phase', () => {
+    const { unmount: unmountGuest } = render(
+      <CallStage {...baseProps} role="guest" phase="in-call" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountGuest();
+
+    const disabledTrack = { kind: 'audio', enabled: false } as any;
+    const stream = {
+      getAudioTracks: () => [disabledTrack],
+      getVideoTracks: () => [],
+    } as any;
+    const { unmount: unmountMuted } = render(
+      <CallStage {...baseProps} localStream={stream} phase="in-call" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountMuted();
+
+    const { unmount: unmountFinalizing } = render(
+      <CallStage {...baseProps} phase="finalizing" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountFinalizing();
+
+    const { unmount: unmountDone } = render(
+      <CallStage {...baseProps} phase="done" micWarning="silent" />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    unmountDone();
+  });
+
+  it('holds dismissal through a mic switch', async () => {
+    const mockDevices: MediaDeviceInfo[] = [
+      {
+        deviceId: 'mic-default',
+        kind: 'audioinput',
+        label: 'Default Microphone',
+        groupId: 'g1',
+        toJSON: () => ({}),
+      },
+      {
+        deviceId: 'mic-usb',
+        kind: 'audioinput',
+        label: 'USB Podcast Mic',
+        groupId: 'g2',
+        toJSON: () => ({}),
+      },
+    ];
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        enumerateDevices: vi.fn().mockResolvedValue(mockDevices),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+
+    const onSwitchMic = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        micWarning="silent"
+        onSwitchMic={onSwitchMic}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const micArrow = screen.getByLabelText(/select microphone/i);
+    await act(async () => {
+      fireEvent.click(micArrow);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('USB Podcast Mic')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('USB Podcast Mic'));
+    });
+    expect(onSwitchMic).toHaveBeenCalledWith('mic-usb');
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('causes no extra render when a take starts with nothing dismissed', async () => {
+    let commits = 0;
+    const { rerender } = await act(async () =>
+      render(
+        <Profiler id="cs" onRender={() => { commits += 1; }}>
+          <CallStage {...baseProps} phase="in-call" />
+        </Profiler>
+      )
+    );
+    commits = 0;
+    await act(async () => {
+      rerender(
+        <Profiler id="cs" onRender={() => { commits += 1; }}>
+          <CallStage {...baseProps} phase="recording" />
+        </Profiler>
+      );
+    });
+    expect(commits).toBe(1);
+  });
+
+  it('renders clipping note inside the role="alert" element', () => {
+    render(<CallStage {...baseProps} micWarning="clipping" />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+  });
+
+  it('keeps dismissal per kind so dismissing silent leaves clipping visible', () => {
+    const { rerender } = render(<CallStage {...baseProps} micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    rerender(<CallStage {...baseProps} micWarning="clipping" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+  });
+
+  it('dismisses the clipping note and leaves the silent one armed', () => {
+    const { rerender } = render(<CallStage {...baseProps} micWarning="clipping" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.clipping);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss microphone warning' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    rerender(<CallStage {...baseProps} micWarning="silent" />);
+    expect(screen.getByRole('alert')).toHaveTextContent(MIC_WARNING_TEXT.silent);
+  });
+});
+
+describe('CallStage track panel', () => {
+  const read = () => [{ key: 'own:camera', track: 'camera' as const, bytes: 1_500_000 }];
+
+  // Against the call screen the panel would be positioned against the whole
+  // viewport and land off the bottom of it; the status bar is its anchor.
+  it('mounts the track panel inside a status bar it is positioned against', () => {
+    render(<CallStage {...baseProps} phase="recording" markerCount={2} readTrackHealth={read} />);
+    const bar = screen.getByTestId('status-bar');
+    expect(bar.contains(screen.getByTestId('track-health'))).toBe(true);
+    expect(bar.className).toMatch(/\brelative\b/);
+    expect(screen.getByText('2 markers').nextElementSibling).toBe(screen.getByTestId('track-health'));
+  });
+
+  it('mounts the track panel for a guest whose own capture is running', () => {
+    render(<CallStage {...baseProps} role="guest" phase="recording" readTrackHealth={read} />);
+    expect(screen.getByTestId('track-health')).toBeTruthy();
+  });
+
+  // The panel is positioned against the status bar and paints over the
+  // in-flow notices, so a banner only wins the stack by its own positioning.
+  it('keeps an alert banner above an open track panel', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        recordingError="The disk is full. Press End & save."
+        readTrackHealth={read}
+      />
+    );
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent('The disk is full. Press End & save.');
+    expect(banner.className).toMatch(/\brelative\b/);
+    expect(banner.className).toMatch(/\bz-50\b/);
+  });
+
+  it('leaves the track panel unmounted while the room records and this browser does not', () => {
+    render(<CallStage {...baseProps} phase="in-call" roomRecording readTrackHealth={read} />);
+    expect(screen.queryByTestId('track-health')).toBeNull();
+  });
+
+  it.each(['in-call', 'finalizing', 'done'] as const)(
+    'leaves the track panel unmounted outside a take (%s)',
+    (phase) => {
+      render(<CallStage {...baseProps} phase={phase} readTrackHealth={read} />);
+      expect(screen.queryByTestId('track-health')).toBeNull();
+    }
+  );
+
+  // The element is absent either way (the panel itself skips a failed read), so
+  // the only trace of a panel mounted without a reading is its armed timer.
+  it('arms no timer for a panel that has nothing to read', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      const bare = render(<CallStage {...baseProps} phase="recording" />);
+      const elapsedOnly = spy.mock.calls.length;
+      bare.unmount();
+      spy.mockClear();
+
+      const withRead = render(<CallStage {...baseProps} phase="recording" readTrackHealth={read} />);
+      expect(spy.mock.calls.length).toBe(elapsedOnly + 1);
+      withRead.unmount();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('returned backups', () => {
+  const offered = [
+    {
+      id: 'backup_asha_camera_20231114T221320000Z.mp4',
+      kind: 'camera' as const,
+      size: 1_500_000_000,
+      status: 'offered' as const,
+      percent: 0,
+      from: 'Asha',
+    },
+  ];
+
+  // The notice must sit in the flow above the stage, where it cannot cover the
+  // Recording pill, a name tag or the PiP.
+  it('shows an offer above the stage and saves it from the button', () => {
+    const onAcceptBackups = vi.fn();
+    render(
+      <CallStage {...baseProps} backupTransfers={offered} onAcceptBackups={onAcceptBackups} />
+    );
+
+    const notice = screen.getByText(
+      'Asha wants to send you 1 backup file (1.5 GB) from an earlier recording in this room.'
+    );
+    const column = screen.getByTestId('stage-column');
+    expect(
+      column.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_PRECEDING
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
+    expect(onAcceptBackups).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands a stalled backup to the engine when the host dismisses it', () => {
+    const onDismissBackup = vi.fn();
+    const stalled = offered.map((t) => ({ ...t, status: 'stalled' as const, percent: 30 }));
+    render(
+      <CallStage {...baseProps} backupTransfers={stalled} onDismissBackup={onDismissBackup} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismissBackup).toHaveBeenCalledWith(stalled[0]!.id);
+  });
+
+  it('holds an offer back while a take records', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        backupTransfers={offered}
+        onAcceptBackups={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+    expect(screen.queryByText(/wants to send you/)).toBeNull();
+  });
+
+  it('shows a guest its own backup, without the host’s buttons', () => {
+    render(<CallStage {...baseProps} role="guest" backupTransfers={offered} />);
+    expect(
+      screen.getByText('Waiting for the host to accept your backup (1 file, 1.5 GB). Keep this tab open.')
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+  });
+
+  it('lets the host decline an offer from the notice', () => {
+    const onDeclineBackups = vi.fn();
+    render(
+      <CallStage {...baseProps} backupTransfers={offered} onDeclineBackups={onDeclineBackups} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(onDeclineBackups).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('interrupted take notice', () => {
+  it('offers to continue the same take and to save what was recorded', () => {
+    const onResumeRecording = vi.fn();
+    const onSaveRecording = vi.fn();
+    render(
+      <CallStage
+        {...baseProps}
+        resumeOffer={{ take: 1, canResume: true }}
+        onResumeRecording={onResumeRecording}
+        onSaveRecording={onSaveRecording}
+      />
+    );
+
+    const notice = screen
+      .getByText('Recording was interrupted. This browser still has the take.')
+      .closest('[role="status"]');
+    expect(notice).not.toBeNull();
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: 'Resume recording' }));
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: 'Save what was recorded' }));
+    expect(onResumeRecording).toHaveBeenCalledTimes(1);
+    expect(onSaveRecording).toHaveBeenCalledTimes(1);
+  });
+
+  // The offer only appears when a pending channel would really continue a file,
+  // so with none there is one action, not a dead button.
+  it('offers only to save when nothing pending would continue the take', () => {
+    render(<CallStage {...baseProps} resumeOffer={{ take: 1, canResume: false }} />);
+
+    expect(
+      screen.getByText('Recording was interrupted. This browser still has the take.')
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Resume recording' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save what was recorded' })).toBeTruthy();
+  });
+
+  it('lets neither action, nor Record, be pressed while a resume or a save runs', () => {
+    const onResumeRecording = vi.fn();
+    const onSaveRecording = vi.fn();
+    const onRecord = vi.fn();
+    render(
+      <CallStage
+        {...baseProps}
+        onRecord={onRecord}
+        resumeOffer={{ take: 1, canResume: true }}
+        onResumeRecording={onResumeRecording}
+        onSaveRecording={onSaveRecording}
+        recoveryBusy
+      />
+    );
+
+    const resume = screen.getByRole('button', { name: 'Resume recording' });
+    const save = screen.getByRole('button', { name: 'Save what was recorded' });
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    for (const button of [resume, save, record]) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(onResumeRecording).not.toHaveBeenCalled();
+    expect(onSaveRecording).not.toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(resume.closest('[role="status"]')).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('shows no notice when no take was interrupted', () => {
+    render(<CallStage {...baseProps} />);
+
+    expect(
+      screen.queryByText('Recording was interrupted. This browser still has the take.')
+    ).toBeNull();
+    expect(screen.queryByText('Save what was recorded')).toBeNull();
+  });
+
+  it('reports a take saved from inside the call as a status line', () => {
+    render(<CallStage {...baseProps} takeNotice="Saved 1 file to your folder." />);
+
+    expect(screen.getByText('Saved 1 file to your folder.').getAttribute('role')).toBe('status');
+    expect(screen.queryByText('Recording was interrupted. This browser still has the take.')).toBeNull();
   });
 });

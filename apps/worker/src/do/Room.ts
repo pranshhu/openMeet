@@ -14,6 +14,7 @@ import {
 import type { Env } from '../env.js';
 import { parseHostTokenCookie } from '../lib/cookie.js';
 import { timingSafeEqualHex } from '../lib/token.js';
+import { isValidSlugFormat } from '../lib/slug.js';
 import {
   endSession,
   getRoomBySlug,
@@ -23,7 +24,6 @@ import {
   markParticipantLeft,
   markRoomConsumed,
   touchRoom,
-  updateRecordingProgress,
 } from '../db/queries.js';
 
 /**
@@ -64,6 +64,7 @@ interface RoomRow {
 interface SessionRow {
   sessionId: string | null;
   recording: boolean;
+  recordingCount?: number;
 }
 
 /**
@@ -72,6 +73,25 @@ interface SessionRow {
  * connection, hence a bound of their own.
  */
 const MAX_PRODUCERS = 2;
+
+/**
+ * Bounds on what a client can make the Room store. Names and user agents are
+ * truncated rather than refused, so a browser with a long user agent still
+ * joins; both also sit in the socket attachment, which is limited to 2048
+ * bytes at two bytes a character outside Latin-1. A recording id is a UUID
+ * and a filename `host_<uuid>.mp4`, and a take is one row, so no honest
+ * session comes near the other three.
+ */
+const MAX_DISPLAY_NAME_LENGTH = 64;
+const MAX_USER_AGENT_LENGTH = 512;
+const MAX_RECORDING_ID_LENGTH = 64;
+const MAX_FILENAME_LENGTH = 255;
+const MAX_RECORDINGS_PER_SESSION = 256;
+
+/** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
+function truncate(s: string, max: number): string {
+  return s.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
+}
 
 export class Room implements DurableObject {
   private state: DurableObjectState;
@@ -85,6 +105,7 @@ export class Room implements DurableObject {
   // role-assigned so a peer that joins mid-recording is told, and starts its
   // own capture, exactly like one that was here when Record was pressed.
   private recording = false;
+  private recordingCount = 0;
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -108,6 +129,7 @@ export class Room implements DurableObject {
       if (session) {
         this.sessionId = session.sessionId;
         this.recording = session.recording;
+        this.recordingCount = session.recordingCount ?? 0;
       }
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
@@ -137,8 +159,23 @@ export class Room implements DurableObject {
       .filter(({ p }) => !p.left);
   }
 
+  /**
+   * The room itself: sockets whose `join` passed the caps. A socket that is
+   * only connected is outside it — relays, broadcasts, peerCount and the
+   * session's lifetime all go through this. allPeers() stays for what must
+   * reach every socket: closing them on expiry, and finding the host or
+   * client a new connection replaces, which can happen before either joins.
+   */
+  private joinedPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
+    return this.allPeers().filter(({ p }) => p.joined);
+  }
+
   private async saveSession(): Promise<void> {
-    await this.state.storage.put('session', { sessionId: this.sessionId, recording: this.recording });
+    await this.state.storage.put('session', {
+      sessionId: this.sessionId,
+      recording: this.recording,
+      recordingCount: this.recordingCount,
+    } satisfies SessionRow);
   }
 
   /**
@@ -168,6 +205,7 @@ export class Room implements DurableObject {
       );
       this.sessionId = null;
       this.recording = false;
+      this.recordingCount = 0;
       await this.saveSession();
     }
   }
@@ -179,10 +217,10 @@ export class Room implements DurableObject {
     const upgrade = req.headers.get('Upgrade');
     if (upgrade !== 'websocket') return new Response('expected websocket', { status: 426 });
 
-    const slug = url.pathname.slice('/ws/r/'.length);
-    this.slug = slug;
-
-    const room = await getRoomBySlug(this.env.DB, slug);
+    const rawSlug = url.pathname.slice('/ws/r/'.length);
+    // The router picks this object from the percent-decoded slug but forwards
+    // the raw request, so the path is not trusted for the slug; the row is.
+    const room = isValidSlugFormat(rawSlug) ? await getRoomBySlug(this.env.DB, rawSlug) : null;
     if (!room || room.expires_at < Date.now()) {
       const { 0: client, 1: server } = new WebSocketPair();
       server.accept();
@@ -195,12 +233,13 @@ export class Room implements DurableObject {
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    this.slug = room.slug;
     this.hostToken = room.host_token;
-    await this.state.storage.put('room', { slug, hostToken: room.host_token } satisfies RoomRow);
+    await this.state.storage.put('room', { slug: room.slug, hostToken: room.host_token } satisfies RoomRow);
     // Same-origin/local-dev path: host_token may arrive as an httpOnly cookie.
     // Cross-origin deploys (*.pages.dev + *.workers.dev) can't send it, so the
     // host also presents the token in its `join` message (see webSocketMessage).
-    const cookie = parseHostTokenCookie(req.headers.get('Cookie'), slug);
+    const cookie = parseHostTokenCookie(req.headers.get('Cookie'), room.slug);
     const isHost = !!cookie && timingSafeEqualHex(cookie, room.host_token);
 
     const { 0: client, 1: server } = new WebSocketPair();
@@ -239,9 +278,21 @@ export class Room implements DurableObject {
     } catch {
       return;
     }
+    // `null` is valid JSON, and reading its `type` would throw.
+    if (typeof parsed !== 'object' || parsed === null) return;
+
+    // A socket is in the room from a `join` that passed the caps until its
+    // close. Outside that it is answered on its own join and ping and nothing
+    // else: closing a socket from this side does not stop its client sending,
+    // so one refused at the cap or replaced could otherwise go on talking.
+    if (p.left) return;
+    if (!p.joined && parsed.type !== 'join' && parsed.type !== 'ping') return;
 
     switch (parsed.type) {
       case 'join':
+        // A repeat would insert another participant row per message and
+        // announce the same peer again.
+        if (p.joined) break;
         if (typeof parsed.displayName !== 'string' || typeof parsed.userAgent !== 'string') {
           this.send(ws, {
             type: 'error',
@@ -256,9 +307,10 @@ export class Room implements DurableObject {
           }
           return;
         }
+        parsed.displayName = truncate(parsed.displayName, MAX_DISPLAY_NAME_LENGTH);
+        parsed.userAgent = truncate(parsed.userAgent, MAX_USER_AGENT_LENGTH);
         p.displayName = parsed.displayName;
         p.userAgent = parsed.userAgent;
-        p.joined = true;
         // Capped: it is stored in the socket attachment, which has a size limit.
         if (typeof parsed.clientId === 'string' && parsed.clientId.length > 0 && parsed.clientId.length <= 64) {
           p.clientId = parsed.clientId;
@@ -310,6 +362,10 @@ export class Room implements DurableObject {
             return;
           }
         }
+        // Only now, and before the first await so a concurrent join counts
+        // this seat: a socket refused above never becomes part of the room.
+        p.joined = true;
+        this.save(ws, p);
         // Reusable rooms: every join pushes the expiry out, so a weekly show
         // keeps one link alive. Unused rooms still lapse on their own.
         if (this.slug) {
@@ -333,6 +389,7 @@ export class Room implements DurableObject {
             started_at: Date.now(),
           });
           this.sessionId = id;
+          this.recordingCount = 0;
           await this.saveSession();
           await markRoomConsumed(this.env.DB, this.slug);
         }
@@ -353,7 +410,7 @@ export class Room implements DurableObject {
         this.send(ws, {
           type: 'role-assigned',
           role: p.role,
-          peerCount: this.allPeers().length,
+          peerCount: this.joinedPeers().length,
           peerId: p.peerId,
           ordinal: p.ordinal,
           recording: this.recording,
@@ -439,7 +496,9 @@ export class Room implements DurableObject {
         });
         break;
       case 'leave':
-        this.broadcastExcept(ws, { type: 'peer-left', role: p.role, reason: parsed.reason, peerId: p.peerId });
+        // onClose announces it, with the leaver's reason, and marks the socket
+        // left — so the close callback that follows doesn't announce it again.
+        await this.onClose(ws, parsed.reason);
         try {
           ws.close(1000, 'graceful');
         } catch {
@@ -447,10 +506,10 @@ export class Room implements DurableObject {
         }
         break;
       case 'recording-started':
-        // Relayed as well as persisted. Recording is room-wide: guests are
-        // entitled to know they are being recorded, and the relay is what
-        // starts their own capture. (Chunk ACKs still flow over DataChannel —
-        // this is a control signal, not an ack.)
+        // Relayed for every peer, but persisted only for the host. Recording
+        // is room-wide: guests are entitled to know they are being recorded,
+        // and the relay is what starts their own capture. (Chunk ACKs still flow
+        // over DataChannel — this is a control signal, not an ack.)
         if (p.role === 'host') {
           this.recording = true;
           await this.saveSession();
@@ -461,20 +520,48 @@ export class Room implements DurableObject {
           from: p.role,
         });
         // Persist a recordings row so D1 reflects the in-progress capture.
-        if (this.sessionId && p.participantId) {
-          await insertRecording(this.env.DB, {
-            id: parsed.recordingId,
-            session_id: this.sessionId,
-            participant_id: p.participantId,
-            kind: parsed.kind,
-            filename: parsed.filename,
-            total_bytes: 0,
-            last_offset: 0,
-            sha256: null,
-            status: 'recording',
-            started_at: Date.now(),
-            finalized_at: null,
-          }).catch((e) => console.error('room:insertRecording', e));
+        // Only the host writes rows — guests write nothing to D1. What is
+        // bounded is the row itself and how many of them a session gets.
+        if (
+          p.role === 'host' &&
+          this.sessionId &&
+          p.participantId &&
+          this.recordingCount < MAX_RECORDINGS_PER_SESSION &&
+          typeof parsed.recordingId === 'string' &&
+          parsed.recordingId.length > 0 &&
+          parsed.recordingId.length <= MAX_RECORDING_ID_LENGTH &&
+          typeof parsed.filename === 'string' &&
+          parsed.filename.length > 0 &&
+          parsed.filename.length <= MAX_FILENAME_LENGTH &&
+          (parsed.kind === 'camera' || parsed.kind === 'screen')
+        ) {
+          // Counted before the insert so concurrent announcements cannot both
+          // pass the cap check; a row that never lands gives the seat back.
+          this.recordingCount++;
+          await this.saveSession();
+          try {
+            const written = await insertRecording(this.env.DB, {
+              id: parsed.recordingId,
+              session_id: this.sessionId,
+              participant_id: p.participantId,
+              kind: parsed.kind,
+              filename: parsed.filename,
+              total_bytes: 0,
+              last_offset: 0,
+              sha256: null,
+              status: 'recording',
+              started_at: Date.now(),
+              finalized_at: null,
+            });
+            if (!written) {
+              this.recordingCount--;
+              await this.saveSession();
+            }
+          } catch (e) {
+            this.recordingCount--;
+            await this.saveSession();
+            console.error('room:insertRecording', e);
+          }
         }
         break;
       case 'recording-stop':
@@ -503,31 +590,6 @@ export class Room implements DurableObject {
           fromPeerId: p.peerId,
         });
         break;
-      case 'recording-completed': {
-        // The id is CLIENT-SUPPLIED, so it must be proved to belong to this
-        // session before anything is written. Without this check any peer in
-        // any room could overwrite any recording's sha256 and status — forging
-        // the one record that claims the bytes arrived intact, including for a
-        // room they were never in.
-        if (!this.sessionId || !p.joined) break;
-        const owned = await this.env.DB.prepare(
-          'SELECT 1 FROM recordings WHERE id = ? AND session_id = ?'
-        )
-          .bind(parsed.recordingId, this.sessionId)
-          .first<{ 1: number }>()
-          .catch((e) => {
-            console.error('room:recordingOwnership', e);
-            return null;
-          });
-        if (!owned) break;
-        await updateRecordingProgress(this.env.DB, parsed.recordingId, {
-          total_bytes: parsed.totalBytes,
-          ...(parsed.sha256 != null ? { sha256: parsed.sha256 } : {}),
-          status: 'finalized',
-          finalized_at: Date.now(),
-        }).catch((e) => console.error('room:updateRecordingProgress', e));
-        break;
-      }
     }
   }
 
@@ -544,7 +606,7 @@ export class Room implements DurableObject {
       this.broadcastExcept(fromWs, msg);
       return;
     }
-    for (const { ws, p } of this.allPeers()) {
+    for (const { ws, p } of this.joinedPeers()) {
       if (p.peerId === to) {
         this.send(ws, msg);
         return;
@@ -553,7 +615,7 @@ export class Room implements DurableObject {
   }
 
   private broadcastExcept(exceptWs: WebSocket, msg: ServerMessage): void {
-    for (const { ws } of this.allPeers()) {
+    for (const { ws } of this.joinedPeers()) {
       if (ws === exceptWs) continue;
       this.send(ws, msg);
     }
@@ -577,7 +639,7 @@ export class Room implements DurableObject {
     await this.onClose(ws);
   }
 
-  private async onClose(ws: WebSocket): Promise<void> {
+  private async onClose(ws: WebSocket, reason = 'disconnect'): Promise<void> {
     const p = this.peer(ws);
     if (!p || p.left) return;
     p.left = true;
@@ -586,7 +648,7 @@ export class Room implements DurableObject {
       await markParticipantLeft(this.env.DB, p.participantId, Date.now()).catch((e) => console.error('room:markParticipantLeft', e));
     }
     if (p.joined) {
-      this.broadcastExcept(ws, { type: 'peer-left', role: p.role, reason: 'disconnect', peerId: p.peerId });
+      this.broadcastExcept(ws, { type: 'peer-left', role: p.role, reason, peerId: p.peerId });
     }
     // The host owns the recording, so its socket closing ends it. Otherwise a
     // crashed host leaves the room advertising `recording: true`, and the next
@@ -595,7 +657,13 @@ export class Room implements DurableObject {
       this.recording = false;
       await this.saveSession();
     }
-    if (this.allPeers().length === 0 && this.sessionId) {
+    // Joined peers, not sockets: one that is connected but never joined must
+    // not hold the session open after everyone in the room has gone. Except a
+    // socket that proved the host cookie at connect: that is the host
+    // reconnecting, and it replaces its old socket before it has joined.
+    // Ending here would clear `recording` under a take that is still running;
+    // if it never joins, its own close lands here and ends the session.
+    if (this.joinedPeers().length === 0 && !this.anyHostPresent() && this.sessionId) {
       await endSession(
         this.env.DB,
         this.sessionId,
@@ -607,6 +675,7 @@ export class Room implements DurableObject {
       // session that just ended.
       this.sessionId = null;
       this.recording = false;
+      this.recordingCount = 0;
       await this.saveSession();
     }
   }

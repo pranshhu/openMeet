@@ -1,15 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   diskCheck, folderCheck, micCheck, codecCheck, connectionCheck, overallLevel, probeIce, wavCheck,
+  journalSpaceCheck, journalSpaceNeed, JOURNAL_FLOOR_MINUTES,
 } from '@/lib/preflight';
-import { bytesPerHour, presetById, recordingFolderBytesPerHour } from '@/lib/quality';
+import { bytesPerHour, presetById, recordingFolderBytesPerHour, QUALITY_PRESETS } from '@/lib/quality';
 import { MAX_RECORDED_PEERS } from '@openmeet/protocol';
+import { MIC_CLIP_PEAK } from '@/lib/mic-watch';
 
 const p1080 = presetById('1080p');
 const GB = 1e9;
 // Derived, not hardcoded: the bands are in HOURS, so a bitrate change would
 // otherwise silently move which band a fixed byte count lands in. Browser
-// storage holds only this device's own backup: camera MP4 plus a stereo WAV.
+// storage holds this device's own backup: camera MP4 plus a stereo WAV — and,
+// for a host, the take's crash journal.
 const perHour = bytesPerHour(p1080, 2);
 
 describe('diskCheck', () => {
@@ -30,9 +33,10 @@ describe('diskCheck', () => {
   it('warns rather than failing when the quota is unknown', () => {
     expect(diskCheck(undefined, undefined, p1080).level).toBe('warn');
   });
-  // Browser storage (OPFS) only ever holds this device's own backup; the
-  // host's copies of everyone's tracks go to the recording folder. Budgeting
-  // it for a full room raised a false warning on every normal machine.
+  // Browser storage (OPFS) holds this device's own backup (the host's take
+  // also keeps the guests' journal there); the host's copies of everyone's
+  // tracks go to the recording folder. Budgeting it for a full room raised a
+  // false warning on every normal machine.
   it('budgets for this device’s own backup, not a full room', () => {
     const onePersonFor90Min = bytesPerHour(p1080, 2) * 1.5;
     expect(diskCheck(onePersonFor90Min, 0, p1080).level).toBe('warn');
@@ -57,6 +61,79 @@ describe('diskCheck', () => {
     expect(c.message).toMatch(/browser storage available \(for backups\)/);
   });
 
+  // The host is the only one whose storage holds the take's journal, so the
+  // sentence is the only warning that this take has no crash copy.
+  const NO_PROTECTION =
+    ' Not enough browser storage to protect this take against a crash — it records to your folder without that copy.';
+
+  it('adds the no-crash-copy sentence for a host under the floor', () => {
+    const plain = diskCheck(0.5 * perHour, 0, p1080);
+    const host = diskCheck(0.5 * perHour, 0, p1080, true);
+    expect(plain.level).toBe('fail');
+    expect(host.level).toBe('fail');
+    expect(host.message).toBe(plain.message + NO_PROTECTION);
+  });
+
+  it('follows the journal floor, not the storage level', () => {
+    const floor = (4 * perHour * JOURNAL_FLOOR_MINUTES) / 60;
+    const justUnder = diskCheck(floor - 1, 0, p1080, true);
+    expect(justUnder.level).toBe('fail');
+    expect(justUnder.message).toMatch(/without that copy/);
+    const atFloor = diskCheck(floor, 0, p1080, true);
+    expect(atFloor.level).toBe('fail');
+    expect(atFloor.message).not.toMatch(/without that copy/);
+    expect(diskCheck(1.5 * perHour, 0, p1080, true)).toEqual(diskCheck(1.5 * perHour, 0, p1080));
+    expect(diskCheck(3.5 * perHour, 0, p1080, true)).toEqual(diskCheck(3.5 * perHour, 0, p1080));
+  });
+
+  it('leaves a guest’s message without the no-crash-copy sentence', () => {
+    expect(diskCheck(0.5 * perHour, 0, p1080).message).not.toMatch(/without that copy/);
+  });
+
+  it('says nothing about a crash copy when the quota is unknown', () => {
+    const host = diskCheck(undefined, undefined, p1080, true);
+    expect(host.message).toBe(diskCheck(undefined, undefined, p1080).message);
+    expect(host.message).not.toMatch(/without that copy/);
+  });
+
+});
+
+describe('journalSpaceCheck', () => {
+  // The room is the host plus MAX_RECORDED_PEERS - 1 guests, so the journal
+  // budgets a whole hour for each of those guests.
+  it('budgets a whole hour for every guest the room can hold', () => {
+    expect(journalSpaceNeed(p1080, 1)).toBe(perHour);
+    expect(journalSpaceNeed(p1080, 3)).toBe(3 * perHour);
+    expect(journalSpaceNeed(p1080)).toBe(3 * perHour);
+    expect(journalSpaceNeed(p1080, -1)).toBe(0);
+  });
+
+  it('asks for ten minutes of the room plus ten minutes of this device', () => {
+    const floor = (4 * perHour * JOURNAL_FLOOR_MINUTES) / 60;
+    expect(journalSpaceCheck(floor, 0, p1080)).toBe(true);
+    expect(journalSpaceCheck(floor - 1, 0, p1080)).toBe(false);
+  });
+
+  // An ordinary Chrome profile reports a fixed 10 GiB of free quota; a longer
+  // floor would switch the crash copy off for everyone at every preset.
+  it('keeps the crash copy on the free quota an ordinary Chrome profile reports', () => {
+    for (const preset of QUALITY_PRESETS) {
+      expect(journalSpaceCheck(10 * 1024 ** 3, 0, preset)).toBe(true);
+    }
+  });
+
+  it('counts the space already in use', () => {
+    const floor = (4 * perHour * JOURNAL_FLOOR_MINUTES) / 60;
+    expect(journalSpaceCheck(floor + 1, 1, p1080)).toBe(true);
+    expect(journalSpaceCheck(floor, 1, p1080)).toBe(false);
+    // A browser may report the quota with nothing said about what is in use.
+    expect(journalSpaceCheck(floor, undefined, p1080)).toBe(true);
+  });
+
+  it('promises nothing when the browser cannot report a usable quota', () => {
+    expect(journalSpaceCheck(undefined, 0, p1080)).toBe(false);
+    expect(journalSpaceCheck(Infinity, 0, p1080)).toBe(false);
+  });
 });
 
 describe('folderCheck', () => {
@@ -84,6 +161,9 @@ describe('micCheck', () => {
   });
   it('warns on clipping, which bakes distortion into the master', () => {
     expect(micCheck(0.99, 3000).level).toBe('warn');
+  });
+  it('does not warn at exactly MIC_CLIP_PEAK', () => {
+    expect(micCheck(MIC_CLIP_PEAK, 3000).level).toBe('ok');
   });
   it('passes on normal speech level', () => {
     expect(micCheck(0.3, 3000).level).toBe('ok');

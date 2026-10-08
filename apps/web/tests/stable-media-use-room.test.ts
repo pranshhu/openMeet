@@ -67,10 +67,30 @@ vi.mock('@/lib/backup-recorder', () => ({
   })),
 }));
 
+let mediaOptions: any;
+let stopCalls = 0;
+vi.mock('@/lib/switchable-media', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/switchable-media')>();
+  return {
+    ...real,
+    SwitchableMedia: class extends real.SwitchableMedia {
+      constructor(stream: MediaStream, options: any) {
+        super(stream, options);
+        mediaOptions = options;
+      }
+      override stop() {
+        stopCalls += 1;
+        super.stop();
+      }
+    },
+  };
+});
+
 describe('useRoom stable media integration', () => {
   beforeEach(() => {
     signalHandlers = {};
     mockPeers = [];
+    stopCalls = 0;
     vi.clearAllMocks();
   });
 
@@ -198,6 +218,103 @@ describe('useRoom stable media integration', () => {
       await result.current.switchCamera('cam-usb');
     });
     expect(result.current.state.activeCamId).toBe('cam-usb');
+  });
+
+  it('mirrors the mic verdict as a note and nothing more', async () => {
+    const rawAudio = { kind: 'audio', id: 'raw-audio-id', enabled: true, stop: vi.fn() } as any;
+    const rawVideo = { kind: 'video', id: 'raw-video-id', enabled: true, stop: vi.fn() } as any;
+    const lobbyStream = {
+      getTracks: () => [rawAudio, rawVideo],
+      getAudioTracks: () => [rawAudio],
+      getVideoTracks: () => [rawVideo],
+    } as any;
+
+    const { result } = renderHook(() => useRoom('test-room'));
+
+    expect(result.current.state.micWarning).toBeNull();
+
+    await act(async () => {
+      await result.current.join(lobbyStream, 'Guest Alice', false);
+    });
+
+    expect(result.current.state.micWarning).toBeNull();
+
+    await act(async () => {
+      signalHandlers['peer-joined']?.[0]?.({
+        type: 'peer-joined',
+        peerId: 'peer-1',
+        ordinal: 2,
+        role: 'guest',
+        displayName: 'Bob',
+      });
+    });
+
+    const phaseBefore = result.current.state.phase;
+    const recordingErrorBefore = result.current.state.recordingError;
+    const connectionWarningBefore = result.current.state.connectionWarning;
+
+    act(() => mediaOptions.onMicWarning('silent'));
+    expect(result.current.state.micWarning).toBe('silent');
+    expect(result.current.state.phase).toBe(phaseBefore);
+    expect(result.current.state.recordingError).toBe(recordingErrorBefore);
+    expect(result.current.state.connectionWarning).toBe(connectionWarningBefore);
+
+    act(() => {
+      result.current.newTake();
+    });
+    expect(result.current.state.micWarning).toBe('silent');
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.micWarning).toBe('silent');
+
+    act(() => mediaOptions.onMicWarning(null));
+    expect(result.current.state.micWarning).toBeNull();
+
+    expect(stopCalls).toBe(0);
+    await act(async () => {
+      await result.current.leave();
+    });
+    expect(stopCalls).toBeGreaterThan(0);
+  });
+
+  it('preserves mic warning when guest recording starts', async () => {
+    const rawAudio = { kind: 'audio', id: 'raw-audio-id', enabled: true, stop: vi.fn() } as any;
+    const rawVideo = { kind: 'video', id: 'raw-video-id', enabled: true, stop: vi.fn() } as any;
+    const lobbyStream = {
+      getTracks: () => [rawAudio, rawVideo],
+      getAudioTracks: () => [rawAudio],
+      getVideoTracks: () => [rawVideo],
+    } as any;
+
+    const { result } = renderHook(() => useRoom('test-room'));
+
+    await act(async () => {
+      await result.current.join(lobbyStream, 'Guest Alice', false);
+    });
+
+    await act(async () => {
+      signalHandlers['role-assigned']?.[0]?.({
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'guest-peer',
+        ordinal: 2,
+        peers: [{ peerId: 'host-peer', ordinal: 1, role: 'host' }],
+      });
+    });
+
+    act(() => mediaOptions.onMicWarning('silent'));
+    expect(result.current.state.micWarning).toBe('silent');
+
+    await act(async () => {
+      await signalHandlers['recording-started']?.[0]?.({
+        type: 'recording-started',
+        recordingId: 'take-1',
+        from: 'host',
+      });
+    });
+    expect(result.current.state.micWarning).toBe('silent');
   });
 
   // A producer publishes nothing and joins with no tracks. Wrapping that empty

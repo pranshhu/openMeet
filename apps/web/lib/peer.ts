@@ -7,6 +7,7 @@ import type {
 } from '@openmeet/protocol';
 import { sendEncoding, type SendKind } from './send-quality';
 import {
+  DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
@@ -72,6 +73,7 @@ export class PeerConnection {
   private screenChannelSeq = 0;
   /** People in the room including us. 2 until told otherwise. */
   private peerCount = 2;
+  private lowPower = false;
   /** Serializes handleSignal() calls so signals are processed strictly in order. */
   private signalTail: Promise<void> = Promise.resolve();
   // Lazily created by whenConnected() so a caller that never asks pays nothing.
@@ -143,10 +145,12 @@ export class PeerConnection {
       // Video and uncompressed audio arrive on separate channels so each carries
       // exactly one file. The consumer routes on label. A label may carry a
       // stable key after '#' (see recordingChannelKind) — filter on the base.
+      // `backup` carries a leftover backup going back to the host.
       const { base } = recordingChannelKind(ev.channel.label);
       if (
         base === DATA_CHANNEL_RECORDING ||
         base === DATA_CHANNEL_RECORDING_AUDIO ||
+        base === DATA_CHANNEL_BACKUP ||
         ev.channel.label.startsWith(DATA_CHANNEL_RECORDING_SCREEN)
       ) {
         this.opts.onDataChannel?.(ev.channel);
@@ -182,6 +186,28 @@ export class PeerConnection {
 
   get connectionState(): RTCPeerConnectionState | null {
     return this.pc?.connectionState ?? null;
+  }
+
+  /**
+   * Whether the browser reports an outbound video encoder on this connection as
+   * held back by the processor. `qualityLimitationReason` is the browser's own
+   * overuse verdict, and only outbound video carries it, so nothing here models
+   * encode time or filters by stream. Reads the whole connection's report;
+   * narrow it to the video sender if it shows in a profile.
+   * Never rejects: a closed or failing connection reads as not limited.
+   */
+  async cpuLimited(): Promise<boolean> {
+    const pc = this.pc;
+    if (!pc) return false;
+    try {
+      let limited = false;
+      (await pc.getStats()).forEach((s) => {
+        if (s.qualityLimitationReason === 'cpu') limited = true;
+      });
+      return limited;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -289,6 +315,13 @@ export class PeerConnection {
     this.applySendQuality();
   }
 
+  /** Send a much smaller live picture so the recording gets the processor. */
+  setLowPower(on: boolean): void {
+    if (on === this.lowPower) return;
+    this.lowPower = on;
+    this.applySendQuality();
+  }
+
   /**
    * Cap every outbound video sender.
    *
@@ -310,7 +343,7 @@ export class PeerConnection {
       // Before the first negotiation `encodings` can be empty; setting it then
       // throws, so seed one entry rather than skipping the cap entirely.
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      const want = sendEncoding(this.peerCount, kind);
+      const want = sendEncoding(this.peerCount, kind, this.lowPower);
       params.encodings[0] = { ...params.encodings[0], ...want };
       void sender.setParameters(params).catch(() => {
         /* unsupported here; the call still works, just uncapped */
@@ -357,6 +390,11 @@ export class PeerConnection {
     const pc = this.requirePc();
     const label = key ? `${DATA_CHANNEL_RECORDING_AUDIO}#${key}` : DATA_CHANNEL_RECORDING_AUDIO;
     return pc.createDataChannel(label, { ordered: true });
+  }
+
+  /** One channel per leftover backup sent back to the host, keyed by the backup's file name. */
+  createBackupChannel(name: string): RTCDataChannel {
+    return this.requirePc().createDataChannel(`${DATA_CHANNEL_BACKUP}#${name}`, { ordered: true });
   }
 
   /**

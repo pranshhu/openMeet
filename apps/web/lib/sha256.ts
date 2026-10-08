@@ -19,6 +19,17 @@ function rotr(x: number, n: number): number {
   return (x >>> n) | (x << (32 - n));
 }
 
+/** The running hash as plain data, small enough to keep beside a journal position. */
+export type Sha256State = { words: number[]; remainder: number[]; length: number };
+
+function isUint32(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
+}
+
+function isByte(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xff;
+}
+
 export class StreamingSha256 {
   private readonly h = new Uint32Array([
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -67,6 +78,47 @@ export class StreamingSha256 {
     dv.setUint32(tail.length - 4, bitLen >>> 0);
     for (let off = 0; off < tail.length; off += 64) this.processBlock(h, this.w, tail, off);
     return [...h].map((x) => (x >>> 0).toString(16).padStart(8, '0')).join('');
+  }
+
+  /** The state of the hashed bytes so far, as plain numbers: no view outlives the call. */
+  toJSON(): Sha256State {
+    return {
+      words: [...this.h],
+      remainder: [...this.block.subarray(0, this.blockLen)],
+      length: this.totalLen,
+    };
+  }
+
+  /**
+   * The instance a `toJSON` describes, or null when the value is not one. A
+   * state is only accepted when the remainder is exactly the bytes the length
+   * leaves in the block, so a state that describes other bytes reads as "no
+   * state" instead of becoming a digest of something else.
+   */
+  static fromJSON(v: unknown): StreamingSha256 | null {
+    if (typeof v !== 'object' || v === null) return null;
+    const { words, remainder, length } = v as Partial<Sha256State>;
+    if (!Array.isArray(words) || words.length !== 8 || !words.every(isUint32)) return null;
+    if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return null;
+    if (!Array.isArray(remainder) || remainder.length !== length % 64 || !remainder.every(isByte)) return null;
+
+    const h = new StreamingSha256();
+    h.h.set(words);
+    h.block.set(remainder);
+    h.blockLen = remainder.length;
+    h.totalLen = length;
+    return h;
+  }
+
+  /** Continue from a `toJSON` written earlier. False leaves this instance untouched. */
+  restore(v: unknown): boolean {
+    const state = StreamingSha256.fromJSON(v);
+    if (!state) return false;
+    this.h.set(state.h);
+    this.block.set(state.block);
+    this.blockLen = state.blockLen;
+    this.totalLen = state.totalLen;
+    return true;
   }
 
   private processBlock(h: Uint32Array, w: Uint32Array, data: Uint8Array, off: number): void {

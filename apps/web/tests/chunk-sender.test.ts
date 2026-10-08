@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ChunkSender } from '@/lib/chunk-sender';
+import { ChunkSender, RESUME_ANSWER_TIMEOUT_MS } from '@/lib/chunk-sender';
 import { encodeChunkHeader, decodeChunkHeader, type ChunkHeader } from '@openmeet/protocol';
 
 class FakeChannel {
@@ -41,8 +41,93 @@ describe('ChunkSender', () => {
   it('tracks lastAckedIdx from ack control messages', () => {
     const ch = new FakeChannel();
     const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    for (let i = 0; i < 6; i++) s.sendChunk(chunk(i, i * 8, 8));
     s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 5, uptoOffset: 4000 });
     expect(s.lastAckedIdx).toBe(5);
+  });
+
+  it('counts ackedBytes as the host acknowledges', () => {
+    const ch = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    for (let i = 0; i < 3; i++) s.sendChunk(chunk(i, i * 8, 8));
+
+    expect(s.ackedBytes).toBe(0);
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+    expect(s.ackedBytes).toBe(8);
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 24 });
+    expect(s.ackedBytes).toBe(24);
+
+    // An ack that goes backwards confirms nothing new.
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 16 });
+    expect(s.ackedBytes).toBe(24);
+  });
+
+  it('ignores an ack for an index never sent, and later real acks still count', () => {
+    const ch = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
+    s.sendChunk(chunk(1, 8, 8));
+
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1e15, uptoOffset: 0 });
+    expect(s.lastAckedIdx).toBe(-1);
+    expect(s.ackedBytes).toBe(0);
+
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 16 });
+    expect(s.ackedBytes).toBe(16);
+  });
+
+  it('pins that an ack immediately beyond lastSentIdx is ignored and does not advance lastAckedIdx', () => {
+    const ch = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
+    s.sendChunk(chunk(1, 8, 8));
+
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 0 });
+    expect(s.lastAckedIdx).toBe(-1);
+    expect(s.ackedBytes).toBe(0);
+  });
+
+  it('pins that an earlier ack cannot move lastAckedIdx backwards', () => {
+    const ch = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    for (let i = 0; i < 3; i++) s.sendChunk(chunk(i, i * 8, 8));
+
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 24 });
+    expect(s.lastAckedIdx).toBe(2);
+
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 16 });
+    expect(s.lastAckedIdx).toBe(2);
+  });
+
+  it('ignores an ack whose uptoIdx is not a safe integer, without throwing', () => {
+    const ch = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    for (let i = 0; i < 3; i++) s.sendChunk(chunk(i, i * 8, 8));
+
+    for (const uptoIdx of [1.5, '1', null, NaN, Infinity, undefined]) {
+      expect(() =>
+        s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: uptoIdx as never, uptoOffset: 0 })
+      ).not.toThrow();
+      expect(s.lastAckedIdx).toBe(-1);
+      expect(s.ackedBytes).toBe(0);
+    }
+  });
+
+  it('drain() keeps waiting when a true ack arrives past the no-progress timeout', async () => {
+    const ch = new FakeChannel();
+    ch.bufferedAmount = 1000;
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
+    const p = s.drain();
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    ch.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(200);
+
+    await expect(p).resolves.toBe(true);
   });
 
   it('drain() resolves true when buffer empties before the cap', async () => {
@@ -97,6 +182,19 @@ describe('ChunkSender', () => {
     s.sendChunk(chunk(0, 0, 4));
     const hex = await s.digestHex();
     expect(hex).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('keeps what was acknowledged across a rebind to a new channel', () => {
+    const chA = new FakeChannel();
+    const s = new ChunkSender({ recordingId: 'r1', channel: chA as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
+    s.sendChunk(chunk(1, 8, 8));
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+    s.rebind(new FakeChannel() as unknown as RTCDataChannel);
+    expect(s.ackedBytes).toBe(8);
+    s.resume(0);
+    s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 16 });
+    expect(s.ackedBytes).toBe(16);
   });
 
   it('rebinds to a new channel, replaying unacked chunks and un-pausing when bufferedAmount is low', () => {
@@ -241,6 +339,7 @@ describe('ChunkSender', () => {
     const ch = new FakeChannel();
     ch.bufferedAmount = 1000;
     const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    s.sendChunk(chunk(0, 0, 8));
     const p = s.drain();
 
     // At 15s: progress happens (bufferedAmount decreases)
@@ -257,6 +356,121 @@ describe('ChunkSender', () => {
     await vi.advanceTimersByTimeAsync(200);
 
     await expect(p).resolves.toBe(true);
+  });
+
+  // A rebound sender must not put its backlog on a channel the host has not
+  // bound a receiver to yet: those bytes land before the host knows where its
+  // file stands, and the replay that follows sends them a second time.
+  describe('while held for the host position', () => {
+    it('queues a chunk without sending and without pausing the recorder', () => {
+      const ch = new FakeChannel();
+      const backpressure: boolean[] = [];
+      const s = new ChunkSender({
+        recordingId: 'r1',
+        channel: ch as unknown as RTCDataChannel,
+        onBackpressure: (p) => backpressure.push(p),
+      });
+
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      expect(ch.sent).toHaveLength(0);
+      expect(s.hasQueuedChunks).toBe(true);
+      // A wait of a few seconds is not back pressure: a full or closed pipe
+      // pauses the recorder, a hold does not.
+      expect(backpressure).toEqual([]);
+    });
+
+    it('release() sends the held queue in idx order and does nothing when never held', () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+      s.sendChunk(chunk(1, 8, 8));
+      expect(ch.sent).toHaveLength(0);
+
+      s.release();
+      const headers = ch.sent
+        .filter((f): f is string => typeof f === 'string')
+        .map((f) => decodeChunkHeader(f)!.idx);
+      expect(headers).toEqual([0, 1]);
+
+      // Never held: a queue that formed behind a full pipe is the pipe's to
+      // drain, so release() leaves it alone.
+      const full = new FakeChannel();
+      full.bufferedAmount = 17 * 1024 * 1024;
+      const s2 = new ChunkSender({ recordingId: 'r1', channel: full as unknown as RTCDataChannel });
+      s2.sendChunk(chunk(0, 0, 8));
+      full.bufferedAmount = 0;
+      s2.release();
+      expect(full.sent).toHaveLength(0);
+      s2.drainQueue();
+      expect(full.sent).toHaveLength(2);
+    });
+
+    it('drain() resolves false at once while held', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      let result: boolean | undefined;
+      void s.drain().then((v) => { result = v; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toBe(false);
+    });
+
+    it('resume() keeps the replay queued while held, and release() sends it', () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      for (let i = 0; i < 3; i++) s.sendChunk(chunk(i, i * 8, 8));
+      s.handleControl({ type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 8 });
+      ch.sent.length = 0;
+
+      s.hold();
+      s.resume(0);
+      expect(ch.sent).toHaveLength(0);
+      expect(s.hasQueuedChunks).toBe(true);
+
+      s.release();
+      const headers = ch.sent
+        .filter((f): f is string => typeof f === 'string')
+        .map((f) => decodeChunkHeader(f)!.idx);
+      expect(headers).toEqual([1, 2]);
+    });
+
+    it('a second hold() restarts the five second wait', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      await vi.advanceTimersByTimeAsync(3000);
+      s.hold();
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(ch.sent).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(RESUME_ANSWER_TIMEOUT_MS);
+      expect(ch.sent).toHaveLength(2);
+    });
+
+    it('release() cancels the hold timer so a subsequent hold does not expire early', async () => {
+      const ch = new FakeChannel();
+      const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+      s.hold();
+      await vi.advanceTimersByTimeAsync(2000);
+      s.release();
+
+      s.hold();
+      s.sendChunk(chunk(0, 0, 8));
+
+      // 3000 ms more reaches the first hold's 5 s mark, but only 3 s of the second hold.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(ch.sent).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(ch.sent).toHaveLength(2);
+    });
   });
 });
 

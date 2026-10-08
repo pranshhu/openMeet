@@ -22,12 +22,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Version comes from the "packageManager" field in package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22        # LTS; satisfies the ">=20.11" engines constraint
           cache: pnpm
@@ -50,6 +50,30 @@ jobs:
       - run: pnpm build
         env:
           NEXT_PUBLIC_API_BASE: https://ci.invalid
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: a secret can be committed anywhere, not just in the
+      # commit that happens to be at the tip.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sast:
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # --error turns a blocking finding into a failed job. The pnpm rules
+      # that this repository's pnpm version predates are silenced in
+      # .semgrepignore at the root.
+      - run: semgrep scan --config p/default --config p/typescript --config p/react --config p/secrets --metrics=off --error
 
   # NOTE: nothing here covers the media paths. getUserMedia, getDisplayMedia
   # and RTCPeerConnection cannot run headless, so recording, screen share and

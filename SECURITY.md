@@ -20,16 +20,19 @@ rather not be.
 
 Worth understanding before deciding whether something is a vulnerability.
 
-**Recording bytes never touch a server.** Each peer records its own local track.
-The guest streams chunks to the host over a WebRTC DataChannel, and the host
-writes them straight to local disk via the File System Access API. There is no
-upload, no object storage, and no server-side copy — by design, and it's also
-why the project costs nothing to run.
+**Recording bytes never touch a server.** Each peer records its own local track;
+during a take the host also records each recorded guest's incoming live call audio
+into the same folder, a copy that starts only once that guest's browser has begun
+recording its own track. The guest streams chunks to the host over a WebRTC
+DataChannel, and the host writes them straight to local disk via the File System
+Access API. There is no upload, no object storage, and no server-side copy — by
+design, and it's also why the project costs nothing to run.
 
 **The server sees metadata only.** The Cloudflare Worker and its Durable Object
 handle REST and WebSocket signaling. The Durable Object is a dumb relay: it
 forwards SDP and ICE between peers and never inspects them. D1 stores
-room, session, participant and recording metadata — never media.
+room, session, participant and recording metadata (one row per take, written
+only by the authenticated host) — never media.
 
 **TURN relay traffic is opaque to the operator.** When symmetric NAT forces a
 relay, the bytes crossing it are SRTP/SCTP-encrypted end to end. A TURN operator

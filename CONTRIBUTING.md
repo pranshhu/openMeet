@@ -70,6 +70,10 @@ pnpm -r test        # the vitest suites for worker, web and protocol
 NEXT_PUBLIC_API_BASE=https://ci.invalid pnpm build
 ```
 
+CI also scans every push and pull request: `gitleaks` over the full history for
+leaked secrets, and `semgrep` for known-bad code patterns. A leak or a blocking
+finding fails the run the same way a red test does.
+
 There is deliberately **no linter**. The `tsconfig` is strict
 (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`,
 `noFallthroughCasesInSwitch`) and catches nearly everything ESLint would, and
@@ -111,7 +115,8 @@ These will bite you if you don't know them. There are more in [`docs/ARCHITECTUR
   the receiver tells control messages from headers.
 - **There are two unrelated ack mechanisms.** Recording acks flow over the
   DataChannel. The WebSocket `recording-ack` message exists in the protocol
-  types but nothing produces or consumes it.
+  types but nothing produces or consumes it; `recording-completed` is likewise
+  kept in the protocol only for older tabs.
 - **`@openmeet/protocol` is consumed as raw TypeScript source**, resolved via
   tsconfig `paths` plus a vitest `alias`. Breaking either breaks every consumer.
 - **Time units differ by field.** Every D1 timestamp is in milliseconds

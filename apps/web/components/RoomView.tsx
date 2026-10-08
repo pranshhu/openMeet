@@ -6,6 +6,7 @@ import { detectBrowserDevice } from '@/lib/browser-guidance';
 import { isFsAccessSupported } from '@/lib/fs-writer';
 import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
+import { holdTakeLock } from '@/lib/take-lock';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -81,7 +82,9 @@ function isPresentLink(): boolean {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
-    startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake,
+    startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
+    resumeRecording, saveRecordingFromCall,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -89,16 +92,27 @@ export function RoomView({ slug }: { slug: string }) {
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
   // the next lobby. Rejoin reloads, so ask before any way out of the page.
+  const unsavedSidecars = !state.sidecarsSaved && (state.syncReportUrl || state.chaptersUrl);
   const unsaved =
     state.phase === 'left' &&
     state.role === 'host' &&
-    !!(state.syncReportUrl || state.chaptersUrl || state.backupBlobUrl || state.wavBackupBlobUrl);
+    !!(unsavedSidecars || state.backupBlobUrl || state.wavBackupBlobUrl);
   useEffect(() => {
     if (!unsaved) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [unsaved]);
+
+  // A second tab in this browser would take the host seat from under a live
+  // take. This tab holds the room's take lock for as long as its take is, so
+  // that tab's lobby can ask first. Resuming or saving an interrupted take
+  // counts from the click: until it ends, that take's crash copy is this tab's
+  // to work on, and another tab's lobby must not list it.
+  const hostTakeLive =
+    state.role === 'host' &&
+    (state.phase === 'recording' || state.phase === 'finalizing' || state.recoveryBusy);
+  useEffect(() => (hostTakeLive ? holdTakeLock(slug) : undefined), [hostTakeLive, slug]);
 
   if (state.phase === 'checking') {
     return <StatusScreen spinner>Checking room…</StatusScreen>;
@@ -140,6 +154,7 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
+        onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream) =>
           void join(stream, name, producer, asCompanion, screenStream)
         }
@@ -151,7 +166,14 @@ export function RoomView({ slug }: { slug: string }) {
   const companionNote = state.companion && state.screenSharing
     ? 'You’re presenting from this device. Your screen appears for everyone once they’re connected.'
     : undefined;
+  // A guest waiting alone has nothing else to do but keep the tab open; say so
+  // while the backup is still only offered.
+  const offeredNote =
+    state.role !== 'host' && (state.backupTransfers ?? []).some((t) => t.status === 'offered')
+      ? 'Your backup is offered to the host as soon as they join. Keep this tab open.'
+      : undefined;
   if (state.phase === 'waiting') {
+    const note = companionNote ?? offeredNote;
     return (
       <WaitingRoom
         role={state.role}
@@ -160,7 +182,7 @@ export function RoomView({ slug }: { slug: string }) {
         onLeave={leave}
         onToggleMic={setMic}
         onToggleCam={setCam}
-        {...(companionNote ? { note: companionNote } : {})}
+        {...(note ? { note } : {})}
       />
     );
   }
@@ -264,8 +286,20 @@ export function RoomView({ slug }: { slug: string }) {
       backupUrl={state.backupBlobUrl}
       wavBackupUrl={state.wavBackupBlobUrl}
       recordingError={state.recordingError ?? state.connectionWarning}
+      micWarning={state.micWarning}
+      resumeOffer={state.resumeOffer}
+      takeNotice={state.takeNotice}
+      onResumeRecording={() => void resumeRecording()}
+      onSaveRecording={() => void saveRecordingFromCall()}
+      recoveryBusy={state.recoveryBusy}
       syncReportUrl={state.syncReportUrl}
+      sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
+      readLoad={readLoad}
+      readTrackHealth={readTrackHealth}
+      lowPower={state.lowPower}
+      unprotectedRecording={state.unprotectedRecording}
+      onSetLowPower={setLowPower}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}
@@ -286,6 +320,11 @@ export function RoomView({ slug }: { slug: string }) {
       onSwitchCamera={switchCamera}
       activeMicId={state.activeMicId}
       activeCamId={state.activeCamId}
+      backupTransfers={state.backupTransfers}
+      onAcceptBackups={() => void acceptBackups()}
+      onDeclineBackups={declineBackups}
+      onDismissBackup={dismissBackup}
+      onStopBackup={stopBackup}
       {...(state.isFallbackMedia !== undefined ? { isFallbackMedia: state.isFallbackMedia } : {})}
     />
   );
