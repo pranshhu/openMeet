@@ -155,8 +155,8 @@ export function RoomView({ slug }: { slug: string }) {
         producer={producer}
         present={present}
         onSendBackups={sendBackups}
-        onJoin={(stream, name, asCompanion, screenStream) =>
-          void join(stream, name, producer, asCompanion, screenStream)
+        onJoin={(stream, name, asCompanion, screenStream, stereo) =>
+          void join(stream, name, producer, asCompanion, screenStream, stereo)
         }
       />
     );

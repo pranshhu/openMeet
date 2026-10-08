@@ -1,6 +1,6 @@
 import { RECORDING_FRAME_RATE, WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import { DEFAULT_QUALITY_ID, presetForTrack } from './quality';
-import { cameraConstraints, micConstraints } from './media';
+import { cameraConstraints, micConstraints, recordedChannels } from './media';
 import { watchMic, type MicWarning } from './mic-watch';
 
 export interface SwitchableMediaOptions {
@@ -8,6 +8,8 @@ export interface SwitchableMediaOptions {
   isRecording?: () => boolean;
   onTrackReplaced?: (kind: 'audio' | 'video', newTrack: MediaStreamTrack, oldTrack: MediaStreamTrack) => void;
   onMicWarning?: (warning: MicWarning | null) => void;
+  /** Two channels when the microphone has them. */
+  stereo?: boolean;
 }
 
 /**
@@ -96,14 +98,6 @@ export class SwitchableMedia {
     this.startVideoPump(rawCamTrack);
 
     // --- Stable Audio ---
-    const micSettings = rawMicTrack?.getSettings?.() ?? {};
-    const channelCount =
-      typeof micSettings.channelCount === 'number' && micSettings.channelCount > 0
-        ? micSettings.channelCount
-        : rawMicTrack
-          ? 1
-          : 2;
-
     // One rate for every microphone and every take. The AAC muxer and the WAV
     // writer lock their rate on the first frame, and a device is free to run at
     // 44.1 kHz or, over Bluetooth, 16 kHz; the source node resamples to this.
@@ -117,7 +111,7 @@ export class SwitchableMedia {
     }
 
     this.destinationNode = this.audioCtx.createMediaStreamDestination();
-    this.destinationNode.channelCount = channelCount;
+    this.destinationNode.channelCount = recordedChannels(rawMicTrack, options.stereo ?? false);
     this.destinationNode.channelCountMode = 'explicit';
 
     if (rawMicTrack) {

@@ -172,6 +172,44 @@ describe('SwitchableMedia', () => {
       expect(mockDestinationNode.channelCount).toBe(1);
     });
 
+    it('records a two-channel mic in mono unless stereo was asked for', () => {
+      mockDestinationNode.channelCount = 0;
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 2 });
+      new SwitchableMedia(createMockStream(mic));
+      expect(mockDestinationNode.channelCount).toBe(1);
+    });
+
+    it('records two channels when stereo was asked for and the mic has two', () => {
+      mockDestinationNode.channelCount = 0;
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 2 });
+      new SwitchableMedia(createMockStream(mic), { stereo: true });
+      expect(mockDestinationNode.channelCount).toBe(2);
+    });
+
+    it('records one channel when stereo was asked for but the mic has one', () => {
+      mockDestinationNode.channelCount = 0;
+      const mic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+      new SwitchableMedia(createMockStream(mic), { stereo: true });
+      expect(mockDestinationNode.channelCount).toBe(1);
+    });
+
+    // The WAV writer and the AAC muxer fix their channel count on the first
+    // frame, so a microphone picked later is mixed to the count set at join.
+    it('keeps the channel count set at join when the mic is switched', async () => {
+      mockDestinationNode.channelCount = 0;
+      const mono = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
+      const stereoMic = createMockTrack('audio', 'mic-2', { sampleRate: 48000, channelCount: 2 });
+      vi.stubGlobal('navigator', {
+        userAgent: 'test-desktop',
+        mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(createMockStream(stereoMic)) },
+      });
+      const sm = new SwitchableMedia(createMockStream(mono), { stereo: true });
+      expect(mockDestinationNode.channelCount).toBe(1);
+
+      await sm.switchMic('mic-2');
+      expect(mockDestinationNode.channelCount).toBe(1);
+    });
+
     it('resumes suspended AudioContext on construction', () => {
       const resume = vi.fn().mockResolvedValue(undefined);
       (globalThis as any).AudioContext = vi.fn().mockImplementation(() => ({

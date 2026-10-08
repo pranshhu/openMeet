@@ -90,6 +90,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   disk estimates follow it.
 - The lobby's size figures (per-hour estimates, bitrate labels, storage and
   folder checks) follow a camera that delivers 50 or 60 fps.
+- A Stereo choice in the lobby for a person with a stereo microphone, remembered
+  in that browser. Without it audio is recorded in mono.
 
 ### Changed
 
@@ -102,6 +104,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   wording; the `endedEarly` flags are unchanged.
 - Each camera backup is encoded at the same bitrate as the file it backs up
   (it was 5 Mbps at every resolution).
+- Audio is recorded in mono by default, which halves the uncompressed master
+  (about 518 MB per hour per person).
 
 ### Fixed
 

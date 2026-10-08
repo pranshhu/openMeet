@@ -30,8 +30,18 @@ function fakeStream(): MediaStream {
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
-function cam720Stream(frameRate = 30, sampleRate = 48000, maxFrameRate?: number): MediaStream {
-  const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate }) };
+function cam720Stream(
+  frameRate = 30,
+  sampleRate = 48000,
+  channelCount?: number,
+  maxFrameRate?: number
+): MediaStream {
+  const audio = {
+    kind: 'audio',
+    enabled: true,
+    stop: vi.fn(),
+    getSettings: () => (channelCount === undefined ? { sampleRate } : { sampleRate, channelCount }),
+  };
   const video = {
     kind: 'video',
     enabled: true,
@@ -131,7 +141,7 @@ describe('Lobby', () => {
       const select = screen.getByLabelText('Recording bitrate');
       expect(select).toHaveValue('max');
       expect(
-        screen.getByRole('option', { name: /^Quality: 1080p · ~5\.6 GB\/hr per person$/ })
+        screen.getByRole('option', { name: `Quality: 1080p · ${formatPerHour(atMax, 1)} per person` })
       ).toBeInTheDocument();
       fireEvent.change(select, { target: { value: 'standard' } });
       await waitFor(() =>
@@ -191,7 +201,9 @@ describe('Lobby', () => {
       ]);
       // Each quality is priced at the remembered level, not at the Standard one.
       expect(
-        screen.getByRole('option', { name: /^Quality: 1080p · ~5\.6 GB\/hr per person$/ })
+        screen.getByRole('option', {
+          name: `Quality: 1080p · ${formatPerHour(atBitrate(presetById('1080p'), 'max'), 1)} per person`,
+        })
       ).toBeInTheDocument();
       fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
       fireEvent.click(screen.getByRole('button', { name: 'Join now' }));
@@ -233,7 +245,7 @@ describe('Lobby', () => {
     expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
     fireEvent.click(screen.getByRole('button', { name: /join/i }));
-    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false));
   });
 
   // On a phone the page is one column in DOM order. With the device pickers
@@ -1145,8 +1157,168 @@ describe('Lobby', () => {
       (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream(30, 44100));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
       const line = await screen.findByText(/Capturing 1280x720/);
-      expect(line.textContent).toMatch(/audio 48kHz\/24-bit uncompressed/);
+      expect(line.textContent).toMatch(/audio 48kHz\/24-bit mono uncompressed/);
     } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  // The control is only offered where it can change the recording: a two-channel
+  // microphone in a browser that captures the uncompressed WAV master.
+  it('offers the audio channel picker only when a stereo microphone and a WAV master are both there', async () => {
+    try {
+      vi.stubGlobal('MediaStreamTrackProcessor', class {});
+      stubDevices(cam720Stream());
+      const plain = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await screen.findByLabelText('Recording quality');
+      expect(screen.queryByLabelText('Audio channels')).toBeNull();
+      plain.unmount();
+
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+      stubDevices(cam720Stream(30, 48000, 2));
+      const noMaster = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await screen.findByLabelText('Recording quality');
+      expect(screen.queryByLabelText('Audio channels')).toBeNull();
+      noMaster.unmount();
+
+      vi.stubGlobal('MediaStreamTrackProcessor', class {});
+      stubDevices(cam720Stream(30, 48000, 2));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const select = await screen.findByLabelText('Audio channels');
+      expect(select).toHaveValue('mono');
+      expect(select.closest('label')?.className).toMatch(/focus-within:ring/);
+      // Full width in the same grid, right after the microphone picker, and a
+      // plain setting rather than a notice.
+      expect(select.closest('label')?.className).toMatch(/sm:col-span-2/);
+      expect(select.closest('label')).not.toHaveAttribute('role');
+      expect(select.closest('label')?.previousElementSibling?.querySelector('select')).toHaveAttribute(
+        'aria-label',
+        'Microphone'
+      );
+    } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  it('remembers the audio channel choice, and does not re-open the microphone to change it', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    try {
+      localStorage.removeItem('om_stereo');
+      stubDevices(cam720Stream(30, 48000, 2));
+      const first = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      fireEvent.change(await screen.findByLabelText('Audio channels'), { target: { value: 'stereo' } });
+      expect(localStorage.getItem('om_stereo')).toBe('1');
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      const second = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByLabelText('Audio channels')).toHaveValue('stereo'));
+      fireEvent.change(screen.getByLabelText('Audio channels'), { target: { value: 'mono' } });
+      expect(localStorage.getItem('om_stereo')).toBe('0');
+      second.unmount();
+
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      expect(await screen.findByLabelText('Audio channels')).toHaveValue('mono');
+    } finally {
+      localStorage.removeItem('om_stereo');
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  // A microphone that cannot feed stereo hides the control; the saved choice
+  // stays for the next one that can.
+  it('hides the audio channel picker when the microphone changes to a mono one, and keeps the choice', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    try {
+      localStorage.removeItem('om_stereo');
+      vi.stubGlobal('navigator', {
+        userAgent: 'test',
+        mediaDevices: {
+          getUserMedia: vi
+            .fn()
+            .mockResolvedValueOnce(cam720Stream(30, 48000, 2))
+            .mockResolvedValueOnce(cam720Stream(30, 48000))
+            .mockResolvedValueOnce(cam720Stream(30, 48000, 2)),
+          enumerateDevices: vi.fn().mockResolvedValue([
+            { kind: 'videoinput', deviceId: 'cam1', label: 'Webcam' },
+            { kind: 'audioinput', deviceId: 'mic1', label: 'Stereo mic' },
+            { kind: 'audioinput', deviceId: 'mic2', label: 'Mono mic' },
+          ]),
+        },
+      });
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      fireEvent.change(await screen.findByLabelText('Audio channels'), { target: { value: 'stereo' } });
+
+      fireEvent.change(screen.getByLabelText('Microphone'), { target: { value: 'mic2' } });
+      await waitFor(() => expect(screen.queryByLabelText('Audio channels')).toBeNull());
+      expect(screen.getByText(/Capturing 1280x720/).textContent).toMatch(/24-bit mono uncompressed/);
+      expect(localStorage.getItem('om_stereo')).toBe('1');
+
+      fireEvent.change(screen.getByLabelText('Microphone'), { target: { value: 'mic1' } });
+      expect(await screen.findByLabelText('Audio channels')).toHaveValue('stereo');
+    } finally {
+      localStorage.removeItem('om_stereo');
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  // Storage can be blocked outright; the lobby still opens, in mono.
+  it('opens in mono when storage cannot be read', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    try {
+      stubDevices(cam720Stream(30, 48000, 2));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      expect(await screen.findByLabelText('Audio channels')).toHaveValue('mono');
+    } finally {
+      getItem.mockRestore();
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  it('sizes the estimate and the caption for the channels the choice records', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    try {
+      localStorage.removeItem('om_stereo');
+      stubDevices(cam720Stream(30, 48000, 2));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const quality = await screen.findByLabelText('Recording quality');
+      expect(quality.textContent).toContain(formatPerHour(presetById('720p'), 1));
+      expect((await screen.findByText(/Capturing 1280x720/)).textContent).toMatch(
+        /audio 48kHz\/24-bit mono uncompressed/
+      );
+
+      fireEvent.change(screen.getByLabelText('Audio channels'), { target: { value: 'stereo' } });
+      expect(screen.getByLabelText('Recording quality').textContent).toContain(
+        formatPerHour(presetById('720p'), 2)
+      );
+      expect(screen.getByText(/Capturing 1280x720/).textContent).toMatch(/24-bit stereo uncompressed/);
+    } finally {
+      localStorage.removeItem('om_stereo');
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  it('hands the audio channel choice to onJoin', async () => {
+    const onJoin = vi.fn();
+    vi.stubGlobal('MediaStreamTrackProcessor', class {});
+    try {
+      localStorage.removeItem('om_stereo');
+      stubDevices(cam720Stream(30, 48000, 2));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      fireEvent.change(await screen.findByLabelText('Audio channels'), { target: { value: 'stereo' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(join);
+
+      await waitFor(() =>
+        expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, true)
+      );
+    } finally {
+      localStorage.removeItem('om_stereo');
       delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
     }
   });
@@ -1431,7 +1603,9 @@ describe('Lobby', () => {
     expect(onJoin).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: 'Alice' } });
     fireEvent.submit(input.closest('form')!);
-    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+    await waitFor(() =>
+      expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false)
+    );
   });
 
   /** A browser where another tab holds this room's take lock. */
@@ -1689,7 +1863,9 @@ describe('Lobby', () => {
       fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
       fireEvent.click(join);
 
-      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      await waitFor(() =>
+        expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false)
+      );
       expect(onSendBackups).toHaveBeenCalledWith([file]);
       expect(onSendBackups.mock.invocationCallOrder[0]!).toBeLessThan(onJoin.mock.invocationCallOrder[0]!);
     } finally {
@@ -1712,7 +1888,9 @@ describe('Lobby', () => {
       await screen.findByRole('button', { name: /^Send to host:/ });
       fireEvent.click(join);
 
-      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      await waitFor(() =>
+        expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false)
+      );
       expect(onSendBackups).not.toHaveBeenCalled();
     } finally {
       findBackupsSpy.mockRestore();
@@ -1738,7 +1916,9 @@ describe('Lobby', () => {
       await waitFor(() => expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull());
 
       fireEvent.click(join);
-      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      await waitFor(() =>
+        expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false)
+      );
       expect(onSendBackups).not.toHaveBeenCalled();
     } finally {
       confirm.mockRestore();
@@ -1898,7 +2078,7 @@ describe('Lobby', () => {
     }
 
     it('offers 24, 25, 29.97 and 30 fps, starting at 30', async () => {
-      gum().mockResolvedValue(cam720Stream(30, undefined, 30));
+      gum().mockResolvedValue(cam720Stream(30, undefined, undefined, 30));
       const picker = await renderWithPicker();
       expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
         'Frame rate: 24 fps',
@@ -1911,7 +2091,7 @@ describe('Lobby', () => {
     });
 
     it('adds 50 and 60 on a camera that reaches them, and asks for the pick', async () => {
-      gum().mockResolvedValue(cam720Stream(30, undefined, 60));
+      gum().mockResolvedValue(cam720Stream(30, undefined, undefined, 60));
       const picker = await renderWithPicker();
       expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
         'Frame rate: 24 fps',
@@ -1929,7 +2109,7 @@ describe('Lobby', () => {
 
     it('shows a remembered rate the camera cannot reach as the best it can do, without a false alarm', async () => {
       localStorage.setItem('om_fps', '60');
-      gum().mockResolvedValue(cam720Stream(30, undefined, 30));
+      gum().mockResolvedValue(cam720Stream(30, undefined, undefined, 30));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
 
       await screen.findByText(/Capturing 1280x720/);
@@ -1942,7 +2122,7 @@ describe('Lobby', () => {
 
     it('measures a shortfall against the rate the picker shows', async () => {
       localStorage.setItem('om_fps', '60');
-      gum().mockResolvedValue(cam720Stream(15, undefined, 30));
+      gum().mockResolvedValue(cam720Stream(15, undefined, undefined, 30));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
 
       expect(
@@ -1952,7 +2132,7 @@ describe('Lobby', () => {
 
     it('states the cost when the camera delivers a high rate', async () => {
       localStorage.setItem('om_fps', '60');
-      gum().mockResolvedValue(cam720Stream(59.94005994, undefined, 60));
+      gum().mockResolvedValue(cam720Stream(59.94005994, undefined, undefined, 60));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
 
       const note = await screen.findByText(
@@ -1965,7 +2145,7 @@ describe('Lobby', () => {
 
     it('follows what the camera delivers, not the pick, for the cost note', async () => {
       localStorage.setItem('om_fps', '60');
-      gum().mockResolvedValue(cam720Stream(30, undefined, 60));
+      gum().mockResolvedValue(cam720Stream(30, undefined, undefined, 60));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
 
       expect(
@@ -2155,7 +2335,7 @@ describe('Lobby', () => {
         expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
         expect(await shown(folderCheck(p).message)).toBeInTheDocument();
         expect(optionTexts('Recording quality')).toEqual([
-          `Quality: 720p · ${formatPerHour(p, 2)} per person`,
+          `Quality: 720p · ${formatPerHour(p, 1)} per person`,
         ]);
         expect(optionTexts('Recording bitrate')[0]).toBe(
           `Bitrate: Standard · up to ${p.videoBps / 1e6} Mbps`
@@ -2170,7 +2350,7 @@ describe('Lobby', () => {
         expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
         expect(await shown(folderCheck(p).message)).toBeInTheDocument();
         expect(optionTexts('Recording quality')).toEqual([
-          `Quality: 720p · ${formatPerHour(p, 2)} per person`,
+          `Quality: 720p · ${formatPerHour(p, 1)} per person`,
         ]);
         expect(optionTexts('Recording bitrate')[0]).toBe(
           `Bitrate: Standard · up to ${p.videoBps / 1e6} Mbps`
@@ -2200,7 +2380,7 @@ describe('Lobby', () => {
         expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
         expect(await shown(folderCheck(p).message)).toBeInTheDocument();
         expect(optionTexts('Recording quality').at(-1)).toBe(
-          `Quality: 1440p · ${formatPerHour(p, 2)} per person`
+          `Quality: 1440p · ${formatPerHour(p, 1)} per person`
         );
         expect(optionTexts('Recording bitrate').at(-1)).toBe(
           `Bitrate: Maximum · up to ${p.videoBps / 1e6} Mbps`

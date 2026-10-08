@@ -8,6 +8,7 @@ import {
   MediaPermissionError,
   RECORDING_CONSTRAINTS,
   deviceConstraints,
+  recordedChannels,
   type DeviceList,
 } from '@/lib/media';
 import { isRecordingSupported } from '@/lib/recorder';
@@ -73,6 +74,7 @@ const EMPTY_DEVICES: DeviceList = { audioInputs: [], videoInputs: [] };
 const QUALITY_KEY = 'om_quality';
 const FRAME_RATE_KEY = 'om_fps';
 const BITRATE_KEY = 'om_bitrate';
+const STEREO_KEY = 'om_stereo';
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -132,7 +134,8 @@ export function Lobby({
     stream: MediaStream,
     displayName: string,
     companion?: boolean,
-    screenStream?: MediaStream
+    screenStream?: MediaStream,
+    stereo?: boolean
   ) => void;
   /** Guest: queue leftover backups for the host, in the call or before it. */
   onSendBackups?: (files: File[]) => void;
@@ -159,6 +162,7 @@ export function Lobby({
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
+  const [stereo, setStereo] = useState(false);
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
@@ -335,6 +339,8 @@ export function Lobby({
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
       setBitrateId(localStorage.getItem(BITRATE_KEY) ?? DEFAULT_BITRATE_ID);
+      // Strictly '1': anything else, including a stored '0', is mono.
+      setStereo(localStorage.getItem(STEREO_KEY) === '1');
     } catch {
       /* private mode — fall back to the default */
     }
@@ -393,6 +399,15 @@ export function Lobby({
       /* private mode — the choice just doesn't persist */
     }
     setBitrateId(id);
+  }
+
+  function changeStereo(on: boolean) {
+    setStereo(on);
+    try {
+      localStorage.setItem(STEREO_KEY, on ? '1' : '0');
+    } catch {
+      /* private mode — the choice just doesn't persist */
+    }
   }
 
   function toggleMic() {
@@ -589,6 +604,12 @@ export function Lobby({
   const rates = supportedFrameRates(stream?.getVideoTracks()[0]);
   const shownFrameRate = rates.includes(frameRate) ? frameRate : rates.at(-1)!;
   const otherFps = deliveredFps !== null && Math.abs(deliveredFps - shownFrameRate) > 0.5 ? deliveredFps : null;
+  // Asked of the microphone that is in the preview, and only offered where it
+  // can change the file: a two-channel mic in a browser that keeps the
+  // uncompressed master. Without either, the choice would change nothing.
+  const mic = stream?.getAudioTracks()[0];
+  const canStereo = isPcmCaptureSupported() && recordedChannels(mic, true) === 2;
+  const channels = recordedChannels(mic, stereo);
   const recordingNotice = !isRecordingSupported()
     ? isHost
       ? 'Recording needs a Chromium browser (Chrome, Edge; Brave works as host only after enabling brave://flags/#file-system-access-api). The live call still works — switch browser to record.'
@@ -690,7 +711,7 @@ export function Lobby({
               chooseBitrate(shownBitrate);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
-              onJoin(stream, name.trim());
+              onJoin(stream, name.trim(), false, undefined, stereo);
             }}
           >
             {nameField}
@@ -931,6 +952,20 @@ export function Lobby({
                   </select>
                 </label>
               )}
+              {canStereo && (
+                <label className={`${picker} sm:col-span-2`}>
+                  <Icon name="mic" size={18} className="shrink-0" />
+                  <select
+                    aria-label="Audio channels"
+                    value={stereo ? 'stereo' : 'mono'}
+                    onChange={(e) => changeStereo(e.target.value === 'stereo')}
+                    className={select}
+                  >
+                    <option value="mono">Audio: Mono · for speech</option>
+                    <option value="stereo">Audio: Stereo · for music</option>
+                  </select>
+                </label>
+              )}
               <label className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
@@ -941,7 +976,7 @@ export function Lobby({
                 >
                   {presets.map((q) => (
                     <option key={q.id} value={q.id}>
-                      {`Quality: ${q.label} · ${formatPerHour(presetAt(atBitrate(q, bitrateId), deliveredFps), 2)} per person`}
+                      {`Quality: ${q.label} · ${formatPerHour(presetAt(atBitrate(q, bitrateId), deliveredFps), channels)} per person`}
                     </option>
                   ))}
                 </select>
@@ -982,7 +1017,9 @@ export function Lobby({
             <p className="mt-2 text-center text-xs text-[#5f6368]">
               Capturing {actual} · audio{' '}
               {/* Only the WAV master is uncompressed; without it audio is the MP4's. */}
-              {isPcmCaptureSupported() ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit uncompressed` : '(compressed)'}
+              {isPcmCaptureSupported()
+                ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit ${channels === 2 ? 'stereo' : 'mono'} uncompressed`
+                : '(compressed)'}
             </p>
           )}
           {otherFps !== null && (
