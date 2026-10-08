@@ -440,7 +440,7 @@ unfinished send to each new connection to the host.
   "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
-  `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
+  `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
   button copies the invite link instead and the summary stays. The summary's file list leaves out a
   guest WAV that was never opened, host files a host companion never opened, empty guest screen
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
@@ -449,8 +449,9 @@ unfinished send to each new connection to the host.
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only".
-- `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
-  (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
+- `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
+  (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
+  only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
   `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
   A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
   WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
@@ -536,7 +537,8 @@ unfinished send to each new connection to the host.
 2. **WebRTC signaling** — perfect negotiation over WS relay; guest creates DataChannel, host
    `ondatachannel`; ICE trickled in parallel; DO never inspects SDP.
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
-   Host click → `startHostRecording` (one folder prompt, opens `host_*.mp4` + `host_*.wav` +
+   Host click → the one folder prompt, then a three-second countdown (`recordWithCountdown`) →
+   `startHostRecording` (opens `host_*.mp4` + `host_*.wav` +
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
    auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
    nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`

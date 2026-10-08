@@ -126,6 +126,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The recording folder is asked for with write access when it is chosen, so the
   browser does not ask again when the first file is saved; and if the browser
   later refuses to write to that folder, the next Record asks for a folder again.
+- After **Record** is pressed the take starts three seconds later, and Record
+  cannot be pressed again meanwhile. The recording folder is asked for first.
 
 ### Fixed
 

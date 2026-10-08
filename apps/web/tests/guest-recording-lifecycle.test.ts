@@ -4882,6 +4882,37 @@ describe('resuming a crashed take from inside the call', () => {
     });
   });
 
+  it('drops the countdown’s take when a resume began while it counted', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    guestChannel('recording#R1');
+    await vi.waitFor(() => expect(result.current.state.resumeOffer?.canResume).toBe(true));
+    vi.mocked(startHostRecording).mockClear();
+    vi.mocked(pickRecordingDirectory).mockResolvedValue(fakeDirectory().dir as never);
+    vi.mocked(resumeHostRecording).mockResolvedValue(resumed);
+
+    vi.useFakeTimers();
+    try {
+      let counting = Promise.resolve();
+      await act(async () => {
+        counting = result.current.recordWithCountdown();
+        await vi.advanceTimersByTimeAsync(1000);
+        await result.current.resumeRecording();
+        await vi.advanceTimersByTimeAsync(5000);
+        await counting;
+      });
+      expect(result.current.state.phase).toBe('recording');
+      expect(result.current.state.countdownEndsAt).toBeNull();
+      expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
   it('says in the take’s own line when the crash copy stops on a resumed take', async () => {
     const { result } = await hostAfterReload();
     const journal = takeJournal();
@@ -5681,5 +5712,165 @@ describe('the host and a guest set as not recorded', () => {
     await act(async () => {
       await result.current.endRecording();
     });
+  });
+});
+
+describe('the countdown before a take', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    vi.mocked(findTakeJournals).mockResolvedValue([]);
+    vi.mocked(pickRecordingDirectory).mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const hostStream = {
+    getTracks: () => [],
+    getAudioTracks: () => [{ kind: 'audio' }],
+    getVideoTracks: () => [{ kind: 'video' }],
+  } as unknown as MediaStream;
+
+  /** A host in a room with one guest, nothing recording, and the folder the picker will hand back. */
+  async function hostInCall() {
+    const folder = fakeDirectory().dir;
+    vi.mocked(pickRecordingDirectory).mockResolvedValue(folder as never);
+    const { result, unmount } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(hostStream, 'Host Hana');
+    });
+    await act(async () => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-bob', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+    return { result, unmount, folder };
+  }
+
+  /**
+   * Presses Record and lets `ms` of the countdown pass. The promise is handed
+   * back inside an object: returned bare, an async function would wait for it.
+   */
+  async function pressRecord(result: { current: ReturnType<typeof useRoom> }, ms: number) {
+    let done = Promise.resolve();
+    await act(async () => {
+      done = result.current.recordWithCountdown();
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+    return { done };
+  }
+
+  it('starts the take when three seconds have been counted, in the folder chosen at the click', async () => {
+    const { result, folder } = await hostInCall();
+    vi.useFakeTimers();
+    const { done } = await pressRecord(result, 2999);
+    expect(vi.mocked(pickRecordingDirectory)).toHaveBeenCalledTimes(1);
+    expect(result.current.state.countdownEndsAt).toBe(Date.now() + 1);
+    expect(result.current.state.phase).not.toBe('recording');
+    expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+    });
+    expect(vi.mocked(startHostRecording)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startHostRecording).mock.calls[0]![0].dir).toBe(folder);
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.countdownEndsAt).toBeNull();
+
+    vi.useRealTimers();
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('counts nothing down when the folder prompt is dismissed, and says so when it fails', async () => {
+    const { result } = await hostInCall();
+    vi.mocked(pickRecordingDirectory).mockRejectedValueOnce(
+      Object.assign(new Error('dismissed'), { name: 'AbortError' })
+    );
+    await act(async () => {
+      await result.current.recordWithCountdown();
+    });
+    expect(result.current.state.countdownEndsAt).toBeNull();
+    expect(result.current.state.recordingError).toBeNull();
+
+    // The press before is over, so this one is a press of its own.
+    vi.mocked(pickRecordingDirectory).mockRejectedValueOnce(new Error('no picker'));
+    await act(async () => {
+      await result.current.recordWithCountdown();
+    });
+    expect(result.current.state.countdownEndsAt).toBeNull();
+    expect(result.current.state.recordingError).toBe('Recording failed: no picker');
+    expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
+  });
+
+  it('starts one take however often Record is pressed while it counts, and asks for the folder once a session', async () => {
+    const { result, folder } = await hostInCall();
+    vi.useFakeTimers();
+    const first = await pressRecord(result, 1000);
+    const second = await pressRecord(result, 0);
+    // The second press did not start the count again.
+    expect(result.current.state.countdownEndsAt).toBe(Date.now() + 2000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+      await Promise.all([first.done, second.done]);
+    });
+    expect(vi.mocked(startHostRecording)).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    act(() => {
+      result.current.newTake();
+    });
+    vi.useFakeTimers();
+    const next = await pressRecord(result, 3000);
+    await act(async () => {
+      await next.done;
+    });
+    expect(vi.mocked(pickRecordingDirectory)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startHostRecording)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startHostRecording).mock.calls[1]![0].dir).toBe(folder);
+
+    vi.useRealTimers();
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('takes its timer along when the page goes away', async () => {
+    const { result, unmount } = await hostInCall();
+    vi.useFakeTimers();
+    await pressRecord(result, 1000);
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
+  });
+
+  // Pins what already holds: release() clears the peer, and a take needs one.
+  it('starts no take when the host leaves while it counts', async () => {
+    const { result } = await hostInCall();
+    vi.useFakeTimers();
+    const { done } = await pressRecord(result, 1000);
+    await act(async () => {
+      await result.current.leave();
+      await vi.advanceTimersByTimeAsync(5000);
+      await done;
+    });
+    expect(result.current.state.phase).toBe('left');
+    expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
   });
 });

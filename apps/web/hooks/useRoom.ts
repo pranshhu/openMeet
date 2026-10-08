@@ -5,6 +5,7 @@ import {
   DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
+  RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
@@ -238,6 +239,8 @@ export interface RoomState {
   takeNotice: string | null;
   /** A Resume or a Save of the interrupted take is running: its buttons wait, and this tab holds the take lock. */
   recoveryBusy: boolean;
+  /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
+  countdownEndsAt: number | null;
 }
 
 /** One reading of how this device is coping with the take it is recording. */
@@ -597,6 +600,7 @@ export function useRoom(slug: string) {
     resumeOffer: null,
     takeNotice: null,
     recoveryBusy: false,
+    countdownEndsAt: null,
   });
   // Peer ids whose camera recording channel has arrived for the take in
   // progress, or whose channels the resume that continued it bound.
@@ -688,6 +692,12 @@ export function useRoom(slug: string) {
   // warning, even one that later cleared — means its backup may hold the only
   // complete copy, so it must not be marked finalized. Reset as a take starts.
   const takeTroubleRef = useRef(false);
+  // A Record click, from its first line until its take has started or been
+  // dropped: a press while the folder prompt or the countdown is up is the
+  // same press again.
+  const startingRef = useRef(false);
+  // The countdown's timer, so a page that goes away takes it along.
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sendPresence = useCallback(() => {
     signalRef.current?.send({
@@ -2443,6 +2453,35 @@ export function useRoom(slug: string) {
     }
   }, [beginGuestRecording, slug]);
 
+  /**
+   * The Record click. The folder is chosen first, while the click is recent;
+   * then the seconds are counted down; only then does the take start.
+   */
+  const recordWithCountdown = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    const held = recordingRef.current;
+    try {
+      if (!dirRef.current) dirRef.current = await pickRecordingDirectory();
+      const ms = RECORD_COUNTDOWN_S * 1000;
+      const endsAt = Date.now() + ms;
+      setState((s) => ({ ...s, countdownEndsAt: endsAt }));
+      await new Promise<void>((resolve) => {
+        countdownTimerRef.current = setTimeout(resolve, ms);
+      });
+      setState((s) => ({ ...s, countdownEndsAt: null }));
+      // A take that took the room while this one counted, a resume, keeps it.
+      if (recordingRef.current !== held) return;
+      await startRecording();
+    } catch (e) {
+      // Dismissing the folder prompt is a normal outcome, not a failure.
+      if ((e as { name?: string })?.name === 'AbortError') return;
+      setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
+    } finally {
+      startingRef.current = false;
+    }
+  }, [startRecording]);
+
   const endRecording = useCallback(
     async (opts?: { from?: 'recording-stop' | 'leave'; internal?: boolean } | boolean) => {
       const isInternal =
@@ -2754,6 +2793,7 @@ export function useRoom(slug: string) {
 
   useEffect(() => {
     return () => {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       // Same reason as pagehide: never unmount holding an open writer.
       for (const b of backupSendsRef.current) b.cancel();
       void backupIntakeRef.current?.close();
@@ -2789,6 +2829,7 @@ export function useRoom(slug: string) {
     setPeerRecorded,
     toggleScreenShare,
     startRecording,
+    recordWithCountdown,
     resumeRecording,
     saveRecordingFromCall,
     endRecording,

@@ -115,7 +115,7 @@ kept saying "Recording".
 
 | # | Test | How | Expect | ✅ | Notes |
 |---|---|---|---|:--:|---|
-| 4.1 | Second take | After a take, click **Record another take** | Recording starts at once, with **no** second folder prompt | ☐ | |
+| 4.1 | Second take | After a take, click **Record another take** | Record is greyed out for three seconds and recording starts, with **no** second folder prompt | ☐ | |
 | 4.2 | Take 2 filenames | Look at the folder | `*_take2.*`; take 1's files untouched | ☐ | |
 | 4.3 | Guest is in take 2 | Check `guest_*_take2.mp4` | Exists and plays. *(This silently failed once — the guest sat out every take after the first)* | ☐ | |
 | 4.4 | Summary survives | After ending take 2 | Summary still lists both takes with durations | ☐ | |

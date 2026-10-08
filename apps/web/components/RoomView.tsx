@@ -86,7 +86,7 @@ function isPresentLink(): boolean {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall,
   } = useRoom(slug);
@@ -303,6 +303,7 @@ export function RoomView({ slug }: { slug: string }) {
       onResumeRecording={() => void resumeRecording()}
       onSaveRecording={() => void saveRecordingFromCall()}
       recoveryBusy={state.recoveryBusy}
+      countdownEndsAt={state.countdownEndsAt}
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
@@ -321,7 +322,7 @@ export function RoomView({ slug }: { slug: string }) {
       onNewTake={newTake}
       onDiscardTake={discardTake}
       onOpenMediaBoard={openMediaBoard}
-      onRecord={() => void startRecording()}
+      onRecord={() => void recordWithCountdown()}
       onEnd={() => void endRecording()}
       onLeave={leave}
       onSendChat={sendChat}

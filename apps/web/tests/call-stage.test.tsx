@@ -2354,3 +2354,37 @@ describe('CallStage: who is recorded', () => {
     expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
   });
 });
+
+describe('countdown before a take', () => {
+  it('keeps Record from being pressed again while it counts', () => {
+    const onRecord = vi.fn();
+    const { rerender } = render(
+      <CallStage {...baseProps} onRecord={onRecord} countdownEndsAt={Date.now() + 3000} />
+    );
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    expect(record).toBeDisabled();
+    fireEvent.click(record);
+    expect(onRecord).not.toHaveBeenCalled();
+
+    rerender(<CallStage {...baseProps} onRecord={onRecord} countdownEndsAt={null} />);
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
+  });
+
+  // Who is recorded is still a decision until the take starts, so the countdown
+  // greys out Record alone; the arrow beside it stays usable.
+  it('leaves the who-is-recorded arrow usable while it counts', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }]}
+        onSetPeerRecorded={vi.fn()}
+        countdownEndsAt={Date.now() + 3000}
+      />
+    );
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toBeEnabled();
+    fireEvent.click(arrow);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+  });
+});

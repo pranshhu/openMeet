@@ -136,6 +136,7 @@ export function CallStage({
   recoveryBusy = false,
   notRecorded,
   onSetPeerRecorded,
+  countdownEndsAt = null,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -227,6 +228,8 @@ export function CallStage({
   notRecorded?: boolean;
   /** Host: choose whether one guest is recorded in the takes that follow. */
   onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
+  /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
+  countdownEndsAt?: number | null;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -1185,7 +1188,7 @@ export function CallStage({
                     text="Record"
                     label="Start recording"
                     variant="record"
-                    disabled={recoveryBusy}
+                    disabled={recoveryBusy || countdownEndsAt !== null}
                     onClick={phase === 'done' ? recordNextTake : handleRecord}
                   />
                   {/* Not while an interrupted take can still be resumed or saved: the
