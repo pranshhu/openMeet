@@ -5277,23 +5277,37 @@ describe('a guest set as not recorded', () => {
     expect(result.current.state.remotePeers).toBe(before);
   });
 
-  it('keeps a capture that already started when the setting arrives mid-take', async () => {
+  // The Room refuses the setting during a take, but it has lost that flag after
+  // a host reload, while this browser may still be capturing the interrupted take.
+  it('ends a capture that is already running when the setting arrives', async () => {
     const result = await joinGuest();
     await hostStartsTake();
     expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
     expect(result.current.state.phase).toBe('recording');
 
-    act(() => {
+    await act(async () => {
       emitSignal('peer-recorded', peerRecorded('p-guest', false));
     });
 
     expect(result.current.state.notRecorded).toBe(true);
-    expect(result.current.state.phase).toBe('recording');
+    expect(endGuestRecordingCalled).toBe(true);
+    expect(result.current.state.phase).toBe('done');
+  });
+
+  it('leaves a running capture alone when the setting names someone else or says recorded', async () => {
+    const result = await joinGuest();
+    await hostStartsTake();
+
+    await act(async () => {
+      emitSignal('peer-recorded', peerRecorded('p-other', false));
+      emitSignal('peer-recorded', peerRecorded('p-guest', true));
+    });
+
     expect(endGuestRecordingCalled).toBe(false);
+    expect(result.current.state.phase).toBe('recording');
 
     await stopTake();
     expect(endGuestRecordingCalled).toBe(true);
-    expect(result.current.state.phase).toBe('done');
   });
 });
 

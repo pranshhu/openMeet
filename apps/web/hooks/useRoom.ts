@@ -1692,6 +1692,15 @@ export function useRoom(slug: string) {
         if (m.peerId === myPeerIdRef.current) {
           notRecordedRef.current = notRecorded;
           setState((s) => ({ ...s, notRecorded }));
+          // The Room lets the setting through after a host reload, while this
+          // browser may still be capturing the interrupted take. This screen
+          // says "not recorded" from here on, so that capture ends here too,
+          // the way the host's stop ends it. What it holds so far is kept.
+          if (notRecorded && roleRef.current === 'guest' && recordingRef.current) {
+            void endRecordingRef.current({ from: 'recording-stop' }).catch((e: unknown) =>
+              setState((s) => ({ ...s, phase: 'done', recordingError: recordingErrorMessage(e) }))
+            );
+          }
           return;
         }
         // The host's check reads this ref when a channel arrives; the effect that
