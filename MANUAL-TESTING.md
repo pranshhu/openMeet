@@ -192,6 +192,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.19 | 50 / 60 fps | On a camera that offers it, pick 1080p and 60 fps, record 30 s, `ffprobe` the MP4 and open it in an editor | The lobby showed the cost note; `avg_frame_rate` is about 60 and the video bit rate is well above a 30 fps take's (about 1.5 times where the encoder uses the real frame rate, about 3 times on Linux); it plays and scrubs. A camera capped at 30 lists no 50 or 60 | ☐ | |
 | 8.20 | Do not record | As host with two guests, open the arrow beside **Record**, untick one guest, record 30 s, End & save | That guest reads "The host has set you as not recorded…"; everyone else reads "<name> is not being recorded."; the folder has no file and no call copy from that guest, and their chat lines are not in `chat_*.txt`; their browser offers no backup | ☐ | |
 | 8.21 | Do not record, after a host reload | Record with two guests, reload the host tab mid-take, join again | While "Recording was interrupted" is shown there is **no** arrow beside Record; it returns after **Resume recording** and End & save (or after **Save what was recorded**) | ☐ | |
+| 8.22 | Media board loop | Load a clip a few seconds long, press **Loop** under it, fire it, wait three times its length, then click the pad. Fire it again and press **Loop** off while it plays | It repeats and stays lit until the click, and the guest hears it repeat; with Loop off it runs to its end and stops. During a recording, one marker per fire | ☐ | |
 
 ## 9 — Deploy
 

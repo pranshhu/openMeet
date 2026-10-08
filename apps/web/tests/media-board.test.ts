@@ -8,7 +8,7 @@ import { MediaBoard } from '@/lib/media-board';
 function fakeCtx() {
   const destTrack = { kind: 'audio', id: 'mixed' } as MediaStreamTrack;
   const started: string[] = [];
-  const sources: { onended: (() => void) | null }[] = [];
+  const sources: { onended: (() => void) | null; loop: boolean }[] = [];
   const dest = { stream: { getAudioTracks: () => [destTrack] } };
   const ctx = {
     started,
@@ -19,6 +19,7 @@ function fakeCtx() {
     createBufferSource: () => {
       const node = {
         buffer: null as AudioBuffer | null,
+        loop: false,
         onended: null as (() => void) | null,
         connect: vi.fn(),
         start: () => started.push('start'),
@@ -135,6 +136,29 @@ describe('MediaBoard', () => {
     board.play(pad.id);
     board.stop(pad.id);
     expect(ended).toHaveLength(2);
+  });
+
+  it('plays a pad set to loop as a loop, and any other pad once', async () => {
+    const { board, ctx } = mkBoard();
+    const bed = await board.load(file('bed.wav'));
+    const sting = await board.load(file('sting.wav'));
+    board.setLoop(bed.id, true);
+    expect(board.pads.find((p) => p.id === bed.id)?.loop).toBe(true);
+
+    board.play(bed.id);
+    board.play(sting.id);
+    expect(ctx.sources[0]!.loop).toBe(true);
+    expect(ctx.sources[1]!.loop).toBe(false);
+  });
+
+  it('turns looping on and off for a pad that is already playing', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.play(pad.id);
+    board.setLoop(pad.id, true);
+    expect(ctx.sources[0]!.loop).toBe(true);
+    board.setLoop(pad.id, false);
+    expect(ctx.sources[0]!.loop).toBe(false);
   });
 
   it('stops everything on close', async () => {

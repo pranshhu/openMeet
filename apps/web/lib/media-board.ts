@@ -20,6 +20,8 @@ export interface Pad {
   id: string;
   name: string;
   durationMs: number;
+  /** Starts over each time it reaches its end, until it is stopped. */
+  loop?: boolean;
 }
 
 type Ctor = new (options?: AudioContextOptions) => AudioContext;
@@ -68,6 +70,7 @@ export class MediaBoard {
     this.stop(id);
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
+    src.loop = this._pads.find((p) => p.id === id)?.loop ?? false;
     src.connect(this.dest);
     // Monitor locally too, or the host can't hear what they just fired.
     src.connect(this.ctx.destination);
@@ -86,6 +89,13 @@ export class MediaBoard {
       /* already finished */
     }
     this.ended(id);
+  }
+
+  /** A pad that is playing changes at once: turned off, it runs to its end and stops. */
+  setLoop(id: string, loop: boolean): void {
+    this._pads = this._pads.map((p) => (p.id === id ? { ...p, loop } : p));
+    const src = this.playing.get(id);
+    if (src) src.loop = loop;
   }
 
   isPlaying(id: string): boolean {

@@ -52,6 +52,12 @@ export function MediaBoardPanel({
     refresh();
   }
 
+  function toggleLoop(pad: Pad) {
+    if (!board) return;
+    board.setLoop(pad.id, !pad.loop);
+    setPads([...board.pads]);
+  }
+
   // The control bar sits below the stage, so the bottom offset only has to
   // clear the self view / peer PiP in the stage's bottom-right corner:
   // bottom-24 on a phone, sm:bottom-40 for the larger desktop PiP.
@@ -87,7 +93,7 @@ export function MediaBoardPanel({
           audio stays on your computer.
         </p>
       ) : (
-        <ul className="grid grid-cols-2 gap-2">
+        <ul className="-m-1 grid max-h-[40dvh] grid-cols-2 gap-2 overflow-y-auto p-1">
           {pads.map((pad) => {
             const playing = board?.isPlaying(pad.id) ?? false;
             return (
@@ -106,6 +112,21 @@ export function MediaBoardPanel({
                     {(pad.durationMs / 1000).toFixed(1)}s
                   </span>
                 </button>
+                {/* 44px to tap on a phone. Lit white, as an active control-bar button is. */}
+                <div className="mt-1 flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleLoop(pad)}
+                    aria-pressed={!!pad.loop}
+                    aria-label={`Loop ${pad.name}`}
+                    title="Repeat until stopped"
+                    className={`min-h-11 rounded-md px-3 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-0 sm:py-1 ${
+                      pad.loop ? 'bg-white text-[#202124]' : 'bg-white/10 text-white/70 hover:bg-white/15'
+                    }`}
+                  >
+                    Loop
+                  </button>
+                </div>
               </li>
             );
           })}
