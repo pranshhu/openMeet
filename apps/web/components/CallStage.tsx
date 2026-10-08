@@ -123,6 +123,8 @@ export function CallStage({
   readTrackHealth,
   lowPower = false,
   onSetLowPower,
+  incomingVideoOff = false,
+  onSetIncomingVideoOff,
   unprotectedRecording,
   backupTransfers,
   onAcceptBackups,
@@ -205,6 +207,9 @@ export function CallStage({
   /** This device is sending everyone a smaller live picture to spare its processor. */
   lowPower?: boolean;
   onSetLowPower?: (on: boolean) => void;
+  /** This device has stopped taking everyone else's video; it still hears the call. */
+  incomingVideoOff?: boolean;
+  onSetIncomingVideoOff?: (off: boolean) => void;
   /** The running take has no crash copy in this browser, so say so. */
   unprotectedRecording?: boolean;
   /** Returned backups: what the guests are sending back, and the host's answer. */
@@ -500,7 +505,7 @@ export function CallStage({
         stream: remoteStream,
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
-        camOff: firstRemotePresence ? !firstRemotePresence.camOn : false,
+        camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
         ...(firstRemotePresence ? { presence: <PresenceBadge {...firstRemotePresence} /> } : {}),
       }
     : null;
@@ -839,7 +844,7 @@ export function CallStage({
                   stream: r.stream,
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
-                  camOff: presence ? !presence.camOn : !r.stream,
+                  camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
                   ...(presence ? { presence: <PresenceBadge {...presence} /> } : {}),
                 };
               })}
@@ -984,6 +989,21 @@ export function CallStage({
                         role="menu"
                         className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-30 min-w-64 max-w-[calc(100vw-2rem)] max-h-60 overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
                       >
+                        {onSetIncomingVideoOff && (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={incomingVideoOff}
+                            onClick={() => {
+                              setCamMenuOpen(false);
+                              onSetIncomingVideoOff(!incomingVideoOff);
+                            }}
+                            className="mb-1 flex w-full items-center justify-between gap-2 rounded-lg border-b border-white/10 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                          >
+                            <span>Stop incoming video</span>
+                            {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                          </button>
+                        )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>

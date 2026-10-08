@@ -111,6 +111,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- **Stop incoming video**, in the call's camera menu, for a weak connection: the
+  other participants stop sending you their camera and shared screen. You still
+  hear everyone, they still see you, and no recording is affected.
 
 ### Changed
 

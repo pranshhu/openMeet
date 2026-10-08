@@ -2354,3 +2354,51 @@ describe('CallStage: who is recorded', () => {
     expect(screen.queryByRole('menu', { name: 'Who is recorded' })).toBeNull();
   });
 });
+
+describe('CallStage: stop incoming video', () => {
+  it('offers it in the camera menu, ticked while it is on, and asks for the other state', () => {
+    const spy = vi.fn();
+    const { rerender } = render(<CallStage {...baseProps} onSetIncomingVideoOff={spy} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    const item = screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' });
+    expect(item).toHaveAttribute('aria-checked', 'false');
+    // First in the menu, above the cameras: a phone's list can be longer than the menu.
+    expect(screen.getByRole('menu').firstElementChild).toBe(item);
+    fireEvent.click(item);
+    expect(spy).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByRole('menuitemcheckbox', { name: 'Stop incoming video' })).toBeNull();
+
+    rerender(<CallStage {...baseProps} incomingVideoOff onSetIncomingVideoOff={spy} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    const ticked = screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' });
+    expect(ticked).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(ticked);
+    expect(spy).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows every other person as their initial while it is on, with the name tag kept', () => {
+    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    const carol = { id: 'stream-carol' } as unknown as MediaStream;
+    const props = {
+      ...baseProps,
+      remoteStream: bob,
+      remotePeers: [
+        { peerId: 'p-bob', name: 'Bob', stream: bob, presence: { micOn: true, camOn: true, screenSharing: false } },
+        { peerId: 'p-carol', name: 'Carol', stream: carol, presence: { micOn: true, camOn: true, screenSharing: false } },
+      ],
+    };
+    const { container, rerender } = render(<CallStage {...props} />);
+    const tile = (s: MediaStream) =>
+      Array.from(container.querySelectorAll('video')).find((v) => (v as { srcObject?: unknown }).srcObject === s)!;
+
+    expect(tile(bob)).toHaveClass('opacity-100');
+    expect(tile(carol)).toHaveClass('opacity-100');
+
+    rerender(<CallStage {...props} incomingVideoOff />);
+    expect(tile(bob)).toHaveClass('opacity-0');
+    expect(tile(carol)).toHaveClass('opacity-0');
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Carol')).toBeInTheDocument();
+  });
+});

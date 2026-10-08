@@ -485,6 +485,36 @@ describe('recording', () => {
     }
   });
 
+  it('passes the incoming-video switch and its state to the call', () => {
+    Object.assign(state, {
+      phase: 'in-call',
+      role: 'guest',
+      peerRecording: false,
+      incomingVideoOff: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    hook.setIncomingVideoOff = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    const item = screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' });
+    expect(item).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(item);
+    expect(hook.setIncomingVideoOff).toHaveBeenCalledWith(false);
+  });
+
   // The room moved this viewer out of the take. The status bar says so, and it
   // must not also promise that the viewer will be captured.
   it('tells a guest the host set as not recorded what is left out', () => {

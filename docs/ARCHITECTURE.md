@@ -287,6 +287,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   makes `sendEncoding` send a quarter-size camera picture at the floor bitrate and a shared screen
   at 4 fps on every connection, leaves every recorder alone, and stays on until turned off.
   Switching the mode starts the readings over, and while it is on only lost audio counts.
+  The camera menu's **Stop incoming video** (`useRoom().setIncomingVideoOff`,
+  `state.incomingVideoOff`) is the other mode a tab keeps for itself: every connection stops
+  taking the other side's video, and `CallStage` shows the other people as initials (`camOff`)
+  while it is on. The call's sound, what this tab sends and every recorder are left alone.
   `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
@@ -825,3 +829,9 @@ unfinished send to each new connection to the host.
   else leaves and the tab shows "Everyone else left", there is no Stop presenting on
   screen; on a computer the clip is heard until someone joins and the call is back, or
   until Leave.
+- **Nobody is told that a participant has stopped incoming video.** The others still see
+  that person's camera and get no sign that their own picture, or a screen they present, is
+  not being watched. The choice is not remembered: a reload or a rejoin starts with video
+  on. A producer and a Present-only device have no camera menu and so no such control.
+- **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
+  live budget by everyone in the room, including a person who has stopped incoming video.
