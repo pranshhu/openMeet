@@ -58,6 +58,12 @@ export function MediaBoardPanel({
     setPads([...board.pads]);
   }
 
+  function toggleFade(pad: Pad) {
+    if (!board) return;
+    board.setFade(pad.id, !pad.fade);
+    setPads([...board.pads]);
+  }
+
   // The control bar sits below the stage, so the bottom offset only has to
   // clear the self view / peer PiP in the stage's bottom-right corner:
   // bottom-24 on a phone, sm:bottom-40 for the larger desktop PiP.
@@ -125,6 +131,18 @@ export function MediaBoardPanel({
                     }`}
                   >
                     Loop
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleFade(pad)}
+                    aria-pressed={!!pad.fade}
+                    aria-label={`Fade ${pad.name}`}
+                    title="Fade in when fired, fade out when stopped"
+                    className={`min-h-11 rounded-md px-3 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-0 sm:py-1 ${
+                      pad.fade ? 'bg-white text-[#202124]' : 'bg-white/10 text-white/70 hover:bg-white/15'
+                    }`}
+                  >
+                    Fade
                   </button>
                 </div>
               </li>

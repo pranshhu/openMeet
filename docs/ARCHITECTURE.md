@@ -493,7 +493,9 @@ unfinished send to each new connection to the host.
   take already recording when the board is first opened keeps a mic-only MP4 (a running
   `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
   board says so for that take. A pad set to loop (`setLoop`) repeats until it is stopped, and
-  the switch reaches a pad that is already playing.
+  the switch reaches a pad that is already playing. Each pad plays through a gain node of its
+  own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
+  when stopped, counts as playing until it is silent, and is cut by a second stop.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can

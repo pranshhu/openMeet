@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MediaBoard } from '@/lib/media-board';
+import { MediaBoard, PAD_FADE_S } from '@/lib/media-board';
 
 /**
  * The load-bearing property: the mic and the pads meet in ONE output track,
@@ -10,10 +10,34 @@ function fakeCtx() {
   const started: string[] = [];
   const sources: { onended: (() => void) | null; loop: boolean }[] = [];
   const dest = { stream: { getAudioTracks: () => [destTrack] } };
+  const gains: {
+    gain: {
+      value: number;
+      setValueAtTime: ReturnType<typeof vi.fn>;
+      linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+      cancelScheduledValues: ReturnType<typeof vi.fn>;
+    };
+    connect: ReturnType<typeof vi.fn>;
+  }[] = [];
   const ctx = {
     started,
     sources,
+    gains,
     dest,
+    currentTime: 10,
+    createGain: () => {
+      const node = {
+        gain: {
+          value: 1,
+          setValueAtTime: vi.fn(),
+          linearRampToValueAtTime: vi.fn(),
+          cancelScheduledValues: vi.fn(),
+        },
+        connect: vi.fn(),
+      };
+      gains.push(node);
+      return node;
+    },
     createMediaStreamDestination: () => dest,
     createMediaStreamSource: vi.fn(() => ({ connect: vi.fn() })),
     createBufferSource: () => {
@@ -23,7 +47,8 @@ function fakeCtx() {
         onended: null as (() => void) | null,
         connect: vi.fn(),
         start: () => started.push('start'),
-        stop: () => started.push('stop'),
+        // A stop with a time is one that waits for a fade.
+        stop: (when?: number) => started.push(when === undefined ? 'stop' : `stop@${when}`),
       };
       sources.push(node);
       return node;
@@ -102,8 +127,10 @@ describe('MediaBoard', () => {
     const pad = await board.load(file('a.wav'));
     board.play(pad.id);
     const srcNode = ctx.sources[0] as any;
-    expect(srcNode.connect).toHaveBeenCalledWith(ctx.dest);
-    expect(srcNode.connect).toHaveBeenCalledWith(ctx.destination);
+    const gainNode = ctx.gains[0]!;
+    expect(srcNode.connect).toHaveBeenCalledWith(gainNode);
+    expect(gainNode.connect).toHaveBeenCalledWith(ctx.dest);
+    expect(gainNode.connect).toHaveBeenCalledWith(ctx.destination);
   });
 
   it('stop is a no-op for a pad that is not playing', async () => {
@@ -159,6 +186,98 @@ describe('MediaBoard', () => {
     expect(ctx.sources[0]!.loop).toBe(true);
     board.setLoop(pad.id, false);
     expect(ctx.sources[0]!.loop).toBe(false);
+  });
+
+  it('brings a fading pad in from silence, and any other pad in at once', async () => {
+    const { board, ctx } = mkBoard();
+    const bed = await board.load(file('bed.wav'));
+    const sting = await board.load(file('sting.wav'));
+    board.setFade(bed.id, true);
+    expect(board.pads.find((p) => p.id === bed.id)?.fade).toBe(true);
+
+    board.play(bed.id);
+    board.play(sting.id);
+    expect(ctx.gains[0]!.gain.setValueAtTime).toHaveBeenCalledWith(0, 10);
+    expect(ctx.gains[0]!.gain.linearRampToValueAtTime).toHaveBeenCalledWith(1, 10 + PAD_FADE_S);
+    expect(ctx.gains[1]!.gain.setValueAtTime).not.toHaveBeenCalled();
+    expect(ctx.gains[1]!.gain.linearRampToValueAtTime).not.toHaveBeenCalled();
+  });
+
+  it('fades a fading pad out when stopped, and counts it as playing until it is silent', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.setFade(pad.id, true);
+    const ended: string[] = [];
+    board.onPadEnded((id) => ended.push(id));
+    board.play(pad.id);
+    ctx.gains[0]!.gain.value = 0.4; // stopped part-way through its way in
+
+    board.stop(pad.id);
+    expect(ctx.gains[0]!.gain.cancelScheduledValues).toHaveBeenCalledWith(10);
+    expect(ctx.gains[0]!.gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 10);
+    expect(ctx.gains[0]!.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 10 + PAD_FADE_S);
+    expect(ctx.started).toEqual(['start', `stop@${10 + PAD_FADE_S}`]);
+    expect(board.isPlaying(pad.id)).toBe(true);
+    expect(ended).toEqual([]);
+
+    ctx.sources[0]!.onended?.();
+    expect(board.isPlaying(pad.id)).toBe(false);
+    expect(ended).toEqual([pad.id]);
+  });
+
+  it('cuts a pad that is fading out when it is stopped again', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.setFade(pad.id, true);
+    const ended: string[] = [];
+    board.onPadEnded((id) => ended.push(id));
+    board.play(pad.id);
+
+    board.stop(pad.id);
+    board.stop(pad.id);
+    expect(ctx.started).toEqual(['start', `stop@${10 + PAD_FADE_S}`, 'stop']);
+    expect(board.isPlaying(pad.id)).toBe(false);
+    expect(ended).toEqual([pad.id]);
+    // A real node still fires `ended` after a cut; the listeners were already told.
+    ctx.sources[0]!.onended?.();
+    expect(ended).toEqual([pad.id]);
+  });
+
+  // The switch is read when the pad is stopped, so it reaches one that is playing.
+  it('reads Fade when a pad is stopped, not only when it is fired', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.play(pad.id);
+    board.setFade(pad.id, true);
+    board.stop(pad.id);
+    expect(ctx.started).toEqual(['start', 'stop@11.5']);
+
+    board.stop(pad.id);
+    board.play(pad.id);
+    board.setFade(pad.id, false);
+    board.stop(pad.id);
+    expect(ctx.started).toEqual(['start', 'stop@11.5', 'stop', 'start', 'stop']);
+  });
+
+  // Faded out instead, the old copy would end later and take the new one off the board.
+  it('re-triggering a fading pad cuts the old copy at once', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.setFade(pad.id, true);
+    board.play(pad.id);
+    board.play(pad.id);
+    expect(ctx.started).toEqual(['start', 'stop', 'start']);
+    ctx.sources[0]!.onended?.();
+    expect(board.isPlaying(pad.id)).toBe(true);
+  });
+
+  it('cuts a fading pad at once on close', async () => {
+    const { board, ctx } = mkBoard();
+    const pad = await board.load(file('bed.wav'));
+    board.setFade(pad.id, true);
+    board.play(pad.id);
+    board.close();
+    expect(ctx.started).toEqual(['start', 'stop']);
   });
 
   it('stops everything on close', async () => {

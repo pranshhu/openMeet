@@ -29,6 +29,9 @@ function fakeBoard(initialPads: Pad[] = []) {
     setLoop(id: string, loop: boolean) {
       pads = pads.map((p) => (p.id === id ? { ...p, loop } : p));
     },
+    setFade(id: string, fade: boolean) {
+      pads = pads.map((p) => (p.id === id ? { ...p, fade } : p));
+    },
     onPadEnded(l: (id: string) => void) {
       listeners.add(l);
       return () => void listeners.delete(l);
@@ -127,6 +130,36 @@ describe('MediaBoardPanel', () => {
 
     render(<MediaBoardPanel board={board} onFire={() => {}} onClose={() => {}} />);
     expect(screen.getByRole('button', { name: 'Loop bed.wav' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('sets a pad to fade from its Fade switch, without firing it, and keeps it after close and reopen', () => {
+    const board = fakeBoard([{ id: 'pad-1', name: 'bed.wav', durationMs: 2500 }]);
+    const fired: string[] = [];
+    const first = render(<MediaBoardPanel board={board} onFire={(n) => fired.push(n)} onClose={() => {}} />);
+    const fade = screen.getByRole('button', { name: 'Fade bed.wav' });
+    expect(fade.textContent).toBe('Fade');
+    expect(fade.getAttribute('title')).toBe('Fade in when fired, fade out when stopped');
+    // 44 px to tap on a phone, in the same row as the Loop switch.
+    expect(fade.className).toMatch(/min-h-11.*sm:min-h-0/);
+    expect(fade.parentElement).toBe(screen.getByRole('button', { name: 'Loop bed.wav' }).parentElement);
+    expect(fade.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(fade);
+    expect(board.pads[0]?.fade).toBe(true);
+    expect(screen.getByRole('button', { name: 'Fade bed.wav' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Fade bed.wav' }).className).toMatch(/bg-white text-\[#202124\]/);
+    expect(screen.getByRole('button', { name: 'Loop bed.wav' }).getAttribute('aria-pressed')).toBe('false');
+    expect(board.isPlaying('pad-1')).toBe(false);
+    expect(fired).toEqual([]);
+
+    first.unmount();
+    render(<MediaBoardPanel board={board} onFire={() => {}} onClose={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Fade bed.wav' }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fade bed.wav' }));
+    expect(board.pads[0]?.fade).toBe(false);
+    expect(screen.getByRole('button', { name: 'Fade bed.wav' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Fade bed.wav' }).className).toMatch(/bg-white\/10/);
   });
 
   // A phone has room for about two rows of pads above the control bar.

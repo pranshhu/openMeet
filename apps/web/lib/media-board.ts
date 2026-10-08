@@ -16,12 +16,17 @@
 
 import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
 
+/** Seconds a fading pad takes to come in when fired and to go out when stopped. */
+export const PAD_FADE_S = 1.5;
+
 export interface Pad {
   id: string;
   name: string;
   durationMs: number;
   /** Starts over each time it reaches its end, until it is stopped. */
   loop?: boolean;
+  /** Comes in and goes out over PAD_FADE_S instead of cutting. */
+  fade?: boolean;
 }
 
 type Ctor = new (options?: AudioContextOptions) => AudioContext;
@@ -30,7 +35,7 @@ export class MediaBoard {
   private ctx: AudioContext;
   private dest: MediaStreamAudioDestinationNode;
   private buffers = new Map<string, AudioBuffer>();
-  private playing = new Map<string, AudioBufferSourceNode>();
+  private playing = new Map<string, { src: AudioBufferSourceNode; gain: GainNode; fadingOut?: true }>();
   private endListeners = new Set<(id: string) => void>();
   private _pads: Pad[] = [];
   private seq = 0;
@@ -67,24 +72,49 @@ export class MediaBoard {
   play(id: string): void {
     const buf = this.buffers.get(id);
     if (!buf) return;
-    this.stop(id);
+    this.cut(id);
+    const pad = this._pads.find((p) => p.id === id);
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
-    src.loop = this._pads.find((p) => p.id === id)?.loop ?? false;
-    src.connect(this.dest);
+    src.loop = pad?.loop ?? false;
+    const gain = this.ctx.createGain();
+    if (pad?.fade) {
+      const now = this.ctx.currentTime;
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(1, now + PAD_FADE_S);
+    }
+    src.connect(gain);
+    gain.connect(this.dest);
     // Monitor locally too, or the host can't hear what they just fired.
-    src.connect(this.ctx.destination);
+    gain.connect(this.ctx.destination);
     src.onended = () => this.ended(id);
     src.start();
-    this.playing.set(id, src);
+    this.playing.set(id, { src, gain });
   }
 
+  /**
+   * Stop a pad. One that fades goes out over PAD_FADE_S and counts as playing
+   * until it is silent; stopping it again while it goes out cuts it.
+   */
   stop(id: string): void {
-    const src = this.playing.get(id);
-    if (!src) return;
+    const p = this.playing.get(id);
+    if (!p) return;
+    if (p.fadingOut || !this._pads.find((x) => x.id === id)?.fade) return this.cut(id);
+    p.fadingOut = true;
+    const now = this.ctx.currentTime;
+    p.gain.gain.cancelScheduledValues(now);
+    p.gain.gain.setValueAtTime(p.gain.gain.value, now);
+    p.gain.gain.linearRampToValueAtTime(0, now + PAD_FADE_S);
+    // onended fires once the fade has run, and tells the listeners then.
+    p.src.stop(now + PAD_FADE_S);
+  }
+
+  private cut(id: string): void {
+    const p = this.playing.get(id);
+    if (!p) return;
     try {
-      src.onended = null;
-      src.stop();
+      p.src.onended = null;
+      p.src.stop();
     } catch {
       /* already finished */
     }
@@ -94,8 +124,13 @@ export class MediaBoard {
   /** A pad that is playing changes at once: turned off, it runs to its end and stops. */
   setLoop(id: string, loop: boolean): void {
     this._pads = this._pads.map((p) => (p.id === id ? { ...p, loop } : p));
-    const src = this.playing.get(id);
-    if (src) src.loop = loop;
+    const p = this.playing.get(id);
+    if (p) p.src.loop = loop;
+  }
+
+  /** Read when the pad is fired (the way in) and when it is stopped (the way out). */
+  setFade(id: string, fade: boolean): void {
+    this._pads = this._pads.map((p) => (p.id === id ? { ...p, fade } : p));
   }
 
   isPlaying(id: string): boolean {
@@ -114,7 +149,7 @@ export class MediaBoard {
   }
 
   close(): void {
-    for (const id of [...this.playing.keys()]) this.stop(id);
+    for (const id of [...this.playing.keys()]) this.cut(id);
     void this.ctx.close();
   }
 }
