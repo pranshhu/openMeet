@@ -90,7 +90,8 @@ header `{idx,offset,size,ts}` (`encodeChunkHeader` = `JSON.stringify`), then (2)
 integers and a `ts` that is negative or non-finite; returns a field-whitelisted copy.
 
 **Constants** (`constants.ts`): `CHUNK_TIMESLICE_MS=2000`, `DC_BUFFERED_HIGH_WATERMARK=16MiB`,
-`DC_BUFFERED_LOW_WATERMARK=8MiB`, `GUEST_RETRANSMIT_BUFFER_CAP=32MiB`, `ACK_EVERY_N_CHUNKS=5`,
+`DC_BUFFERED_LOW_WATERMARK=8MiB`, `STREAM_BACKLOG_CAP_BYTES=256MiB` (un-acked bytes of one file
+after which a guest stops streaming it), `ACK_EVERY_N_CHUNKS=5` (counted in 64 KiB fragments),
 `ACK_EVERY_N_MS=10000`, `WS_HEARTBEAT_INTERVAL_MS=30000`, `DRAIN_HARD_CAP_MS=30000`,
 `ROOM_TTL_MS=30d` (extended on every join), `TURN_CRED_TTL_S=43200` (12 h, **seconds**, unlike every `*_MS`; must outlast a session — the client never refreshes TURN credentials and Cloudflare drops a relayed call soon after its credential expires),
 `RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
@@ -335,7 +336,7 @@ unfinished send to each new connection to the host.
   while a bounded receiver with `maxBytes` still **drops `header.idx <= lastIdx`**;
   `writer.write(offset, data)`; `maxBytes` holds a sender to a size it declared; a bounded receiver
   also refuses a chunk whose declared size is not its payload's length, takes chunks only in order
-  and stops at its first refusal; acks every 5 chunks / 10s (with a journal file attached, after
+  and stops at its first refusal; acks every 5 fragments / 10s (with a journal file attached, after
   each journal commit instead, so an ack means the bytes are in a closed journal part; a commit
   window holds at most 8 separate runs of bytes, so a sender that scatters its offsets further is
   acknowledged from the folder write for the runs the journal did not take; a journal that fails,
@@ -513,7 +514,7 @@ unfinished send to each new connection to the host.
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
    auto-runs `beginGuestRecording`, opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
-   FileWriter at offset; acks every 5 chunks/10s (with a journal attached, after each journal
+   FileWriter at offset; acks every 5 fragments/10s (with a journal attached, after each journal
    commit instead); backpressure via watermarks.
    Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
@@ -631,8 +632,9 @@ unfinished send to each new connection to the host.
   one timeslice; but the retransmit buffer keeps every chunk that was not acked and reads no byte
   cap, and a backed-up DataChannel does not pause the recorder. The only bound is
   `STREAM_BACKLOG_CAP_BYTES` (256 MiB, `constants.ts`) checked in `ChunkSender.sendChunk`, after
-  which that stream is abandoned and the guest's backup keeps the rest. Raising
-  `RECORDING_VIDEO_BPS` is bounded by disk, not RAM.
+  which that stream is abandoned and the guest's backup keeps the rest. A higher bitrate costs
+  disk and upload, and fills that backlog sooner: about 85 s of a link that has stopped moving at
+  the 4K preset's 25 Mbps, about 7 min at 1080p Standard (5 Mbps).
 - `DiskFullError` surfaces as a `recordingError` **banner**, deliberately NOT `phase:'error'` —
   switching phase unmounts `CallStage`, which takes "End & save" with it, and that button is the
   only thing that closes the file handle. CallStage plays two short beeps and, if the tab is
