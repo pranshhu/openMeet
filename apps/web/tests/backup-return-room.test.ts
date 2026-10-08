@@ -440,6 +440,42 @@ describe('a host taking returned backups', () => {
     });
     expect(folder.files.get(name)!.closed).toBe(true);
   });
+
+  it('dismissBackup drops a stalled transfer and frees its name for a new key', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    const first = await offerBackup(opts);
+    await act(async () => {
+      await result.current.acceptBackups();
+    });
+    await writeBytes(first);
+    act(() => {
+      first.close();
+    });
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['stalled']);
+
+    await act(async () => {
+      await result.current.dismissBackup(BACKUP);
+    });
+    expect(result.current.state.backupTransfers).toEqual([]);
+    // A partial file stays on the disk; only the record goes.
+    const name = [...folder.files.keys()][0]!;
+    expect(folder.files.get(name)!.closed).toBe(true);
+    expect(folder.removed).toEqual([]);
+
+    // The guest's tab reloaded with a new key: the name it offers is free again.
+    const second = backupChannel(BACKUP);
+    await act(async () => {
+      opts.onDataChannel!(second as unknown as RTCDataChannel);
+      second.deliver(JSON.stringify({ type: 'backup_offer', size: 4096, key: 'k2' }));
+      await flush();
+    });
+    expect(result.current.state.backupTransfers.map((t) => [t.id, t.status])).toEqual([
+      [BACKUP, 'offered'],
+    ]);
+    expect(second.readyState).toBe('open');
+  });
 });
 
 describe('a tab that cannot take a returned backup', () => {

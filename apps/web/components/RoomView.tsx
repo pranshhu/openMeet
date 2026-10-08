@@ -83,7 +83,7 @@ export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
     startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
-    readTrackHealth, setLowPower,
+    readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -303,6 +303,10 @@ export function RoomView({ slug }: { slug: string }) {
       onSwitchCamera={switchCamera}
       activeMicId={state.activeMicId}
       activeCamId={state.activeCamId}
+      backupTransfers={state.backupTransfers}
+      onAcceptBackups={() => void acceptBackups()}
+      onDeclineBackups={declineBackups}
+      onDismissBackup={dismissBackup}
       {...(state.isFallbackMedia !== undefined ? { isFallbackMedia: state.isFallbackMedia } : {})}
     />
   );

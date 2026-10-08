@@ -1689,6 +1689,11 @@ export function useRoom(slug: string) {
 
   const declineBackups = useCallback(() => backupIntakeRef.current?.decline(), []);
 
+  /** Host: give up on a dead transfer, so its sender may offer that name again. */
+  const dismissBackup = useCallback(async (id: string) => {
+    await backupIntakeRef.current?.dismiss(id);
+  }, []);
+
   /** Guest: send these leftover backups to the host, at once or as soon as the host is connected. */
   const sendBackups = useCallback((files: File[]) => {
     const report = () =>
@@ -2314,6 +2319,7 @@ export function useRoom(slug: string) {
     endRecording,
     acceptBackups,
     declineBackups,
+    dismissBackup,
     sendBackups,
     addMarker,
     openMediaBoard,

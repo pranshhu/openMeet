@@ -1797,3 +1797,77 @@ describe('CallStage track panel', () => {
     }
   });
 });
+
+describe('returned backups', () => {
+  const offered = [
+    {
+      id: 'backup_asha_camera_20231114T221320000Z.mp4',
+      kind: 'camera' as const,
+      size: 1_500_000_000,
+      status: 'offered' as const,
+      percent: 0,
+      from: 'Asha',
+    },
+  ];
+
+  // The notice must sit in the flow above the stage, where it cannot cover the
+  // Recording pill, a name tag or the PiP.
+  it('shows an offer above the stage and saves it from the button', () => {
+    const onAcceptBackups = vi.fn();
+    render(
+      <CallStage {...baseProps} backupTransfers={offered} onAcceptBackups={onAcceptBackups} />
+    );
+
+    const notice = screen.getByText(
+      'Asha wants to send you 1 backup file (1.5 GB) from an earlier recording in this room.'
+    );
+    const column = screen.getByTestId('stage-column');
+    expect(
+      column.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_PRECEDING
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
+    expect(onAcceptBackups).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands a stalled backup to the engine when the host dismisses it', () => {
+    const onDismissBackup = vi.fn();
+    const stalled = offered.map((t) => ({ ...t, status: 'stalled' as const, percent: 30 }));
+    render(
+      <CallStage {...baseProps} backupTransfers={stalled} onDismissBackup={onDismissBackup} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismissBackup).toHaveBeenCalledWith(stalled[0]!.id);
+  });
+
+  it('holds an offer back while a take records', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        phase="recording"
+        backupTransfers={offered}
+        onAcceptBackups={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+    expect(screen.queryByText(/wants to send you/)).toBeNull();
+  });
+
+  it('shows a guest its own backup, without the host’s buttons', () => {
+    render(<CallStage {...baseProps} role="guest" backupTransfers={offered} />);
+    expect(
+      screen.getByText('Waiting for the host to accept your backup (1 file, 1.5 GB). Keep this tab open.')
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+  });
+
+  it('lets the host decline an offer from the notice', () => {
+    const onDeclineBackups = vi.fn();
+    render(
+      <CallStage {...baseProps} backupTransfers={offered} onDeclineBackups={onDeclineBackups} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(onDeclineBackups).toHaveBeenCalledTimes(1);
+  });
+});

@@ -263,6 +263,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   makes `sendEncoding` send a quarter-size camera picture at the floor bitrate and a shared screen
   at 4 fps on every connection, leaves every recorder alone, and stays on until turned off.
   Switching the mode starts the readings over, and while it is on only lost audio counts.
+  `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
+  host's Save to folder / Not now on an offer, the percent while bytes move, and the saved or
+  failed verdict on both sides, with offers held back while a take records or saves.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`

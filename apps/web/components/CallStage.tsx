@@ -16,6 +16,8 @@ import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
 import { RecordingNotice } from './RecordingNotice';
+import { BackupNotice } from './BackupNotice';
+import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
@@ -121,6 +123,10 @@ export function CallStage({
   lowPower = false,
   onSetLowPower,
   unprotectedRecording,
+  backupTransfers,
+  onAcceptBackups,
+  onDeclineBackups,
+  onDismissBackup,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -192,6 +198,12 @@ export function CallStage({
   onSetLowPower?: (on: boolean) => void;
   /** The running take has no crash copy in this browser, so say so. */
   unprotectedRecording?: boolean;
+  /** Returned backups: what the guests are sending back, and the host's answer. */
+  backupTransfers?: BackupTransfer[];
+  onAcceptBackups?: () => void;
+  onDeclineBackups?: () => void;
+  /** The host gave up on a dead returned backup. */
+  onDismissBackup?: (id: string) => void;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -678,6 +690,15 @@ export function CallStage({
           </button>
         </div>
       )}
+
+      <BackupNotice
+        role={role}
+        transfers={backupTransfers ?? []}
+        takeActive={isTakeActive}
+        onAccept={onAcceptBackups}
+        onDecline={onDeclineBackups}
+        onDismiss={onDismissBackup}
+      />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the

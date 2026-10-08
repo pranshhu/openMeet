@@ -542,6 +542,20 @@ export class BackupIntake {
     this.emit();
   }
 
+  /**
+   * The host gave up on a transfer that is dead: drop the record so its name
+   * can be offered again, and take back a file that holds nothing. A transfer
+   * that is still moving keeps its record.
+   */
+  async dismiss(id: string): Promise<void> {
+    const record = this.records.get(id);
+    if (!record) return;
+    if (record.item.status !== 'stalled' && record.item.status !== 'failed') return;
+    this.records.delete(id);
+    this.emit();
+    await this.endRecordFile(record);
+  }
+
   /** Leaving the room: close every open file. */
   async close(): Promise<void> {
     await Promise.allSettled(

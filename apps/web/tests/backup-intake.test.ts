@@ -2109,4 +2109,106 @@ describe('live take receivers are unbounded', () => {
     await endHostRecording(handles);
     delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
   });
+  it('dismiss drops a stalled transfer and frees its name for a new offer', async () => {
+    const { state, intake } = setup();
+
+    const label = validLabel(1700000000000, ROOM, 'mp4');
+    const ch1 = fakeChannel(label);
+    intake.offer(ch1, { peerId: 'peer-1', name: 'Alice' });
+    ch1.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+
+    const folder = fakeFolder();
+    await intake.accept(folder, state.items);
+    ch1.close();
+    await flush();
+    expect(state.items[0]!.status).toBe('stalled');
+
+    await intake.dismiss(BACKUP_ID);
+    expect(state.items).toEqual([]);
+    expect(folder.files.has(FILE)).toBe(false);
+    expect(folder.removed).toEqual([FILE]);
+
+    // The name is free again: a reloaded guest with a new key can offer it.
+    const ch2 = fakeChannel(label);
+    intake.offer(ch2, { peerId: 'peer-2', name: 'Bob' });
+    ch2.deliver(offerMsg(2000, 'key-bob'));
+    await flush();
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('offered');
+    expect(state.items[0]!.from).toBe('Bob');
+    expect(ch2.readyState).toBe('open');
+  });
+
+  it('dismiss leaves a receiving transfer and its file alone', async () => {
+    const { state, intake } = setup();
+
+    const ch = fakeChannel(validLabel(1700000000000, ROOM, 'mp4'));
+    intake.offer(ch, { peerId: 'peer-1', name: 'Alice' });
+    ch.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+
+    const folder = fakeFolder();
+    await intake.accept(folder, state.items);
+    expect(state.items[0]!.status).toBe('active');
+
+    await intake.dismiss(BACKUP_ID);
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('active');
+    expect(folder.files.has(FILE)).toBe(true);
+    expect(folder.removed).toEqual([]);
+  });
+
+  it('dismiss removes an empty file and keeps a partial one', async () => {
+    const partial = setup();
+    const ch1 = fakeChannel(validLabel(1700000000000, ROOM, 'mp4'));
+    partial.intake.offer(ch1, { peerId: 'peer-1', name: 'Alice' });
+    ch1.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+    const partialFolder = fakeFolder();
+    await partial.intake.accept(partialFolder, partial.state.items);
+    const { frames } = await framesFor(new Uint8Array([1, 2, 3, 4]));
+    for (const f of frames) ch1.deliver(f);
+    await flush();
+    ch1.close();
+    await flush();
+    expect(partial.state.items[0]!.status).toBe('stalled');
+
+    await partial.intake.dismiss(BACKUP_ID);
+    expect(partialFolder.files.get(FILE)!.bytes.byteLength).toBe(4);
+    expect(partialFolder.removed).toEqual([]);
+
+    const empty = setup();
+    const ch2 = fakeChannel(validLabel(1700000000000, ROOM, 'mp4'));
+    empty.intake.offer(ch2, { peerId: 'peer-1', name: 'Alice' });
+    ch2.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+    const emptyFolder = fakeFolder();
+    await empty.intake.accept(emptyFolder, empty.state.items);
+    ch2.close();
+    await flush();
+    expect(empty.state.items[0]!.status).toBe('stalled');
+
+    await empty.intake.dismiss(BACKUP_ID);
+    expect(emptyFolder.files.has(FILE)).toBe(false);
+    expect(emptyFolder.removed).toEqual([FILE]);
+  });
+
+  it('dismiss leaves an offer and an unknown id alone', async () => {
+    const { state, intake } = setup();
+
+    const ch = fakeChannel(validLabel(1700000000000, ROOM, 'mp4'));
+    intake.offer(ch, { peerId: 'peer-1', name: 'Alice' });
+    ch.deliver(offerMsg(1000, 'key-alice'));
+    await flush();
+    expect(state.items[0]!.status).toBe('offered');
+
+    await intake.dismiss(BACKUP_ID);
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('offered');
+
+    await intake.dismiss('openmeet-backup-1-nobody-sent-this.mp4');
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]!.status).toBe('offered');
+  });
 });

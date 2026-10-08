@@ -340,3 +340,51 @@ describe('mic warning', () => {
     }
   });
 });
+
+describe('returned backups', () => {
+  const offered = [
+    {
+      id: 'backup_asha_camera_20231114T221320000Z.mp4',
+      kind: 'camera',
+      size: 1_500_000_000,
+      status: 'offered',
+      percent: 0,
+      from: 'Asha',
+    },
+  ];
+
+  it('saves an offered backup through the hook when the host presses the button', () => {
+    const acceptBackups = vi.fn();
+    hook.acceptBackups = acceptBackups;
+    hook.declineBackups = vi.fn();
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
+    expect(acceptBackups).toHaveBeenCalledTimes(1);
+  });
+
+  it('declines an offered backup through the hook when the host presses Not now', () => {
+    const declineBackups = vi.fn();
+    hook.acceptBackups = vi.fn();
+    hook.declineBackups = declineBackups;
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(declineBackups).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses a stalled backup through the hook', () => {
+    const dismissBackup = vi.fn();
+    hook.dismissBackup = dismissBackup;
+    hook.acceptBackups = vi.fn();
+    hook.declineBackups = vi.fn();
+    const stalled = offered.map((t) => ({ ...t, status: 'stalled', percent: 30 }));
+    Object.assign(state, inCall, { role: 'host', backupTransfers: stalled });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(dismissBackup).toHaveBeenCalledWith(stalled[0]!.id);
+  });
+});
