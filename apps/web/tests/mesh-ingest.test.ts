@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { encodeChunkHeader, CHUNK_TIMESLICE_MS } from '@openmeet/protocol';
 import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
+import { MAX_OFFSET_JUMP_BYTES } from '@/lib/chunk-receiver';
 import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import {
   bindHostGuestChannel,
@@ -11,6 +12,7 @@ import {
   collectFileChecks,
   collectScreenSegments,
   endHostRecording,
+  resumeHostRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 
@@ -24,17 +26,42 @@ import {
 
 type Written = { file: string; position: number; bytes: number };
 
-function fakeDir(opened: string[], written: Written[]) {
+/**
+ * `existing` is what the folder already holds, for the segment probe a resumed
+ * take makes: a handle without `create` resolves only for those names, the way
+ * the real File System Access API rejects a name that is not there. `probes`
+ * records those lookups so a test can tell a probe from an open.
+ */
+function fakeDir(
+  opened: string[],
+  written: Written[],
+  closed: string[] = [],
+  existing: string[] = [],
+  probes: string[] = []
+) {
+  const holds = new Set(existing);
   return {
-    getFileHandle: async (name: string) => {
+    getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+      if (!opts?.create) {
+        probes.push(name);
+        if (!holds.has(name)) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      }
       opened.push(name);
+      holds.add(name);
       return {
         name,
         createWritable: async () => ({
-          write: async (d: { position: number; data: ArrayBuffer }) => {
-            written.push({ file: name, position: d.position, bytes: d.data.byteLength });
+          write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
+            written.push({
+              file: name,
+              position: d.position,
+              bytes: d.data instanceof Blob ? d.data.size : d.data.byteLength,
+            });
           },
-          close: async () => {},
+          close: async () => {
+            closed.push(name);
+          },
         }),
       };
     },
@@ -124,6 +151,57 @@ function fakeJournal() {
     file,
   } as unknown as TakeJournal;
   return { journal, parts };
+}
+
+type ResumeNote = { file: string; kind: 'camera' | 'wav' | 'screen'; key?: string; slot?: number; segment?: number };
+type JournalPosition = { nextIdx: number; end: number };
+
+/**
+ * A journal whose parts are already on disk from the crashed session: replay
+ * hands the writer one Blob per part, and file(name).position() reports the
+ * index and byte extent those parts prove.
+ */
+function resumeJournal(
+  files: ResumeNote[],
+  positions: Record<string, JournalPosition> = {},
+  parts: Record<string, { offset: number; size: number }[]> = {},
+  journalDead = false
+) {
+  const replayed: string[] = [];
+  const notes: TakeNotes = {
+    room: 'abc-defg-hij',
+    recordingId: 'rec',
+    take: 1,
+    hostStartMs: 1_700_000_000_000,
+    files,
+    backups: [],
+    markers: [],
+  };
+  const journal = {
+    notes,
+    note: (change: (n: TakeNotes) => void) => change(notes),
+    file: (name: string) => ({
+      append: () => {},
+      commit: async () => {},
+      position: async () => positions[name] ?? null,
+      parts: async () => parts[name] ?? [],
+      dead: journalDead,
+    }),
+    replay: async (name: string, into: { write(position: number, data: Blob): Promise<void> }) => {
+      replayed.push(name);
+      let end = 0;
+      for (const part of parts[name] ?? []) {
+        try {
+          await into.write(part.offset, new Blob([new Uint8Array(part.size)]));
+        } catch {
+          break; // a real journal's replay never rejects
+        }
+        end = Math.max(end, part.offset + part.size);
+      }
+      return end;
+    },
+  } as unknown as TakeJournal;
+  return { journal, replayed };
 }
 
 describe('host ingest routes by source peer', () => {
@@ -284,6 +362,26 @@ describe('host ingest routes by source peer', () => {
       sha256Sent: undefined,
       sha256Written: await h.guestReceivers!.get('peer-b:wav')!.receiver.digestHex(),
     });
+  });
+
+  it('carries the written digest in the guest report of a live take', async () => {
+    const h = await hostHandles([], [], []);
+    const a = fakeChannel();
+    const b = fakeChannel();
+    await bindHostGuestChannel(a, h, 'peer-a');
+    await bindHostGuestChannel(b, h, 'peer-b');
+    await sendChunk(b, 0, 0, 250);
+    await new Promise((r) => setTimeout(r));
+
+    // Slot 0 received nothing, so its digest is the empty input's; slot 1's is
+    // the digest of the 250 zero bytes it took.
+    const reports = await collectGuestReports(h);
+    expect(reports.find((g) => g.slot === 0)?.sha256Written).toBe(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    );
+    expect(reports.find((g) => g.slot === 1)?.sha256Written).toBe(
+      '1a5ce2eb33e4dcd8bf09a57d740649e2aec359dc2c0fd952ac0d19d4a63d0c42'
+    );
   });
 
   it('reports abandoned: true when stream-abandoned is delivered', async () => {
@@ -470,21 +568,23 @@ describe('host ingest routes by source peer', () => {
     expect(opened).toEqual(['guest2_rec.mp4']);
   });
 
-  it('caps journal notes at 64 files and keeps the first 64 notes', async () => {
+  it('writes a guest camera note even when the journal already holds 64', async () => {
     const opened: string[] = [];
     const written: Written[] = [];
     const h = await hostHandles(opened, written, []);
     const { journal } = fakeJournal();
     h.journal = journal;
     for (let i = 0; i < 64; i++) {
-      journal.notes.files.push({ file: `f${i}.mp4`, kind: 'camera', slot: i });
+      journal.notes.files.push({ file: `f${i}.mp4`, kind: 'screen', segment: i + 1 });
     }
 
+    // A guest's camera file is bounded by the take's slots, not by a count
+    // another guest's screen shares can spend.
     await bindHostGuestChannel(fakeChannel(), h, 'peer-a');
     await bindHostGuestChannel(fakeChannel('recording#k-extra'), h, 'peer-extra');
 
-    expect(journal.notes.files).toHaveLength(64);
-    expect(journal.notes.files.some((f) => f.key === 'k-extra')).toBe(false);
+    expect(journal.notes.files).toHaveLength(65);
+    expect(journal.notes.files.some((f) => f.key === 'k-extra')).toBe(true);
   });
 });
 
@@ -1035,5 +1135,609 @@ describe('a guest cannot make the host open files without end', () => {
     expect(opened).toEqual(['guest_rec.wav', 'guest2_rec.mp4', 'guest2_rec.wav']);
     expect(h.guestReceivers?.has('k3:wav')).toBe(false);
     expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
+  });
+});
+
+/**
+ * After a reload, the take in the journal is picked up again: the same take id,
+ * number, start time and slot map, each guest file reopened where the crash copy
+ * got to, and each receiver seeded from the journal's position so the guest's
+ * next fragment lands exactly where the file ends.
+ */
+describe('a take resumed from its journal', () => {
+  const r1Note: ResumeNote = { file: 'guest_rec.mp4', kind: 'camera', key: 'R1', slot: 0 };
+  const r2Note: ResumeNote = { file: 'guest2_rec.mp4', kind: 'camera', key: 'R2', slot: 1 };
+  const r1Parts = { 'guest_rec.mp4': [{ offset: 0, size: 100 }, { offset: 100, size: 100 }] };
+  const r1Position = { 'guest_rec.mp4': { nextIdx: 2, end: 200 } };
+
+  it('replays the crash copy and continues the guest file with no gap', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    expect(h.recordingId).toBe('rec');
+    expect(h.take).toBe(1);
+    expect(h.hostStartMs).toBe(1_700_000_000_000);
+    expect(j.replayed).toEqual(['guest_rec.mp4']);
+    // The folder holds the crashed parts before the receiver takes over.
+    expect(written.filter((w) => w.file === 'guest_rec.mp4').map((w) => [w.position, w.bytes])).toEqual([
+      [0, 100],
+      [100, 100],
+    ]);
+    // The bind announces where the file ends, so the guest replays only the rest.
+    expect(channel.sent.map((m) => JSON.parse(m as string))).toEqual([
+      { type: 'resume_offset', recordingId: 'rec', lastByte: 200, lastIdx: 1 },
+    ]);
+
+    await sendChunk(channel, 2, 200, 100);
+    await sendChunk(channel, 3, 300, 100);
+    expect(written.filter((w) => w.file === 'guest_rec.mp4').map((w) => [w.position, w.bytes])).toEqual([
+      [0, 100],
+      [100, 100],
+      [200, 100],
+      [300, 100],
+    ]);
+  });
+
+  it('withholds the written digest of a resumed file, so its verdict is not a false mismatch', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+    await sendChunk(channel, 2, 200, 100);
+    await channel.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 300, sha256: 'a'.repeat(64) })
+    );
+
+    const check = (await collectFileChecks(h)).get('guest_rec.mp4');
+    expect(check?.recovered).toBe(true);
+    // What this tab hashed is only the part after the crash, so the report must
+    // withhold it rather than let the verdict call the file a mismatch.
+    expect((await collectGuestReports(h, undefined)).find((g) => g.slot === 0)?.sha256Written).toBeUndefined();
+    expect(fileVerdict(check, 'R1')).toEqual({
+      status: 'unverified',
+      text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
+    });
+  });
+
+  it('keeps the journal slots and keys, so each guest file keeps its own bytes', async () => {
+    const written: Written[] = [];
+    // The notes need not be in slot order, and the second guest's channel
+    // arrives first: both times the slot comes from the note, not the arrival.
+    const j = resumeJournal(
+      [r2Note, r1Note],
+      { ...r1Position, 'guest2_rec.mp4': { nextIdx: 1, end: 50 } },
+      { ...r1Parts, 'guest2_rec.mp4': [{ offset: 0, size: 50 }] }
+    );
+    const c2 = fakeChannel('recording#R2');
+    const c1 = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      // A caller that still holds the folder handle passes it instead of a picker.
+      dir: fakeDir([], written),
+      channels: [
+        { channel: c2, peerId: 'peer-b' },
+        { channel: c1, peerId: 'peer-a' },
+      ],
+    });
+
+    expect(h.guestSlots?.get('R1')).toBe(0);
+    expect(h.guestSlots?.get('R2')).toBe(1);
+    expect(h.slotPeerIds?.get(1)).toBe('peer-b');
+
+    await sendChunk(c2, 1, 50, 10);
+    expect(written.filter((w) => w.file === 'guest2_rec.mp4').map((w) => [w.position, w.bytes])).toEqual([
+      [0, 50],
+      [50, 10],
+    ]);
+    expect(written.filter((w) => w.file === 'guest_rec.mp4' && w.position === 50)).toEqual([]);
+  });
+
+  it('withholds the written digest of a resumed extra slot too', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal(
+      [r1Note, r2Note],
+      { ...r1Position, 'guest2_rec.mp4': { nextIdx: 1, end: 50 } },
+      { ...r1Parts, 'guest2_rec.mp4': [{ offset: 0, size: 50 }] }
+    );
+    const c1 = fakeChannel('recording#R1');
+    const c2 = fakeChannel('recording#R2');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [
+        { channel: c1, peerId: 'peer-a' },
+        { channel: c2, peerId: 'peer-b' },
+      ],
+    });
+    await sendChunk(c2, 1, 50, 10);
+    await c2.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 60, sha256: 'b'.repeat(64) })
+    );
+
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest2_rec.mp4')?.recovered).toBe(true);
+    expect((await collectGuestReports(h, undefined)).find((g) => g.slot === 1)?.sha256Written).toBeUndefined();
+    expect(fileVerdict(checks.get('guest2_rec.mp4'), 'Guest 2')).toEqual({
+      status: 'unverified',
+      text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
+    });
+  });
+
+  it('leaves a channel with no note, and a screen channel, untouched', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const r9 = fakeChannel('recording#R9');
+    const screen = fakeChannel('recording-screen-1');
+    const backup = fakeChannel('backup#R1');
+    const other = fakeChannel('other#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, written),
+      channels: [
+        { channel: r9, peerId: 'peer-x' },
+        { channel: screen, peerId: 'peer-y' },
+        { channel: backup, peerId: 'peer-a' },
+        { channel: other, peerId: 'peer-a' },
+      ],
+    });
+
+    expect(r9.onmessage).toBeNull();
+    expect(screen.onmessage).toBeNull();
+    expect(backup.onmessage).toBeNull();
+    expect(other.onmessage).toBeNull();
+    expect(opened).toEqual(['guest_rec.mp4']);
+    expect(h.guestSlots?.has('R9')).toBe(false);
+    await sendChunk(r9, 0, 0, 10);
+    expect(written.filter((w) => w.bytes === 10)).toEqual([]);
+  });
+
+  it('counts the journal guest screen segments so the next share does not overwrite one', async () => {
+    const opened: string[] = [];
+    // The host's own screen file is not a guest segment, even if one ever lands
+    // in the notes: only `guest_screen` names are counted here.
+    const j = resumeJournal([
+      { file: 'guest_screen_rec.mp4', kind: 'screen' },
+      { file: 'host_screen_rec.mp4', kind: 'screen' },
+    ]);
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, []),
+      channels: [],
+    });
+
+    expect(h.guestScreenSegments).toBe(1);
+    expect(h.screenSegment).toBeUndefined();
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h);
+    expect(opened).toContain('guest_screen_rec_2.mp4');
+    // The resumed take carries its journal, so the new segment is crash-safe too.
+    expect(j.journal.notes.files.map((f) => f.file)).toContain('guest_screen_rec_2.mp4');
+  });
+
+  it('ignores hostile channel labels and peer ids without throwing', async () => {
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const hostileChannels = [
+      { channel: fakeChannel(''), peerId: '' },
+      { channel: fakeChannel('recording\n#R1'), peerId: 'peer-1' },
+      { channel: fakeChannel('recording#"\'<script>'), peerId: 'NaN' },
+      { channel: fakeChannel('other#R1'), peerId: '-1' },
+      { channel: fakeChannel('recording#R1'), peerId: '\n"\'/../bad' },
+    ];
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], []),
+      channels: hostileChannels,
+    });
+    expect(h.slotPeerIds?.get(0)).toBe('\n"\'/../bad');
+  });
+
+  it('puts a resumed slot-0 WAV master where a fresh take keeps it', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal(
+      [{ file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 }],
+      { 'guest_rec.wav': { nextIdx: 1, end: 50 } },
+      { 'guest_rec.wav': [{ offset: 0, size: 50 }] }
+    );
+    const channel = fakeChannel('recording-audio#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    expect(h.guestWavWriter?.fileName).toBe('guest_rec.wav');
+    expect(h.wavReceiver?.lastOffsetValue).toBe(50);
+    expect(h.receiver).toBeUndefined();
+    // collectFileChecks and collectTrackHealth read the WAV through this entry;
+    // it is not an extra file, so it is not listed twice at the end either.
+    expect(h.guestReceivers?.has('R1:wav')).toBe(true);
+    expect(h.extraWriters ?? []).toEqual([]);
+
+    await sendChunk(channel, 1, 50, 10);
+    expect(written.filter((w) => w.file === 'guest_rec.wav').map((w) => [w.position, w.bytes])).toEqual([
+      [0, 50],
+      [50, 10],
+    ]);
+  });
+
+  it('surfaces a write failure on a resumed file', async () => {
+    const errors: unknown[] = [];
+    const failingDir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async () => {
+            throw new Error('disk full');
+          },
+          close: async () => {},
+        }),
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      dir: failingDir,
+      channels: [{ channel, peerId: 'peer-a' }],
+      onError: (e) => errors.push(e),
+    });
+
+    await sendChunk(channel, 2, 200, 10);
+    // The channel handler does not await the receiver, so let the write settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The folder refuses the replay first, then the live fragment; both reach
+    // the caller.
+    expect(errors.map((e) => (e as Error).message)).toContain('disk full');
+  });
+
+  it('surfaces the journal warning of a resumed receiver', async () => {
+    const warns: string[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts, true);
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], []),
+      channels: [],
+      onWarn: (m) => warns.push(m),
+    });
+
+    h.receiver?.flushAck();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warns[0]).toContain('Crash protection stopped');
+  });
+
+  it('ends a resumed take: every guest file the journal held is closed', async () => {
+    const opened: string[] = [];
+    const closed: string[] = [];
+    const j = resumeJournal(
+      [r1Note, r2Note],
+      { ...r1Position, 'guest2_rec.mp4': { nextIdx: 1, end: 50 } },
+      { ...r1Parts, 'guest2_rec.mp4': [{ offset: 0, size: 50 }] }
+    );
+    const c1 = fakeChannel('recording#R1');
+    const c2 = fakeChannel('recording#R2');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, [], closed),
+      channels: [
+        { channel: c1, peerId: 'peer-a' },
+        { channel: c2, peerId: 'peer-b' },
+      ],
+    });
+    const finalized = (sha: string) =>
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 0, sha256: sha });
+    await c1.deliver(finalized('one'));
+    await c2.deliver(finalized('two'));
+
+    await endHostRecording(h);
+    expect(closed.sort()).toEqual(['guest2_rec.mp4', 'guest_rec.mp4']);
+  });
+
+  it('continues a file longer than the far-offset bound without refusing the guest', async () => {
+    // The journal's end is already past the bound the live path measures from
+    // zero. The guest's next fragment starts there, so the rule has to move
+    // with the resume rather than read every honest first fragment as a jump.
+    const end = MAX_OFFSET_JUMP_BYTES + 1024;
+    const written: Written[] = [];
+    const errors: unknown[] = [];
+    const j = resumeJournal(
+      [r1Note],
+      { 'guest_rec.mp4': { nextIdx: 2, end } },
+      // One committed byte at the file's end: the parts prove the extent the
+      // position reports without the test building a 64 MiB buffer.
+      { 'guest_rec.mp4': [{ offset: end - 1, size: 1 }] }
+    );
+    const channel = fakeChannel('recording#R1');
+    await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+      onError: (e) => errors.push(e),
+    });
+
+    await sendChunk(channel, 2, end, 1000);
+    expect(written.filter((w) => w.file === 'guest_rec.mp4' && w.position === end)).toEqual([
+      { file: 'guest_rec.mp4', position: end, bytes: 1000 },
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it('still refuses a fragment far past the end of a resumed file', async () => {
+    const end = MAX_OFFSET_JUMP_BYTES + 1024;
+    const written: Written[] = [];
+    const errors: unknown[] = [];
+    const j = resumeJournal(
+      [r1Note],
+      { 'guest_rec.mp4': { nextIdx: 2, end } },
+      { 'guest_rec.mp4': [{ offset: end - 1, size: 1 }] }
+    );
+    const channel = fakeChannel('recording#R1');
+    await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+      onError: (e) => errors.push(e),
+    });
+
+    await sendChunk(channel, 2, end + MAX_OFFSET_JUMP_BYTES + 1, 1000);
+    expect((errors[0] as Error)?.message).toBe('A fragment arrived far past the end of the file.');
+    expect(written.filter((w) => w.position === end + MAX_OFFSET_JUMP_BYTES + 1)).toEqual([]);
+  });
+
+  it('refuses a journal with no recording id before asking for a folder', async () => {
+    const opened: string[] = [];
+    let picked = false;
+    const j = resumeJournal([]);
+    j.journal.notes.recordingId = '';
+    await expect(
+      resumeHostRecording({
+        journal: j.journal,
+        directoryPicker: async () => {
+          picked = true;
+          return fakeDir(opened, []);
+        },
+        channels: [],
+      })
+    ).rejects.toThrow();
+    expect(picked).toBe(false);
+    expect(opened).toEqual([]);
+    expect(j.replayed).toEqual([]);
+  });
+
+  it('matches no channel label to a note that has no key', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const j = resumeJournal([{ file: 'guest_rec.mp4', kind: 'camera', slot: 0 }], r1Position, r1Parts);
+    const channel = fakeChannel('recording#guest_rec.mp4');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, written),
+      channels: [{ channel, peerId: 'peer-x' }],
+    });
+
+    // The file is still reopened and its slot restored, but a label that names
+    // the file rather than a key the guest chose must not reach it.
+    expect(h.guestSlots?.get('guest_rec.mp4')).toBe(0);
+    expect(channel.onmessage).toBeNull();
+    await sendChunk(channel, 2, 200, 10);
+    expect(written.filter((w) => w.bytes === 10)).toEqual([]);
+  });
+
+  it('gives a new guest a slot above the highest restored one, not the map size', async () => {
+    const opened: string[] = [];
+    const j = resumeJournal(
+      [
+        { file: 'guest_rec.mp4', kind: 'camera', key: 'A', slot: 0 },
+        { file: 'guest3_rec.mp4', kind: 'camera', key: 'C', slot: 2 },
+      ],
+      { 'guest_rec.mp4': { nextIdx: 1, end: 10 }, 'guest3_rec.mp4': { nextIdx: 1, end: 10 } },
+      { 'guest_rec.mp4': [{ offset: 0, size: 10 }], 'guest3_rec.mp4': [{ offset: 0, size: 10 }] }
+    );
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, []),
+      channels: [],
+    });
+
+    await bindHostGuestChannel(fakeChannel('recording#D'), h, 'peer-d');
+    expect(h.guestSlots?.get('D')).toBe(3);
+    expect(opened).toContain('guest4_rec.mp4');
+    expect(opened.filter((name) => name === 'guest3_rec.mp4')).toHaveLength(1);
+  });
+
+  it('reports a replay that stopped short and resumes from what landed', async () => {
+    const errors: unknown[] = [];
+    const written: Written[] = [];
+    let writes = 0;
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
+            writes += 1;
+            if (writes === 2) throw new Error('disk full');
+            written.push({
+              file: name,
+              position: d.position,
+              bytes: d.data instanceof Blob ? d.data.size : d.data.byteLength,
+            });
+          },
+          close: async () => {},
+        }),
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    await resumeHostRecording({
+      journal: j.journal,
+      dir,
+      channels: [{ channel, peerId: 'peer-a' }],
+      onError: (e) => errors.push(e),
+    });
+
+    expect(written).toEqual([{ file: 'guest_rec.mp4', position: 0, bytes: 100 }]);
+    expect((errors[0] as Error)?.message).toContain('crash copy');
+    // The guest is asked for the rest from where the file really ends, not from
+    // the end the journal claims.
+    expect(channel.sent.map((m) => JSON.parse(m as string))).toEqual([
+      { type: 'resume_offset', recordingId: 'rec', lastByte: 100, lastIdx: 1 },
+    ]);
+  });
+
+  it('keeps the other guests when one channel refuses the resume announcement', async () => {
+    const errors: unknown[] = [];
+    const j = resumeJournal(
+      [r1Note, r2Note],
+      { ...r1Position, 'guest2_rec.mp4': { nextIdx: 1, end: 50 } },
+      { ...r1Parts, 'guest2_rec.mp4': [{ offset: 0, size: 50 }] }
+    );
+    const bad = fakeChannel('recording#R1');
+    bad.send = () => {
+      throw new Error('send failed');
+    };
+    const good = fakeChannel('recording#R2');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], []),
+      channels: [
+        { channel: bad, peerId: 'peer-a' },
+        { channel: good, peerId: 'peer-b' },
+      ],
+      onError: (e) => errors.push(e),
+    });
+
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe('send failed');
+    expect(good.onmessage).not.toBeNull();
+    expect(h.slotPeerIds?.get(1)).toBe('peer-b');
+  });
+
+  it('reports a resumed file that stopped early as incomplete, not merely unverified', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+    await channel.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 200, sha256: 'a'.repeat(64) })
+    );
+    await channel.deliver(JSON.stringify({ type: 'stream-abandoned', recordingId: 'rec' }));
+
+    // The guest's own backup is the only whole copy of a file it stopped
+    // sending, so the host must still be told to ask for it.
+    const check = (await collectFileChecks(h)).get('guest_rec.mp4');
+    expect(check?.received?.sha256Sent).toBeUndefined();
+    const verdict = fileVerdict(check, 'R1');
+    expect(verdict.status).toBe('incomplete');
+    expect(verdict.text).toContain('Ask R1 for the backup');
+  });
+
+  it('reports a resumed file whose guest never came back as incomplete', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    const verdict = fileVerdict((await collectFileChecks(h)).get('guest_rec.mp4'), 'R1');
+    expect(verdict.status).toBe('incomplete');
+    expect(verdict.text).toContain('No finish signal arrived from R1');
+  });
+
+  it('does not wait for a resumed file whose guest never came back', async () => {
+    vi.useFakeTimers();
+    try {
+      const j = resumeJournal(
+        [r1Note, r2Note],
+        { ...r1Position, 'guest2_rec.mp4': { nextIdx: 1, end: 50 } },
+        { ...r1Parts, 'guest2_rec.mp4': [{ offset: 0, size: 50 }] }
+      );
+      const c1 = fakeChannel('recording#R1');
+      const h = await resumeHostRecording({
+        journal: j.journal,
+        directoryPicker: async () => fakeDir([], []),
+        channels: [{ channel: c1, peerId: 'peer-a' }],
+      });
+      await c1.deliver(
+        JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 300, sha256: 'a'.repeat(64) })
+      );
+
+      let settled = false;
+      const done = endHostRecording(h).then(() => {
+        settled = true;
+      });
+      // The 45 s tail is meant for a channel that is still sending; guest 2's
+      // file has no channel at all, so the save must not sit on it.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(settled).toBe(true);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('moves the next screen share past the highest segment the notes name', async () => {
+    const opened: string[] = [];
+    const j = resumeJournal([{ file: 'guest_screen_rec_2.mp4', kind: 'screen', segment: 2 }]);
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, []),
+      channels: [],
+    });
+
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h);
+    expect(opened).toContain('guest_screen_rec_3.mp4');
+    expect(opened).not.toContain('guest_screen_rec_2.mp4');
+  });
+
+  it('never replaces a screen file the folder already holds after a resume', async () => {
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const j = resumeJournal(
+      [r1Note, { file: 'guest_screen_rec_2.mp4', kind: 'screen', segment: 2 }],
+      r1Position,
+      r1Parts
+    );
+    const h = await resumeHostRecording({
+      journal: j.journal,
+      // Segment 3 was handed out before the crash but left no note: only the
+      // folder itself knows its name is taken.
+      dir: fakeDir(opened, [], [], ['guest_screen_rec_3.mp4'], probes),
+      channels: [],
+    });
+
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h);
+    expect(opened).toContain('guest_screen_rec_4.mp4');
+    expect(opened).not.toContain('guest_screen_rec_3.mp4');
+    expect(probes).toEqual(['guest_screen_rec_3.mp4', 'guest_screen_rec_4.mp4']);
+  });
+
+  it('leaves a fresh take to open its own screen segment number', async () => {
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const h = {
+      recordingId: 'rec',
+      dir: fakeDir(opened, [], [], ['guest_screen_rec.mp4'], probes),
+    } as RecordingHandles;
+
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h);
+    expect(opened).toEqual(['guest_screen_rec.mp4']);
+    expect(probes).toEqual([]);
   });
 });

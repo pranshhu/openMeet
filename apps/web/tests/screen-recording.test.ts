@@ -705,19 +705,38 @@ describe('screen recording', () => {
     });
   });
 
-  it('caps screen journal notes at 64 files', async () => {
+  it('caps screen journal notes at 48, past which a segment is recorded but not crash-safe', async () => {
     const h: RecordingHandles = { recordingId: 'r-cap', dir: fakeDir() };
     const { journal } = fakeJournal();
     h.journal = journal;
-    for (let i = 0; i < 64; i++) {
-      journal.notes.files.push({ file: `f${i}.mp4`, kind: 'camera', slot: i });
+
+    for (let i = 0; i < 49; i++) {
+      const channel = new EventTarget() as unknown as RTCDataChannel;
+      (channel as any).readyState = 'open';
+      await bindHostScreenChannel(channel, h, undefined, 'sharer');
     }
+
+    const screenNotes = journal.notes.files.filter((f) => f.kind === 'screen');
+    expect(screenNotes).toHaveLength(48);
+    // The segment itself still opened and is still listed; only its crash copy
+    // is missing.
+    expect(h.screenWriters).toHaveLength(49);
+  });
+
+  it('drops the note of a guest share stopped before its first chunk', async () => {
+    const removed: string[] = [];
+    const dir = { ...fakeDir(), removeEntry: async (n: string) => { removed.push(n); } };
+    const h = { recordingId: 'r1', dir } as unknown as RecordingHandles;
+    const { journal } = fakeJournal();
+    h.journal = journal;
     const channel = new EventTarget() as unknown as RTCDataChannel;
     (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h);
+    expect(journal.notes.files.map((f) => f.file)).toEqual(['guest_screen_r1.mp4']);
 
-    await bindHostScreenChannel(channel, h, undefined, 'sharer');
-
-    expect(journal.notes.files).toHaveLength(64);
-    expect(journal.notes.files.some((f) => f.kind === 'screen')).toBe(false);
+    channel.dispatchEvent(new Event('close'));
+    await vi.waitFor(() => expect(removed).toEqual(['guest_screen_r1.mp4']));
+    // The note named a file that is gone, so a resume must not open it.
+    expect(journal.notes.files).toEqual([]);
   });
 });

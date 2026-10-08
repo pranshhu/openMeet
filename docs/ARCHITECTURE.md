@@ -356,7 +356,11 @@ unfinished send to each new connection to the host.
   no second screen encode; the host's are finalized with its camera/WAV backups after a clean take.
   While a take runs, its guest files are also kept in a crash journal (`lib/take-journal.ts`): one
   directory per take (`openmeet-take-<startMs>-<slug>`) holding each file's acknowledged bytes in
-  small closed parts.
+  small closed parts. A take reopened from that journal replays the parts into the same folder files
+  and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
+  zero. A screen file already in the folder is never replaced — the resumed host probes for a free
+  segment number instead — and screen notes are bounded at 48 while camera and WAV notes are never
+  refused by that bound.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via

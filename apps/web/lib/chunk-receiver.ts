@@ -30,6 +30,8 @@ export interface ChunkReceiverOpts {
   journalFile?: JournalFile;
   /** One message when the journal dies and the receiver falls back to acking the folder write. */
   onWarn?: (msg: string) => void;
+  /** Where the journal's parts already put this file, for a take reopened after a crash. */
+  resumeFrom?: { nextIdx: number; end: number };
 }
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
@@ -85,6 +87,9 @@ export class ChunkReceiver {
   private _timedOut = false;
   private _receivedFinalHeader = false;
   private _receivedFinalized = false;
+  private _resumed = false;
+  /** Where the file stood when this receiver took over: the far-offset rule moves with it. */
+  private resumeBase = 0;
   private lastDataReceivedAt = Date.now();
   private readonly hash = new StreamingSha256();
   // Resolved when the sender says it has flushed everything. The host waits on
@@ -104,6 +109,16 @@ export class ChunkReceiver {
     this.maxBytes = opts.maxBytes;
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
+    const from = opts.resumeFrom;
+    // A position the journal could not have produced is no position: the take
+    // then starts this file where it would have without one.
+    if (from && Number.isFinite(from.nextIdx) && Number.isFinite(from.end) && from.nextIdx >= 0) {
+      this.nextIdx = from.nextIdx;
+      this.lastIdx = from.nextIdx - 1;
+      this.lastOffset = Math.max(0, from.end);
+      this.resumeBase = this.lastOffset;
+      this._resumed = true;
+    }
   }
 
   get bytesWritten(): number {
@@ -128,6 +143,11 @@ export class ChunkReceiver {
 
   get lastOffsetValue(): number {
     return this.lastOffset;
+  }
+
+  /** This file began mid-stream; its digest covers only the part this tab received. */
+  get resumed(): boolean {
+    return this._resumed;
   }
 
   // Guest recorder start, expressed on the host clock (from clock-sync), or null
@@ -271,10 +291,12 @@ export class ChunkReceiver {
       }
       // A guest names its own offsets. One far past the bytes that arrived
       // would make the folder writer create a sparse file, so it is refused.
-      // Measured from those bytes, not the file's end, one byte cannot buy
-      // another 64 MiB of file. The bound is loose on purpose: a reconnect or
-      // a WAV header rewritten at offset 0 both move by more than a fragment.
-      if (header.offset > this._bytesWritten + MAX_OFFSET_JUMP_BYTES) {
+      // Measured from where this receiver took the file over plus the bytes
+      // that arrived since, not the file's end: one byte cannot buy another
+      // 64 MiB of file, and a resumed file's own end is not a jump. The bound
+      // is loose on purpose: a reconnect or a WAV header rewritten at offset 0
+      // both move by more than a fragment.
+      if (header.offset > this.resumeBase + this._bytesWritten + MAX_OFFSET_JUMP_BYTES) {
         if (!this.jumpReported) {
           this.jumpReported = true;
           this.onError?.(new Error('A fragment arrived far past the end of the file.'));

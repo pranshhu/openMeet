@@ -303,6 +303,66 @@ describe('ChunkReceiver', () => {
     expect(ro).toMatchObject({ type: 'resume_offset', recordingId: 'r1', lastIdx: 3, lastByte: 40 });
   });
 
+  it('continues from a resume position: the part this tab missed is skipped, not rewritten', async () => {
+    const writer = fakeWriter();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: vi.fn(),
+      resumeFrom: { nextIdx: 2, end: 200 },
+    });
+
+    expect(r.resumed).toBe(true);
+    expect(r.lastOffsetValue).toBe(200);
+
+    // Replayed from the start by a sender that ignored the announced position:
+    // the two parts this tab already has must not be rewritten.
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 100, size: 100, ts: 1 }));
+    await r.handleMessage(new Uint8Array(100).buffer);
+    expect(writer.write).not.toHaveBeenCalled();
+
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 200, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array(4).buffer);
+    expect(writer.write).toHaveBeenCalledWith(200, expect.any(ArrayBuffer));
+    expect(r.lastOffsetValue).toBe(204);
+  });
+
+  it('ignores a resume position that is not two finite numbers with an index', async () => {
+    const cases: ({ nextIdx: number; end: number } | undefined)[] = [
+      undefined,
+      { nextIdx: -1, end: 50 },
+      { nextIdx: NaN, end: 0 },
+      { nextIdx: 1, end: Infinity },
+    ];
+    for (const resumeFrom of cases) {
+      const writer = fakeWriter();
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: writer as never,
+        sendControl: vi.fn(),
+        ...(resumeFrom ? { resumeFrom } : {}),
+      });
+
+      expect(r.resumed).toBe(false);
+      expect(r.lastOffsetValue).toBe(0);
+
+      await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 1 }));
+      await r.handleMessage(new Uint8Array(4).buffer);
+      expect(writer.write).toHaveBeenCalledWith(0, expect.any(ArrayBuffer));
+    }
+  });
+
+  it('clamps negative resume end to zero', () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      resumeFrom: { nextIdx: 1, end: -50 },
+    });
+    expect(r.resumed).toBe(true);
+    expect(r.lastOffsetValue).toBe(0);
+  });
+
   it('reports a write failure via onError instead of throwing', async () => {
     const writer = {
       write: vi.fn().mockRejectedValue(Object.assign(new Error('full'), { name: 'DiskFullError' })),

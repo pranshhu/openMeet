@@ -35,6 +35,8 @@ export interface GuestSyncInput {
   endedEarly?: boolean | undefined;
   /** What this guest's camera track reported when its recorder started, if the host knows. */
   trackFps?: number | null | undefined;
+  /** Digest of what the host wrote; absent when the host cannot prove the whole file. */
+  sha256Written?: string | undefined;
 }
 
 export interface ScreenSegmentInput {
