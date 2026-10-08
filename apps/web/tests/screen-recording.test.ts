@@ -4,12 +4,15 @@ import {
   collectScreenSegments,
   collectTrackHealth,
   collectFileChecks,
+  resumeHostRecording,
   startScreenRecording,
   stopScreenRecording,
   type HealthPeer,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
-import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
+import { fileVerdict } from '@/lib/sync-report';
+import { findTakeJournals, openTakeJournal, type TakeJournal, type TakeNotes } from '@/lib/take-journal';
+import { FakeDirectoryHandle } from './fake-opfs';
 
 /**
  * Screen share was rendered but never recorded: share a deck for twenty minutes
@@ -659,11 +662,17 @@ describe('screen recording', () => {
     expect(checks.get('host_screen_r-own.mp4')?.received).toBeUndefined();
   });
 
-  it('notes a guest screen segment and hands its receiver the journal file', async () => {
+  it('notes a guest screen segment under the sharer name and hands its receiver the journal file', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(1_759_824_000_000);
-      const h: RecordingHandles = { recordingId: 'r-journal', dir: fakeDir() };
+      const h: RecordingHandles = {
+        recordingId: 'r-journal',
+        dir: fakeDir(),
+        // Bob's camera channel was bound to slot 0 under his name.
+        slotPeerIds: new Map([[0, 'peer-bob']]),
+        slotNames: new Map([[0, 'Bob']]),
+      };
       const { journal, names } = fakeJournal();
       h.journal = journal;
       const channel = new EventTarget() as unknown as RTCDataChannel;
@@ -677,7 +686,7 @@ describe('screen recording', () => {
           kind: 'screen',
           segment: 1,
           startedAtMs: 1759824000000,
-          who: 'peer-bob',
+          who: 'Bob',
         },
       ]);
       expect(names).toEqual(['guest_screen_r-journal.mp4']);
@@ -687,40 +696,71 @@ describe('screen recording', () => {
     }
   });
 
-  it('stores only the first 200 characters of a sharer name', async () => {
-    const h: RecordingHandles = { recordingId: 'r-long', dir: fakeDir() };
+  it('never stores the socket peer id as the sharer of a screen note', async () => {
+    const h: RecordingHandles = { recordingId: 'r-who', dir: fakeDir() };
     const { journal } = fakeJournal();
     h.journal = journal;
-    const channel = new EventTarget() as unknown as RTCDataChannel;
-    (channel as any).readyState = 'open';
-
-    await bindHostScreenChannel(channel, h, undefined, 'S'.repeat(300));
-
-    expect(journal.notes.files[0]).toEqual({
-      file: 'guest_screen_r-long.mp4',
-      kind: 'screen',
-      segment: 1,
-      startedAtMs: expect.any(Number),
-      who: 'S'.repeat(200),
-    });
-  });
-
-  it('caps screen journal notes at 48, past which a segment is recorded but not crash-safe', async () => {
-    const h: RecordingHandles = { recordingId: 'r-cap', dir: fakeDir() };
-    const { journal } = fakeJournal();
-    h.journal = journal;
-
-    for (let i = 0; i < 49; i++) {
+    const share = async (peerId: string, name?: string) => {
       const channel = new EventTarget() as unknown as RTCDataChannel;
       (channel as any).readyState = 'open';
-      await bindHostScreenChannel(channel, h, undefined, 'sharer');
-    }
+      await bindHostScreenChannel(channel, h, undefined, peerId, name);
+    };
 
-    const screenNotes = journal.notes.files.filter((f) => f.kind === 'screen');
-    expect(screenNotes).toHaveLength(48);
-    // The segment itself still opened and is still listed; only its crash copy
-    // is missing.
-    expect(h.screenWriters).toHaveLength(49);
+    // A present-only device has no camera slot, so no name is known for it.
+    await share('0b6e1c1e-socket-peer-id');
+    // A name handed in is cleaned and cut like every other name in the notes.
+    await share('0b6e1c1e-socket-peer-id', 'Dee\n\u202Egnp.exe');
+    await share('0b6e1c1e-socket-peer-id', 'S'.repeat(300));
+
+    expect(journal.notes.files.map((f) => f.who)).toEqual([undefined, 'Dee gnp.exe', 'S'.repeat(200)]);
+    expect('who' in journal.notes.files[0]!).toBe(false);
+  });
+
+  it('lets one sharer hold 12 screen notes and the take 48; a share past either has no crash copy', async () => {
+    const h: RecordingHandles = { recordingId: 'r-cap', dir: fakeDir() };
+    const { journal, names } = fakeJournal();
+    h.journal = journal;
+    const share = async (peerId: string) => {
+      const sent: string[] = [];
+      const channel = new EventTarget() as unknown as RTCDataChannel;
+      (channel as any).readyState = 'open';
+      (channel as any).send = (data: string) => sent.push(data);
+      await bindHostScreenChannel(channel, h, undefined, peerId);
+      return { channel, sent };
+    };
+    const screenNotes = () => journal.notes.files.filter((f) => f.kind === 'screen');
+
+    for (let i = 0; i < 12; i++) await share('peer-a');
+    const thirteenth = await share('peer-a');
+    expect(screenNotes()).toHaveLength(12);
+    // The thirteenth is still recorded and listed. It has no note and no file in
+    // the crash copy, so the guest is acknowledged from the folder write: five
+    // fragments at one instant are enough for an ack, with no commit to wait for.
+    expect(h.screenWriters).toHaveLength(13);
+    expect(names).toHaveLength(12);
+    expect(names).not.toContain('guest_screen_r-cap_13.mp4');
+    for (let idx = 0; idx < 5; idx++) {
+      (thirteenth.channel as any).onmessage({ data: JSON.stringify({ idx, offset: idx * 4, size: 4, ts: 0 }) });
+      (thirteenth.channel as any).onmessage({ data: new ArrayBuffer(4) });
+    }
+    await vi.waitFor(() =>
+      expect(thirteenth.sent.map((m) => JSON.parse(m))).toEqual([
+        { type: 'ack', recordingId: 'r-cap', uptoIdx: 4, uptoOffset: 20 },
+      ])
+    );
+
+    // Another sharer is not crowded out by the first.
+    await share('peer-b');
+    expect(screenNotes()).toHaveLength(13);
+    expect(names).toContain('guest_screen_r-cap_14.mp4');
+
+    // The bound for the whole take still holds across sharers.
+    for (const peerId of ['peer-c', 'peer-d', 'peer-e']) {
+      for (let i = 0; i < 12; i++) await share(peerId);
+    }
+    expect(screenNotes()).toHaveLength(48);
+    expect(names).toHaveLength(48);
+    expect(h.screenWriters).toHaveLength(50);
   });
 
   it('tells the host when the crash copy of a screen file stops being kept', async () => {
@@ -886,5 +926,162 @@ describe('a screen share after a resume', () => {
     expect(errors.map((e) => (e as Error).message)).toEqual([
       'Your screen is not being recorded: the folder has no free file name left for it.',
     ]);
+  });
+});
+
+/**
+ * A resume uses the screen notes for more than the next number. Each screen
+ * file from before the reload is put back in the folder from the crash copy and
+ * listed, so the summary and the sync file have it with its size.
+ */
+describe('screen files from before the reload', () => {
+  const T0 = 1_759_824_000_000;
+  const emptyStream = () =>
+    ({ getTracks: () => [], getVideoTracks: () => [], getAudioTracks: () => [] }) as unknown as MediaStream;
+
+  /** A folder that knows each file's length and replaces a file when one opened for writing is closed. */
+  function folder(seed: Record<string, number> = {}, refuseWrite?: (nth: number) => boolean) {
+    const sizes = new Map(Object.entries(seed));
+    const opened: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (!sizes.has(name)) {
+          if (!opts?.create) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+          sizes.set(name, 0);
+        }
+        return {
+          name,
+          getFile: async () => ({ size: sizes.get(name)! }),
+          createWritable: async () => {
+            opened.push(name);
+            let end = 0;
+            let writes = 0;
+            return {
+              write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
+                writes += 1;
+                if (refuseWrite?.(writes)) throw new Error('disk full');
+                end = Math.max(end, d.position + (d.data instanceof Blob ? d.data.size : d.data.byteLength));
+              },
+              close: async () => {
+                sizes.set(name, end);
+              },
+            };
+          },
+        };
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    return { dir, opened, size: (name: string) => sizes.get(name) };
+  }
+
+  /** A crashed take's journal in browser storage, read back the way the next session finds it. */
+  async function crashedTake(shares: { file: string; segment: number; atMs: number; who?: string; parts: number[] }[]) {
+    const root = new FakeDirectoryHandle('root');
+    const getRoot = async () => root as never;
+    const live = (await openTakeJournal(
+      { room: 'abc-defg-hij', recordingId: 'rec', take: 1, hostStartMs: T0 },
+      getRoot
+    ))!;
+    for (const share of shares) {
+      live.note((n) =>
+        n.files.push({
+          file: share.file,
+          kind: 'screen',
+          segment: share.segment,
+          startedAtMs: T0 + share.atMs,
+          ...(share.who ? { who: share.who } : {}),
+        })
+      );
+      const file = live.file(share.file);
+      let offset = 0;
+      for (const [i, size] of share.parts.entries()) {
+        file.append(offset, new Uint8Array(size).fill(i + 1).buffer);
+        await file.commit(i + 1);
+        offset += size;
+      }
+    }
+    const [journal] = await findTakeJournals(getRoot);
+    return journal!;
+  }
+
+  it('puts a share that was running at the crash back from the crash copy, and lists it', async () => {
+    const journal = await crashedTake([
+      { file: 'guest_screen_rec.mp4', segment: 1, atMs: 6800, who: 'Bo', parts: [100, 200] },
+    ]);
+    // The crash left the folder's file empty: it was never closed.
+    const f = folder({ 'guest_screen_rec.mp4': 0 });
+    const errors: unknown[] = [];
+
+    const h = await resumeHostRecording({
+      journal,
+      dir: f.dir,
+      localStream: emptyStream(),
+      channels: [],
+      onError: (e) => errors.push(e),
+    });
+
+    expect(errors).toEqual([]);
+    expect(f.size('guest_screen_rec.mp4')).toBe(300);
+    expect(collectScreenSegments(h, () => undefined)).toEqual([
+      { file: 'guest_screen_rec.mp4', offsetMs: 6800, endedEarly: true, sharer: 'Bo' },
+    ]);
+    expect((await collectFileChecks(h)).get('guest_screen_rec.mp4')).toEqual({ bytes: 300, recovered: true });
+
+    // The next share still takes a new number, and both are listed in order.
+    const channel = new EventTarget() as unknown as RTCDataChannel;
+    (channel as any).readyState = 'open';
+    await bindHostScreenChannel(channel, h, undefined, 'peer-b');
+    expect(f.opened).toEqual(['guest_screen_rec.mp4', 'guest_screen_rec_2.mp4']);
+    expect(collectScreenSegments(h, () => undefined).map((s) => s.file)).toEqual([
+      'guest_screen_rec.mp4',
+      'guest_screen_rec_2.mp4',
+    ]);
+  });
+
+  it('leaves a share that ended before the crash as the folder has it, and lists it', async () => {
+    const journal = await crashedTake([{ file: 'guest_screen_rec.mp4', segment: 1, atMs: 4100, parts: [100, 200] }]);
+    // The share stopped before the crash, so its file was closed whole.
+    const f = folder({ 'guest_screen_rec.mp4': 300 });
+
+    const h = await resumeHostRecording({ journal, dir: f.dir, localStream: emptyStream(), channels: [] });
+
+    expect(f.opened).toEqual([]);
+    expect(f.size('guest_screen_rec.mp4')).toBe(300);
+    expect(collectScreenSegments(h, () => undefined)).toEqual([
+      { file: 'guest_screen_rec.mp4', offsetMs: 4100, endedEarly: true },
+    ]);
+    expect((await collectFileChecks(h)).get('guest_screen_rec.mp4')).toEqual({ bytes: 300, recovered: true });
+  });
+
+  it('lists a share it could not put back whole as incomplete, and says so', async () => {
+    const journal = await crashedTake([
+      { file: 'guest_screen_rec.mp4', segment: 1, atMs: 6800, who: 'Bo', parts: [100, 200] },
+      { file: 'guest_screen_rec_2.mp4', segment: 2, atMs: 9000, who: 'Bo', parts: [50] },
+    ]);
+    // The folder refuses the second write to a file: the first share's second part.
+    const f = folder({}, (nth) => nth === 2);
+    const errors: unknown[] = [];
+
+    const h = await resumeHostRecording({
+      journal,
+      dir: f.dir,
+      localStream: emptyStream(),
+      channels: [],
+      onError: (e) => errors.push(e),
+    });
+
+    expect(errors.map((e) => (e as Error).message)).toEqual([
+      'A screen recording from before the reload could not be fully rebuilt from the crash copy. The sharer has it in their own backup.',
+    ]);
+    // Both are listed: the one with a hole, and the one after it, which is whole.
+    expect(collectScreenSegments(h, () => undefined).map((s) => [s.file, s.offsetMs])).toEqual([
+      ['guest_screen_rec.mp4', 6800],
+      ['guest_screen_rec_2.mp4', 9000],
+    ]);
+    const checks = await collectFileChecks(h);
+    expect(checks.get('guest_screen_rec_2.mp4')).toEqual({ bytes: 50, recovered: true });
+    const verdict = fileVerdict(checks.get('guest_screen_rec.mp4'), 'Bo', 'screen');
+    expect(checks.get('guest_screen_rec.mp4')?.bytes).toBe(100);
+    expect(verdict.status).toBe('incomplete');
+    expect(verdict.text).toContain('Ask Bo for the backup');
   });
 });

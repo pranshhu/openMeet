@@ -1310,7 +1310,10 @@ export function useRoom(slug: string) {
                   channel,
                   recNow,
                   (e) => setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) })),
-                  remotePeerId
+                  remotePeerId,
+                  // The crash copy's note names the sharer; a socket id means
+                  // nothing to the host who reads it back after a crash.
+                  remotePeersRef.current.find((r) => r.peerId === remotePeerId)?.name ?? undefined
                 ).catch((e: unknown) =>
                   setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }))
                 );

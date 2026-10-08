@@ -89,6 +89,15 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- After **Resume recording**, the screen recordings from before the reload are
+  put back in the folder from the crash copy and listed in the summary and
+  `sync_<id>.json` with their size and sharer; one that cannot be rebuilt whole
+  reads Incomplete.
+- A call-audio copy started after a resume takes a file name the folder does not
+  already hold, so the copy from before the reload is not replaced.
+- A resumed file reads Incomplete when nothing arrived for it after the reload
+  or the host gave up waiting for a missing piece, where it read as rebuilt.
+- The crash copy names the person sharing a screen by their display name.
 - **Resume recording** keeps what the folder already holds of a guest's file.
   A page that reloads saves each file a few seconds ahead of the crash copy, and
   the resume opened over it; those bytes are now carried into the continued
@@ -171,6 +180,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Security
 
+- A recording channel is accepted only when its label key is letters, digits and
+  hyphens (at most 64), and one person's screen shares can use at most 12 of a
+  take's 48 crash-copy entries, so one participant cannot use up the others'.
 - A Save takes only the offers that were listed when it was pressed: an offer
   that arrives, or changes size, while the folder prompt is open waits for the
   next Save.

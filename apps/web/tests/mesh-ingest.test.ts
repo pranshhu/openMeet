@@ -669,6 +669,35 @@ describe('host ingest routes by source peer', () => {
       rttMs: 12,
     });
   });
+
+  it('refuses a channel-label key that is not letters, digits and hyphens', async () => {
+    const opened: string[] = [];
+    const h = await hostHandles(opened, [], []);
+    const { journal } = fakeJournal();
+    h.journal = journal;
+
+    const hostile = ['../../../etc/passwd', 'a/b\\c:d*e?"<>|', '', 'guest_rec.mp4', '\u{1F4A5}\u0000\n', 'k'.repeat(65)];
+    for (const key of hostile) {
+      const cam = fakeChannel(`recording#${key}`);
+      const wav = fakeChannel(`recording-audio#${key}`);
+      await bindHostGuestChannel(cam, h, 'peer-a');
+      await bindHostAudioChannel(wav, h, 'peer-a');
+      expect(cam.onmessage).toBeNull();
+      expect(wav.onmessage).toBeNull();
+    }
+    expect(h.guestSlots?.size ?? 0).toBe(0);
+    expect(opened).toEqual([]);
+    expect(journal.notes.files).toEqual([]);
+
+    // A recording id is a key, and so is the Room's peer id when the label has none.
+    const keyed = fakeChannel('recording-audio#11111111-1111-4111-8111-111111111111');
+    await bindHostAudioChannel(keyed, h, 'peer-a');
+    const plain = fakeChannel('recording-audio');
+    await bindHostAudioChannel(plain, h, 'peer-b');
+    expect(keyed.onmessage).not.toBeNull();
+    expect(plain.onmessage).not.toBeNull();
+    expect(opened).toEqual(['guest_rec.wav', 'guest2_rec.wav']);
+  });
 });
 
 /**
@@ -2177,5 +2206,60 @@ describe('a take resumed from its journal', () => {
     expect(recordingErrorMessage(errors[0])).toBe(
       'A screen share was not saved here: the folder has no free file name left for it. The sharer has it in their own backup.'
     );
+  });
+
+  it('reads a resumed file the guest finished without sending anything after the reload as incomplete', async () => {
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], []),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+    // The guest says it has sent everything, and nothing of it arrived here.
+    await channel.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 900, sha256: 'a'.repeat(64) })
+    );
+
+    const check = (await collectFileChecks(h)).get('guest_rec.mp4');
+    expect(check?.recovered).toBeUndefined();
+    const verdict = fileVerdict(check, 'Bob');
+    expect(verdict.status).toBe('incomplete');
+    expect(verdict.text).toContain('Ask Bob for the backup');
+  });
+
+  it('reads a resumed file whose receiver gave up on a gap as incomplete, though bytes arrived after the reload', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const errors: string[] = [];
+      const j = resumeJournal([r1Note], r1Position, r1Parts);
+      const channel = fakeChannel('recording#R1');
+      const h = await resumeHostRecording({
+        localStream: emptyFakeStream(),
+        journal: j.journal,
+        directoryPicker: async () => fakeDir([], []),
+        channels: [{ channel, peerId: 'peer-a' }],
+        onError: (e) => errors.push((e as Error).message),
+      });
+      // The next fragment arrives; the guest no longer holds the ones after it.
+      await sendChunk(channel, 2, 200, 100);
+      for (let i = 0; i < 7; i++) {
+        vi.setSystemTime(Date.now() + 2100);
+        await sendChunk(channel, 9 + i, 900 + i * 100, 100);
+      }
+      await channel.deliver(
+        JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 1600, sha256: 'a'.repeat(64) })
+      );
+
+      expect(errors).toEqual(["A guest's recording could not be continued here. Their own backup has it."]);
+      const check = (await collectFileChecks(h)).get('guest_rec.mp4');
+      expect(check?.recovered).toBeUndefined();
+      const verdict = fileVerdict(check, 'Bob');
+      expect(verdict.status).toBe('incomplete');
+      expect(verdict.text).toContain('Ask Bob for the backup');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

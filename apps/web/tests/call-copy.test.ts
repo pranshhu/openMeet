@@ -637,6 +637,97 @@ describe('syncCallCopies', () => {
   });
 });
 
+/**
+ * A resumed take's list of copies starts again, and opening a name replaces the
+ * file behind it. The folder is asked, so a copy from before the reload is
+ * never opened over.
+ */
+describe('call-audio copies after a resume', () => {
+  beforeEach(() => {
+    FakeMediaRecorder.instances = [];
+    FakeMediaRecorder.supported = () => true;
+    FakeMediaRecorder.tailBytes = 0;
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    vi.restoreAllMocks();
+  });
+
+  /** A folder that already holds `held`: a lookup resolves only for a name that is there. */
+  function seededDir(held: string[], holdsEverything = false) {
+    const names = new Set(held);
+    const created: string[] = [];
+    const lookups: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (opts?.create) {
+          created.push(name);
+          names.add(name);
+        } else {
+          lookups.push(name);
+          if (!holdsEverything && !names.has(name)) {
+            throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+          }
+        }
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      },
+      removeEntry: async () => {},
+    };
+    return { dir, created, lookups };
+  }
+
+  it('numbers a copy opened after a resume past the names the folder holds', async () => {
+    const { dir, created } = seededDir(['call1_rec.m4a', 'call2_rec.m4a']);
+    const h: RecordingHandles = { ...handles(dir), resumed: true };
+
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+
+    expect(created).toEqual(['call3_rec.m4a']);
+    expect(h.callCopies?.[0]?.writer.fileName).toBe('call3_rec.m4a');
+    expect(FakeMediaRecorder.instances).toHaveLength(1);
+  });
+
+  it('gives two copies that open together after a resume a file each', async () => {
+    const { dir, created } = seededDir(['call1_rec.m4a']);
+    const h: RecordingHandles = { ...handles(dir), resumed: true };
+
+    syncCallCopies(h, [peer('p1'), peer('p2')]);
+    await opened(h);
+
+    expect(created.slice().sort()).toEqual(['call2_rec.m4a', 'call3_rec.m4a']);
+  });
+
+  it('asks the folder nothing in a take that was not resumed', async () => {
+    const { dir, created, lookups } = seededDir([]);
+    const h = handles(dir);
+
+    syncCallCopies(h, [peer('p1'), peer('p2')]);
+    await opened(h);
+
+    expect(lookups).toEqual([]);
+    expect(created).toEqual(['call1_rec.m4a', 'call2_rec.m4a']);
+  });
+
+  it('opens no copy when the folder has no free name for it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { dir, created, lookups } = seededDir([], true);
+    const h: RecordingHandles = { ...handles(dir), resumed: true };
+
+    syncCallCopies(h, [peer('p1')]);
+    await opened(h);
+
+    expect(lookups).toHaveLength(50);
+    expect(created).toEqual([]);
+    expect(FakeMediaRecorder.instances).toHaveLength(0);
+    expect(collectCallCopies(h)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    await expect(endHostRecording(h)).resolves.toBeDefined();
+  });
+});
+
 describe('call-audio copies at the end of a take', () => {
   beforeEach(() => {
     FakeMediaRecorder.instances = [];

@@ -161,6 +161,11 @@ export class ChunkReceiver {
     return this._receivedFinalized;
   }
 
+  /** A gap was given up on: five answers left it unfilled, so this file takes nothing past it. */
+  get gaveUpOnGap(): boolean {
+    return this.gapReported;
+  }
+
   get lastOffsetValue(): number {
     return this.lastOffset;
   }

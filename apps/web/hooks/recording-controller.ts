@@ -18,7 +18,7 @@ import {
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
-import { openTakeJournal, type TakeJournal } from '@/lib/take-journal';
+import { openTakeJournal, type JournalFileNote, type TakeJournal } from '@/lib/take-journal';
 import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
 import { sanitizeText } from '@/lib/sync-report';
@@ -47,7 +47,21 @@ export const MAX_GUEST_SLOTS_PER_PEER = 2;
  */
 const MAX_GUEST_SCREEN_NOTES = 48;
 
-/** Folder lookups a resumed take makes for one free guest screen file name. */
+/**
+ * Screen notes one sharer may hold of those. A share's note is what lets its
+ * crash copy be found again, so one participant toggling a share must not use
+ * up every other sharer's.
+ */
+const MAX_SCREEN_NOTES_PER_SHARER = 12;
+
+/**
+ * A channel-label key: the guest's recording id, or the Room's peer id when the
+ * label carries none. Both are letters, digits and hyphens. The key is held for
+ * the whole take and written into the notes, so anything else is not a key.
+ */
+const GUEST_KEY_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Folder lookups a resumed take makes for one free file name. */
 const MAX_SCREEN_PROBES = 50;
 
 /** One stretch of one guest's live call audio, recorded by the host as a fallback. */
@@ -199,8 +213,16 @@ export interface RecordingHandles {
   guestScreenSegments?: number;
   /** Guest screen segments whose channel is still open, with the sharer's peerId. */
   screenLive?: Map<number, string>;
+  /** Screen notes written for each sharer in this take, by peerId. */
+  screenNotesBySharer?: Map<string, number>;
   /** Set at the first screen share refused for want of a free file name, so later refusals stay silent. */
   screenRefused?: boolean;
+  /**
+   * Guest screen files from before the reload, as the resume left them in the
+   * folder: put back from the crash copy, or kept because the folder already
+   * held at least as much. `short` marks one that could not be put back whole.
+   */
+  resumedScreens?: { file: string; bytes: number; startedAtMs?: number; who?: string; short?: boolean }[];
   screenWriters?: FileWriter[];
   screenChannelRef?: { current: RTCDataChannel | null };
   screenEndedEarlyByFile?: Set<string>;
@@ -222,6 +244,8 @@ export interface RecordingHandles {
   callCopiesClosed?: boolean;
   /** Set at the first refusal: the take's file limit was reached, so later stretches have no copy. */
   callCopiesCapped?: boolean;
+  /** The highest call-copy number a resumed take has claimed; a fresh take numbers by the list. */
+  callCopyNumber?: number;
 }
 
 /**
@@ -351,28 +375,28 @@ function screenFileName(role: 'host' | 'guest', recordingId: string, segment: nu
 }
 
 /**
- * The first screen segment number the folder does not already hold, from `from`
- * onward, or null when none was found. A resumed take restarts its counter, and
+ * The first number, from `from` onward, whose file the folder does not already
+ * hold, or null when none was found. A resumed take restarts its counters, and
  * opening a name replaces the file behind it, so the folder itself is asked;
  * the probe is bounded so a folder that answers every name cannot spin here,
- * and a name that was not asked about is never handed out. `next` picks the
- * number to try after one that is taken.
+ * and a name that was not asked about is never handed out. `nameOf` gives the
+ * file name a number stands for, and `next` the number to try after one that is
+ * taken.
  */
-async function freeScreenSegment(
+async function freeNumber(
   dir: FsDirectoryHandle,
-  role: 'host' | 'guest',
-  recordingId: string,
+  nameOf: (n: number) => string,
   from: number,
   next: (taken: number) => number = (taken) => taken + 1
 ): Promise<number | null> {
-  let segment = from;
+  let n = from;
   for (let probes = 0; probes < MAX_SCREEN_PROBES; probes += 1) {
     try {
-      await dir.getFileHandle(screenFileName(role, recordingId, segment));
+      await dir.getFileHandle(nameOf(n));
     } catch {
-      return segment;
+      return n;
     }
-    segment = next(segment);
+    n = next(n);
   }
   return null;
 }
@@ -406,6 +430,44 @@ async function folderFile(dir: FsDirectoryHandle, name: string): Promise<{ size:
     return typeof handle.getFile === 'function' ? await handle.getFile() : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Put one guest screen file from before the reload back in the folder, the way
+ * the lobby's Save rebuilds a file: its committed parts in order, each at its
+ * own offset. A folder file at least as long as the crash copy is left as it
+ * is: a share that ended before the crash was closed whole, and opening its
+ * name would replace it. Never rejects; `short` says the file is not whole.
+ */
+async function restoreScreenFile(
+  journal: TakeJournal,
+  dir: FsDirectoryHandle,
+  note: JournalFileNote,
+  onError?: (err: unknown) => void
+): Promise<NonNullable<RecordingHandles['resumedScreens']>[number]> {
+  const listed = {
+    file: note.file,
+    ...(note.startedAtMs != null ? { startedAtMs: note.startedAtMs } : {}),
+    ...(note.who ? { who: note.who } : {}),
+  };
+  const held = (await folderFile(dir, note.file))?.size ?? null;
+  const failed = new Error(
+    'A screen recording from before the reload could not be fully rebuilt from the crash copy. The sharer has it in their own backup.'
+  );
+  try {
+    const position = await journal.file(note.file).position();
+    if (!position || (held !== null && held >= position.end)) return { ...listed, bytes: held ?? 0 };
+    const writer = new FileWriter();
+    await writer.openIn(dir, note.file);
+    const replayed = await journal.replay(note.file, { write: (at, data) => writer.write(at, data) });
+    await writer.close();
+    if (replayed >= position.end) return { ...listed, bytes: writer.size };
+    onError?.(failed);
+    return { ...listed, bytes: writer.size, short: true };
+  } catch {
+    onError?.(failed);
+    return { ...listed, bytes: held ?? 0, short: true };
   }
 }
 
@@ -960,8 +1022,8 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
     if (note.key !== undefined) byKey.set(`${key}:${ext}`, { receiver, ref });
   }
 
-  // Guest screen files are not reopened: the next share takes a new number, so
-  // the crashed segment stays in the folder instead of being written over. The
+  // No share continues a guest screen file from before the reload: the next
+  // share takes a new number, so the crashed segment is never written over. The
   // number has to clear both the notes' count and the highest number any note
   // carries, since a share that stopped while its file was opening left none.
   const screenNotes = notes.files.filter(
@@ -1028,6 +1090,16 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
     }
   }
 
+  // The screen files from before the reload are put back and listed, so the
+  // report has each with its size. After the channels are bound: the guests'
+  // live files are picked up first.
+  for (const note of screenNotes) {
+    h.resumedScreens = [
+      ...(h.resumedScreens ?? []),
+      await restoreScreenFile(args.journal, dir, note, args.onError),
+    ];
+  }
+
   return h;
 }
 
@@ -1049,9 +1121,10 @@ export async function bindHostAudioChannel(
   // is not (the DO mints a fresh one per socket). Prefer the key so a
   // rebuilt channel lands on the same slot/file it started on.
   const key = recordingChannelKind(channel.label).key ?? peerId;
-  // A real key is the guest's 36-character recordingId; the key is held and
-  // compared for the whole take, so a longer one is not a key.
-  if (key.length > 64) return;
+  // A real key is the guest's 36-character recordingId. A label can carry any
+  // text, and the key is held, compared and written into the notes for the
+  // whole take, so one of another shape is not a key.
+  if (!GUEST_KEY_RE.test(key)) return;
   const slot = claimGuestSlot(h, key, peerId, onError);
   if (slot === null) return;
   h.slotPeerIds ??= new Map();
@@ -1078,7 +1151,7 @@ export async function bindHostGuestChannel(
   // Same stable-key preference as bindHostAudioChannel — see there.
   const key = recordingChannelKind(channel.label).key ?? peerId;
   // Same bound as bindHostAudioChannel — see there.
-  if (key.length > 64) return;
+  if (!GUEST_KEY_RE.test(key)) return;
   const slot = claimGuestSlot(h, key, peerId, onError);
   if (slot === null) return;
   h.slotPeerIds ??= new Map();
@@ -1375,7 +1448,18 @@ async function openCallCopy(
   mimeType: string
 ): Promise<void> {
   const ext = mimeType.startsWith('audio/mp4') ? 'm4a' : 'webm';
-  await c.writer.openIn(dir, takeName(`call${n}`, h.recordingId, h.take ?? 1, ext));
+  const nameOf = (k: number) => takeName(`call${k}`, h.recordingId, h.take ?? 1, ext);
+  let number: number | null = n;
+  if (h.resumed) {
+    // The list starts again after a resume, and opening a name replaces the
+    // file behind it, so the folder is asked as it is for a screen file. Each
+    // number is claimed before it is asked about, so two copies opening
+    // together never hold the same one. A fresh take's id is new: it never asks.
+    const claim = () => (h.callCopyNumber = (h.callCopyNumber ?? 0) + 1);
+    number = await freeNumber(dir, nameOf, claim(), claim);
+  }
+  if (number === null) throw new Error('no free call copy file name in the folder; this stretch has no copy');
+  await c.writer.openIn(dir, nameOf(number));
   // The take ended, the guest left or the track died while the file was opening.
   if (c.finished || c.track.readyState === 'ended') return;
   const recorder = new ChunkRecorder({
@@ -1753,7 +1837,7 @@ export async function startScreenRecording(
       // The counter starts again after a resume, so the first share would open
       // the number the crashed tab left in the folder. Step past every name
       // already there; a fresh take's id is new, so it never probes.
-      const free = await freeScreenSegment(h.dir, 'host', h.recordingId, segment);
+      const free = await freeNumber(h.dir, (n) => screenFileName('host', h.recordingId, n), segment);
       if (free === null) {
         // No name the folder was asked about is free, and an unasked one could
         // be a file from before the crash.
@@ -1906,7 +1990,8 @@ export async function bindHostScreenChannel(
   channel: RTCDataChannel,
   h: RecordingHandles,
   onError?: (err: unknown) => void,
-  sharerPeerIdOrName?: string
+  sharerPeerIdOrName?: string,
+  sharerName?: string
 ): Promise<void> {
   channel.binaryType = 'arraybuffer';
   if (!h.dir) return;
@@ -1920,7 +2005,7 @@ export async function bindHostScreenChannel(
     // A number the folder already holds is given up for the next unclaimed one,
     // which keeps a segment saved before the crash from being opened over. A
     // fresh take reuses its own number.
-    segment = await freeScreenSegment(h.dir, 'guest', h.recordingId, segment, claim);
+    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n), segment, claim);
   }
   if (segment === null) {
     refuseScreenSegment(h, 'guest', onError);
@@ -1937,18 +2022,33 @@ export async function bindHostScreenChannel(
   }
   h.screenWriters = [...(h.screenWriters ?? []), writer];
   (h.screenStartsByFile ??= new Map()).set(writer.fileName, Date.now());
+  // Screen shares get their own bounds, one for the take and one for each
+  // sharer. A segment past either is recorded to the folder with no crash copy
+  // at all, so one sharer cannot spend the notes or the storage the others'
+  // recovery needs.
+  const sharer = sharerPeerIdOrName ?? '';
+  const sharerNotes = h.screenNotesBySharer?.get(sharer) ?? 0;
+  // The name is what a recovered report shows. The peer id means nothing to
+  // the host once the tab that knew it is gone, so it is never stored.
+  const who = (
+    (typeof sharerName === 'string' ? sanitizeText(sharerName).trim() : '') ||
+    (sharerPeerIdOrName ? slotNameForPeer(h, sharerPeerIdOrName) : undefined) ||
+    ''
+  ).slice(0, 200);
+  let noted = false;
   h.journal?.note((n) => {
-    // Screen shares get their own bound: later segments are still recorded,
-    // they only have no crash copy to reopen.
+    if (sharerNotes >= MAX_SCREEN_NOTES_PER_SHARER) return;
     if (n.files.filter((f) => f.kind === 'screen').length >= MAX_GUEST_SCREEN_NOTES) return;
     n.files.push({
       file: writer.fileName,
       kind: 'screen',
       segment,
       startedAtMs: Date.now(),
-      ...(sharerPeerIdOrName ? { who: sharerPeerIdOrName.slice(0, 200) } : {}),
+      ...(who ? { who } : {}),
     });
+    noted = true;
   });
+  if (noted) (h.screenNotesBySharer ??= new Map()).set(sharer, sharerNotes + 1);
   if (sharerPeerIdOrName) {
     (h.screenSharerPeerIdsByFile ??= new Map()).set(writer.fileName, sharerPeerIdOrName);
   }
@@ -1960,7 +2060,7 @@ export async function bindHostScreenChannel(
       const c = ref.current;
       if (c && c.readyState === 'open') c.send(json);
     },
-    ...(h.journal ? { journalFile: h.journal.file(writer.fileName) } : {}),
+    ...(noted && h.journal ? { journalFile: h.journal.file(writer.fileName) } : {}),
     ...(h.onWarn ? { onWarn: h.onWarn } : {}),
     ...(onError ? { onError } : {}),
   });
@@ -2076,7 +2176,15 @@ export function collectScreenSegments(
   h: RecordingHandles,
   getPeerName?: (peerId: string) => string | undefined
 ): ScreenSegmentInput[] {
-  return (h.screenWriters ?? [])
+  // The files a resume put back come first: they are from before the reload.
+  // The crash cut the take, so no finish signal for any of them was kept.
+  const before: ScreenSegmentInput[] = (h.resumedScreens ?? []).map((s) => ({
+    file: s.file,
+    offsetMs: s.startedAtMs != null && h.hostStartMs != null ? Math.max(0, s.startedAtMs - h.hostStartMs) : 0,
+    endedEarly: true,
+    ...(s.who ? { sharer: s.who } : {}),
+  }));
+  const live: ScreenSegmentInput[] = (h.screenWriters ?? [])
     .filter((w) => w.fileName)
     .map((w) => {
       const startMs = h.screenStartsByFile?.get(w.fileName);
@@ -2096,6 +2204,7 @@ export function collectScreenSegments(
         ...(sharer ? { sharer } : {}),
       };
     });
+  return [...before, ...live];
 }
 
 /**
@@ -2136,11 +2245,16 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
     // sender said it had finished: a stopped or unfinished resumed file keeps
     // its received block, with the digest comparison withheld because no
     // digest can stand for the whole file, so it still reads Incomplete.
-    // A file whose replay stopped short has a hole, which is known and not
-    // merely unverified: it is never "recovered", and the sender's digest is
-    // compared, so it reads as differing from what was sent.
-    const short = Boolean(h.shortFiles?.has(w.fileName));
-    const recovered = Boolean(r?.resumed && r.receivedFinalized && !r.isAbandoned && !short);
+    // A resumed file the sender finished can still be known to have a hole:
+    // its replay stopped short, nothing arrived for it after the reload, or the
+    // receiver gave up on a gap. That is not merely unverified: it is never
+    // "recovered", and the sender's digest is compared, so it reads as
+    // differing from what was sent.
+    const finished = Boolean(r?.resumed && r.receivedFinalized && !r.isAbandoned);
+    const holed = Boolean(
+      r && finished && (h.shortFiles?.has(w.fileName) || r.bytesWritten === 0 || r.gaveUpOnGap)
+    );
+    const recovered = finished && !holed;
     out.set(w.fileName, {
       bytes: w.size,
       ...(recovered
@@ -2150,7 +2264,7 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
               received: {
                 finalized: r.receivedFinalized,
                 abandoned: r.isAbandoned,
-                sha256Sent: r.resumed && !short ? undefined : r.senderSha256 ?? undefined,
+                sha256Sent: r.resumed && !holed ? undefined : r.senderSha256 ?? undefined,
                 sha256Written: await r.digestHex(),
               },
             }
@@ -2159,6 +2273,17 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
   }
   // A pre-crash host part was written by its copy, not by a writer of this take.
   for (const [name, bytes] of h.hostCopied ?? []) out.set(name, { bytes });
+  // Nor was a screen file from before the reload. One that could not be put
+  // back whole keeps a received block with no finish signal, so it reads
+  // incomplete and names the sharer's backup; the rest read as rebuilt.
+  for (const s of h.resumedScreens ?? []) {
+    out.set(
+      s.file,
+      s.short
+        ? { bytes: s.bytes, received: { finalized: false, abandoned: false, sha256Written: '' } }
+        : { bytes: s.bytes, recovered: true }
+    );
+  }
   // A finished call copy closed its own file and is not in allWriters; one the
   // take removed, or whose write or close failed, has no file to check.
   for (const c of keptCallCopies(h)) out.set(c.writer.fileName, { bytes: c.writer.size });

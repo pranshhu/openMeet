@@ -2309,7 +2309,7 @@ describe('host backup after a take in useRoom', () => {
     expect(result.current.state.recordingError).toBeNull();
   });
 
-  it('leaves the screen note naming the guest by socket peerId', async () => {
+  it('names the sharer in the screen note by display name, never by socket id', async () => {
     const notes = fakeNotes();
     const { dir } = fakeDirectory();
     const channel = {
@@ -2331,7 +2331,7 @@ describe('host backup after a take in useRoom', () => {
           kind: 'screen',
           segment: 1,
           startedAtMs: expect.any(Number),
-          who: 'p-guest',
+          who: 'Guest',
         },
       ])
     );
