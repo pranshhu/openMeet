@@ -241,6 +241,9 @@ Also not covered automatically. Needs 3 browser profiles.
   part is only in that guest's backup.
 - **The media board, if first opened during a take, isn't in that take's MP4.**
   Pads still play live and drop markers; the next take includes them.
+- **A take with the media board open has two audio channels in its camera MP4,**
+  also when the lobby says Mono, so stereo pads keep their stereo. The voice is
+  the same on both channels, and the WAV master stays mono.
 - **Clock sync needs the host recording within ~8 s of the guest.** Otherwise
   `sync.json` has no offset and says to align by waveform.
 - **WAV past 4 GiB** (~4 h 08 m at 24-bit/48 kHz stereo) declares a clamped
