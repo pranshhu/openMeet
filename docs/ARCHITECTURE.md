@@ -359,9 +359,10 @@ unfinished send to each new connection to the host.
   `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
   where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
-  `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
-  (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
-  `QuotaExceededError`→`DiskFullError`.
+  `pickRecordingDirectory` (`showDirectoryPicker` with `mode: 'readwrite'`: write access is
+  granted when the folder is chosen, so creating a file later needs no click) → all writes
+  **chained through `writeTail`** (host own-track writes are fire-and-forget; serialization
+  prevents interleaved corruption). `QuotaExceededError`→`DiskFullError`.
 - `retransmit-buffer.ts`: FIFO keeping every chunk that was not acked; it stores a `cap` and never
   reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only

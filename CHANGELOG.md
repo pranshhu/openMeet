@@ -123,6 +123,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   stereo; the voice is the same on both channels and the WAV master stays mono.
 - The host's recording files carry the host's name after the role:
   `host-ana_<id>.mp4` instead of `host_<id>.mp4`.
+- The recording folder is asked for with write access when it is chosen, so the
+  browser does not ask again when the first file is saved; and if the browser
+  later refuses to write to that folder, the next Record asks for a folder again.
 
 ### Fixed
 

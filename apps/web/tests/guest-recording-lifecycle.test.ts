@@ -975,6 +975,87 @@ describe('host backup after a take in useRoom', () => {
     expect(warnings.filter((w) => /WAV master|Clock sync|Integrity not verified/.test(w))).toEqual([]);
   });
 
+  it.each(['NotAllowedError', 'SecurityError'])(
+    'asks for a folder again after the browser refused to write to the one it had (%s)',
+    async (name) => {
+      const folder = fakeDirectory().dir;
+      const { result } = await startHostTake({ dir: folder });
+      await act(async () => {
+        await result.current.endRecording();
+      });
+      act(() => {
+        result.current.newTake();
+      });
+
+      vi.mocked(startHostRecording).mockRejectedValueOnce(Object.assign(new Error('denied'), { name }));
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(vi.mocked(startHostRecording).mock.calls.at(-1)![0].dir).toBe(folder);
+      expect(result.current.state.recordingError).toBe(
+        'Permission to write to that folder was denied. Press Record again and choose a folder you own.'
+      );
+
+      await act(async () => {
+        await result.current.startRecording();
+      });
+      expect(vi.mocked(startHostRecording).mock.calls.at(-1)![0].dir).toBeUndefined();
+
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    }
+  );
+
+  it('stays silent when the folder prompt is dismissed before a take', async () => {
+    const { result } = await startHostTake();
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    act(() => {
+      result.current.newTake();
+    });
+
+    vi.mocked(startHostRecording).mockRejectedValueOnce(
+      Object.assign(new Error('cancelled'), { name: 'AbortError' })
+    );
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.recordingError).toBeNull();
+    expect(result.current.state.phase).not.toBe('recording');
+  });
+
+  it('keeps the folder when a take fails for a reason other than refused access', async () => {
+    const folder = fakeDirectory().dir;
+    const { result } = await startHostTake({ dir: folder });
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    act(() => {
+      result.current.newTake();
+    });
+
+    vi.mocked(startHostRecording).mockRejectedValueOnce(
+      Object.assign(new Error('full'), { name: 'DiskFullError' })
+    );
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.recordingError).toBe(
+      'Disk full — recording stopped. Free up space, then press End & save to keep what was recorded.'
+    );
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(vi.mocked(startHostRecording).mock.calls.at(-1)![0].dir).toBe(folder);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
   /** The take notes a fake journal owns, in the shape take.json holds. */
   function fakeNotes() {
     return {

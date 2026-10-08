@@ -2433,8 +2433,12 @@ export function useRoom(slug: string) {
       unprotectedRecording: recordingRef.current?.unprotected === true,
     }));
     } catch (e) {
+      const name = (e as { name?: string })?.name;
       // Cancelling the folder picker is a normal outcome, not a failure.
-      if ((e as { name?: string })?.name === 'AbortError') return;
+      if (name === 'AbortError') return;
+      // A folder the browser will not let this page write to is not kept, so
+      // the next Record asks for one, as the message says.
+      if (name === 'NotAllowedError' || name === 'SecurityError') dirRef.current = null;
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
     }
   }, [beginGuestRecording, slug]);
