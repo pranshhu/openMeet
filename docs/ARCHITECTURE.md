@@ -104,7 +104,8 @@ Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`), times 1.5 when 
 more than 40 fps (`presetAt`), under the same ceiling; capture constraints in
 `lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
-`cameraConstraints` asks the camera for it.
+`cameraConstraints` asks the camera for it. The lobby's size figures follow the rate
+the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup

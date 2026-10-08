@@ -3,7 +3,15 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck, folderCheck } from '@/lib/preflight';
-import { DEFAULT_BITRATE_ID, atBitrate, cameraVideoBps, chooseBitrate, presetById } from '@/lib/quality';
+import {
+  DEFAULT_BITRATE_ID,
+  atBitrate,
+  cameraVideoBps,
+  chooseBitrate,
+  formatPerHour,
+  presetAt,
+  presetById,
+} from '@/lib/quality';
 import { formatBytes } from '@/lib/sync-report';
 import type { TakeJournal } from '@/lib/take-journal';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
@@ -2026,6 +2034,108 @@ describe('Lobby', () => {
       expect(notice.className).toMatch(/\btext-xs\b/);
       expect(notice.className).toMatch(/\btext-center\b/);
       expect(notice.className).toMatch(/text-\[#7a4f01\]/);
+    });
+
+    describe('size figures', () => {
+      // A camera of the given size that delivers `frameRate`.
+      const cam = (width: number, height: number, frameRate: number) => {
+        const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate: 48000 }) };
+        const video = {
+          kind: 'video',
+          enabled: true,
+          stop: vi.fn(),
+          getSettings: () => ({ width, height, frameRate }),
+          getCapabilities: () => ({ width: { max: width }, height: { max: height } }),
+        };
+        return {
+          getTracks: () => [audio, video],
+          getAudioTracks: () => [audio],
+          getVideoTracks: () => [video],
+        } as unknown as MediaStream;
+      };
+      const lobbyWith = (stream: MediaStream) => {
+        const estimate = vi.fn().mockResolvedValue({ quota: 20e9, usage: 0 });
+        vi.stubGlobal('navigator', {
+          userAgent: 'test',
+          mediaDevices: {
+            getUserMedia: vi.fn().mockResolvedValue(stream),
+            enumerateDevices: vi
+              .fn()
+              .mockResolvedValue([...DEVICES, { kind: 'videoinput', deviceId: 'cam2', label: 'USB cam' }]),
+          },
+          storage: { estimate },
+        });
+        localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+        render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+        return estimate;
+      };
+      // The DOM query collapses the message's non-breaking space.
+      const shown = (message: string) => screen.findByText(message.replace(/\s+/g, ' '));
+      const optionTexts = (label: string) =>
+        [...(screen.getByLabelText(label) as HTMLSelectElement).options].map((o) => o.textContent);
+
+      afterEach(() => {
+        for (const key of ['om_host_xyz-abcd-pqr', 'om_quality', 'om_bitrate']) localStorage.removeItem(key);
+      });
+
+      it('grows every figure for a camera that delivers 60 fps', async () => {
+        const estimate = lobbyWith(cam(1280, 720, 60));
+        const p = presetAt(presetById('720p'), 60);
+
+        expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
+        expect(await shown(folderCheck(p).message)).toBeInTheDocument();
+        expect(optionTexts('Recording quality')).toEqual([
+          `Quality: 720p · ${formatPerHour(p, 2)} per person`,
+        ]);
+        expect(optionTexts('Recording bitrate')[0]).toBe(
+          `Bitrate: Standard · up to ${p.videoBps / 1e6} Mbps`
+        );
+        expect(estimate).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves every figure as it was for a camera that delivers 30 fps', async () => {
+        lobbyWith(cam(1280, 720, 30));
+        const p = presetById('720p');
+
+        expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
+        expect(await shown(folderCheck(p).message)).toBeInTheDocument();
+        expect(optionTexts('Recording quality')).toEqual([
+          `Quality: 720p · ${formatPerHour(p, 2)} per person`,
+        ]);
+        expect(optionTexts('Recording bitrate')[0]).toBe(
+          `Bitrate: Standard · up to ${p.videoBps / 1e6} Mbps`
+        );
+      });
+
+      it('follows the delivered rate when the camera changes', async () => {
+        lobbyWith(cam(1280, 720, 30));
+        await shown(diskCheck(20e9, 0, presetById('720p')).message);
+
+        (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(
+          cam(1280, 720, 60)
+        );
+        fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'cam2' } });
+
+        expect(
+          await shown(diskCheck(20e9, 0, presetAt(presetById('720p'), 60)).message)
+        ).toBeInTheDocument();
+      });
+
+      it('applies the bitrate level before the frame rate, as the recorder does', async () => {
+        localStorage.setItem('om_quality', '1440p');
+        localStorage.setItem('om_bitrate', 'max');
+        lobbyWith(cam(2560, 1440, 60));
+        const p = presetAt(atBitrate(presetById('1440p'), 'max'), 60);
+
+        expect(await shown(diskCheck(20e9, 0, p).message)).toBeInTheDocument();
+        expect(await shown(folderCheck(p).message)).toBeInTheDocument();
+        expect(optionTexts('Recording quality').at(-1)).toBe(
+          `Quality: 1440p · ${formatPerHour(p, 2)} per person`
+        );
+        expect(optionTexts('Recording bitrate').at(-1)).toBe(
+          `Bitrate: Maximum · up to ${p.videoBps / 1e6} Mbps`
+        );
+      });
     });
   });
 });
