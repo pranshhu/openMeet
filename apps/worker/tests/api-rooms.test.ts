@@ -97,25 +97,25 @@ describe('POST /api/rooms rate limit', () => {
   });
 
   it('rate limits after 10 requests from same IP using miniflare native binding', async () => {
-    const ip = '198.51.100.42';
-    for (let i = 0; i < 10; i++) {
-      const r = await SELF.fetch('https://test/api/rooms', {
-        method: 'POST',
-        headers: { 'CF-Connecting-IP': ip },
-      });
-      expect(r.status).toBe(201);
+    const post = (from: string) =>
+      SELF.fetch('https://test/api/rooms', { method: 'POST', headers: { 'CF-Connecting-IP': from } });
+    // The limiter counts in fixed 60-second windows, so eleven requests in a row
+    // can straddle a window edge and all be let through. Within twenty-one, one
+    // window holds eleven of them.
+    let limited: Response | undefined;
+    let sent = 0;
+    while (!limited && sent < 21) {
+      const r = await post('198.51.100.42');
+      sent += 1;
+      if (r.status === 429) limited = r;
+      else expect(r.status).toBe(201);
     }
-    const r11 = await SELF.fetch('https://test/api/rooms', {
-      method: 'POST',
-      headers: { 'CF-Connecting-IP': ip },
-    });
-    expect(r11.status).toBe(429);
-    expect(await r11.json()).toEqual({ error: 'rate_limited' });
+    // Never before the eleventh, and always by the twenty-first.
+    expect(sent).toBeGreaterThanOrEqual(11);
+    expect(limited?.status).toBe(429);
+    expect(await limited!.json()).toEqual({ error: 'rate_limited' });
 
-    const other = await SELF.fetch('https://test/api/rooms', {
-      method: 'POST',
-      headers: { 'CF-Connecting-IP': '198.51.100.43' },
-    });
+    const other = await post('198.51.100.43');
     expect(other.status).toBe(201);
   });
 
