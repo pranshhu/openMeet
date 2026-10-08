@@ -799,6 +799,24 @@ describe('CallStage initial device state from stream', () => {
     expect(wavLink.getAttribute('download')).toBe('openmeet-abc-defg-hij-backup-alice.wav');
   });
 
+  it('keeps a name written with combining marks whole in the download name', () => {
+    render(
+      <CallStage {...baseProps} phase="done" localName="प्रांशु" backupUrl="blob:backup" wavBackupUrl="blob:wav-backup" />
+    );
+    expect(screen.getByText('Download your WAV backup').getAttribute('download')).toBe(
+      'openmeet-abc-defg-hij-backup-प्रांशु.wav'
+    );
+  });
+
+  it('falls back to the role in the download name when the name has nothing usable', () => {
+    render(
+      <CallStage {...baseProps} phase="done" role="guest" localName="😀" backupUrl="blob:backup" wavBackupUrl="blob:wav-backup" />
+    );
+    expect(screen.getByText('Download your WAV backup').getAttribute('download')).toBe(
+      'openmeet-abc-defg-hij-backup-guest.wav'
+    );
+  });
+
   it('companion peer has no camera tile on the stage', () => {
     const s1 = { id: 'stream-bob' } as unknown as MediaStream;
     render(

@@ -30,6 +30,7 @@ beforeEach(() => {
     chaptersUrl: null,
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
+    takes: [],
   };
 });
 
@@ -42,8 +43,11 @@ describe('left', () => {
     expect(screen.getByRole('heading', { name: 'You left the call' })).toBeInTheDocument();
     expect(screen.getByText(/Download these before you close this tab/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'sync.json' })).toHaveAttribute('href', 'blob:sync');
-    expect(screen.getByRole('link', { name: 'sync.json' })).toHaveAttribute('download', 'sync.json');
-    expect(screen.getByRole('link', { name: 'Backup video' })).toHaveAttribute('download', 'backup.mp4');
+    expect(screen.getByRole('link', { name: 'sync.json' })).toHaveAttribute('download', 'openmeet-abc-defg-hij-sync.json');
+    expect(screen.getByRole('link', { name: 'Backup video' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-backup-ana.mp4'
+    );
     expect(screen.queryByRole('link', { name: 'chapters.txt' })).not.toBeInTheDocument();
     expect(screen.queryByText(/You can close this tab/)).not.toBeInTheDocument();
   });
@@ -83,6 +87,47 @@ describe('left', () => {
     const e = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(e);
     expect(e.defaultPrevented).toBe(false);
+  });
+
+  it('names them for the room, the last take and the person, like the links in the call', () => {
+    Object.assign(state, {
+      syncReportUrl: 'blob:sync',
+      chaptersUrl: 'blob:chapters',
+      wavBackupBlobUrl: 'blob:wav',
+      localName: 'Ana María',
+      takes: [{ take: 1 }, { take: 2 }],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('link', { name: 'sync.json' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-take2-sync.json'
+    );
+    expect(screen.getByRole('link', { name: 'chapters.txt' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-take2-chapters.txt'
+    );
+    expect(screen.getByRole('link', { name: 'Backup audio (WAV)' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-take2-backup-ana-maría.wav'
+    );
+  });
+
+  it('falls back to the role when the name has nothing usable', () => {
+    Object.assign(state, { role: 'guest', backupBlobUrl: 'blob:backup', localName: '😀' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('link', { name: 'Backup video' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-backup-guest.mp4'
+    );
+  });
+
+  it('gives a guest, who is not told the take number, names without one', () => {
+    Object.assign(state, { role: 'guest', backupBlobUrl: 'blob:backup', localName: 'Sam Lee' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('link', { name: 'Backup video' })).toHaveAttribute(
+      'download',
+      'openmeet-abc-defg-hij-backup-sam-lee.mp4'
+    );
   });
 });
 

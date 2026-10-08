@@ -23,6 +23,7 @@ import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
+import { downloadNamesFor } from '@/lib/file-names';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 
@@ -492,19 +493,12 @@ export function CallStage({
   const fileCount = summaryFiles.length;
   const savedWithWarnings = !!summary?.warnings.length;
 
-  // Downloads carry the room, the take and whose copy it is: three guests'
-  // backups all arriving as backup.mp4 can't be told apart, and a second
-  // take's sync.json has to visibly match its _take2 files. A guest isn't told
-  // the take number, so its names go without one rather than guess.
-  const lastTake = takes[takes.length - 1]?.take;
-  const tag = `openmeet-${slug}${lastTake ? `-take${lastTake}` : ''}`;
-  const who = (localName.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || role || 'you').toLowerCase();
-  const downloadNames = {
-    sync: `${tag}-sync.json`,
-    chapters: `${tag}-chapters.txt`,
-    backup: `${tag}-backup-${who}.mp4`,
-    wav: `${tag}-backup-${who}.wav`,
-  };
+  const downloadNames = downloadNamesFor({
+    room: slug,
+    take: takes[takes.length - 1]?.take,
+    localName,
+    role,
+  });
 
   // "Record another take" has to record. newTake only resets the refs, and
   // startRecording reads refs and reuses the folder, so both run inside the one
