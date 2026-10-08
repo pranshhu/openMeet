@@ -5023,3 +5023,256 @@ describe('resuming a crashed take from inside the call', () => {
     });
   });
 });
+
+/** A joined guest whose role-assigned carries whatever the Room said about it. */
+async function joinGuest(extra: Record<string, unknown> = {}) {
+  const { result } = renderHook(() => useRoom('xyz-test-room'));
+  const fakeStream = {
+    getTracks: () => [],
+    getAudioTracks: () => [{ kind: 'audio' }],
+    getVideoTracks: () => [{ kind: 'video' }],
+  } as unknown as MediaStream;
+  await act(async () => {
+    await result.current.join(fakeStream, 'Guest Alice');
+  });
+  await act(async () => {
+    emitSignal('role-assigned', {
+      type: 'role-assigned',
+      role: 'guest',
+      peerId: 'p-guest',
+      ordinal: 2,
+      peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+      recording: false,
+      ...extra,
+    });
+  });
+  return result;
+}
+
+const hostStartsTake = () =>
+  act(async () => {
+    emitSignal('recording-started', {
+      type: 'recording-started',
+      from: 'host',
+      recordingId: 'rec-x',
+      kind: 'camera',
+      filename: 'host_rec-x.mp4',
+    });
+  });
+
+const peerRecorded = (peerId: string, recorded: boolean) => ({ type: 'peer-recorded', peerId, recorded });
+
+describe('a guest set as not recorded', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    endGuestRecordingCalled = false;
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('starts as recorded until the Room says otherwise', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {});
+
+    expect(result.current.state.notRecorded).toBe(false);
+  });
+
+  it('starts no capture when the Room said so before it joined', async () => {
+    const result = await joinGuest({ notRecorded: true });
+
+    await hostStartsTake();
+
+    expect(result.current.state.notRecorded).toBe(true);
+    expect(vi.mocked(BackupRecorder)).not.toHaveBeenCalled();
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('connecting');
+    // The pill still comes on: the notice is about the call, not this capture.
+    expect(result.current.state.peerRecording).toBe(true);
+  });
+
+  it('starts nothing while set mid-call, and starts the next take once cleared', async () => {
+    const result = await joinGuest();
+
+    act(() => {
+      emitSignal('peer-recorded', peerRecorded('p-guest', false));
+    });
+    expect(result.current.state.notRecorded).toBe(true);
+
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('connecting');
+
+    await stopTake();
+    act(() => {
+      emitSignal('peer-recorded', peerRecorded('p-guest', true));
+    });
+    expect(result.current.state.notRecorded).toBe(false);
+
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+    expect(result.current.state.phase).toBe('recording');
+  });
+
+  it('starts no capture when it joins while a take runs and is already set', async () => {
+    const result = await joinGuest({ recording: true, notRecorded: true });
+
+    expect(result.current.state.notRecorded).toBe(true);
+    expect(vi.mocked(BackupRecorder)).not.toHaveBeenCalled();
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('connecting');
+  });
+
+  it('follows a Room that no longer lists the setting', async () => {
+    const result = await joinGuest({ notRecorded: true });
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+    expect(result.current.state.notRecorded).toBe(false);
+
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+    expect(result.current.state.phase).toBe('recording');
+  });
+
+  it('keeps the setting for the next take', async () => {
+    const result = await joinGuest();
+    act(() => {
+      emitSignal('peer-recorded', peerRecorded('p-guest', false));
+    });
+
+    act(() => {
+      result.current.newTake();
+    });
+
+    expect(result.current.state.notRecorded).toBe(true);
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).not.toHaveBeenCalled();
+  });
+
+  it('carries the setting on the other peers the Room lists', async () => {
+    const result = await joinGuest({
+      peers: [
+        { peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' },
+        { peerId: 'p-carol', ordinal: 3, role: 'guest', displayName: 'Carol', notRecorded: true },
+        { peerId: 'p-dan', ordinal: 4, role: 'guest', displayName: 'Dan' },
+      ],
+    });
+    const entry = (peerId: string) => result.current.state.remotePeers.find((r) => r.peerId === peerId);
+
+    expect(entry('p-carol')?.notRecorded).toBe(true);
+    expect(entry('p-dan')?.notRecorded).toBe(false);
+    expect(entry('p-host')?.notRecorded).toBe(false);
+
+    act(() => {
+      emitSignal('peer-recorded', peerRecorded('p-dan', false));
+    });
+
+    expect(entry('p-dan')?.notRecorded).toBe(true);
+    expect(entry('p-carol')?.notRecorded).toBe(true);
+    expect(entry('p-host')?.notRecorded).toBe(false);
+
+    act(() => {
+      emitSignal('presence', {
+        type: 'presence',
+        from: 'guest',
+        fromPeerId: 'p-dan',
+        fromName: 'Dan',
+        micOn: true,
+        camOn: false,
+        screenSharing: false,
+      });
+    });
+    expect(entry('p-dan')?.notRecorded).toBe(true);
+
+    act(() => {
+      emitSignal('peer-joined', {
+        type: 'peer-joined',
+        role: 'guest',
+        displayName: 'Erin',
+        userAgent: 'test',
+        peerId: 'p-erin',
+        ordinal: 5,
+        notRecorded: true,
+      });
+    });
+    expect(entry('p-erin')?.notRecorded).toBe(true);
+  });
+
+  it('sets the field on a peer whose entry presence added before peer-joined', async () => {
+    const result = await joinGuest();
+
+    act(() => {
+      emitSignal('presence', {
+        type: 'presence',
+        from: 'guest',
+        fromPeerId: 'p-frank',
+        fromName: 'Frank',
+        micOn: true,
+        camOn: true,
+        screenSharing: false,
+      });
+    });
+    expect(result.current.state.remotePeers.find((r) => r.peerId === 'p-frank')?.notRecorded).toBeUndefined();
+
+    act(() => {
+      emitSignal('peer-joined', {
+        type: 'peer-joined',
+        role: 'guest',
+        displayName: 'Frank',
+        userAgent: 'test',
+        peerId: 'p-frank',
+        ordinal: 6,
+        notRecorded: true,
+      });
+    });
+    expect(result.current.state.remotePeers.find((r) => r.peerId === 'p-frank')?.notRecorded).toBe(true);
+  });
+
+  it('drops a peer-recorded that is not shaped like one', async () => {
+    const result = await joinGuest();
+    const before = result.current.state.remotePeers;
+
+    await act(async () => {
+      emitSignal('peer-recorded', { type: 'peer-recorded', peerId: 'p-guest' });
+      emitSignal('peer-recorded', { type: 'peer-recorded', peerId: 'p-guest', recorded: 0 });
+      emitSignal('peer-recorded', { type: 'peer-recorded', peerId: 7, recorded: false });
+    });
+
+    expect(result.current.state.notRecorded).toBe(false);
+    expect(result.current.state.remotePeers).toBe(before);
+  });
+
+  it('keeps a capture that already started when the setting arrives mid-take', async () => {
+    const result = await joinGuest();
+    await hostStartsTake();
+    expect(vi.mocked(startGuestRecording)).toHaveBeenCalledTimes(1);
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      emitSignal('peer-recorded', peerRecorded('p-guest', false));
+    });
+
+    expect(result.current.state.notRecorded).toBe(true);
+    expect(result.current.state.phase).toBe('recording');
+    expect(endGuestRecordingCalled).toBe(false);
+
+    await stopTake();
+    expect(endGuestRecordingCalled).toBe(true);
+    expect(result.current.state.phase).toBe('done');
+  });
+});

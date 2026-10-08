@@ -116,6 +116,8 @@ export interface RemotePeer {
   presence?: PeerPresence | undefined;
   role?: Role | undefined;
   companion?: boolean | undefined;
+  /** The host set this guest as not recorded. */
+  notRecorded?: boolean | undefined;
 }
 
 export function applyRemotePeerPresence(
@@ -202,6 +204,11 @@ export interface RoomState {
    * capture started.
    */
   peerRecording: boolean;
+  /**
+   * The host set THIS peer as not recorded, so its own capture never starts.
+   * It stays in the call as before, and `peerRecording` still drives the pill.
+   */
+  notRecorded: boolean;
   /**
    * This device sends everyone a smaller live picture, to leave more of its
    * processor for the recording. The files are not affected.
@@ -576,6 +583,7 @@ export function useRoom(slug: string) {
     summary: null,
     takes: [],
     peerRecording: false,
+    notRecorded: false,
     lowPower: false,
     capabilities: {},
     finalizingGuests: [],
@@ -640,6 +648,9 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const companionRef = useRef(false);
+  // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
+  // which read refs.
+  const notRecordedRef = useRef(false);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   // The local screen share gets its OWN MediaStream (distinct id) so the remote
   // peer's ontrack receives it as a separate stream, not appended to the camera.
@@ -818,6 +829,9 @@ export function useRoom(slug: string) {
    * are silently discarded.
    */
   const beginGuestRecording = useCallback(async () => {
+    // The host set this guest as not recorded. Every way a guest's capture can
+    // start comes through here, so this is the one place that decides.
+    if (notRecordedRef.current) return;
     if (companionRef.current) {
       if (!peerRef.current || recordingRef.current) return;
       const recordingId = crypto.randomUUID();
@@ -1437,6 +1451,7 @@ export function useRoom(slug: string) {
         roleRef.current = m.role;
         myPeerIdRef.current = m.peerId;
         myOrdinalRef.current = m.ordinal;
+        notRecordedRef.current = m.notRecorded === true;
         // A host owns the take and takes no returned backup, so whatever this
         // tab queued before the room named its role is dropped instead of being
         // listed back to it as an incoming offer.
@@ -1493,9 +1508,11 @@ export function useRoom(slug: string) {
             stream: null,
             role: pp.role,
             companion: pp.companion,
+            notRecorded: pp.notRecorded === true,
           })),
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
+          notRecorded: m.notRecorded === true,
         }));
         sendPresence();
         // Joined mid-recording (rejoin after a crash, or just arriving late):
@@ -1548,12 +1565,25 @@ export function useRoom(slug: string) {
           remotePeers: s.remotePeers.some((r) => r.peerId === m.peerId)
             ? s.remotePeers.map((r) =>
                 r.peerId === m.peerId
-                  ? { ...r, name: m.displayName || r.name, role: m.role, companion: m.companion }
+                  ? {
+                      ...r,
+                      name: m.displayName || r.name,
+                      role: m.role,
+                      companion: m.companion,
+                      notRecorded: m.notRecorded === true,
+                    }
                   : r
               )
             : [
                 ...s.remotePeers,
-                { peerId: m.peerId, name: m.displayName, stream: null, role: m.role, companion: m.companion },
+                {
+                  peerId: m.peerId,
+                  name: m.displayName,
+                  stream: null,
+                  role: m.role,
+                  companion: m.companion,
+                  notRecorded: m.notRecorded === true,
+                },
               ],
           // 'peer-left' is recoverable: the peer may have simply reconnected.
           // Without this it was a permanent dead end even after they came back.
@@ -1638,6 +1668,19 @@ export function useRoom(slug: string) {
           },
         }))
       );
+      signal.on('peer-recorded', (m) => {
+        if (typeof m.peerId !== 'string' || typeof m.recorded !== 'boolean') return;
+        const notRecorded = !m.recorded;
+        if (m.peerId === myPeerIdRef.current) {
+          notRecordedRef.current = notRecorded;
+          setState((s) => ({ ...s, notRecorded }));
+          return;
+        }
+        setState((s) => ({
+          ...s,
+          remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
+        }));
+      });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
         const msg: ChatMessage = {
