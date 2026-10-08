@@ -57,6 +57,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   `sync_<id>.json`.
 - After the browser closes on a take, the lobby lists it as **Unsaved recording** and
   **Save to folder** rebuilds the files and their sync file from the browser’s copy.
+- While a take runs the guests' bytes are also kept in this browser, so a crash
+  loses at most the last seconds, and a take that cannot keep that copy says so on
+  screen and records as usual.
 
 ### Changed
 

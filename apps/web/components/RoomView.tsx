@@ -281,6 +281,7 @@ export function RoomView({ slug }: { slug: string }) {
       readLoad={readLoad}
       readTrackHealth={readTrackHealth}
       lowPower={state.lowPower}
+      unprotectedRecording={state.unprotectedRecording}
       onSetLowPower={setLowPower}
       onToggleMic={setMic}
       onToggleCam={setCam}

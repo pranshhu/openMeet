@@ -204,6 +204,8 @@ export interface RoomState {
   finalizingGuests: string[];
   /** Backups on their way from a guest to the host: incoming on the host, outgoing on a guest. */
   backupTransfers: BackupTransfer[];
+  /** The running take has no crash copy in this browser (storage unavailable or too small). */
+  unprotectedRecording: boolean;
 }
 
 /** One reading of how this device is coping with the take it is recording. */
@@ -538,6 +540,7 @@ export function useRoom(slug: string) {
     capabilities: {},
     finalizingGuests: [],
     backupTransfers: [],
+    unprotectedRecording: false,
   });
   // Peer ids whose camera recording channel has arrived for the take in progress.
   const [toldPeers, setToldPeers] = useState<string[]>([]);
@@ -1635,6 +1638,7 @@ export function useRoom(slug: string) {
       summary: null,
       backupBlobUrl: null,
       wavBackupBlobUrl: null,
+      unprotectedRecording: false,
     }));
   }, []);
 
@@ -1910,7 +1914,12 @@ export function useRoom(slug: string) {
       filename: `host_${recordingId}.mp4`,
     });
     phaseRef.current = 'recording';
-    setState((s) => ({ ...s, phase: 'recording', peerRecording: true }));
+    setState((s) => ({
+      ...s,
+      phase: 'recording',
+      peerRecording: true,
+      unprotectedRecording: recordingRef.current?.unprotected === true,
+    }));
     } catch (e) {
       // Cancelling the folder picker is a normal outcome, not a failure.
       if ((e as { name?: string })?.name === 'AbortError') return;

@@ -120,6 +120,7 @@ export function CallStage({
   readTrackHealth,
   lowPower = false,
   onSetLowPower,
+  unprotectedRecording,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -189,6 +190,8 @@ export function CallStage({
   /** This device is sending everyone a smaller live picture to spare its processor. */
   lowPower?: boolean;
   onSetLowPower?: (on: boolean) => void;
+  /** The running take has no crash copy in this browser, so say so. */
+  unprotectedRecording?: boolean;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -546,6 +549,9 @@ export function CallStage({
           <span className="text-white/70">
             {markerCount} marker{markerCount === 1 ? '' : 's'}
           </span>
+        )}
+        {phase === 'recording' && unprotectedRecording && (
+          <span role="status" className="text-[#fdd663]">This take isn’t protected if the browser crashes.</span>
         )}
         {phase === 'recording' && readTrackHealth && <RecordingHealth read={readTrackHealth} />}
         {/* The host's downloads live in the summary; here is only the verdict.

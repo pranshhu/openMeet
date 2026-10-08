@@ -1,6 +1,6 @@
 import { Profiler } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup, waitFor, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
 
@@ -384,6 +384,49 @@ describe('CallStage recording-capability labels', () => {
     expect(end).toHaveTextContent('End & save');
     expect(end.querySelector('svg rect')).not.toBeNull();
     expect(end.querySelector('svg circle')).toBeNull();
+  });
+
+  // A take with no crash copy has to say so while it runs; one that has a copy,
+  // or a call that is not recording, must stay quiet.
+  it('tells the host when the running take has no crash copy', () => {
+    render(<CallStage {...baseProps} phase="recording" unprotectedRecording />);
+    const line = within(screen.getByTestId('status-bar')).getByRole('status');
+    expect(line).toHaveTextContent('This take isn’t protected if the browser crashes.');
+    expect(line.className).toMatch(/text-\[#fdd663\]/);
+  });
+
+  it('shows no crash-copy line for a protected take or outside a take', () => {
+    const { rerender } = render(<CallStage {...baseProps} phase="recording" />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+    rerender(<CallStage {...baseProps} phase="in-call" unprotectedRecording />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+  });
+
+  it('shows no crash-copy line when finalizing or done even if unprotected', () => {
+    const { rerender } = render(
+      <CallStage {...baseProps} phase="finalizing" unprotectedRecording />
+    );
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+    rerender(<CallStage {...baseProps} phase="done" unprotectedRecording />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent(
+      'protected if the browser crashes'
+    );
+  });
+
+  // The warning belongs after the marker count, so a marker and a lost crash
+  // copy read in the order they matter, not the other way round.
+  it('keeps the crash-copy line after the marker count', () => {
+    render(<CallStage {...baseProps} phase="recording" markerCount={1} unprotectedRecording />);
+    const bar = screen.getByTestId('status-bar');
+    const markers = within(bar).getByText('1 marker');
+    const line = within(bar).getByRole('status');
+    expect(markers.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("gives the guest's recovery button the words its banner tells them to press", () => {

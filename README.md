@@ -412,7 +412,10 @@ after a crash the host's files are missing or empty. The lobby then lists the ta
 **Unsaved recording**: **Save to folder** rebuilds the guests' files from this browser's
 crash copy, copies in the host's own camera file and WAV master from its backups, and
 writes `sync_<id>.json` and the chapters beside them. The last couple of seconds before
-the crash may be missing, and a guest's own backup still holds the rest.
+the crash may be missing, and a guest's own backup still holds the rest. While a take
+runs, the guests' bytes are also kept in this browser about every two seconds, so the copy
+is at most a couple of seconds behind; a take that cannot keep that copy says so on screen
+and records as usual.
 
 ---
 

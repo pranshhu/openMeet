@@ -191,6 +191,33 @@ describe('recording', () => {
     expect(screen.getByTestId('track-health')).toBeInTheDocument();
   });
 
+  // Same wiring as the track panel: the flag the hook derives from the handles
+  // only reaches the screen through RoomView.
+  it('hands the call the unprotected flag for the status line', () => {
+    Object.assign(state, {
+      phase: 'recording',
+      role: 'host',
+      peerRecording: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      unprotectedRecording: true,
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByTestId('status-bar')).toHaveTextContent(
+      'This take isn’t protected if the browser crashes.'
+    );
+  });
+
   it('passes low-power mode and its switch to the call', () => {
     Object.assign(state, {
       phase: 'in-call',

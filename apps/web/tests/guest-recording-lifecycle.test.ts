@@ -894,6 +894,32 @@ describe('host backup after a take in useRoom', () => {
     return { backup, wavBackup, screenBackup, hostWriter, result, recordingId };
   }
 
+  // The handles say whether this browser could keep a crash copy; the call has
+  // to show it, and the take after it must start from a clean slate.
+  it('starts with unprotectedRecording false before a take', () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    expect(result.current.state.unprotectedRecording).toBe(false);
+  });
+
+  it('mirrors the handles when a take has no crash copy', async () => {
+    const { result } = await hostTake(undefined, { unprotected: true });
+    expect(result.current.state.unprotectedRecording).toBe(true);
+  });
+
+  it('is not marked unprotected when the take has a journal', async () => {
+    const { result } = await hostTake(undefined, { journal: { note: vi.fn() } });
+    expect(result.current.state.unprotectedRecording).toBe(false);
+  });
+
+  it('clears the unprotected flag when the next take starts', async () => {
+    const { result } = await hostTake(undefined, { unprotected: true });
+    expect(result.current.state.unprotectedRecording).toBe(true);
+    act(() => {
+      result.current.newTake();
+    });
+    expect(result.current.state.unprotectedRecording).toBe(false);
+  });
+
   // A full disk makes the errored writer reject its close, so the finalize
   // throws. That used to hold 'finalizing' for good: Leave off, and a toast
   // still promising a save.
