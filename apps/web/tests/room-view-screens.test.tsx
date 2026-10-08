@@ -502,6 +502,19 @@ describe('interrupted take', () => {
     expect(saveRecordingFromCall).toHaveBeenCalledTimes(1);
   });
 
+  it('tells the call screen while a resume or a save runs', () => {
+    Object.assign(state, inCall, {
+      role: 'host',
+      resumeOffer: { take: 1, canResume: true },
+      takeNotice: null,
+      recoveryBusy: true,
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByRole('button', { name: 'Resume recording' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save what was recorded' })).toBeDisabled();
+  });
+
   it('hands the saved line to the call screen', () => {
     Object.assign(state, inCall, {
       role: 'host',

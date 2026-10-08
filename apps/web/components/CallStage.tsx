@@ -132,6 +132,7 @@ export function CallStage({
   onResumeRecording,
   onSaveRecording,
   takeNotice,
+  recoveryBusy = false,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -217,6 +218,8 @@ export function CallStage({
   onSaveRecording?: () => void;
   /** One line after an interrupted take was saved from inside the call. */
   takeNotice?: string | null;
+  /** A Resume or a Save of the interrupted take is running, so neither can be pressed, nor Record. */
+  recoveryBusy?: boolean;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -670,18 +673,24 @@ export function CallStage({
         </p>
       )}
       {resumeOffer && (
-        <div role="status" className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+        <div role="status" aria-busy={recoveryBusy} className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           <span>Recording was interrupted. This browser still has the take.</span>
           {resumeOffer.canResume && (
             <button
               type="button"
               onClick={onResumeRecording}
-              className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-7"
+              disabled={recoveryBusy}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-7"
             >
               Resume recording
             </button>
           )}
-          <button type="button" onClick={onSaveRecording} className={guestLink}>
+          <button
+            type="button"
+            onClick={onSaveRecording}
+            disabled={recoveryBusy}
+            className={`${guestLink} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
             Save what was recorded
           </button>
         </div>
@@ -1117,6 +1126,7 @@ export function CallStage({
                   text="Record"
                   label="Start recording"
                   variant="record"
+                  disabled={recoveryBusy}
                   onClick={phase === 'done' ? recordNextTake : handleRecord}
                 />
               )}

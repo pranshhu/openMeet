@@ -89,6 +89,31 @@ describe('RoomView holds the take lock', () => {
     await waitFor(() => expect([...locks.held]).toEqual([]));
   });
 
+  it('a host tab holds it from a resume or a save of an interrupted take, into the take that follows', async () => {
+    const locks = fakeLocks();
+    install(locks);
+    state = { ...base, phase: 'in-call', role: 'host', recoveryBusy: true };
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    await waitFor(() => expect([...locks.held]).toEqual(['openmeet-take:abc-defg-hij']));
+    // The resume worked: the take is live, and the lock was never let go.
+    state = { ...base, phase: 'recording', role: 'host', recoveryBusy: false };
+    rerender(<RoomView slug="abc-defg-hij" />);
+    await act(async () => {});
+    expect([...locks.held]).toEqual(['openmeet-take:abc-defg-hij']);
+    expect(locks.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('a host tab lets it go when the resume or the save ends without a take', async () => {
+    const locks = fakeLocks();
+    install(locks);
+    state = { ...base, phase: 'in-call', role: 'host', recoveryBusy: true };
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    await waitFor(() => expect([...locks.held]).toEqual(['openmeet-take:abc-defg-hij']));
+    state = { ...base, phase: 'in-call', role: 'host', recoveryBusy: false };
+    rerender(<RoomView slug="abc-defg-hij" />);
+    await waitFor(() => expect([...locks.held]).toEqual([]));
+  });
+
   it('a guest tab never holds it', async () => {
     const locks = fakeLocks();
     install(locks);

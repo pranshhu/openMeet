@@ -224,6 +224,8 @@ export interface RoomState {
   resumeOffer: { take: number; canResume: boolean } | null;
   /** One line after an interrupted take was saved from inside the call. */
   takeNotice: string | null;
+  /** A Resume or a Save of the interrupted take is running: its buttons wait, and this tab holds the take lock. */
+  recoveryBusy: boolean;
 }
 
 /** One reading of how this device is coping with the take it is recording. */
@@ -348,12 +350,6 @@ export function recordingErrorOnPeerJoined(
  */
 export function forgetPreTakeGuestChannels(pending: { current: PendingRecordingChannel[] }): void {
   pending.current = [];
-}
-
-/** A screen label carries a per-share sequence number; one entry per guest and kind is enough. */
-function pendingBase(label: string): string {
-  const { base } = recordingChannelKind(label);
-  return base.startsWith(DATA_CHANNEL_RECORDING_SCREEN) ? DATA_CHANNEL_RECORDING_SCREEN : base;
 }
 
 /** Whether any pending channel names a file this journal holds. */
@@ -537,8 +533,6 @@ export function startConnectWatchdog(
 
 export const MAX_RELAYED_MARKERS = 1000;
 export const MAX_MARKER_LABEL_LENGTH = 200;
-/** One entry per peer and kind: a camera, a WAV and one screen per recorded peer. */
-export const MAX_PENDING_CHANNELS = 12;
 
 export function useRoom(slug: string) {
   const [state, setState] = useState<RoomState>({
@@ -573,8 +567,10 @@ export function useRoom(slug: string) {
     unprotectedRecording: false,
     resumeOffer: null,
     takeNotice: null,
+    recoveryBusy: false,
   });
-  // Peer ids whose camera recording channel has arrived for the take in progress.
+  // Peer ids whose camera recording channel has arrived for the take in
+  // progress, or whose channels the resume that continued it bound.
   const [toldPeers, setToldPeers] = useState<string[]>([]);
 
   const signalRef = useRef<SignalClient | null>(null);
@@ -593,7 +589,22 @@ export function useRoom(slug: string) {
   const pendingChannelsRef = useRef<PendingRecordingChannel[]>([]);
   // The interrupted take this browser can still continue, found after a reload.
   const resumeJournalRef = useRef<TakeJournal | null>(null);
-  const savingRef = useRef(false);
+  // One flag for Resume and Save: both work on the same crash copy, so neither
+  // may start while either runs.
+  const recoveryBusyRef = useRef(false);
+  // This browser holds no crash copy of the room that could be continued:
+  // storage was read and has none, or a save from the call removed it. Only a
+  // host tab ever sets it.
+  const nothingToResumeRef = useRef(false);
+  // The connections a stop sent for a leftover take has reached.
+  const stoppedPeersRef = useRef<Set<string>>(new Set());
+  // The screen recording channel a connection sent while no take was running.
+  // Nothing binds such a channel, so after a resume that share is recorded
+  // only once it is started again, and the host is told whose it is. Kept by
+  // connection, so a mark goes when its connection does; and a take that
+  // starts closes the offer, which only a new join brings back, and a join
+  // rebuilds every connection.
+  const idleScreensRef = useRef(new WeakMap<PeerConnection, RTCDataChannel>());
   const recordingRef = useRef<RecordingHandles | null>(null);
   // The host take this guest is following, learned from `recording-started` or
   // from the host's acks. A host that resumes re-announces the same take.
@@ -945,6 +956,25 @@ export function useRoom(slug: string) {
   }, [slug]);
 
   /**
+   * Tell guests that are still recording a take this room does not have.
+   *
+   * After a host crash the guests keep recording so the host can resume. When
+   * the take was saved or deleted from the lobby instead, no socket was open to
+   * tell them, and their recording channels arriving here, with no take running
+   * and no crash copy that could be continued, are the only sign. The Room
+   * relays a stop to everyone in it, so every connection there is counted as
+   * told by it: one stop per connection at most, however many channels it opens.
+   */
+  const stopLeftoverTake = useCallback(() => {
+    if (!nothingToResumeRef.current || recordingRef.current) return;
+    if (!pendingChannelsRef.current.some((p) => !stoppedPeersRef.current.has(p.peerId))) return;
+    stoppedPeersRef.current = new Set(peersRef.current.keys());
+    // No id: the take's id went with its crash copy, and a guest ends the take
+    // it is in whichever id a stop carries.
+    signalRef.current?.send({ type: 'recording-stop', recordingId: '' });
+  }, []);
+
+  /**
    * Offer to continue or save this room's interrupted take.
    *
    * Only a crash copy whose notes parsed and whose commits have not stopped can
@@ -953,9 +983,19 @@ export function useRoom(slug: string) {
    */
   const offerResume = useCallback(async () => {
     if (recordingRef.current || roleRef.current !== 'host') return;
+    const take = takeRef.current;
     const found = await findTakeJournals();
     const journal = found.find((j) => j.notesOk && j.notes.room === slug && !j.dead);
+    // With no crash copy that could be continued, a guest whose channels are
+    // already waiting has nothing to wait for. One that another tab holds is
+    // still one: its guests are left alone.
+    nothingToResumeRef.current = !journal;
+    stopLeftoverTake();
     if (!journal || (await isTakeLockHeld(slug))) return;
+    // A take that began while storage was being read (Record pressed, or the
+    // take resumed from an earlier offer) owns the room from its click: an
+    // offer over it would put a second take on top of it.
+    if (recordingRef.current || takeRef.current !== take) return;
     resumeJournalRef.current = journal;
     setState((s) => ({
       ...s,
@@ -964,7 +1004,7 @@ export function useRoom(slug: string) {
         canResume: canResumeFrom(journal, pendingChannelsRef.current),
       },
     }));
-  }, [slug]);
+  }, [slug, stopLeftoverTake]);
 
   const join = useCallback(
     async (
@@ -1235,23 +1275,22 @@ export function useRoom(slug: string) {
             // uncompressed WAV master on `recording-audio`. Route by label.
             const recNow = recordingRef.current;
             // No take running: keep the channel so a resume can bind it. One
-            // entry per guest and kind, so a rebind replaces its own instead of
-            // stacking, and the screen share's sequence number is not part of
-            // the identity.
+            // camera and one WAV entry per connection, whatever key the label
+            // carries: the key is the sender's to choose, so as an identity it
+            // would let one participant fill the list. A rebind replaces its
+            // own entry, and a channel that has closed is dropped on the way.
+            // Always a new array: a resume in flight holds the one it was given.
             const keepPending = () => {
-              const kind = recordingChannelKind(channel.label);
-              const key = kind.key ?? remotePeerId;
-              const base = pendingBase(channel.label);
+              const base = recordingChannelKind(channel.label).base;
               pendingChannelsRef.current = [
                 ...pendingChannelsRef.current.filter(
                   (p) =>
-                    !(
-                      pendingBase(p.channel.label) === base &&
-                      (recordingChannelKind(p.channel.label).key ?? p.peerId) === key
-                    )
+                    p.channel.readyState !== 'closed' &&
+                    !(p.peerId === remotePeerId && recordingChannelKind(p.channel.label).base === base)
                 ),
                 { channel, peerId: remotePeerId },
-              ].slice(-MAX_PENDING_CHANNELS);
+              ];
+              stopLeftoverTake();
               const journal = resumeJournalRef.current;
               if (!journal) return;
               const canResume = canResumeFrom(journal, pendingChannelsRef.current);
@@ -1275,7 +1314,11 @@ export function useRoom(slug: string) {
                 ).catch((e: unknown) =>
                   setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }))
                 );
-              } else keepPending();
+              } else if (roleRef.current === 'host' && remoteRole !== 'producer') {
+                // Not kept for a resume, only remembered, one per connection.
+                // A producer is never recorded, so its channel says nothing.
+                idleScreensRef.current.set(peer, channel);
+              }
               return;
             }
             // Only the host opens guest files, and only for the peers it
@@ -1646,7 +1689,7 @@ export function useRoom(slug: string) {
 
       signal.connect();
     },
-    [slug, beginGuestRecording, recordMarker, sendPresence, offerResume]
+    [slug, beginGuestRecording, recordMarker, sendPresence, offerResume, stopLeftoverTake]
   );
 
   const setMic = useCallback(
@@ -1715,28 +1758,89 @@ export function useRoom(slug: string) {
    */
   const resumeRecording = useCallback(async () => {
     const journal = resumeJournalRef.current;
-    if (!journal || recordingRef.current) return;
+    if (!journal || recordingRef.current || recoveryBusyRef.current) return;
+    recoveryBusyRef.current = true;
+    // Cleared here and not after the call: what the resume reports while it
+    // runs is about the take that follows, and has to stay on screen.
+    setState((s) => ({ ...s, recordingError: null, takeNotice: null, recoveryBusy: true }));
     const onError = (e: unknown) =>
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
+    // What the controller is given. A channel that arrives while the folder
+    // prompt or the replay runs is not in it, and is bound below.
+    const handed = pendingChannelsRef.current;
+    // Declared before the call: the warning callback has to tell a take that is
+    // still being resumed (no handles yet) from one that has ended.
+    let handles: RecordingHandles | null = null;
     try {
       const h = await resumeHostRecording({
         journal,
-        channels: pendingChannelsRef.current,
+        channels: handed,
         // The host's own track is recorded from here on, so it needs the same
         // streams a fresh take passes: the MP4 stream (board mix included) and
         // the raw mic for the WAV master.
         localStream: withBoardAudio(localStreamRef.current!, boardRef.current),
         micStream: localStreamRef.current ?? undefined,
         onError,
-        onWarn: (msg) => setState((s) => ({ ...s, recordingError: msg })),
+        onWarn: (msg) => {
+          // A commit to the crash copy can give up some seconds after End &
+          // save closed the files. A warning for a take that has ended must not
+          // put a banner over the saved take or mark the take after it. Before
+          // the handles exist the take is still being resumed, and what it
+          // reports then belongs on screen.
+          if (handles && recordingRef.current !== handles) return;
+          // The banner is shared and the next problem replaces it, so a lost
+          // crash copy is also said in the take's own status line, which stays
+          // until the take ends. The text is matched as well as the journal's
+          // flag because one file's crash copy can stop without the whole
+          // journal dying.
+          const lost = msg.startsWith('Crash protection stopped') || journal.dead === true;
+          setState((s) => ({ ...s, recordingError: msg, ...(lost ? { unprotectedRecording: true } : {}) }));
+        },
       });
+      recordingRef.current = handles = h;
+      // A guest the resume took up again was told when its take began, and its
+      // channel was already here, so nothing else marks it for the call-audio
+      // copy the host keeps of everyone it records.
+      const told = new Set<string>(h.slotPeerIds?.values());
+      // A guest ignores the re-announced take it is already in and opens no
+      // other channel, so one that arrived meanwhile is bound here, the way a
+      // channel arriving during a take is, or its file would stop at the crash.
+      for (const late of pendingChannelsRef.current) {
+        if (handed.includes(late)) continue;
+        const name = remotePeersRef.current.find((r) => r.peerId === late.peerId)?.name ?? undefined;
+        const audio = recordingChannelKind(late.channel.label).base === DATA_CHANNEL_RECORDING_AUDIO;
+        if (!audio) told.add(late.peerId);
+        const bind = audio ? bindHostAudioChannel : bindHostGuestChannel;
+        void bind(late.channel, h, late.peerId, onError, name).catch(onError);
+      }
+      setToldPeers([...told]);
       pendingChannelsRef.current = [];
       resumeJournalRef.current = null;
-      recordingRef.current = h;
       dirRef.current = h.dir ?? dirRef.current;
       // Still the original take's start: the markers and every offset in the
       // report are measured from it, across both host files.
       hostStartRef.current = h.hostStartMs ?? Date.now();
+      // The markers placed before the crash belong to this take; its report is
+      // built from this list and the crash copy is removed when the take ends.
+      markersRef.current = [...journal.notes.markers];
+      relayedMarkersCountRef.current = markersRef.current.filter((m) => m.from !== 'host').length;
+      // A screen share that was already running sent its channel before the
+      // take was back, and nothing binds that channel: the share is recorded
+      // again only once it is restarted, so the host is told whose it is.
+      const unrecorded: string[] = [];
+      for (const [id, connection] of peersRef.current) {
+        const screen = idleScreensRef.current.get(connection);
+        // A share that has stopped closed its channel.
+        if (!screen || screen.readyState === 'closed') continue;
+        unrecorded.push(remotePeersRef.current.find((r) => r.peerId === id)?.name || 'a participant');
+      }
+      const screenLine =
+        unrecorded.length > 0
+          ? `The screen share from ${unrecorded.join(', ')} is not being recorded until they stop sharing and share again.`
+          : null;
+      // The take after this one must not reuse its number: the summary lists
+      // takes by it.
+      takeRef.current = Math.max(takeRef.current, h.take ?? 0);
       signalRef.current?.send({
         type: 'recording-started',
         recordingId: h.recordingId,
@@ -1744,35 +1848,64 @@ export function useRoom(slug: string) {
         filename: resumedName(h.recordingId, 'mp4'),
       });
       phaseRef.current = 'recording';
-      setState((s) => ({ ...s, phase: 'recording', peerRecording: true, resumeOffer: null, recordingError: null }));
+      setState((s) => ({
+        ...s,
+        phase: 'recording',
+        peerRecording: true,
+        resumeOffer: null,
+        markers: markersRef.current,
+        // Added to whatever the resume itself reported, never in its place.
+        ...(screenLine
+          ? { recordingError: s.recordingError ? `${s.recordingError} ${screenLine}` : screenLine }
+          : {}),
+      }));
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') return; // the folder prompt was dismissed
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
+    } finally {
+      recoveryBusyRef.current = false;
+      setState((s) => ({ ...s, recoveryBusy: false }));
     }
   }, []);
 
   /** Rebuild the interrupted take into a folder this browser can write to. */
   const saveRecordingFromCall = useCallback(async () => {
     const journal = resumeJournalRef.current;
-    if (!journal || savingRef.current) return;
-    savingRef.current = true;
+    if (!journal || recoveryBusyRef.current) return;
+    recoveryBusyRef.current = true;
+    setState((s) => ({ ...s, recoveryBusy: true }));
     try {
       const folder = await pickRecordingDirectory();
       const result = await saveRecoveredTake(journal, folder);
+      const failed = result.unsaved ?? [];
       const saved = result.files.filter((f) => f.source !== 'failed').length;
-      const line = `Saved ${saved} file${saved === 1 ? '' : 's'} to your folder.`;
-      if (result.json === null) {
-        // The journal is kept when the sync file could not be written, so the offer stays.
-        setState((s) => ({ ...s, takeNotice: `${line} The sync file could not be written.` }));
+      const line =
+        `Saved ${saved} file${saved === 1 ? '' : 's'} to your folder.` +
+        (failed.length > 0
+          ? ` Not saved: ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}.`
+          : '') +
+        (result.json === null ? ' The sync file could not be written.' : '');
+      // The save says when the crash copy was left in browser storage: a file
+      // is not in the folder in full, or the sync file was not written. Until
+      // it is removed the take is still here, to resume or to save again.
+      if (result.kept) {
+        setState((s) => ({ ...s, takeNotice: line }));
         return;
       }
       resumeJournalRef.current = null;
+      nothingToResumeRef.current = true;
+      // With the crash copy gone the take cannot be continued, so the guests
+      // still recording it are told it ended, the way End & save tells them.
+      // Everyone in the room hears this stop, so none of them is sent another.
+      stoppedPeersRef.current = new Set(peersRef.current.keys());
+      signalRef.current?.send({ type: 'recording-stop', recordingId: journal.notes.recordingId });
       setState((s) => ({ ...s, resumeOffer: null, takeNotice: line }));
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') return;
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
     } finally {
-      savingRef.current = false;
+      recoveryBusyRef.current = false;
+      setState((s) => ({ ...s, recoveryBusy: false }));
     }
   }, []);
 
@@ -2059,6 +2192,9 @@ export function useRoom(slug: string) {
   );
 
   const startRecording = useCallback(async () => {
+    // A resume or a save of the interrupted take is still running on its crash
+    // copy and its guests: a fresh take beside it would be a second one.
+    if (recoveryBusyRef.current) return;
     const peer = peerRef.current;
     const localStream = localStreamRef.current;
     if (!peer || !localStream) return;

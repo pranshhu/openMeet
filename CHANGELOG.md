@@ -89,6 +89,18 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- After a host reload, **Resume recording** and **Save what was recorded** run
+  once and one at a time: a second click, or pressing the other button or Record
+  while one is still working, does nothing.
+- A take that is resumed keeps the markers placed before the reload, anything
+  the resume itself reported stays on screen, a guest whose connection arrives
+  while the resume is running is still recorded, and the host keeps a call-audio
+  copy of the guests it resumed.
+- When the host saves an interrupted take instead of resuming it, from the call
+  or from the lobby, the guests are told the take has ended and stop recording.
+- A screen share that was already running when the host reloaded is named on the
+  host's screen after a resume, because it is recorded again only once that
+  person stops sharing and shares again.
 - Browser storage that stops answering during a take no longer holds back the
   guests' recordings: after 15 seconds crash protection stops for that file, the
   call says so, and the recording carries on.

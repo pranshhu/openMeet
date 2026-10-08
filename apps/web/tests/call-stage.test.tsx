@@ -1907,6 +1907,34 @@ describe('interrupted take notice', () => {
     expect(screen.getByRole('button', { name: 'Save what was recorded' })).toBeTruthy();
   });
 
+  it('lets neither action, nor Record, be pressed while a resume or a save runs', () => {
+    const onResumeRecording = vi.fn();
+    const onSaveRecording = vi.fn();
+    const onRecord = vi.fn();
+    render(
+      <CallStage
+        {...baseProps}
+        onRecord={onRecord}
+        resumeOffer={{ take: 1, canResume: true }}
+        onResumeRecording={onResumeRecording}
+        onSaveRecording={onSaveRecording}
+        recoveryBusy
+      />
+    );
+
+    const resume = screen.getByRole('button', { name: 'Resume recording' });
+    const save = screen.getByRole('button', { name: 'Save what was recorded' });
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    for (const button of [resume, save, record]) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(onResumeRecording).not.toHaveBeenCalled();
+    expect(onSaveRecording).not.toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(resume.closest('[role="status"]')).toHaveAttribute('aria-busy', 'true');
+  });
+
   it('shows no notice when no take was interrupted', () => {
     render(<CallStage {...baseProps} />);
 

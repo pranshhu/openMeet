@@ -106,9 +106,12 @@ export function RoomView({ slug }: { slug: string }) {
 
   // A second tab in this browser would take the host seat from under a live
   // take. This tab holds the room's take lock for as long as its take is, so
-  // that tab's lobby can ask first.
+  // that tab's lobby can ask first. Resuming or saving an interrupted take
+  // counts from the click: until it ends, that take's crash copy is this tab's
+  // to work on, and another tab's lobby must not list it.
   const hostTakeLive =
-    state.role === 'host' && (state.phase === 'recording' || state.phase === 'finalizing');
+    state.role === 'host' &&
+    (state.phase === 'recording' || state.phase === 'finalizing' || state.recoveryBusy);
   useEffect(() => (hostTakeLive ? holdTakeLock(slug) : undefined), [hostTakeLive, slug]);
 
   if (state.phase === 'checking') {
@@ -288,6 +291,7 @@ export function RoomView({ slug }: { slug: string }) {
       takeNotice={state.takeNotice}
       onResumeRecording={() => void resumeRecording()}
       onSaveRecording={() => void saveRecordingFromCall()}
+      recoveryBusy={state.recoveryBusy}
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
