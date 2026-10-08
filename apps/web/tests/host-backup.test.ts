@@ -6,9 +6,12 @@ import {
   bindHostGuestChannel,
   collectFileChecks,
   resumeHostRecording,
+  startGuestRecording,
+  startScreenRecording,
+  stopScreenRecording,
 } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { presetById } from '@/lib/quality';
+import { presetById, DEFAULT_BITRATE_ID, chooseBitrate } from '@/lib/quality';
 import type { RecoveredFile } from '@/lib/take-recovery';
 import { findTakeJournals, type TakeJournal, type TakeNotes } from '@/lib/take-journal';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
@@ -982,5 +985,59 @@ describe('host backup recording', () => {
     } finally {
       delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
     }
+  });
+});
+
+describe('camera bitrate level', () => {
+  beforeEach(() => {
+    FakeMediaRecorder.instances = [];
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    chooseBitrate(DEFAULT_BITRATE_ID);
+  });
+
+  const bitrates = () =>
+    FakeMediaRecorder.instances.map((m) => (m.opts as MediaRecorderOptions).videoBitsPerSecond);
+
+  it('records the host camera and its backup at the level joined with', async () => {
+    chooseBitrate('high');
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-level-host',
+      localStream: fakeStream(),
+      dir: fakeDir() as never,
+    });
+    expect(bitrates()).toEqual([7_500_000, 7_500_000]);
+    await endHostRecording(handles);
+  });
+
+  it('records a guest camera and its backup at the level joined with', () => {
+    chooseBitrate('max');
+    const channel = { readyState: 'open', addEventListener: vi.fn(), send: vi.fn() } as unknown as RTCDataChannel;
+    startGuestRecording({ recordingId: 'test-rec-level-guest', localStream: fakeStream(), channel });
+    expect(bitrates()).toEqual([10_000_000, 10_000_000]);
+  });
+
+  it('records a resumed host camera and its backup at the level joined with', async () => {
+    chooseBitrate('high');
+    const { journal } = resumeJournal();
+    const handles = await resumeHostRecording({
+      journal,
+      dir: fakeDir() as never,
+      localStream: fakeStream(),
+      channels: [],
+    });
+    expect(bitrates()).toEqual([7_500_000, 7_500_000]);
+    await endHostRecording(handles);
+  });
+
+  it('leaves a screen segment at the preset for its resolution', async () => {
+    chooseBitrate('max');
+    const h = { recordingId: 'test-rec-level-screen', dir: fakeDir() as never };
+    await startScreenRecording(h, fakeStream(), 'host', null);
+    expect(bitrates()).toEqual([5_000_000]);
+    await stopScreenRecording(h);
   });
 });

@@ -96,8 +96,10 @@ integers and a `ts` that is negative or non-finite; returns a field-whitelisted 
 `RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
 Recording quality: `RECORDING_VIDEO_WIDTH=1920`/`HEIGHT=1080`/`FRAME_RATE=30` (capture, `ideal`),
 `RECORDING_VIDEO_BPS=5_000_000`, `RECORDING_AUDIO_BPS=160_000` (encode; the 1080p entry of
-`lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which `ChunkRecorder` and the camera
-`BackupRecorder` get the bitrate for the actual track via `presetForTrack`; capture constraints in
+`lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which a screen segment's `ChunkRecorder` gets the
+bitrate for the actual track via `presetForTrack`, and the camera `ChunkRecorder` and
+`BackupRecorder` via `cameraVideoBps`: that preset at the level picked in the lobby (`BITRATE_LEVELS`:
+Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`); capture constraints in
 `lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
 `cameraConstraints` asks the camera for it.
