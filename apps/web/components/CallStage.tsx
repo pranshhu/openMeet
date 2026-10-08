@@ -904,6 +904,7 @@ export function CallStage({
                       onClick={() => {
                         setMicMenuOpen((o) => !o);
                         setCamMenuOpen(false);
+                        setPresentMenuOpen(false);
                         setRecordMenuOpen(false);
                       }}
                       aria-label="Select microphone"
@@ -967,6 +968,7 @@ export function CallStage({
                       onClick={() => {
                         setCamMenuOpen((o) => !o);
                         setMicMenuOpen(false);
+                        setPresentMenuOpen(false);
                         setRecordMenuOpen(false);
                       }}
                       aria-label="Select camera"
@@ -1032,17 +1034,22 @@ export function CallStage({
                 </>
               )}
               {/* Present control:
-                  Desktop with getDisplayMedia presents directly.
-                  Where screen capture is unsupported (phones/mobile), opens a menu
-                  with "A photo or video" and "Rear camera".
-                  Where neither is supported, disabled with explanation. */}
+                  With getDisplayMedia the button presents the screen in one click and
+                  the arrow beside it opens a menu with "A photo or video".
+                  Without it (phones) the button itself opens the menu, which offers
+                  "Rear camera" as well.
+                  Where neither is possible, disabled with explanation. */}
               {(() => {
-                const canPresentMobile =
+                const canPresentFile =
                   typeof window !== 'undefined' &&
                   typeof HTMLCanvasElement !== 'undefined' &&
                   typeof MediaStream !== 'undefined';
+                const fileArrow = screenShareSupported && canPresentFile;
                 return (
-                  <div data-picker-container className="relative inline-flex items-center">
+                  <div
+                    data-picker-container
+                    className={`relative inline-flex items-center${fileArrow ? ' rounded-full bg-[#3c4043]' : ''}`}
+                  >
                     <ControlButton
                       icon="present"
                       label={
@@ -1050,24 +1057,43 @@ export function CallStage({
                           ? 'Stop presenting'
                           : screenShareSupported
                             ? 'Present screen'
-                            : canPresentMobile
+                            : canPresentFile
                               ? 'Present a photo, video or your rear camera'
                               : 'Screen sharing isn’t available in this browser — most mobile browsers can’t share a screen. Use a desktop browser.'
                       }
                       variant={screenSharing ? 'active' : 'default'}
-                      disabled={!screenSharing && !screenShareSupported && !canPresentMobile}
+                      disabled={!screenSharing && !screenShareSupported && !canPresentFile}
                       onClick={() => {
                         if (screenSharing || screenShareSupported) {
                           setPresentMenuOpen(false);
                           onToggleScreen();
-                        } else if (canPresentMobile) {
+                        } else if (canPresentFile) {
                           setPresentMenuOpen((o) => !o);
                           setMicMenuOpen(false);
                           setCamMenuOpen(false);
                         }
                       }}
                     />
-                    {!screenSharing && !screenShareSupported && canPresentMobile && presentMenuOpen && (
+                    {fileArrow && (
+                      <button
+                        type="button"
+                        disabled={screenSharing}
+                        onClick={() => {
+                          setPresentMenuOpen((o) => !o);
+                          setMicMenuOpen(false);
+                          setCamMenuOpen(false);
+                          setRecordMenuOpen(false);
+                        }}
+                        aria-label="Choose what to present"
+                        title="Choose what to present"
+                        aria-haspopup="menu"
+                        aria-expanded={presentMenuOpen}
+                        className="inline-flex h-12 w-11 items-center justify-center rounded-r-full sm:w-9 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Icon name={presentMenuOpen ? 'arrow_drop_down' : 'arrow_drop_up'} size={18} />
+                      </button>
+                    )}
+                    {!screenSharing && canPresentFile && presentMenuOpen && (
                       <div
                         role="menu"
                         aria-label="Present options"
@@ -1075,7 +1101,7 @@ export function CallStage({
                       >
                         <label
                           role="menuitem"
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
+                          className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
                         >
                           <span>A photo or video</span>
                           <input
@@ -1090,17 +1116,19 @@ export function CallStage({
                             }}
                           />
                         </label>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setPresentMenuOpen(false);
-                            onToggleScreen('rear-camera');
-                          }}
-                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
-                        >
-                          <span>Rear camera</span>
-                        </button>
+                        {!screenShareSupported && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setPresentMenuOpen(false);
+                              onToggleScreen('rear-camera');
+                            }}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
+                          >
+                            <span>Rear camera</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1172,6 +1200,7 @@ export function CallStage({
                           setRecordMenuOpen((o) => !o);
                           setMicMenuOpen(false);
                           setCamMenuOpen(false);
+                          setPresentMenuOpen(false);
                         }}
                         aria-label="Choose who is recorded"
                         title="Choose who is recorded"

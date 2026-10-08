@@ -2307,8 +2307,8 @@ export function useRoom(slug: string) {
         track.addEventListener('ended', () => stopScreenShare());
         screenSharingRef.current = true;
         // A desktop screen sharer sees a "You're presenting" placeholder, not a
-        // mirror of their screen (a hall of mirrors). A phone showing its rear
-        // camera or a file has nothing to mirror, and needs the viewfinder to aim.
+        // mirror of their screen (a hall of mirrors). A rear camera or a file has
+        // nothing to mirror, and its presenter needs the viewfinder to see it.
         setState((s) => ({
           ...s,
           screenSharing: true,

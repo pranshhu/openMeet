@@ -31,7 +31,7 @@ function feedProps(f: StageFeed) {
  *  - presenting (a screen is live): screen spotlight + cameras (desktop column /
  *    mobile floating peer PiP), other people first and yourself last. A desktop
  *    screen sharer sees a "You're presenting" placeholder with a Stop button
- *    instead of a self-mirror; a phone presenting its rear camera or a file
+ *    instead of a self-mirror; whoever presents a rear camera or a file
  *    passes `localScreen` and sees what it is showing.
  *  - focused (2 cameras): one big spotlight + a tap-to-swap corner PiP.
  *  - grid (3+ people): equal tiles. Mesh calls have no natural "the other

@@ -69,7 +69,8 @@ retention policy to trust, because there's nothing retained.
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - Chat with a pop-up for each new message while the panel is closed, presence, and
-  screen share (phones present a photo/video or the rear camera)
+  screen share; a photo or a video file can be presented too (phones present those or
+  the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - A sound when a recording problem appears during a take, and a system

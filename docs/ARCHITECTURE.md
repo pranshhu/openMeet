@@ -273,7 +273,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
   floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
-  Stop presenting button, no self-mirror; a phone presenting its rear camera or a photo/video gets that
+  Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
   feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
@@ -447,7 +447,7 @@ unfinished send to each new connection to the host.
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
-- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. Phones present a photo/video (`presentFile`) or the rear camera (`presentRearCamera`); a real screen comes from a second device joined with "Present only".
+- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only".
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
   (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
   `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
@@ -710,6 +710,10 @@ unfinished send to each new connection to the host.
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
   connection, with each segment backed up locally in OPFS.
+- **A presented video is sent the way a screen is.** The others get it at up to 8
+  frames a second (`SCREEN_MAX_FPS`), 4 while the presenter is in low-power mode, because
+  every video track added beside the camera is marked as a screen. Its sound, and the
+  screen file recorded during a take, are not limited.
 - **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
   host's browser asks before it joins while a take is live. If the host joins there anyway,
   the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
