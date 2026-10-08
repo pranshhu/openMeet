@@ -105,6 +105,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad can fade: press **Fade** under it and it comes in over a
   second and a half when fired and goes out the same way when stopped. A second
   click cuts it.
+- The host's screen counts down the three seconds before a take: "Recording
+  starts in 3".
 
 ### Changed
 

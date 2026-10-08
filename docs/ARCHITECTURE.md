@@ -97,7 +97,7 @@ integers and a `ts` that is negative or non-finite; returns a field-whitelisted 
 after which a guest stops streaming it), `ACK_EVERY_N_CHUNKS=5` (counted in 64 KiB fragments),
 `ACK_EVERY_N_MS=10000`, `WS_HEARTBEAT_INTERVAL_MS=30000`, `DRAIN_HARD_CAP_MS=30000`,
 `ROOM_TTL_MS=30d` (extended on every join), `TURN_CRED_TTL_S=43200` (12 h, **seconds**, unlike every `*_MS`; must outlast a session — the client never refreshes TURN credentials and Cloudflare drops a relayed call soon after its credential expires),
-`RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
+`RECORD_COUNTDOWN_S=3` (seconds counted down on screen before a take starts), `RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
 Recording quality: `RECORDING_VIDEO_WIDTH=1920`/`HEIGHT=1080`/`FRAME_RATE=30` (capture, `ideal`),
 `RECORDING_VIDEO_BPS=5_000_000`, `RECORDING_AUDIO_BPS=160_000` (encode; the 1080p entry of
 `lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which a screen segment's `ChunkRecorder` gets the
@@ -302,14 +302,19 @@ guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `Room
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
 backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
-null; `CallStage` shows it as a note that can be dismissed until the next take starts).
+null; `CallStage` shows it as a note that can be dismissed until the next take starts),
+`countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
 stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
-unfinished send to each new connection to the host.
+unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
+asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
+draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.
+A take that took the room while it counted (a resume) keeps it, and `resumeRecording` never counts
+down.
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).

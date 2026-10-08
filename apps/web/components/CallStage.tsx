@@ -15,7 +15,7 @@ import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
-import { RecordingNotice } from './RecordingNotice';
+import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { BackupNotice } from './BackupNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
@@ -817,6 +817,7 @@ export function CallStage({
               notRecorded={!!notRecorded}
               className={toastPlace}
             />
+            <RecordingCountdown endsAt={countdownEndsAt} className={toastPlace} />
             {/* Saving takes up to ~45 s while the last seconds arrive. Leave is
                 off until it finishes, so this says why and what to do. */}
             {phase === 'finalizing' && (

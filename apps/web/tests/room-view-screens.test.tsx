@@ -720,4 +720,10 @@ describe('countdown', () => {
       Reflect.deleteProperty(globalThis, 'showDirectoryPicker');
     }
   });
+
+  it('shows the call the count the hook reports', () => {
+    Object.assign(state, inCall, { role: 'guest', countdownEndsAt: Date.now() + 3000 });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
+  });
 });
