@@ -314,6 +314,90 @@ describe('present presentation lifecycle with useRoom', () => {
     }
   });
 
+  // A presenter has to hear the clip to talk over it; a phone on its loudspeaker,
+  // or a present-only device beside the one with the microphone, would put the
+  // sound back into the call.
+  describe('hearing a presented video on the device that presents it', () => {
+    const speakers = { id: 'speakers' };
+    let mockSource: { connect: ReturnType<typeof vi.fn> };
+    let origPlay: typeof HTMLMediaElement.prototype.play;
+    let origPause: typeof HTMLMediaElement.prototype.pause;
+    const videoFile = new File(['video-bytes'], 'demo.mp4', { type: 'video/mp4' });
+
+    beforeEach(() => {
+      const track = { kind: 'audio', id: 'video-sound', stop: vi.fn() };
+      const dest = { stream: { getAudioTracks: () => [track], getTracks: () => [track] } };
+      mockSource = { connect: vi.fn() };
+      const source = mockSource;
+      class MockAudioContext {
+        createMediaElementSource = vi.fn(() => source);
+        createMediaStreamDestination = vi.fn(() => dest);
+        destination = speakers;
+        close = vi.fn().mockResolvedValue(undefined);
+      }
+      globalThis.AudioContext = MockAudioContext as any;
+      origPlay = HTMLMediaElement.prototype.play;
+      origPause = HTMLMediaElement.prototype.pause;
+      HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+      HTMLMediaElement.prototype.pause = vi.fn();
+    });
+
+    afterEach(() => {
+      HTMLMediaElement.prototype.play = origPlay;
+      HTMLMediaElement.prototype.pause = origPause;
+    });
+
+    it('a computer hears it', async () => {
+      const { result } = await setupConnectedRoom();
+      await act(async () => {
+        await result.current.toggleScreenShare(videoFile);
+      });
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(mockSource.connect).toHaveBeenCalledWith(speakers);
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+    });
+
+    it('a phone does not', async () => {
+      const { result } = await setupConnectedRoom('Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile');
+      await act(async () => {
+        await result.current.toggleScreenShare(videoFile);
+      });
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(mockSource.connect).not.toHaveBeenCalledWith(speakers);
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+    });
+
+    it('a present-only device does not', async () => {
+      Object.defineProperty(navigator, 'userAgent', { value: 'test-desktop', configurable: true });
+      const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as any;
+      const { result } = renderHook(() => useRoom('test-room'));
+      await act(async () => {
+        await result.current.join(empty, 'Alice', false, true);
+      });
+      await act(async () => {
+        signalHandlers['peer-joined']?.[0]?.({
+          type: 'peer-joined',
+          peerId: 'peer-bob',
+          ordinal: 1,
+          role: 'host',
+          displayName: 'Bob',
+        });
+      });
+      await act(async () => {
+        await result.current.toggleScreenShare(videoFile);
+      });
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(mockSource.connect).not.toHaveBeenCalledWith(speakers);
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+    });
+  });
+
   it('rear camera presentation restores the face camera on stop', async () => {
     const phoneUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)';
     const switchCameraSpy = vi.spyOn(SwitchableMedia.prototype, 'switchCamera');

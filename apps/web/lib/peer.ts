@@ -299,8 +299,10 @@ export class PeerConnection {
   addTrack(track: MediaStreamTrack, stream: MediaStream): void {
     // 'detail' is the screen-share hint: keep text sharp, sacrifice frame rate.
     // It also lets applySendQuality tell a screen sender from a camera one
-    // without threading extra state through every call site.
-    if (track.kind === 'video') track.contentHint = 'detail';
+    // without threading extra state through every call site. A track that
+    // arrives with a hint of its own keeps it: a presented video is marked
+    // 'motion' where it is made, and is sent the way a camera is.
+    if (track.kind === 'video' && !track.contentHint) track.contentHint = 'detail';
     this.requirePc().addTrack(track, stream);
     this.applySendQuality();
   }
