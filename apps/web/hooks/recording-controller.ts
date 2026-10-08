@@ -1765,6 +1765,14 @@ export async function endGuestRecording(
   // Must finish before drain(): stopAndFlush emits the final PCM batch AND the
   // rewritten WAV header, so draining first would leave the header on the wire.
   await h.guestPcm?.stopAndFlush();
+  // The backups stop with the recorders, not after the drain: a stream that
+  // cannot drain would keep them recording this person until the sender gave
+  // up, long after the take had ended. Settled, not awaited, so a backup that
+  // fails to stop is still reported only after the host was told the file is final.
+  const backupsStopped = Promise.allSettled([
+    h.backup ? h.backup.stop() : Promise.resolve(null),
+    h.wavBackup ? h.wavBackup.stop() : Promise.resolve(null),
+  ]);
   // In parallel, not in series. Each drain is capped at DRAIN_HARD_CAP_MS, so
   // running them one after another put the guest's worst case at 90s while the
   // host waited 20 — the host gave up on a tail that was still legitimately
@@ -1791,11 +1799,10 @@ export async function endGuestRecording(
       (await h.wavSender?.digestHex()) ?? ''
     );
   }
-  const [backup, wavBackup] = await Promise.all([
-    h.backup ? h.backup.stop() : Promise.resolve(null),
-    h.wavBackup ? h.wavBackup.stop() : Promise.resolve(null),
-  ]);
-  return { drained: drained && wavDrained, backup, wavBackup };
+  const [backup, wavBackup] = await backupsStopped;
+  if (backup.status === 'rejected') throw backup.reason;
+  if (wavBackup.status === 'rejected') throw wavBackup.reason;
+  return { drained: drained && wavDrained, backup: backup.value, wavBackup: wavBackup.value };
 }
 
 /** Tell the host this channel's file is complete, and hand over its digest. */

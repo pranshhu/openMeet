@@ -116,6 +116,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A guest's own backup stops recording the moment a take ends. When the
+  guest's stream to the host had died, the backup used to keep recording for up
+  to 30 seconds after the take while the stream waited to be sent.
 - Files downloaded from the screen shown after leaving a call are named for the
   room, the take and the person, like the ones downloaded in the call, and a
   name written with combining marks (Devanagari, Thai, Arabic) stays whole in a

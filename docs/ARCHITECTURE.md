@@ -799,6 +799,3 @@ unfinished send to each new connection to the host.
   leaves. The call screen does not offer the control while that take can still be resumed or saved
   (`resumeOffer`), so the host's page never sends it then. If the setting does arrive while a
   guest's browser is capturing, that capture ends there, as on the host's stop.
-- **A guest whose stream to the host has died keeps recording its own backup for up to 30 s after
-  the take ends.** `endGuestRecording` stops the backups only once the senders have drained or
-  given up (`DRAIN_NO_PROGRESS_TIMEOUT_MS`).
