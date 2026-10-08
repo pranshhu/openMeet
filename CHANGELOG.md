@@ -108,6 +108,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A person who presents a video from a computer hears it too. A phone and a
   Present-only device stay silent, so the sound is not picked up again by a
   microphone.
+- A presented video is sent to the call as video, at its own frame rate, instead
+  of at the few frames a second a shared screen gets. A presented photo and a
+  shared screen are unchanged.
 
 ### Changed
 

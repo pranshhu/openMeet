@@ -167,6 +167,11 @@ export async function presentFile(file: File, monitor = false): Promise<Presente
       ? (canvas as any).captureStream(30)
       : new MediaStream();
 
+  // A video is motion, not text: marked here, it is sent to the call at its own
+  // frame rate instead of at the few frames a second a shared screen gets.
+  const frames = stream.getVideoTracks?.()[0];
+  if (frames) frames.contentHint = 'motion';
+
   if (audioTrack) {
     stream.addTrack(audioTrack);
   }

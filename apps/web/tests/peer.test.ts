@@ -346,3 +346,26 @@ describe('PeerConnection.setLowPower', () => {
     expect(videoSender.params.encodings[0]?.maxFramerate).toBe(4);
   });
 });
+
+describe('PeerConnection.addTrack — what is sent as a screen', () => {
+  it('sends a track that carries no hint as a screen, at a screen frame rate', () => {
+    const { peer, pc } = setup(false);
+    const track = { kind: 'video', contentHint: '' } as unknown as MediaStreamTrack;
+    peer.start();
+    peer.addTrack(track, {} as MediaStream);
+    expect(track.contentHint).toBe('detail');
+    const sender = pc.getSenders().find((s) => s.track === track)!;
+    expect(sender.params.encodings[0]).toEqual(sendEncoding(2, 'screen'));
+  });
+
+  it('sends a presented video, which arrives marked as motion, without the screen frame-rate cap', () => {
+    const { peer, pc } = setup(false);
+    const clip = { kind: 'video', contentHint: 'motion' } as unknown as MediaStreamTrack;
+    peer.start();
+    peer.addTrack(clip, {} as MediaStream);
+    expect(clip.contentHint).toBe('motion');
+    const sender = pc.getSenders().find((s) => s.track === clip)!;
+    expect(sender.params.encodings[0]).toEqual(sendEncoding(2, 'camera'));
+    expect(sender.params.encodings[0]?.maxFramerate).toBeUndefined();
+  });
+});

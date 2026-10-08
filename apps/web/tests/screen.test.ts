@@ -102,6 +102,8 @@ describe('screen', () => {
 
         expect(mockCaptureStream).toHaveBeenCalledWith(30);
         expect(stream.getVideoTracks().length).toBe(1);
+        // A picture is text and detail: it carries no hint and is sent as a screen.
+        expect(mockVideoTrack.contentHint).toBeUndefined();
         expect(mockFillRect).toHaveBeenCalledWith(0, 0, 1920, 1080);
         expect(mockDrawImage).toHaveBeenCalled();
 
@@ -183,6 +185,8 @@ describe('screen', () => {
         expect(mockSource.connect).not.toHaveBeenCalledWith(mockSpeakers);
         // Video audio track must be added to the presented stream
         expect(stream.getAudioTracks()).toContain(mockAudioTrack);
+        // A video is motion: marked here so it is not sent at a screen's frame rate.
+        expect(mockVideoTrack.contentHint).toBe('motion');
 
         stop();
         expect(mockVideoTrack.stop).toHaveBeenCalled();

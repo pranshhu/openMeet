@@ -447,7 +447,7 @@ unfinished send to each new connection to the host.
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
-- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device.
+- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
   (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
   `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
@@ -714,10 +714,6 @@ unfinished send to each new connection to the host.
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
   connection, with each segment backed up locally in OPFS.
-- **A presented video is sent the way a screen is.** The others get it at up to 8
-  frames a second (`SCREEN_MAX_FPS`), 4 while the presenter is in low-power mode, because
-  every video track added beside the camera is marked as a screen. Its sound, and the
-  screen file recorded during a take, are not limited.
 - **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
   host's browser asks before it joins while a take is live. If the host joins there anyway,
   the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
