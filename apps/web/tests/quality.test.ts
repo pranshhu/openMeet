@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   QUALITY_PRESETS, presetById, presetForTrack, supportedPresets,
   bytesPerHour, formatPerHour, describeTrack, DEFAULT_QUALITY_ID,
-  cleanFps,
+  cleanFps, frameRateFrom,
 } from '@/lib/quality';
 
 const track = (caps?: Partial<MediaTrackCapabilities>, settings?: Partial<MediaTrackSettings>) =>
@@ -72,6 +72,21 @@ describe('describeTrack', () => {
   });
   it('returns null when there is nothing to report', () => {
     expect(describeTrack(track(undefined, {}))).toBeNull();
+  });
+});
+
+describe('frameRateFrom', () => {
+  it('takes a stored rate that is on offer', () => {
+    expect(frameRateFrom('25')).toBe(25);
+    expect(frameRateFrom('29.97')).toBe(29.97);
+  });
+
+  // A stale or hand-edited value must not become `frameRate: { ideal: NaN }`:
+  // getUserMedia throws on it and the lobby is left with no preview at all.
+  it('falls back to the default for anything else', () => {
+    for (const raw of [null, '', 'abc', '1e9', '-25', 'NaN']) {
+      expect(frameRateFrom(raw)).toBe(30);
+    }
   });
 });
 

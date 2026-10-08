@@ -48,4 +48,12 @@ describe('deviceConstraints', () => {
     expect(v.facingMode).toEqual({ exact: 'user' });
     expect(v.deviceId).toBeUndefined();
   });
+
+  it('asks the camera for the chosen frame rate, and for 30 without one', async () => {
+    const { deviceConstraints } = await import('@/lib/media');
+    const chosen = deviceConstraints('mic-123', 'cam-456', '720p', 25).video as MediaTrackConstraints;
+    expect(chosen.frameRate).toEqual({ ideal: 25 });
+    const fallback = deviceConstraints('mic-123', 'cam-456', '720p').video as MediaTrackConstraints;
+    expect(fallback.frameRate).toEqual({ ideal: 30 });
+  });
 });

@@ -98,7 +98,9 @@ Recording quality: `RECORDING_VIDEO_WIDTH=1920`/`HEIGHT=1080`/`FRAME_RATE=30` (c
 `RECORDING_VIDEO_BPS=5_000_000`, `RECORDING_AUDIO_BPS=160_000` (encode; `BackupRecorder`'s
 defaults, and the 1080p entry of `lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which
 `ChunkRecorder` gets the bitrate for the actual track via `presetForTrack`; capture constraints in
-`lib/media.ts` `RECORDING_CONSTRAINTS`).
+`lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
+rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
+`cameraConstraints` asks the camera for it.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
@@ -414,7 +416,7 @@ unfinished send to each new connection to the host.
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
   start and an `ffmpeg` command that writes a copy starting there,
-  and a `frameRate` section: the requested rate, each camera file's track-reported rate where known,
+  and a `frameRate` section: the default requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as
   "Download sync.json" (downloaded as

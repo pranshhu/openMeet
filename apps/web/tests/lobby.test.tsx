@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
@@ -1015,7 +1015,7 @@ describe('Lobby', () => {
   it('shows a visible focus ring on the camera, microphone and quality pickers', async () => {
     (navigator.mediaDevices.enumerateDevices as ReturnType<typeof vi.fn>).mockResolvedValue(DEVICES);
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
-    for (const name of ['Camera', 'Microphone', 'Recording quality']) {
+    for (const name of ['Camera', 'Microphone', 'Recording quality', 'Frame rate']) {
       const select = await screen.findByLabelText(name);
       // The select drops its native outline, so its visible box must take over.
       expect(select.closest('label')?.className).toMatch(/focus-within:ring/);
@@ -1717,5 +1717,97 @@ describe('Lobby', () => {
       now.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+
+  describe('frame rate', () => {
+    const gum = () => navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+    const lastVideo = () => gum().mock.calls.at(-1)![0].video as MediaTrackConstraints;
+    const firstVideo = () => gum().mock.calls[0]![0].video as MediaTrackConstraints;
+
+    beforeEach(() => {
+      (navigator.mediaDevices.enumerateDevices as ReturnType<typeof vi.fn>).mockResolvedValue([
+        ...DEVICES,
+        { kind: 'videoinput', deviceId: 'cam2', label: 'USB cam' },
+      ]);
+    });
+    afterEach(() => localStorage.removeItem('om_fps'));
+
+    /** The lobby with its preview up, returning the frame-rate select. */
+    async function renderWithPicker() {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      return await screen.findByLabelText('Frame rate');
+    }
+
+    it('offers 24, 25, 29.97 and 30 fps, starting at 30', async () => {
+      const picker = await renderWithPicker();
+      expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+        'Frame rate: 24 fps',
+        'Frame rate: 25 fps',
+        'Frame rate: 29.97 fps',
+        'Frame rate: 30 fps',
+      ]);
+      expect(picker).toHaveValue('30');
+      expect(lastVideo().frameRate).toEqual({ ideal: 30 });
+    });
+
+    it('asks the camera for the picked rate and remembers it', async () => {
+      const picker = await renderWithPicker();
+      fireEvent.change(picker, { target: { value: '29.97' } });
+      await waitFor(() => expect(localStorage.getItem('om_fps')).toBe('29.97'));
+      expect(lastVideo().frameRate).toEqual({ ideal: 29.97 });
+      expect(picker).toHaveValue('29.97');
+    });
+
+    it('starts at a rate remembered in this browser', async () => {
+      localStorage.setItem('om_fps', '24');
+      const picker = await renderWithPicker();
+      expect(picker).toHaveValue('24');
+      // The first preview, not a later switch: a remembered rate is asked for
+      // from the moment the camera opens.
+      expect(firstVideo().frameRate).toEqual({ ideal: 24 });
+    });
+
+    it('ignores a remembered rate that is not on offer', async () => {
+      localStorage.setItem('om_fps', '999');
+      const picker = await renderWithPicker();
+      expect(picker).toHaveValue('30');
+      expect(firstVideo().frameRate).toEqual({ ideal: 30 });
+    });
+
+    it('keeps the rate when the camera or the quality changes', async () => {
+      const picker = await renderWithPicker();
+      fireEvent.change(picker, { target: { value: '25' } });
+      // The handlers read state, so the switches below wait for this to settle.
+      await waitFor(() => expect(picker).toHaveValue('25'));
+
+      fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'cam2' } });
+      await waitFor(() => expect(lastVideo().deviceId).toEqual({ exact: 'cam2' }));
+      expect(lastVideo().frameRate).toEqual({ ideal: 25 });
+
+      fireEvent.change(screen.getByLabelText('Recording quality'), { target: { value: '720p' } });
+      await waitFor(() => expect(lastVideo().width).toEqual({ ideal: 1280 }));
+      expect(lastVideo().frameRate).toEqual({ ideal: 25 });
+      expect(picker).toHaveValue('25');
+    });
+
+    it('changes nothing when the camera refuses the switch', async () => {
+      const picker = await renderWithPicker();
+      gum().mockRejectedValueOnce(Object.assign(new Error('busy'), { name: 'NotReadableError' }));
+      fireEvent.change(picker, { target: { value: '25' } });
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('busy'));
+      expect(picker).toHaveValue('30');
+      expect(localStorage.getItem('om_fps')).toBeNull();
+    });
+
+    it('asks for the remembered rate when Try again starts the preview', async () => {
+      localStorage.setItem('om_fps', '25');
+      gum().mockRejectedValueOnce(Object.assign(new Error('no'), { name: 'NotAllowedError' }));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+      expect(await screen.findByLabelText('Frame rate')).toHaveValue('25');
+      expect(gum()).toHaveBeenCalledTimes(2);
+      expect(lastVideo().frameRate).toEqual({ ideal: 25 });
+    });
   });
 });
