@@ -5,7 +5,7 @@ import {
   bytesPerHour, formatPerHour, describeTrack, DEFAULT_QUALITY_ID,
   cleanFps, frameRateFrom,
   DEFAULT_BITRATE_ID, atBitrate, bitrateLevels, cameraVideoBps, chooseBitrate,
-  BITRATE_LEVELS,
+  BITRATE_LEVELS, MAX_VIDEO_BPS, isHighFrameRate, presetAt,
 } from '@/lib/quality';
 
 const track = (caps?: Partial<MediaTrackCapabilities>, settings?: Partial<MediaTrackSettings>) =>
@@ -116,6 +116,52 @@ describe('bitrate levels', () => {
       ['high', 'High', 1.5],
       ['max', 'Maximum', 2],
     ]);
+  });
+});
+
+describe('frame rate and bitrate', () => {
+  afterEach(() => chooseBitrate(DEFAULT_BITRATE_ID));
+
+  it('means 50 and 60 fps, and nothing a 30 fps camera reports', () => {
+    for (const fps of [50, 59.94005994, 60]) expect(isHighFrameRate(fps)).toBe(true);
+    for (const fps of [24, 29.97, 30.000030517578125, undefined, null, NaN]) {
+      expect(isHighFrameRate(fps)).toBe(false);
+    }
+  });
+
+  it('costs 1.5 times the bits and leaves the frame alone', () => {
+    const p = presetById('1080p');
+    expect(presetAt(p, 30)).toBe(p);
+    expect(presetAt(p, undefined)).toBe(p);
+    expect(presetAt(p, null)).toBe(p);
+    expect(presetAt(p, 60)).toEqual({ ...p, videoBps: p.videoBps * 1.5 });
+  });
+
+  it('never passes the ceiling, at any preset and level', () => {
+    expect(presetAt(presetById('4k'), 60).videoBps).toBe(MAX_VIDEO_BPS);
+    for (const p of QUALITY_PRESETS) {
+      for (const l of bitrateLevels(p)) {
+        expect(presetAt(atBitrate(p, l.id), 60).videoBps).toBeLessThanOrEqual(MAX_VIDEO_BPS);
+      }
+    }
+  });
+
+  it('sizes a camera track from the rate it delivers', () => {
+    const p = presetById('1080p').videoBps;
+    expect(cameraVideoBps(track(undefined, { height: 1080, frameRate: 60 }))).toBe(p * 1.5);
+    expect(cameraVideoBps(track(undefined, { height: 1080, frameRate: 30 }))).toBe(p);
+    expect(cameraVideoBps(track(undefined, { height: 1080 }))).toBe(p);
+    expect(cameraVideoBps(undefined)).toBe(presetById(DEFAULT_QUALITY_ID).videoBps);
+  });
+
+  // Frame rate first would drop the level instead of capping the product:
+  // 1440p at Maximum and 60 fps would read 15 Mbps, not the 25 Mbps ceiling.
+  it('applies the level first and the frame rate second, under one ceiling', () => {
+    chooseBitrate('max');
+    expect(cameraVideoBps(track(undefined, { height: 720, frameRate: 60 }))).toBe(
+      presetById('720p').videoBps * 2 * 1.5
+    );
+    expect(cameraVideoBps(track(undefined, { height: 1440, frameRate: 60 }))).toBe(MAX_VIDEO_BPS);
   });
 });
 
