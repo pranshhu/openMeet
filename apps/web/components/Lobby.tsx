@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import {
   MediaDeviceMissingError,
   MediaManager,
@@ -14,8 +14,10 @@ import { isRecordingSupported } from '@/lib/recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
   DEFAULT_QUALITY_ID,
+  FRAME_RATES,
   describeTrack,
   formatPerHour,
+  frameRateFrom,
   presetById,
   supportedPresets,
 } from '@/lib/quality';
@@ -62,6 +64,7 @@ interface BackupItem {
 const EMPTY_DEVICES: DeviceList = { audioInputs: [], videoInputs: [] };
 
 const QUALITY_KEY = 'om_quality';
+const FRAME_RATE_KEY = 'om_fps';
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -146,6 +149,7 @@ export function Lobby({
   const [micId, setMicId] = useState('');
   const [camId, setCamId] = useState('');
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
+  const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
@@ -294,9 +298,9 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, quality: string) {
+  function startPreview(mm: MediaManager, quality: string, fps: number) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', '', quality))
+    mm.acquire(deviceConstraints('', '', quality, fps))
       .then(async (s) => {
         setStream(s);
         // Device labels are only populated after permission is granted.
@@ -317,19 +321,22 @@ export function Lobby({
     const mm = new MediaManager();
     mmRef.current = mm;
     let saved = DEFAULT_QUALITY_ID;
+    let savedFps = RECORDING_FRAME_RATE;
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
+      savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
     } catch {
       /* private mode — fall back to the default */
     }
     setQualityId(saved);
-    startPreview(mm, saved);
+    setFrameRate(savedFps);
+    startPreview(mm, saved, savedFps);
     return () => {
       if (!handedOffRef.current) mm.stop();
     };
   }, []);
 
-  async function reacquire(nextMic: string, nextCam: string, nextQuality: string) {
+  async function reacquire(nextMic: string, nextCam: string, nextQuality: string, nextFrameRate: number) {
     const mm = mmRef.current;
     if (!mm) return;
     const old = stream;
@@ -337,7 +344,7 @@ export function Lobby({
       // Acquire FIRST; only stop the old stream once it succeeds, so a failed
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
-      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality));
+      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate));
       old?.getTracks().forEach((t) => t.stop());
       mm.setAudioEnabled(micOn);
       mm.setVideoEnabled(camOn);
@@ -347,9 +354,11 @@ export function Lobby({
       setMicId(nextMic);
       setCamId(nextCam);
       setQualityId(nextQuality);
+      setFrameRate(nextFrameRate);
       setActual(describeTrack(s.getVideoTracks()[0]));
       try {
         localStorage.setItem(QUALITY_KEY, nextQuality);
+        localStorage.setItem(FRAME_RATE_KEY, String(nextFrameRate));
       } catch {
         /* private mode — the choice just doesn't persist */
       }
@@ -359,7 +368,12 @@ export function Lobby({
   }
 
   async function changeDevice(kind: 'mic' | 'cam', deviceId: string) {
-    await reacquire(kind === 'mic' ? deviceId : micId, kind === 'cam' ? deviceId : camId, qualityId);
+    await reacquire(
+      kind === 'mic' ? deviceId : micId,
+      kind === 'cam' ? deviceId : camId,
+      qualityId,
+      frameRate
+    );
   }
 
   function toggleMic() {
@@ -604,7 +618,7 @@ export function Lobby({
                     <button
                       type="button"
                       onClick={() => {
-                        if (mmRef.current) startPreview(mmRef.current, qualityId);
+                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate);
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -890,12 +904,27 @@ export function Lobby({
                 <select
                   aria-label="Recording quality"
                   value={shownQuality}
-                  onChange={(e) => void reacquire(micId, camId, e.target.value)}
+                  onChange={(e) => void reacquire(micId, camId, e.target.value, frameRate)}
                   className={select}
                 >
                   {presets.map((q) => (
                     <option key={q.id} value={q.id}>
                       {`Quality: ${q.label} · ${formatPerHour(q, 2)} per person`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={`${picker} sm:col-span-2`}>
+                <Icon name="settings" size={18} className="shrink-0" />
+                <select
+                  aria-label="Frame rate"
+                  value={frameRate}
+                  onChange={(e) => void reacquire(micId, camId, qualityId, Number(e.target.value))}
+                  className={select}
+                >
+                  {FRAME_RATES.map((r) => (
+                    <option key={r} value={r}>
+                      {`Frame rate: ${r} fps`}
                     </option>
                   ))}
                 </select>

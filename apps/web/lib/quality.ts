@@ -1,6 +1,7 @@
 import {
   MAX_RECORDED_PEERS,
   RECORDING_AUDIO_BPS,
+  RECORDING_FRAME_RATE,
   RECORDING_VIDEO_BPS,
   RECORDING_VIDEO_HEIGHT,
   RECORDING_VIDEO_WIDTH,
@@ -33,6 +34,15 @@ export const DEFAULT_QUALITY_ID = '1080p';
 
 export function presetById(id: string): QualityPreset {
   return QUALITY_PRESETS.find((p) => p.id === id) ?? (QUALITY_PRESETS[1] as QualityPreset);
+}
+
+/** Frame rates a person can ask their camera for. */
+export const FRAME_RATES: readonly number[] = [24, 25, 29.97, 30];
+
+/** A stored frame rate, or the default when it is not one on offer. */
+export function frameRateFrom(raw: string | null): number {
+  const n = Number(raw);
+  return FRAME_RATES.includes(n) ? n : RECORDING_FRAME_RATE;
 }
 
 /**

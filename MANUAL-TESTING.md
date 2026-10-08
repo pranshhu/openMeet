@@ -187,6 +187,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.14 | Track panel on a phone | Join as a guest from a phone about 360 px wide, get recorded, tap the mark beside the clock | The top bar stays on one line; the list opens under it, inside the screen | ☐ | |
 | 8.15 | Guest's track panel | As the guest in a take, open the indicator; then disable the guest's wifi for 30 s and re-enable it | Camera and WAV master read **Reaching the host**; within about 20 s of the drop they read **Not reaching the host for …**; once reconnected they return to **Reaching the host** (after a moment of **… MB still to send**) | ☐ | |
 | 8.16 | Track alert over the open panel | Record, open the track list, then pull the recording folder's drive (or fill it) on a phone about 360 px wide | The red banner is fully readable above the open list | ☐ | |
+| 8.17 | Frame-rate picker | Pick 25 fps in the lobby, record 30 s, `ffprobe` the MP4 | The lobby's "Capturing" line read `@ 25fps`; `avg_frame_rate` is about 25 | ☐ | |
 
 ## 9 — Deploy
 

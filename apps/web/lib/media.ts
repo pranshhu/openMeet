@@ -43,9 +43,10 @@ export const RECORDING_CONSTRAINTS: MediaStreamConstraints = {
 export function deviceConstraints(
   micId?: string,
   camId?: string,
-  qualityId: string = DEFAULT_QUALITY_ID
+  qualityId: string = DEFAULT_QUALITY_ID,
+  frameRate: number = RECORDING_FRAME_RATE
 ): MediaStreamConstraints {
-  return { audio: micConstraints(micId), video: cameraConstraints(camId, qualityId) };
+  return { audio: micConstraints(micId), video: cameraConstraints(camId, qualityId, frameRate) };
 }
 
 export function micConstraints(micId?: string): MediaTrackConstraints {
@@ -55,7 +56,8 @@ export function micConstraints(micId?: string): MediaTrackConstraints {
 
 export function cameraConstraints(
   camIdOrFacing?: string,
-  qualityId: string = DEFAULT_QUALITY_ID
+  qualityId: string = DEFAULT_QUALITY_ID,
+  frameRate: number = RECORDING_FRAME_RATE
 ): MediaTrackConstraints {
   const v = RECORDING_CONSTRAINTS.video as MediaTrackConstraints;
   const q = presetById(qualityId);
@@ -63,6 +65,7 @@ export function cameraConstraints(
     ...v,
     width: { ideal: q.width },
     height: { ideal: q.height },
+    frameRate: { ideal: frameRate },
     ...(camIdOrFacing === 'user' || camIdOrFacing === 'environment'
       ? { facingMode: { exact: camIdOrFacing } }
       : camIdOrFacing
