@@ -957,7 +957,7 @@ export function Lobby({
                     className={select}
                   >
                     <option value="mono">Audio: Mono · for speech</option>
-                    <option value="stereo">Audio: Stereo · for music or a stereo microphone</option>
+                    <option value="stereo">Audio: Stereo · for music</option>
                   </select>
                 </label>
               )}
