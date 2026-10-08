@@ -103,6 +103,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   (it was 5 Mbps at every resolution).
 - Audio is recorded in mono by default, which halves the uncompressed master
   (about 518 MB per hour per person).
+- The host's recording files carry the host's name after the role:
+  `host-ana_<id>.mp4` instead of `host_<id>.mp4`.
 
 ### Fixed
 

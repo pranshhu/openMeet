@@ -165,8 +165,9 @@ export function SessionSummary({
         <ul className="space-y-1">
           {/* Name above its kind: side by side, the label took half a narrow
               row and broke the name mid-UUID over three lines. At 12px a
-              camera or WAV name fits one line; a longer one breaks after a
-              hyphen, keeping the extension with the last part. */}
+              camera or WAV name with no person's name in it fits one line;
+              a longer one breaks after a hyphen, keeping the extension with
+              the last part. */}
           {files.map((f) => (
             <li key={f.name} className="flex flex-col gap-0.5 rounded-xl bg-white/5 px-3 py-2">
               <code className="min-w-0 break-words text-xs text-white/85">{f.name}</code>

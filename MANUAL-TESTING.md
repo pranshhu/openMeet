@@ -79,7 +79,7 @@ EOF
 | 2.2 | Consent notice | Host clicks **Record** | Guest sees "This call and chat are now being recorded" toast **and** a persistent REC pill | ☐ | |
 | 2.3 | Guest auto-starts | Watch the guest after 2.2 | Guest's own bar shows recording controls — nobody clicked anything there | ☐ | |
 | 2.4 | One folder prompt | Watch the host | Exactly **one** folder picker, not two | ☐ | |
-| 2.5 | Files appear | Record ~60 s, click **End & save** | `host_*.mp4`, `host_*.wav`, `guest_*.mp4`, `guest_*.wav`, `call1_*.m4a` | ☐ | |
+| 2.5 | Files appear | Record ~60 s, click **End & save** | `host-<your name>_*.mp4`, `host-<your name>_*.wav`, `guest_*.mp4`, `guest_*.wav`, `call1_*.m4a` | ☐ | |
 | 2.6 | All of them play | Open each in a video player | All play; the guest MP4 is the one that crossed the network | ☐ | |
 | 2.7 | Integrity | Read the summary screen | "Every file is complete."; each guest file reads "Complete. Matches what <name> sent (SHA-256)." | ☐ | |
 | 2.8 | WAV is honest | Run the python snippet above on both WAVs | `declared data == actual data` | ☐ | |

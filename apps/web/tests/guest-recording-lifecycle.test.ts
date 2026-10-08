@@ -946,6 +946,11 @@ describe('host backup after a take in useRoom', () => {
     return started;
   }
 
+  it("hands the host's display name to the recording so the host's files can carry it", async () => {
+    await hostTake();
+    expect(vi.mocked(startHostRecording).mock.calls.at(-1)?.[0].hostName).toBe('Host Hana');
+  });
+
   /** The take notes a fake journal owns, in the shape take.json holds. */
   function fakeNotes() {
     return {

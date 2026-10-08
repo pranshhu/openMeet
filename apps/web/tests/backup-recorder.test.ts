@@ -1972,6 +1972,24 @@ describe('take journal — small closed parts in browser storage', () => {
     expect(journal.file('guest_r.mp4').dead).toBe(false);
   });
 
+  it('accepts a file name that carries a person, and still refuses separators and unknown extensions', () => {
+    expect(isJournalFileName('host-maría_r.mp4')).toBe(true);
+    expect(isJournalFileName('host-名前_r.wav')).toBe(true);
+    expect(isJournalFileName('host-प्रांशु_r.mp4')).toBe(true);
+    for (const bad of [
+      '../x.mp4',
+      'a/b.mp4',
+      'a\\b.mp4',
+      '.x.mp4',
+      'a b.mp4',
+      'a\u0000b.mp4',
+      '-x.mp4',
+      'x.json',
+    ]) {
+      expect(isJournalFileName(bad)).toBe(false);
+    }
+  });
+
   it('deleteTakeJournal removes one directory recursively and refuses anything else', async () => {
     const root = new FakeDirectoryHandle('root');
     await root.getDirectoryHandle(TAKE_DIR, { create: true });
