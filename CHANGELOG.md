@@ -100,6 +100,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A computer can present a photo or a video file to the call, from the arrow
   beside **Present**. It is shown, and recorded during a take, the way a shared
   screen is.
+- A media board pad can loop: press **Loop** under it and it repeats until it is
+  stopped. The switch works on a pad that is already playing.
+- A media board pad can fade: press **Fade** under it and it comes in over a
+  second and a half when fired and goes out the same way when stopped. A second
+  click cuts it.
 
 ### Changed
 

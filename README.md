@@ -64,7 +64,8 @@ retention policy to trust, because there's nothing retained.
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
-- Teleprompter, chapter markers, and a media board for stingers and ad reads
+- Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
+  music beds
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - Chat with a pop-up for each new message while the panel is closed, presence, and

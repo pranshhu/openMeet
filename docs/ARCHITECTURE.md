@@ -492,7 +492,10 @@ unfinished send to each new connection to the host.
   started afterwards (`withBoardAudio`); the WAV master always records the raw mic (`micStream`). A
   take already recording when the board is first opened keeps a mic-only MP4 (a running
   `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
-  board says so for that take.
+  board says so for that take. A pad set to loop (`setLoop`) repeats until it is stopped, and
+  the switch reaches a pad that is already playing. Each pad plays through a gain node of its
+  own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
+  when stopped, counts as playing until it is silent, and is cut by a second stop.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can
@@ -760,6 +763,12 @@ unfinished send to each new connection to the host.
 - **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
   running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
   markers; takes started later include them. The WAV master is mic-only by design.
+- **The media board is empty after a reload.** Pads are held in memory, so a pad that was
+  looping stops when the tab reloads and the files have to be added again. A board opened
+  after **Resume recording** is opened mid-take, so that take's MP4 has no pad audio.
+- **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
+  the tab shows "Everyone else left", there is no media board on screen; the pad plays on
+  until someone joins and the call is back, or until Leave.
 - **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
   timeout); otherwise the offset is null and `sync.json` says to align by waveform.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
