@@ -799,3 +799,8 @@ unfinished send to each new connection to the host.
   leaves. The call screen does not offer the control while that take can still be resumed or saved
   (`resumeOffer`), so the host's page never sends it then. If the setting does arrive while a
   guest's browser is capturing, that capture ends there, as on the host's stop.
+- **After a host reload a guest can read "Sent to the host." for a part the host never wrote.**
+  Once the host is back but has not resumed, the guest's stream leaves its browser into a channel
+  nothing reads yet. If the host then saves instead of resuming, the guest's page counts those
+  bytes as sent. The host's summary says that file ended early, and the guest's own backup holds
+  all of it.
