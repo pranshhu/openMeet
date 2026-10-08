@@ -2027,6 +2027,24 @@ describe('ChunkReceiver — journal-backed acks', () => {
     ]);
   });
 
+  it('gives the ordinary ack and no warning for a journal finished with the take', async () => {
+    const journal = fakeJournalFile();
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    expect(r.flushAck()).toBeUndefined();
+    await settle();
+
+    expect(journal.commit).toHaveBeenCalledWith(1);
+    expect(journal.dead).toBe(false);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
+    ]);
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
   it('keeps committing when a control send throws', async () => {
     const journal = fakeJournalFile();
     const sent: string[] = [];

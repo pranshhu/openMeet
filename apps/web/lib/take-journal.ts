@@ -126,6 +126,8 @@ interface PartRef {
 /** Shared by every file of one journal, so one double failure stops them all. */
 interface JournalState {
   dead: boolean;
+  /** The take ended cleanly and the directory is gone: no more parts go in, and a write that fails is not storage refusing a live take. */
+  finished: boolean;
   bytes: number;
 }
 
@@ -161,7 +163,7 @@ class JournalFileImpl implements JournalFile {
   }
 
   append(offset: number, data: ArrayBuffer): void {
-    if (this.dead) return;
+    if (this.dead || this.journal.state.finished) return;
     if (!(data instanceof ArrayBuffer) || data.byteLength === 0) return;
     if (!Number.isSafeInteger(offset) || offset < 0) return;
     const last = this.runs[this.runs.length - 1];
@@ -175,7 +177,7 @@ class JournalFileImpl implements JournalFile {
   }
 
   commit(nextIdx: number): Promise<void> {
-    if (this.dead) return Promise.resolve();
+    if (this.dead || this.journal.state.finished) return Promise.resolve();
     const idx = Number.isSafeInteger(nextIdx) && nextIdx >= 0 ? nextIdx : 0;
     if (!this.inFlight) {
       const started = this.writeRuns(idx);
@@ -251,7 +253,9 @@ class JournalFileImpl implements JournalFile {
     for (const run of runs) {
       const name = partName(this.seq, run.offset, nextIdx);
       if (!(await this.writePart(name, run))) {
-        this.journal.state.dead = true;
+        // A journal finished under this commit lost its directory on purpose:
+        // that is not storage refusing a take that is still running.
+        if (!this.journal.state.finished) this.journal.state.dead = true;
         this.runs = [];
         if (this.waiting) {
           this.waiting.resolve();
@@ -394,6 +398,7 @@ class TakeJournalImpl implements TakeJournal {
   }
 
   async finish(): Promise<void> {
+    this.state.finished = true;
     try {
       await this.dir.getFileHandle(FINISHED_MARK, { create: true });
     } catch {
@@ -556,7 +561,7 @@ export async function openTakeJournal(
 
     // A continued journal starts where the last session stopped: its bytes and
     // the next seq of every file directory are read back once, here.
-    const state: JournalState = { dead: false, bytes: 0 };
+    const state: JournalState = { dead: false, finished: false, bytes: 0 };
     const seqByName = new Map<string, number>();
     try {
       for (const entry of await getDirEntries(dir)) {

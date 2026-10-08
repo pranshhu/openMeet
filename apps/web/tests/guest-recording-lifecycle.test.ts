@@ -840,20 +840,15 @@ describe('host backup after a take in useRoom', () => {
   afterEach(() => vi.clearAllMocks());
 
   /**
-   * Runs one host take. `during` gets the recorder's onError and the hook's
-   * result; `after` runs in its own act while the take is still recording, so
-   * it sees the state an earlier act queued.
+   * Starts one host take and stops before End & save, so a test can watch the
+   * take while it is still recording. `extra` is spread into the handles
+   * startHostRecording returns.
    */
-  async function hostTake(
-    during?: (
-      onError: (e: unknown) => void,
-      hook: { current: ReturnType<typeof useRoom> }
-    ) => void | Promise<void>,
+  async function startHostTake(
     extra: Record<string, unknown> = {},
     peers: { peerId: string; ordinal: number; role: string; displayName: string | null }[] = [
       { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Guest' },
-    ],
-    after?: () => void
+    ]
   ) {
     const backup = { stop: vi.fn().mockResolvedValue(new Blob(['b'])), markFinalized: vi.fn().mockResolvedValue(undefined) };
     const wavBackup = { stop: vi.fn().mockResolvedValue(null), markFinalized: vi.fn().mockResolvedValue(undefined) };
@@ -874,7 +869,7 @@ describe('host backup after a take in useRoom', () => {
         ...extra,
       } as never;
     });
-    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const { result, unmount } = renderHook(() => useRoom('xyz-test-room'));
     const fakeStream = {
       getTracks: () => [],
       getAudioTracks: () => [{ kind: 'audio' }],
@@ -897,13 +892,33 @@ describe('host backup after a take in useRoom', () => {
       await result.current.startRecording();
     });
     expect(result.current.state.phase).toBe('recording');
-    if (during) await act(async () => { await during(onError, result); });
+    return { backup, wavBackup, screenBackup, hostWriter, unmount, result, recordingId, onError };
+  }
+
+  /**
+   * Runs one host take. `during` gets the recorder's onError and the hook's
+   * result; `after` runs in its own act while the take is still recording, so
+   * it sees the state an earlier act queued.
+   */
+  async function hostTake(
+    during?: (
+      onError: (e: unknown) => void,
+      hook: { current: ReturnType<typeof useRoom> }
+    ) => void | Promise<void>,
+    extra: Record<string, unknown> = {},
+    peers: { peerId: string; ordinal: number; role: string; displayName: string | null }[] = [
+      { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Guest' },
+    ],
+    after?: () => void
+  ) {
+    const started = await startHostTake(extra, peers);
+    if (during) await act(async () => { await during(started.onError, started.result); });
     if (after) await act(async () => after());
     await act(async () => {
-      await result.current.endRecording();
+      await started.result.current.endRecording();
     });
-    expect(result.current.state.phase).toBe('done');
-    return { backup, wavBackup, screenBackup, hostWriter, result, recordingId };
+    expect(started.result.current.state.phase).toBe('done');
+    return started;
   }
 
   /** The take notes a fake journal owns, in the shape take.json holds. */
@@ -922,6 +937,7 @@ describe('host backup after a take in useRoom', () => {
   /** Stands in for the browser-storage journal: note() edits the notes in place. */
   const fakeJournal = (notes: ReturnType<typeof fakeNotes>) => ({
     note: (change: (n: typeof notes) => void) => change(notes),
+    finish: vi.fn().mockResolvedValue(undefined),
     file: () => ({
       append: vi.fn(),
       commit: vi.fn().mockResolvedValue(undefined),
@@ -986,6 +1002,78 @@ describe('host backup after a take in useRoom', () => {
     });
     expect(endHostRecording).toHaveBeenCalledTimes(1);
     expect(result.current.state.phase).toBe('left');
+  });
+
+  // Every file is closed, so the crash copy has nothing left to prove. Its
+  // removal must not hold the take in 'finalizing'.
+  it('finishes the crash journal on a clean take without waiting for the removal', async () => {
+    let settle!: () => void;
+    let settled = false;
+    const finish = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = () => {
+            settled = true;
+            resolve();
+          };
+        })
+    );
+    const { result } = await hostTake(undefined, { journal: { finish } });
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    expect(result.current.state.phase).toBe('done');
+    settle();
+  });
+
+  // The call sits before the report work on purpose: a throw later in the try
+  // must not leave a journal behind for a take whose files all closed.
+  it('finishes the crash journal before a later step throws', async () => {
+    const finish = vi.fn().mockResolvedValue(undefined);
+    const receiver = {
+      fileName: 'guest_x.mp4',
+      digestHex: async () => 'abc',
+      senderSha256: 'abc',
+      receivedFinalized: true,
+      isAbandoned: false,
+      bytesWritten: 1,
+      answerResume: vi.fn(),
+      get guestStartHostMs(): null {
+        throw new Error('report blew up');
+      },
+    };
+    const { result } = await hostTake(undefined, { journal: { finish }, receiver });
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toMatch(/^Saving didn’t finish \(report blew up\)/);
+  });
+
+  // A file that did not close is the one case the crash copy is still worth
+  // something, so the lobby can offer what did get committed.
+  it('keeps the crash journal when a file could not be closed', async () => {
+    vi.mocked(endHostRecording).mockRejectedValueOnce(new Error('disk full'));
+    const finish = vi.fn().mockResolvedValue(undefined);
+    const { result } = await hostTake(undefined, { journal: { finish } });
+    expect(finish).not.toHaveBeenCalled();
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toMatch(/^Saving didn’t finish \(disk full\)/);
+  });
+
+  // A reload is the crash the journal exists for: the take is still open, so
+  // the copy must stay exactly as best-effort closes find it.
+  it('leaves the crash journal alone when the page hides mid-take', async () => {
+    const finish = vi.fn().mockResolvedValue(undefined);
+    await startHostTake({ journal: { finish } });
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it('leaves the crash journal alone when the tab unmounts mid-take', async () => {
+    const finish = vi.fn().mockResolvedValue(undefined);
+    const { unmount } = await startHostTake({ journal: { finish } });
+    unmount();
+    expect(finish).not.toHaveBeenCalled();
   });
 
   it('marks the host’s camera, WAV, and screen backups when its take finalized normally', async () => {

@@ -1137,6 +1137,57 @@ describe('take journal — small closed parts in browser storage', () => {
     expect(takeDirOf(locked).entries.has('finished')).toBe(true);
   });
 
+  it('a commit caught by finish() is not a failure', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = takeDirOf(root);
+    // The part's directory lookup fails twice, as it does once finish() has
+    // removed the directory under a commit that was already running.
+    dir.getDirectoryHandle = async () => {
+      throw new Error('gone');
+    };
+    // Hold finish() inside its marker write, so the failing commit settles
+    // while the journal is already finished but not yet removed.
+    const realGetFile = dir.getFileHandle.bind(dir);
+    let releaseMarker!: () => void;
+    const markerHold = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    dir.getFileHandle = async (name, opts) => {
+      if (name === 'finished') await markerHold;
+      return realGetFile(name, opts);
+    };
+
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    const committing = file.commit(1);
+    const finishing = journal.finish();
+    await committing;
+
+    expect(journal.dead).toBe(false);
+    expect(file.dead).toBe(false);
+
+    releaseMarker();
+    await finishing;
+    expect(root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('a finished journal writes nothing more', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dir = takeDirOf(root);
+    await journal.finish();
+
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(4));
+    await file.commit(1);
+
+    expect(dir.entries.has('guest_r.mp4')).toBe(false);
+    expect(journal.bytes).toBe(0);
+    expect(journal.dead).toBe(false);
+    expect(file.dead).toBe(false);
+  });
+
   it('hostile input does not throw or break later steps', async () => {
     const root = new FakeDirectoryHandle('root');
     const journal = (await open(root))!;

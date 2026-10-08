@@ -2035,6 +2035,9 @@ export function useRoom(slug: string) {
             onProgress: (pending) => setState((s) => ({ ...s, finalizingGuests: pending })),
             getPeerName: (peerId) => peerNameMap.get(peerId),
           });
+          // Every file is closed; the crash copy has nothing left to prove. Removal is
+          // not awaited: nothing optional may sit between the closed files and `done`.
+          if (h.journal) void h.journal.finish();
           // An empty host file leaves its backup as the only copy of that track, so
           // the backups stay for the lobby to list.
           const hostFileEmpty = [h.hostWriter, h.hostWavWriter].some((w) => w?.size === 0);
@@ -2165,6 +2168,8 @@ export function useRoom(slug: string) {
         // it errored rejects close(). Commit what still can be, hand over the
         // backups (stop() is idempotent), let go and say what happened.
         for (const w of allWriters(h)) void w.close().catch(() => {});
+        // A file did not close, so the crash copy stays for the lobby to offer
+        // whatever did get committed.
         recordingRef.current = null;
         const guest = roleRef.current === 'guest';
         const [backup, wavBackup] = await Promise.all([h.backup?.stop(), h.wavBackup?.stop()]).catch(() => []);

@@ -415,7 +415,8 @@ writes `sync_<id>.json` and the chapters beside them. The last couple of seconds
 the crash may be missing, and a guest's own backup still holds the rest. While a take
 runs, the guests' bytes are also kept in this browser about every two seconds, so the copy
 is at most a couple of seconds behind; a take that cannot keep that copy says so on screen
-and records as usual.
+and records as usual. The copy is removed when the take ends cleanly, and kept for the
+lobby when a file could not be closed.
 
 ---
 
