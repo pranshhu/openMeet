@@ -58,8 +58,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After the browser closes on a take, the lobby lists it as **Unsaved recording** and
   **Save to folder** rebuilds the files and their sync file from the browser’s copy.
 - While a take runs the guests' bytes are also kept in this browser, so a crash
-  loses at most the last seconds, and a take that cannot keep that copy says so on
-  screen and records as usual.
+  loses at most the last seconds, and a take that cannot keep that copy, or loses
+  it part-way, says so on screen until it ends and records as usual.
 - A guest can send a leftover backup straight to the host: press **Send to host**
   in the lobby and join. It travels peer-to-peer into the host's recording folder,
   is checked by SHA-256 and saved as `backup_<name>_<kind>_<time>` with a note on
@@ -68,14 +68,14 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   **Resume recording** to continue the interrupted take under the same id, or
   **Save what was recorded** to rebuild it in the folder instead.
 - After a resume the host's own camera and WAV master are recorded to a second
-  file (`host_<id>_resumed.mp4`/`.wav`), with the part before the crash copied
-  into the folder from the take's backup beside it.
-- An interrupted or resumed take's `sync.json` names every file of the host's own
-  track, each with its offset from the start, and a file that continued after a
-  reload reads "not verified" and says why: no single digest covers it.
-- A take resumed in the same browser can still be verified end to end: each
-  crash copy is committed with the checksum state of the bytes it holds, so the
-  digest covers the whole file, not only what arrived after the reload.
+  file (`host_<id>_resumed.mp4`/`.wav`); the part before the crash is copied into
+  the folder from the take's backup in the background and listed once it is there.
+- An interrupted or resumed take's `sync.json` names the files of the host's own
+  track that reached the folder, each with its offset from the start.
+- A guest's file from a resumed take is still checked against what that guest
+  sent when the crash copy kept the checksum state of the bytes it holds; when
+  it did not, the file reads "not verified" and says why, and a file with a
+  known hole reads "Incomplete".
 
 ### Changed
 
@@ -149,10 +149,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A guest who left before the take ended is still named on their files and in
   the sync file, and a guest WAV master that was opened but received nothing is
   listed with its size and verdict like every other file.
-- A guest whose host drops is told to keep the tab open and that the host can
-  resume this recording, instead of being told to press a button guests do not
-  have; when the host does resume, the guest's file continues instead of
-  splitting in two.
+- A guest left alone in the room when the host drops is told to keep the tab
+  open and that the host can resume this recording, instead of being told to
+  press a button guests do not have; when the host does resume, the guest's file
+  continues instead of splitting in two.
 - A call-audio copy whose write or close failed is no longer listed in the session
   summary and the sync file, and one guest's reconnects can no longer spend every
   other guest's files; the sync file says when the file limit was reached.

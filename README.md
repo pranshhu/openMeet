@@ -429,15 +429,22 @@ take), and a guest's own backup still holds the rest — the participant
 copies are listed in the openMeet lobby with **Download**, or **Send to host** to return
 one while the host is in the room. If the guests are still in the call, the host does not
 have to save at all: **Resume recording** in the in-call notice continues the same take
-under its own id, and the guests' files carry on from where they stopped; a take resumed in
-the same browser can still be checked end to end, because the checksum state is kept with
-the crash copy. The host's own camera and WAV master become a second file after a resume,
-`host_<id>_resumed.mp4` and `host_<id>_resumed.wav`, with the part before the crash copied
-into the folder from the take's backup so both parts sit beside each other. While a take
+under its own id, and the guests' files carry on from where they stopped. What the folder
+already held of each file is kept, the chapter markers from before the reload stay, and
+screen recordings from before it are put back and listed. Each guest's file is still checked
+against what that guest sent when the crash copy kept the checksum state for it; otherwise
+it reads "not verified" and says why, and a file with a known hole reads "Incomplete". A
+screen share that was already running when the host reloaded is recorded again only once
+that person stops sharing and shares again; the host is told whose it is. The host's own
+camera and WAV master become a second file after a resume, `host_<id>_resumed.mp4` and
+`host_<id>_resumed.wav`; the part before the crash is copied into the folder from the take's
+backup in the background and listed in the summary once it is there. If the host presses
+**Save what was recorded** instead, or saves or deletes the recording from the lobby, the
+guests are told the take has ended and stop recording. While a take
 runs, the guests' bytes are also kept in this browser every few seconds, so the copy is a
 few seconds behind, usually three to four and up to about eight at the very start of a
-take; a take that cannot keep that copy says so on screen
-and records as usual. A take whose copy stopped part-way is not offered in the call after
+take; a take that cannot keep that copy, or loses it part-way, says so on screen until the
+take ends and records as usual. A take whose copy stopped part-way is not offered in the call after
 a reload; the lobby still lists what the copy holds. The copy is removed when the take
 ends cleanly, and kept for the lobby when a file could not be closed.
 

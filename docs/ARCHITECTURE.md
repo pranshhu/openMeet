@@ -387,7 +387,17 @@ unfinished send to each new connection to the host.
   before the resume as well. A screen file already in the folder is never replaced — the resumed host
   probes for a free segment number instead — and screen notes are bounded at 48 while camera and WAV
   notes are never refused by that bound. A resumed take opens `host_<id>_resumed.mp4`/`.wav` for the
-  host's own tracks beside the recovered first part, and records both in `hostParts`.
+  host's own tracks; the first part is copied in from the take's backup in the background and
+  enters `hostParts` (and the file checks, with its size) once that copy is in the folder.
+  `resumeHostRecording` keeps what the folder already holds: after a reload the folder is a few
+  seconds ahead of the crash copy (the closing page commits every file), so those bytes are carried
+  into the reopened file before the crash copy is replayed over them; a file that cannot be carried
+  is left untouched (`keptFiles`) and never reopened in that take. A replay that stops short marks
+  the file (`shortFiles`): it gets no stored hash state and reads incomplete. A guest's clock-sync
+  numbers reach its note through the receiver's `onMeta` and are read back at a resume or a save.
+  Guest screen notes are rebuilt from the crash copy and listed (`resumedScreens`); a call-audio
+  copy opened after a resume asks the folder for a free number (`freeNumber`, shared with the screen
+  files), and each number is claimed before it is asked about.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
@@ -429,7 +439,18 @@ unfinished send to each new connection to the host.
   `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take
-  records as before.
+  records as before. `useRoom` mirrors that into `unprotectedRecording`, and sets the same flag
+  when the take's warning callback hears the receiver's "Crash protection stopped" warning (one
+  file's crash copy can stop on a commit that never answers while the journal lives) or finds the
+  journal dead, so the take's own status line outlives the shared banner; a warning for a take
+  that has ended is ignored. In the call, Resume and Save of an interrupted take share one
+  in-flight flag (`recoveryBusy`: neither runs twice or beside the other, Record waits, and the tab
+  holds the take lock from the click). The channels waiting for a resume are one camera and one
+  audio entry per connection, never a producer's or a present-only device's, and no screen channel.
+  A resume restores the take's markers from the notes, binds a channel that arrived while it ran,
+  and marks the guests it bound as told so their call-audio copy starts. A save that removes the
+  crash copy sends `recording-stop`, and a host that joins with no crash copy to continue stops
+  guests still recording the old take, once per connection.
   While a take runs the host also keeps a **call-audio copy** of every guest who is being recorded
   (`syncCallCopies`, driven by one effect in `useRoom`): an audio-only `MediaRecorder` on the guest's
   incoming live track (`pickCallAudioMime`: AAC or Opus in MP4, else WebM/Opus), written to
@@ -660,6 +681,32 @@ unfinished send to each new connection to the host.
   shows "Press End & save to keep this recording", but its files stop at the takeover, and
   the rest of each guest's part exists only in that guest's backup. The new tab records
   only from its own new take.
+- **A screen share that is running when the host reloads is not recorded again until it is
+  restarted.** Its channel arrived while no take was running and nothing binds it; the host is
+  told whose share it is after the resume. The part before the reload is put back from the crash
+  copy. The host's own screen, if it was presenting, is likewise recorded only from the next
+  share, and the lobby's Save does not copy the host's own screen backup into the folder.
+- **Call-audio copies from before a reload are not listed in a resumed take's report.** The copy
+  after the resume takes a new file name; the earlier file stays in the folder as the crash left it.
+- **A file whose crash copy stopped on a commit that never answered still looks resumable.** Only
+  a journal that gave up as a whole is marked; that file's guest was acknowledged from the folder
+  write after the stop, so a resume of it cannot continue past the crash copy's end.
+- **A crash copy can only be reached from the lobby of its own room.** If the room has expired
+  the copy stays in browser storage until the site's data is cleared.
+- **For a moment after Record, a lobby in another tab can remove an empty crash copy.** The take
+  lock is held from the recording phase, and the copy's directory is created just before it; the
+  take then says its crash protection stopped.
+- **A flood of markers from other participants can keep the host's later markers out of the crash
+  copy.** The notes hold at most `MAX_RELAYED_MARKERS` markers in all; the live take's own list is
+  not affected, only what a resume or a save after a crash reads back.
+- **A sharer who rejoins gets a new share of the screen entries in the crash copy.** The count of
+  12 is kept per connection; the take's 48 still holds.
+- **With several guests in the room, none is told when the host drops.** The "keep this tab
+  open, the host can resume" line is shown to a guest left alone; with others still present the
+  call simply continues, and their recordings carry on for a resume all the same.
+- **Resume copies each guest file once more.** The folder's bytes are carried into the reopened
+  file and the crash copy is replayed over them, so a long take takes a while to resume and needs
+  the file's size free on the disk.
 - **A resumed take's own track is two files, and openMeet does not join them.** The pre-crash part
   is recovered from the take's backup and the rest is written to `host_<id>_resumed.*`; both are
   listed with their offsets in `hostParts` and `aligned`, and an editor places them itself.
