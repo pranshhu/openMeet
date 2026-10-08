@@ -9,7 +9,7 @@ import {
   codecCheck, connectionCheck, diskCheck, folderCheck, micCheck, overallLevel, probeIce, wavCheck,
   type Check, type CheckLevel,
 } from '@/lib/preflight';
-import { presetById } from '@/lib/quality';
+import { atBitrate, presetById } from '@/lib/quality';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 
@@ -27,12 +27,15 @@ export function PreflightPanel({
   slug,
   stream,
   qualityId,
+  bitrateId,
   isHost,
   onLevel,
 }: {
   slug: string;
   stream: MediaStream | null;
   qualityId: string;
+  /** Bitrate level id; the storage and folder figures are for the preset at this level. */
+  bitrateId: string;
   isHost?: boolean;
   /** The worst level across the checks, whenever it changes. */
   onLevel?: (level: CheckLevel) => void;
@@ -77,13 +80,15 @@ export function PreflightPanel({
   }, [stream]);
 
   useEffect(() => {
+    const preset = atBitrate(presetById(qualityId), bitrateId);
     void navigator.storage
       ?.estimate?.()
-      .then((e) => setDisk(diskCheck(e.quota, e.usage, presetById(qualityId), host)))
-      .catch(() => setDisk(diskCheck(undefined, undefined, presetById(qualityId), host)));
+      .then((e) => setDisk(diskCheck(e.quota, e.usage, preset, host)))
+      .catch(() => setDisk(diskCheck(undefined, undefined, preset, host)));
     // `host` is false on the first render and set by Lobby's own effect, so the
-    // check has to re-run when it arrives — a host's disk line differs.
-  }, [qualityId, host]);
+    // check has to re-run when it arrives — a host's disk line differs. The two
+    // ids are strings: atBitrate returns a new object and would re-run per frame.
+  }, [qualityId, bitrateId, host]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,7 +110,7 @@ export function PreflightPanel({
     wavCheck(isPcmCaptureSupported()),
     ...(disk ? [disk] : []),
     // Only the host writes everyone's files, so only the host needs the figure.
-    ...(host ? [folderCheck(presetById(qualityId))] : []),
+    ...(host ? [folderCheck(atBitrate(presetById(qualityId), bitrateId))] : []),
     ...(conn ? [conn] : []),
   ];
   const worst = overallLevel(checks);

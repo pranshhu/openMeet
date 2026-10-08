@@ -13,8 +13,12 @@ import {
 import { isRecordingSupported } from '@/lib/recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
+  DEFAULT_BITRATE_ID,
   DEFAULT_QUALITY_ID,
   FRAME_RATES,
+  atBitrate,
+  bitrateLevels,
+  chooseBitrate,
   cleanFps,
   describeTrack,
   formatPerHour,
@@ -66,6 +70,7 @@ const EMPTY_DEVICES: DeviceList = { audioInputs: [], videoInputs: [] };
 
 const QUALITY_KEY = 'om_quality';
 const FRAME_RATE_KEY = 'om_fps';
+const BITRATE_KEY = 'om_bitrate';
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -150,6 +155,7 @@ export function Lobby({
   const [micId, setMicId] = useState('');
   const [camId, setCamId] = useState('');
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
+  const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
@@ -326,6 +332,7 @@ export function Lobby({
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
+      setBitrateId(localStorage.getItem(BITRATE_KEY) ?? DEFAULT_BITRATE_ID);
     } catch {
       /* private mode — fall back to the default */
     }
@@ -375,6 +382,15 @@ export function Lobby({
       qualityId,
       frameRate
     );
+  }
+
+  function changeBitrate(id: string) {
+    try {
+      localStorage.setItem(BITRATE_KEY, id);
+    } catch {
+      /* private mode — the choice just doesn't persist */
+    }
+    setBitrateId(id);
   }
 
   function toggleMic() {
@@ -557,6 +573,10 @@ export function Lobby({
   // Fall back to the best the camera can do, so both agree.
   const presets = supportedPresets(stream?.getVideoTracks()[0]);
   const shownQuality = presets.some((q) => q.id === qualityId) ? qualityId : presets.at(-1)!.id;
+  // Same for the level: 4K has no High, so a remembered one shows Standard.
+  const shownPreset = presetById(shownQuality);
+  const levels = bitrateLevels(shownPreset);
+  const shownBitrate = levels.some((l) => l.id === bitrateId) ? bitrateId : DEFAULT_BITRATE_ID;
   // A self-view reads naturally mirrored; a rear camera shows the world, not you.
   const rearCamera = stream?.getVideoTracks()[0]?.getSettings?.().facingMode === 'environment';
   // What the camera reports, which can fall short of the ask at this resolution.
@@ -661,6 +681,7 @@ export function Lobby({
               e.preventDefault();
               if (!stream || !name.trim()) return;
               if (!(await okToTakeSeat())) return;
+              chooseBitrate(shownBitrate);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               onJoin(stream, name.trim());
@@ -914,7 +935,22 @@ export function Lobby({
                 >
                   {presets.map((q) => (
                     <option key={q.id} value={q.id}>
-                      {`Quality: ${q.label} · ${formatPerHour(q, 2)} per person`}
+                      {`Quality: ${q.label} · ${formatPerHour(atBitrate(q, bitrateId), 2)} per person`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={`${picker} sm:col-span-2`}>
+                <Icon name="settings" size={18} className="shrink-0" />
+                <select
+                  aria-label="Recording bitrate"
+                  value={shownBitrate}
+                  onChange={(e) => changeBitrate(e.target.value)}
+                  className={select}
+                >
+                  {levels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {`Bitrate: ${l.label} · ${atBitrate(shownPreset, l.id).videoBps / 1e6} Mbps`}
                     </option>
                   ))}
                 </select>
@@ -954,6 +990,7 @@ export function Lobby({
                 slug={slug}
                 stream={stream}
                 qualityId={shownQuality}
+                bitrateId={shownBitrate}
                 isHost={isHost}
                 onLevel={setCheckLevel}
               />
