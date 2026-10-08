@@ -115,7 +115,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   other participants stop sending you their camera and shared screen. You still
   hear everyone, they still see you, and no recording is affected. It stays off
   for someone who joins later, after a reconnect, and for a screen share that
-  starts while it is on.
+  starts while it is on. A line above the stage says it is on, and a screen
+  someone presents is covered by a note; both offer **Show video**.
 
 ### Changed
 

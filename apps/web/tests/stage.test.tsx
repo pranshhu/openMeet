@@ -275,5 +275,75 @@ describe('Stage', () => {
     expect(screenVideo).toBeDefined();
     expect(screenVideo?.muted).toBe(true);
   });
-});
 
+  it('presenting (remote screen, incoming video off): a note covers the screen and offers the way back', () => {
+    const onShow = vi.fn();
+    const { rerender } = render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel="Bob's screen"
+        onShowVideo={onShow}
+      />
+    );
+    expect(screen.getByText('Incoming video is off, so you can’t see it.')).toBeTruthy();
+    // The note names the screen; the tile's own tag is under the note.
+    expect(screen.getAllByText("Bob's screen")).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Show video' }));
+    expect(onShow).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel="Bob's screen"
+      />
+    );
+    expect(screen.queryByText('Incoming video is off, so you can’t see it.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show video' })).toBeNull();
+  });
+
+  it('presenting (remote screen, incoming video off): the screen tile stays under the note, unmuted, so its sound plays', () => {
+    const { container } = render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        onShowVideo={() => {}}
+      />
+    );
+    const screenVideo = Array.from(container.querySelectorAll('video')).find(
+      (v) => (v as any).srcObject === fakeStream
+    );
+    expect(screenVideo).toBeDefined();
+    expect(screenVideo?.muted).toBe(false);
+  });
+
+  it('presenting (your own screen, incoming video off): nothing covers what you are sharing', () => {
+    render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={null}
+        localScreen={fakeStream}
+        localPresenting={true}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        onShowVideo={() => {}}
+      />
+    );
+    expect(screen.queryByText('Incoming video is off, so you can’t see it.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show video' })).toBeNull();
+  });
+});

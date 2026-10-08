@@ -291,6 +291,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `state.incomingVideoOff`) is the other mode a tab keeps for itself: every connection stops
   taking the other side's video, and `CallStage` shows the other people as initials (`camOff`)
   while it is on. The call's sound, what this tab sends and every recorder are left alone.
+  While it is on a row above the stage says so with **Show video**, and `Stage` (`onShowVideo`)
+  lays a note with the same button over a screen someone else presents: over the tile, not in
+  its place, because that tile plays the shared sound.
   `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers

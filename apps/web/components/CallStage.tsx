@@ -762,6 +762,21 @@ export function CallStage({
           </button>
         </div>
       )}
+      {incomingVideoOff && (
+        <div
+          role="status"
+          className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
+        >
+          <span>Incoming video is off. You still hear everyone, and the recording is not affected.</span>
+          <button
+            type="button"
+            onClick={() => onSetIncomingVideoOff?.(false)}
+            className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-7"
+          >
+            Show video
+          </button>
+        </div>
+      )}
 
       <BackupNotice
         role={role}
@@ -867,6 +882,7 @@ export function CallStage({
               spotlight={spotlight}
               onSwapSpotlight={() => setSpotlight((s) => (s === 'remote' ? 'local' : 'remote'))}
               onStopPresenting={() => onToggleScreen()}
+              onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
             {prompterOpen && <Teleprompter slug={slug} onClose={() => setPrompterOpen(false)} />}
             {boardOpen && (

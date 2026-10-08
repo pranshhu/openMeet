@@ -2401,4 +2401,39 @@ describe('CallStage: stop incoming video', () => {
     expect(screen.getByText('Bob')).toBeInTheDocument();
     expect(screen.getByText('Carol')).toBeInTheDocument();
   });
+
+  it('says incoming video is off while it is, and Show video turns it back on', () => {
+    const spy = vi.fn();
+    const { rerender } = render(<CallStage {...baseProps} onSetIncomingVideoOff={spy} />);
+    expect(screen.queryByText(/Incoming video is off/)).toBeNull();
+
+    rerender(<CallStage {...baseProps} incomingVideoOff onSetIncomingVideoOff={spy} />);
+    const line = screen.getByText(
+      'Incoming video is off. You still hear everyone, and the recording is not affected.'
+    );
+    expect(line.closest('[role="status"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show video' }));
+    expect(spy).toHaveBeenLastCalledWith(false);
+  });
+
+  it('covers a screen someone presents while it is on, with its own way back', () => {
+    const spy = vi.fn();
+    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    const props = {
+      ...baseProps,
+      remoteStream: bob,
+      remoteScreenStream: { id: 'screen-bob' } as unknown as MediaStream,
+      remotePeers: [
+        { peerId: 'p-bob', name: 'Bob', stream: bob, presence: { micOn: true, camOn: true, screenSharing: true } },
+      ],
+      onSetIncomingVideoOff: spy,
+    };
+    const { rerender } = render(<CallStage {...props} />);
+    expect(screen.queryByText('Incoming video is off, so you can’t see it.')).toBeNull();
+
+    rerender(<CallStage {...props} incomingVideoOff />);
+    const note = screen.getByText('Incoming video is off, so you can’t see it.');
+    fireEvent.click(within(note.parentElement as HTMLElement).getByRole('button', { name: 'Show video' }));
+    expect(spy).toHaveBeenLastCalledWith(false);
+  });
 });
