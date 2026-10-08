@@ -23,6 +23,7 @@ import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
 import { sanitizeText } from '@/lib/sync-report';
 import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
+import { roleWithName } from '@/lib/file-names';
 
 /** Most files one take opens for call copies; a guest who keeps reconnecting gets no more. */
 export const CALL_COPY_MAX_FILES = 50;
@@ -106,6 +107,8 @@ export interface RecordingHandles {
   videoFps?: number | undefined;
   /** Room slug, carried so backups know which room they came from. */
   room?: string;
+  /** The host's display name as typed; roleWithName cleans it wherever it reaches a file name. */
+  hostName?: string;
   /**
    * The host's take id, learned from the acks arriving on this side's channels.
    * The two sides mint different ids for one take, so a guest that joined
@@ -368,10 +371,16 @@ function slotNameForPeer(h: RecordingHandles, peerId: string): string | undefine
   return undefined;
 }
 
-function screenFileName(role: 'host' | 'guest', recordingId: string, segment: number): string {
+function screenFileName(
+  role: 'host' | 'guest',
+  recordingId: string,
+  segment: number,
+  name?: unknown
+): string {
+  const who = roleWithName(role, name);
   return segment <= 1
-    ? `${role}_screen_${recordingId}.mp4`
-    : `${role}_screen_${recordingId}_${segment}.mp4`;
+    ? `${who}_screen_${recordingId}.mp4`
+    : `${who}_screen_${recordingId}_${segment}.mp4`;
 }
 
 /**
@@ -518,6 +527,8 @@ export interface StartHostArgs {
   directoryPicker?: DirectoryPicker;
   /** Room slug, so the host's backup can say which room it came from. */
   room?: string;
+  /** The host's display name, for the names of the host's own files. */
+  hostName?: string;
   onWarn?: (msg: string) => void;
   /** `false` starts a take with no crash copy; the default is on. */
   journal?: boolean;
@@ -563,10 +574,11 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
   // rejected — and two dialogs per recording is hostile anyway.
   const dir = args.dir ?? (await pickRecordingDirectory(args.directoryPicker));
   const take = args.take ?? 1;
+  const hostRole = roleWithName('host', args.hostName);
   let hostWriter: FileWriter | undefined;
   if (hasLocalMedia) {
     hostWriter = new FileWriter();
-    await hostWriter.openIn(dir, takeName('host', args.recordingId, take, 'mp4'));
+    await hostWriter.openIn(dir, takeName(hostRole, args.recordingId, take, 'mp4'));
   }
   const guestWriter = new FileWriter();
   await guestWriter.openIn(dir, takeName('guest', args.recordingId, take, 'mp4'));
@@ -632,7 +644,7 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
   let hostWavWriter: FileWriter | undefined;
   if (hasLocalMedia && isPcmCaptureSupported() && args.localStream.getAudioTracks().length > 0) {
     hostWavWriter = new FileWriter();
-    await hostWavWriter.openIn(dir, takeName('host', args.recordingId, take, 'wav'));
+    await hostWavWriter.openIn(dir, takeName(hostRole, args.recordingId, take, 'wav'));
     const w = hostWavWriter;
     hostPcm = new PcmRecorder({
       stream: args.micStream ?? args.localStream,
@@ -700,6 +712,7 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
     hostStartMs,
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
     ...(args.room ? { room: args.room } : {}),
+    ...(args.hostName ? { hostName: args.hostName } : {}),
     ...(journal ? { journal } : { unprotected: true }),
     ...(args.onWarn ? { onWarn: args.onWarn } : {}),
   };
@@ -1837,7 +1850,11 @@ export async function startScreenRecording(
       // The counter starts again after a resume, so the first share would open
       // the number the crashed tab left in the folder. Step past every name
       // already there; a fresh take's id is new, so it never probes.
-      const free = await freeNumber(h.dir, (n) => screenFileName('host', h.recordingId, n), segment);
+      const free = await freeNumber(
+        h.dir,
+        (n) => screenFileName('host', h.recordingId, n, h.hostName),
+        segment
+      );
       if (free === null) {
         // No name the folder was asked about is free, and an unasked one could
         // be a file from before the crash.
@@ -1849,7 +1866,7 @@ export async function startScreenRecording(
       h.screenSegment = segment;
     }
     const writer = new FileWriter();
-    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment));
+    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment, h.hostName));
     if (screen.getVideoTracks()[0]?.readyState === 'ended') {
       await writer.close();
       rollback();
