@@ -1668,6 +1668,9 @@ export function useRoom(slug: string) {
       });
 
       signal.on('marker', (m) => {
+        // The same setting that closes this peer's recording channels keeps its
+        // markers out of the take.
+        if (isNotRecordedPeer(remotePeersRef.current, m.fromPeerId)) return;
         if (relayedMarkersCountRef.current >= MAX_RELAYED_MARKERS) return;
         const label = typeof m.label === 'string' && m.label.length <= MAX_MARKER_LABEL_LENGTH ? m.label : '';
         if (recordMarker(label, m.from, m.fromName)) {
@@ -1706,6 +1709,9 @@ export function useRoom(slug: string) {
           ts: Date.now(),
           ...(m.fromPeerId ? { fromPeerId: m.fromPeerId } : {}),
           ...(m.fromName ? { fromName: m.fromName } : {}),
+          // Tagged on arrival: a peerId can change on a reconnect and the sender
+          // may be gone by the time the take ends.
+          ...(isNotRecordedPeer(remotePeersRef.current, m.fromPeerId) ? { notRecorded: true } : {}),
         };
         messagesRef.current = [...messagesRef.current, msg];
         setState((s) => ({

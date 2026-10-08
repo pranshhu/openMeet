@@ -596,7 +596,9 @@ unfinished send to each new connection to the host.
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
   channel arriving from a peer the host set as not recorded is closed before any file is opened
   (`isNotRecordedPeer`, in `useRoom`'s `onDataChannel`), so the host does not depend on that guest's
-  browser staying quiet.
+  browser staying quiet. The same check tags that peer's chat lines as they arrive, and drops its
+  markers, so `buildChatLog` leaves them out of `chat_<id>.txt` while everyone in the call still sees
+  them.
 - **The slot key is the channel-label key, not the raw peerId, when one is present.** The DO mints a
   fresh `peerId` per socket, so a full WS reconnect changes it; if `bindHostGuestChannel`/
   `bindHostAudioChannel` keyed slots on `peerId` directly, a reconnected guest would land on a brand

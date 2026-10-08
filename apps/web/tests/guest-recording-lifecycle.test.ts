@@ -5472,4 +5472,100 @@ describe('the host and a guest set as not recorded', () => {
       await result.current.endRecording();
     });
   });
+
+  it('keeps a not-recorded guest’s chat on screen but out of the take’s chat file', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-not-recorded-chat',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-not-recorded-chat.mp4' },
+      guestWriter: { fileName: 'guest_rec-not-recorded-chat.mp4' },
+      slotPeerIds: new Map([[0, 'p-dan']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = await hostInRoom([carol, dan]);
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    act(() => {
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        fromPeerId: 'p-carol',
+        fromName: 'Carol',
+        text: 'off the record',
+        ts: 1,
+      });
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        fromPeerId: 'p-dan',
+        fromName: 'Dan',
+        text: 'on the record',
+        ts: 2,
+      });
+    });
+
+    // Everyone in the call still sees both lines.
+    expect(result.current.state.messages.map((m) => m.text)).toEqual(['off the record', 'on the record']);
+
+    // Carol is gone before the take ends: the tag has to be on the message
+    // already, because only the moment it arrived knew who sent it.
+    act(() => {
+      emitSignal('peer-left', { type: 'peer-left', peerId: 'p-carol', role: 'guest', reason: 'left' });
+    });
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-not-recorded-chat.txt')?.data);
+    expect(chatContent).toContain('on the record');
+    expect(chatContent).not.toContain('off the record');
+    expect(chatContent).not.toContain('Carol');
+  });
+
+  it('drops a marker from a guest set as not recorded and keeps the recorded guest’s', async () => {
+    const { result } = await hostInRoom([carol, dan]);
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    act(() => {
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'Carol marker',
+        from: 'guest',
+        fromPeerId: 'p-carol',
+        fromName: 'Carol',
+      });
+    });
+    expect(result.current.state.markers).toHaveLength(0);
+
+    act(() => {
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'Dan marker',
+        from: 'guest',
+        fromPeerId: 'p-dan',
+        fromName: 'Dan',
+      });
+    });
+    expect(result.current.state.markers.map((m) => m.label)).toEqual(['Dan marker']);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
 });

@@ -958,6 +958,16 @@ describe('buildChatLog', () => {
     expect(log).toBe('[0:00] guest Bob: hello world this is a test\n');
   });
 
+  it('leaves out a message sent by someone set as not recorded, keeping the rest of the window', () => {
+    const messages = [
+      { from: 'guest' as const, fromName: 'Carol', text: 'off the record', ts: 10_000, notRecorded: true },
+      { from: 'guest' as const, fromName: 'Bob', text: 'on the record', ts: 12_000 },
+    ];
+
+    const log = buildChatLog(messages, opts);
+    expect(log).toBe('[0:02] guest Bob: on the record\n');
+  });
+
   it('returns empty string when no messages are in the window or messages list is empty', () => {
     expect(buildChatLog([], opts)).toBe('');
     expect(

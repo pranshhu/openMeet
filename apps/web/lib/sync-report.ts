@@ -16,6 +16,8 @@ export interface ChatMessage {
   fromPeerId?: string;
   fromName?: string;
   self?: boolean;
+  /** Sent by someone the host set as not recorded: shown in the call, left out of the take's chat file. */
+  notRecorded?: boolean;
 }
 
 export interface GuestSyncInput {
@@ -213,7 +215,7 @@ export function buildChatLog(
   messages: ChatMessage[],
   opts: { startMs: number; endMs: number; localName: string }
 ): string {
-  const inWindow = messages.filter((m) => m.ts >= opts.startMs && m.ts <= opts.endMs);
+  const inWindow = messages.filter((m) => !m.notRecorded && m.ts >= opts.startMs && m.ts <= opts.endMs);
   if (inWindow.length === 0) return '';
   const lines = inWindow.map((m) => {
     const time = formatTimecode(m.ts - opts.startMs);
