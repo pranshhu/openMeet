@@ -764,3 +764,6 @@ unfinished send to each new connection to the host.
 - **After a reload the host's own files of the resumed part carry no name.** They are
   `host_<id>_resumed.*`; the part before the reload keeps the name it was written under, and both
   are listed in `hostParts`.
+- **50 and 60 fps were checked with test cameras only.** No take from a real camera running at
+  50 or 60 fps has been inspected (`MANUAL-TESTING.md` row 8.19). A camera that stops at 30 fps is
+  never offered them.
