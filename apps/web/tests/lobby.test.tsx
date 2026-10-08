@@ -22,13 +22,13 @@ function fakeStream(): MediaStream {
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
-function cam720Stream(sampleRate = 48000): MediaStream {
+function cam720Stream(frameRate = 30, sampleRate = 48000): MediaStream {
   const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate }) };
   const video = {
     kind: 'video',
     enabled: true,
     stop: vi.fn(),
-    getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+    getSettings: () => ({ width: 1280, height: 720, frameRate }),
     getCapabilities: () => ({ width: { max: 1280 }, height: { max: 720 } }),
   };
   return {
@@ -983,7 +983,7 @@ describe('Lobby', () => {
   it('states 24-bit uncompressed audio when the WAV master is available', async () => {
     vi.stubGlobal('MediaStreamTrackProcessor', class {});
     try {
-      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream(44100));
+      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(cam720Stream(30, 44100));
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
       const line = await screen.findByText(/Capturing 1280x720/);
       expect(line.textContent).toMatch(/audio 48kHz\/24-bit uncompressed/);
@@ -1808,6 +1808,77 @@ describe('Lobby', () => {
       expect(await screen.findByLabelText('Frame rate')).toHaveValue('25');
       expect(gum()).toHaveBeenCalledTimes(2);
       expect(lastVideo().frameRate).toEqual({ ideal: 25 });
+    });
+
+    it('says the camera gives another rate than the pick, with both figures exact', async () => {
+      gum().mockResolvedValue(cam720Stream(14.985014915466309));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      const notice = await screen.findByText('This camera gives 14.985 fps at this quality, not 30.');
+      expect(notice).toHaveAttribute('role', 'status');
+      expect(screen.getByText(/Capturing 1280x720 @ 14\.985fps/)).toBeInTheDocument();
+    });
+
+    it('compares the delivered rate with the pick, not with the default', async () => {
+      localStorage.setItem('om_fps', '24');
+      gum().mockResolvedValue(cam720Stream(30));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      expect(
+        await screen.findByText('This camera gives 30 fps at this quality, not 24.')
+      ).toBeInTheDocument();
+    });
+
+    it('stays quiet when the camera delivers the pick, within half a frame', async () => {
+      const pairs: [string, number][] = [
+        ['30', 30.000030517578125],
+        ['24', 24],
+        ['29.97', 30],
+        ['30', 30.4],
+      ];
+      for (const [picked, delivered] of pairs) {
+        localStorage.setItem('om_fps', picked);
+        gum().mockResolvedValue(cam720Stream(delivered));
+        const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+        await screen.findByText(/Capturing 1280x720/);
+        expect(screen.queryByText(/This camera gives/)).toBeNull();
+        unmount();
+      }
+    });
+
+    it('reports a difference of more than half a frame, half a frame exactly being the same mode', async () => {
+      gum().mockResolvedValue(cam720Stream(30.6));
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      expect(
+        await screen.findByText('This camera gives 30.6 fps at this quality, not 30.')
+      ).toBeInTheDocument();
+      unmount();
+
+      gum().mockResolvedValue(cam720Stream(30.5));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await screen.findByText(/Capturing 1280x720/);
+      expect(screen.queryByText(/This camera gives/)).toBeNull();
+    });
+
+    it('stays quiet when the track reports no usable rate, and prints no rate', async () => {
+      gum().mockResolvedValue(cam720Stream(0));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      expect(await screen.findByText(/Capturing 1280x720 · audio/)).toBeInTheDocument();
+      expect(screen.queryByText(/This camera gives/)).toBeNull();
+    });
+
+    it('sits under the Capturing line, at the same size and alignment', async () => {
+      gum().mockResolvedValue(cam720Stream(14.985014915466309));
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+      const capturing = await screen.findByText(/Capturing 1280x720 @ 14\.985fps/);
+      const notice = await screen.findByText('This camera gives 14.985 fps at this quality, not 30.');
+      expect(capturing.nextElementSibling).toBe(notice);
+      expect(notice.className).toMatch(/\bmt-1\b/);
+      expect(notice.className).toMatch(/\btext-xs\b/);
+      expect(notice.className).toMatch(/\btext-center\b/);
+      expect(notice.className).toMatch(/text-\[#7a4f01\]/);
     });
   });
 });
