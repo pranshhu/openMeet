@@ -111,9 +111,14 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Ending a take no longer waits on a guest that keeps sending data: each guest
   file is closed two minutes after the stop at the latest, however much is still
   arriving.
+- A backup that failed to arrive can be sent again without the host dismissing
+  it first.
 
 ### Security
 
+- A Save takes only the offers that were listed when it was pressed: an offer
+  that arrives, or changes size, while the folder prompt is open waits for the
+  next Save.
 - Malformed markers, chat or guest metadata can no longer make the host's take
   end in failure.
 - Security headers on every page Cloudflare Pages serves (`apps/web/public/_headers`):

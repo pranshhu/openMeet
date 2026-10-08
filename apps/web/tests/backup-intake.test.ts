@@ -1888,6 +1888,108 @@ describe('BackupIntake receiving a returned backup', () => {
     expect(folder.files.has(numbered(2))).toBe(false);
   });
 
+  it('lists a failed backup again under a new key, keeping the part that arrived', async () => {
+    const payload = payloadOf(150_000, 8);
+    const { frames } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength, undefined, 'key-a');
+
+    for (const f of frames.slice(0, 4)) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, 'f'.repeat(64)));
+    await settle();
+    expect(state.items.map((i) => i.status)).toEqual(['failed']);
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(131_072);
+
+    // The guest's tab reloaded and offers the same label under a new key. A
+    // failed record protects nothing, so the retry must be listed.
+    const retry = fakeChannel(validLabel());
+    intake.offer(retry, { peerId: 'p1', name: 'Alice' });
+    retry.deliver(offerMsg(payload.byteLength, 'key-b'));
+    await settle();
+
+    expect(retry.readyState).toBe('open');
+    expect(retry.sent).toEqual([]);
+    expect(state.items.map((i) => [i.status, i.size])).toEqual([['offered', payload.byteLength]]);
+    expect(folder.removed).toEqual([]);
+    expect(folder.files.get(FILE)!.bytes.length).toBe(131_072);
+
+    // Its Save opens the next free name, so the retry never replaces the part
+    // the first attempt left behind.
+    await intake.accept(folder, state.items);
+    expect(folder.files.has(numbered(2))).toBe(true);
+  });
+
+  it('stop ends an active transfer, dropping its empty file and refusing its sender', async () => {
+    const { state, intake, ch, folder } = await offered(1000);
+    expect(state.items[0]!.status).toBe('active');
+
+    intake.stop(BACKUP_ID);
+    await settle();
+
+    expect(state.items.map((i) => i.status)).toEqual(['failed']);
+    expect(folder.removed).toEqual([FILE]);
+    expect(ch.sent.at(-1)).toBe(NO_COPY);
+    expect(ch.readyState).toBe('closed');
+  });
+
+  it('stop changes nothing for an offered, stalled or saved transfer', async () => {
+    const waiting = setup();
+    const waitingCh = fakeChannel(validLabel(1700000000000));
+    waiting.intake.offer(waitingCh, { peerId: 'p1', name: 'Alice' });
+    waitingCh.deliver(offerMsg(1000, 'key-a'));
+    await flush();
+    waiting.intake.stop(BACKUP_ID);
+    await settle();
+    expect(waiting.state.items.map((i) => i.status)).toEqual(['offered']);
+    expect(waitingCh.sent).toEqual([]);
+    expect(waitingCh.readyState).toBe('open');
+
+    const payload = payloadOf(150_000, 18);
+    const { frames } = await framesFor(payload);
+    const stalled = await offered(payload.byteLength);
+    for (const f of frames.slice(0, 4)) stalled.ch.deliver(f);
+    await settle();
+    stalled.ch.close();
+    await flush();
+    expect(stalled.state.items[0]!.status).toBe('stalled');
+    stalled.intake.stop(BACKUP_ID);
+    await settle();
+    expect(stalled.state.items.map((i) => i.status)).toEqual(['stalled']);
+    expect(stalled.folder.removed).toEqual([]);
+    expect(stalled.folder.files.get(FILE)!.bytes.length).toBe(131_072);
+
+    const bytes = payloadOf(100_000, 19);
+    const { frames: savedFrames, sha256 } = await framesFor(bytes);
+    const saved = await offered(bytes.byteLength);
+    for (const f of savedFrames) saved.ch.deliver(f);
+    saved.ch.deliver(finalized(bytes.byteLength, sha256));
+    await settle();
+    expect(saved.state.items.map((i) => i.status)).toEqual(['saved']);
+    const sent = saved.ch.sent.length;
+    saved.intake.stop(BACKUP_ID);
+    await settle();
+    expect(saved.state.items.map((i) => i.status)).toEqual(['saved']);
+    expect(saved.ch.sent.length).toBe(sent);
+    expect(saved.folder.files.has(NOTE)).toBe(true);
+  });
+
+  it('leaving while a file is being verified keeps its note', async () => {
+    const payload = payloadOf(200_000, 21);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake, ch, folder } = await offered(payload.byteLength, { lateWrites: true });
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    // Let the finalize reach the close of a writer whose writes are still queued.
+    await Promise.resolve();
+    await Promise.resolve();
+    await intake.close();
+    await settle(30);
+
+    expect(folder.files.has(NOTE)).toBe(true);
+    expect(state.items.map((i) => [i.status, i.percent])).toEqual([['saved', 100]]);
+  });
+
   it('answers a repeated finalized or a resume on a new channel with the same verdict', async () => {
     const payload = payloadOf(100_000, 4);
     const { frames, sha256 } = await framesFor(payload);

@@ -347,9 +347,15 @@ export class BackupIntake {
 
     const old = this.records.get(id);
     // Another key may only take a name that holds nothing: a waiting offer whose channel is
-    // gone. An accepted backup has a file on the host's disk, and only the key that created
-    // it may restart it.
-    if (old && old.key !== key && (old.item.status !== 'offered' || old.channel.readyState === 'open')) {
+    // gone, or a record that already failed. An accepted backup has a file on the host's
+    // disk, and only the key that created it may restart it; a failed one protects nothing
+    // (its file was ended), so the same name may be offered again by a sender that reloaded.
+    if (
+      old &&
+      old.key !== key &&
+      old.item.status !== 'failed' &&
+      (old.item.status !== 'offered' || old.channel.readyState === 'open')
+    ) {
       turnAway(channel);
       return;
     }
@@ -543,6 +549,16 @@ export class BackupIntake {
   }
 
   /**
+   * The host ended a transfer that is still running: answer its sender, close
+   * its channel and keep what arrived. Any other record is left alone.
+   */
+  stop(id: string): void {
+    const record = this.records.get(id);
+    if (!record || record.item.status !== 'active') return;
+    void this.failRecord(record);
+  }
+
+  /**
    * The host gave up on a transfer that is dead: drop the record so its name
    * can be offered again, and take back a file that holds nothing. A transfer
    * that is still moving keeps its record.
@@ -593,6 +609,9 @@ export class BackupSend {
   private ready = false;
   private paused = false;
   private started = false;
+  // Every slice of the file has been handed to the sender. Until then a
+  // verdict cannot be about a file this side never sent.
+  private sentAll = false;
   private finished = false;
   private settleDone: (result: 'saved' | 'failed') => void = () => {};
   readonly done: Promise<'saved' | 'failed'>;
@@ -653,7 +672,11 @@ export class BackupSend {
     this.ready = false;
     channel.binaryType = 'arraybuffer';
     channel.bufferedAmountLowThreshold = DC_BUFFERED_LOW_WATERMARK;
-    channel.onbufferedamountlow = () => this.sender?.drainQueue();
+    channel.onbufferedamountlow = () => {
+      // A channel that was replaced must not push its queue onto the one that
+      // took over, and neither may drain before the host has answered there.
+      if (this.channel === channel && this.ready) this.sender?.drainQueue();
+    };
     channel.onmessage = (ev: { data: unknown }) => this.onControl(channel, ev.data);
     channel.onclose = () => {
       // A dropped connection is not an ending: the host keeps the bytes it wrote.
@@ -671,12 +694,7 @@ export class BackupSend {
 
   private say(msg: Record<string, unknown>): void {
     const channel = this.channel;
-    if (channel?.readyState !== 'open') return;
-    try {
-      channel.send(JSON.stringify(msg));
-    } catch {
-      // Channel closed or broke between the ready check and the send.
-    }
+    if (channel) say(channel, JSON.stringify(msg));
   }
 
   private set(patch: { status?: BackupTransfer['status']; percent?: number }): void {
@@ -731,15 +749,9 @@ export class BackupSend {
 
   private onControl(channel: RTCDataChannel, data: unknown): void {
     // A replacement took over: what the dead one says about this send is stale.
-    if (channel !== this.channel || this.finished || typeof data !== 'string') return;
-    let msg: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(data) as unknown;
-      if (typeof parsed !== 'object' || parsed === null) return;
-      msg = parsed as Record<string, unknown>;
-    } catch {
-      return;
-    }
+    if (channel !== this.channel || this.finished) return;
+    const msg = control(data);
+    if (!msg) return;
 
     if (msg.type === 'ack') {
       if (Number.isSafeInteger(msg.uptoIdx)) this.sender?.handleControl(msg as unknown as ChunkAck);
@@ -762,7 +774,11 @@ export class BackupSend {
       void (async () => {
         const mine = await this.sender!.digestHex();
         this.settle(
-          msg.sha256 === mine && msg.totalBytes === this.opts.file.size ? 'saved' : 'failed'
+          // The verdict is about a whole file: one that arrives before the last
+          // slice was handed over is about nothing this side sent.
+          this.sentAll && msg.sha256 === mine && msg.totalBytes === this.opts.file.size
+            ? 'saved'
+            : 'failed'
         );
       })().catch(() => this.settle('failed'));
     }
@@ -780,6 +796,7 @@ export class BackupSend {
       this.sender!.sendChunk({ header: { idx: 0, offset: at, size: payload.byteLength, ts: 0 }, payload });
       this.set({ percent: Math.min(99, Math.floor(((at + payload.byteLength) * 100) / file.size)) });
     }
+    this.sentAll = true;
     const sha256 = await this.sender!.digestHex();
     // Ordered and reliable: sent after the last fragment, it arrives after it.
     // Said again on every replacement channel until the verdict arrives: a

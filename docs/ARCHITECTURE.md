@@ -421,7 +421,9 @@ unfinished send to each new connection to the host.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can
-  take a name only while it holds a waiting offer whose channel is gone. Nothing is written until the
+  take a name while it holds a waiting offer whose channel is gone, or a failed one whose file was
+  already ended. The host can stop a running transfer (`stop`), which answers its sender and keeps
+  the part that arrived. Nothing is written until the
   host accepts, and a Save covers only the offers that were on screen when it was clicked; each
   accepted file is opened under a free name that never replaces an existing file in the folder
   (`…_2.<ext>`). An accepted
@@ -433,7 +435,8 @@ unfinished send to each new connection to the host.
   where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
   its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
   1 MiB slices paced by `ChunkSender` backpressure and by the host's acks (16 MiB unacked is the
-  ceiling), and calls it saved only when the host's digest and byte count match its own. Sends go
+  ceiling), and calls it saved only when the host's digest and byte count match its own and it has
+  sent the whole file. Sends go
   one at a time — each waits for the one before it (`after`) and for this guest's own take to end
   (`hold`) — and a dropped connection shows `stalled` instead of failing: `attachBackupSends`
   points every unfinished send at the rebuilt connection once it is connected, the send asks
@@ -632,3 +635,6 @@ unfinished send to each new connection to the host.
   then be refused, and their recording is kept only in that guest's own backup.
 - Guest screen-share channels are not bounded per guest: each segment a guest opens becomes
   a file in the host's folder.
+- **A returned backup is not held back during a take.** The host does not pause an incoming
+  transfer while it records; a recorded guest's own tab waits, and a sender that does not wait
+  makes the host write while it records.

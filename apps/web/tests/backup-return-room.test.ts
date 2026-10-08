@@ -142,6 +142,13 @@ function lastPeer() {
   };
 }
 
+/** The handler the connection built for `peerId` was started with. */
+function optsFor(peerId: string) {
+  return vi.mocked(PeerConnection).mock.calls.find(
+    (c) => (c[0] as { remotePeerId?: string }).remotePeerId === peerId
+  )![0] as unknown as { onDataChannel?: (channel: RTCDataChannel) => void };
+}
+
 /** Every backup channel any connection was asked for, oldest first. */
 function backupChannels(): FakeChannel[] {
   return vi.mocked(PeerConnection).mock.results.flatMap((r) => {
@@ -476,6 +483,129 @@ describe('a host taking returned backups', () => {
     ]);
     expect(second.readyState).toBe('open');
   });
+
+  it('counts waiting offers per sender: one guest at the limit does not crowd out another', async () => {
+    usePicker(fakeFolder());
+    const { result } = await joined('host', [GUEST, OTHER_GUEST]);
+    const name = (n: number) => `openmeet-backup-170000000000${n}-abc-defg-hij.mp4`;
+    for (let n = 0; n < 8; n++) await offerBackup(optsFor('p-guest'), name(n));
+    const ninth = await offerBackup(optsFor('p-guest'), name(8));
+    expect(ninth.readyState).toBe('closed');
+    const other = await offerBackup(optsFor('p-guest-2'), name(9));
+    expect(other.readyState).toBe('open');
+    expect(result.current.state.backupTransfers.map((t) => t.from)).toEqual([
+      ...Array(8).fill('Asha'),
+      'Bo',
+    ]);
+  });
+
+  it('a Save takes only what was listed when it was pressed, however long the folder prompt stays open', async () => {
+    const folder = fakeFolder();
+    let resolvePicker!: (f: unknown) => void;
+    (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker = vi.fn(
+      () => new Promise((r) => { resolvePicker = r; })
+    );
+    const { result, opts } = await joined('host', [GUEST]);
+    await offerBackup(opts);
+    let accepting!: Promise<void>;
+    act(() => { accepting = result.current.acceptBackups(); });
+    const swap = backupChannel(BACKUP);
+    const extra = backupChannel(BACKUP_2);
+    await act(async () => {
+      opts.onDataChannel!(swap as unknown as RTCDataChannel);
+      swap.deliver(JSON.stringify({ type: 'backup_offer', size: Number.MAX_SAFE_INTEGER, key: 'k1' }));
+      opts.onDataChannel!(extra as unknown as RTCDataChannel);
+      extra.deliver(JSON.stringify({ type: 'backup_offer', size: 123456789, key: 'k9' }));
+      await flush();
+    });
+    await act(async () => { resolvePicker(folder); await accepting; await flush(); });
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['offered', 'offered']);
+    expect([...folder.files.keys()]).toEqual([]);
+  });
+
+  it('a Save takes only the offers listed when it was pressed, even when the folder prompt opens', async () => {
+    const folder = fakeFolder();
+    let pick!: (f: FakeFolderHandle) => void;
+    (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker = vi.fn(
+      () => new Promise<FakeFolderHandle>((r) => { pick = r; })
+    );
+    const { result } = await joined('host', [GUEST, OTHER_GUEST]);
+    const first = await offerBackup(optsFor('p-guest'));
+
+    let saving!: Promise<void>;
+    act(() => { saving = result.current.acceptBackups(); });
+    await act(async () => { await flush(); });
+
+    // The prompt is open: another participant offers a backup the host has not seen.
+    const late = backupChannel(BACKUP_2);
+    await act(async () => {
+      optsFor('p-guest-2').onDataChannel!(late as unknown as RTCDataChannel);
+      late.deliver(JSON.stringify({ type: 'backup_offer', size: Number.MAX_SAFE_INTEGER, key: 'k2' }));
+      await flush();
+    });
+    await act(async () => { pick(folder); await saving; await flush(); });
+
+    expect(result.current.state.backupTransfers.map((t) => [t.from, t.status])).toEqual([
+      ['Asha', 'active'],
+      ['Bo', 'offered'],
+    ]);
+    expect([...folder.files.keys()]).toEqual(['backup_asha_camera_20231114T221320000Z.mp4']);
+    expect(first.sent.map((s) => JSON.parse(s as string).type)).toEqual(['resume_offset']);
+    expect(late.sent).toEqual([]);
+  });
+
+  it('an offer whose size changed while the folder prompt was open waits for the next Save', async () => {
+    const folder = fakeFolder();
+    let pick!: (f: FakeFolderHandle) => void;
+    (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker = vi.fn(
+      () => new Promise<FakeFolderHandle>((r) => { pick = r; })
+    );
+    const { result } = await joined('host', [GUEST]);
+    const asha = optsFor('p-guest');
+    await offerBackup(asha);
+    let saving!: Promise<void>;
+    act(() => { saving = result.current.acceptBackups(); });
+    await act(async () => { await flush(); });
+    const again = backupChannel(BACKUP);
+    await act(async () => {
+      asha.onDataChannel!(again as unknown as RTCDataChannel);
+      again.deliver(JSON.stringify({ type: 'backup_offer', size: 8_000_000_000_000, key: 'k1' }));
+      await flush();
+    });
+    await act(async () => { pick(folder); await saving; await flush(); });
+    expect(result.current.state.backupTransfers.map((t) => [t.size, t.status])).toEqual([
+      [8_000_000_000_000, 'offered'],
+    ]);
+    expect(folder.files.size).toBe(0);
+  });
+
+  it('stopBackup ends a running transfer the way a failure does', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    const channel = await offerBackup(opts);
+    await act(async () => {
+      await result.current.acceptBackups();
+    });
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['active']);
+
+    act(() => {
+      result.current.stopBackup(BACKUP);
+    });
+    await act(async () => {
+      await flush();
+    });
+
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['failed']);
+    expect(folder.removed).toEqual(['backup_asha_camera_20231114T221320000Z.mp4']);
+    expect(JSON.parse(channel.sent.at(-1) as string)).toEqual({
+      type: 'recording-finalized',
+      recordingId: '',
+      totalBytes: 0,
+      sha256: '',
+    });
+    expect(channel.readyState).toBe('closed');
+  });
 });
 
 describe('a tab that cannot take a returned backup', () => {
@@ -729,7 +859,28 @@ describe('a guest offering leftover backups', () => {
   it('never creates a backup channel on a host tab, even with one queued', async () => {
     const { result } = await queuedBeforeJoining('host', [backupFile()], [GUEST]);
     expect(backupChannels()).toEqual([]);
-    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([BACKUP]);
+    // The tab owns the take, so the backup it queued for a host is dropped.
+    expect(result.current.state.backupTransfers).toEqual([]);
+  });
+
+  it('cancels a queued send when the room names this tab the host', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const channel = backupChannels()[0]!;
+    expect(channel.readyState).toBe('open');
+
+    await assigned(result, 'host', [GUEST]);
+
+    expect(JSON.parse(channel.sent.at(-1) as string)).toEqual({
+      type: 'stream-abandoned',
+      recordingId: BACKUP,
+      lastIdx: -1,
+    });
+    expect(channel.readyState).toBe('closed');
+    expect(result.current.state.backupTransfers).toEqual([]);
   });
 
   it('never creates a backup channel on a host tab that hears of a host', async () => {
@@ -747,7 +898,7 @@ describe('a guest offering leftover backups', () => {
       await flush();
     });
     expect(backupChannels()).toEqual([]);
-    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([BACKUP]);
+    expect(result.current.state.backupTransfers).toEqual([]);
   });
 
   it('cancels an unfinished send when the tab goes away', async () => {

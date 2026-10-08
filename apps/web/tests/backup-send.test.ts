@@ -874,6 +874,21 @@ describe('BackupSend', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('a verdict that arrives before the file was sent is not a saved backup', async () => {
+    const file = new File([new Uint8Array(3 * BACKUP_READ_BYTES).fill(5)], NAME);
+    const send = new BackupSend({ file });
+    const ch = fakeChannel(LABEL);
+    send.attach(ch);
+    // The digest of the empty string, and the size the sender declared: a verdict
+    // this side has done nothing to earn.
+    ch.deliver(JSON.stringify({
+      type: 'recording-finalized', recordingId: NAME, totalBytes: file.size,
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    }));
+    expect(await send.done).toBe('failed');
+    expect(send.item.status).toBe('failed');
+  });
+
   it('ignores a message delivered through a channel that was replaced', async () => {
     const file = new File([bytesOf(FILE_BYTES)], NAME);
     const { state, intake } = intakeFor();
@@ -901,6 +916,64 @@ describe('BackupSend', () => {
     expect(send.settled).toBe(false);
     expect(send.item.status).toBe('active');
     expect(messages(guest, 'recording-finalized')).toEqual([]);
+  });
+
+  it('a replaced channel that drains sends nothing on its replacement before the host answers there', async () => {
+    const file = new File([new Uint8Array(BACKUP_READ_BYTES).fill(3)], NAME);
+    const send = new BackupSend({ file });
+    const first = fakeChannel(LABEL);
+    send.attach(first);
+    first.bufferedAmount = 17 * 1024 * 1024; // over the high watermark: the megabyte queues
+    first.deliver(resumeOffset());
+    await tick(300);
+    const second = fakeChannel(LABEL);
+    send.attach(second);
+    first.bufferedAmount = 0;
+    first.onbufferedamountlow?.();
+    expect(second.sent.map((s) => (typeof s === 'string' ? JSON.parse(s).type : 'bytes'))).toEqual([
+      'resume_query',
+    ]);
+    send.cancel();
+  });
+
+  it('a replacement channel that drains before the host answers there sends nothing', async () => {
+    const file = new File([new Uint8Array(BACKUP_READ_BYTES).fill(3)], NAME);
+    const send = new BackupSend({ file });
+    const first = fakeChannel(LABEL);
+    send.attach(first);
+    first.bufferedAmount = 17 * 1024 * 1024;
+    first.deliver(resumeOffset());
+    await tick(300);
+    const second = fakeChannel(LABEL);
+    send.attach(second);
+    second.bufferedAmount = 0;
+    second.onbufferedamountlow?.();
+    expect(second.sent.map((s) => (typeof s === 'string' ? JSON.parse(s).type : 'bytes'))).toEqual([
+      'resume_query',
+    ]);
+    send.cancel();
+  });
+
+  it('a replaced channel that drains after the replacement is ready does not drain the queue onto it', async () => {
+    const file = new File([new Uint8Array(BACKUP_READ_BYTES).fill(3)], NAME);
+    const send = new BackupSend({ file });
+    const first = fakeChannel(LABEL);
+    send.attach(first);
+    first.bufferedAmount = 17 * 1024 * 1024;
+    first.deliver(resumeOffset());
+    await tick(300);
+    const second = fakeChannel(LABEL);
+    send.attach(second);
+    second.bufferedAmount = 17 * 1024 * 1024;
+    second.deliver(resumeOffset());
+    await tick(300);
+    second.bufferedAmount = 10 * 1024 * 1024;
+    first.bufferedAmount = 0;
+    first.onbufferedamountlow?.();
+    expect(second.sent.map((s) => (typeof s === 'string' ? JSON.parse(s).type : 'bytes'))).toEqual([
+      'resume_query',
+    ]);
+    send.cancel();
   });
 });
 

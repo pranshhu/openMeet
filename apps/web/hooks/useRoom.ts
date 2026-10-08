@@ -1353,6 +1353,14 @@ export function useRoom(slug: string) {
         roleRef.current = m.role;
         myPeerIdRef.current = m.peerId;
         myOrdinalRef.current = m.ordinal;
+        // A host owns the take and takes no returned backup, so whatever this
+        // tab queued before the room named its role is dropped instead of being
+        // listed back to it as an incoming offer.
+        if (m.role === 'host' && backupSendsRef.current.length > 0) {
+          for (const send of backupSendsRef.current) send.cancel();
+          backupSendsRef.current = [];
+          setState((s) => ({ ...s, backupTransfers: [] }));
+        }
         // role-assigned describes the whole room as it stands, and the DO mints
         // a peer id per socket: an id it does not list is someone who is gone
         // and will not come back under that id. A Room that restarted never
@@ -1812,6 +1820,11 @@ export function useRoom(slug: string) {
   const acceptBackups = useCallback(async () => {
     const intake = backupIntakeRef.current;
     if (!intake) return;
+    // This click covers exactly the offers that were on screen when it was
+    // pressed. An offer that arrives, or whose size changes, while the folder
+    // prompt is open is a backup the host was never shown: it waits for the
+    // next Save instead of being taken at a size nobody read.
+    const shown = backupShownRef.current;
     // A folder already chosen this session is reused, so a take and the backups
     // returned for it sit together; otherwise this click opens the prompt.
     let dir = dirRef.current;
@@ -1823,7 +1836,7 @@ export function useRoom(slug: string) {
       }
       dirRef.current = dir;
     }
-    await intake.accept(dir, backupShownRef.current);
+    await intake.accept(dir, shown);
   }, []);
 
   const declineBackups = useCallback(() => backupIntakeRef.current?.decline(), []);
@@ -1832,6 +1845,9 @@ export function useRoom(slug: string) {
   const dismissBackup = useCallback(async (id: string) => {
     await backupIntakeRef.current?.dismiss(id);
   }, []);
+
+  /** Host: end a transfer that is still running, keeping the part that arrived. */
+  const stopBackup = useCallback((id: string) => backupIntakeRef.current?.stop(id), []);
 
   /** Guest: send these leftover backups to the host, at once or as soon as the host is connected. */
   const sendBackups = useCallback((files: File[]) => {
@@ -2486,6 +2502,7 @@ export function useRoom(slug: string) {
     acceptBackups,
     declineBackups,
     dismissBackup,
+    stopBackup,
     sendBackups,
     addMarker,
     openMediaBoard,
