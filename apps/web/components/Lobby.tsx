@@ -23,7 +23,7 @@ import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
-import { backupRoom, findBackups, deleteBackup, isScreenBackup } from '@/lib/backup-recorder';
+import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
 import { saveRecoveredTake, type SaveResult } from '@/lib/take-recovery';
@@ -32,6 +32,7 @@ import { guestRecordingGuidance } from '@/lib/browser-guidance';
 import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
 import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
+import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -110,6 +111,7 @@ const TAKEOVER_PROMPT =
 export function Lobby({
   slug,
   onJoin,
+  onSendBackups,
   producer = false,
   present = false,
 }: {
@@ -120,6 +122,8 @@ export function Lobby({
     companion?: boolean,
     screenStream?: MediaStream
   ) => void;
+  /** Guest: queue leftover backups for the host, in the call or before it. */
+  onSendBackups?: (files: File[]) => void;
   /** Unrecorded observer: publishes nothing, so no camera or mic is opened. */
   producer?: boolean;
   /** Join as a screen-sharing companion only: no camera/mic acquisition. */
@@ -148,6 +152,8 @@ export function Lobby({
   const [backups, setBackups] = useState<BackupItem[]>([]);
   const backupsRef = useRef<BackupItem[]>([]);
   backupsRef.current = backups;
+  // Names, not rows: a backup deleted after being chosen no longer counts.
+  const [toSend, setToSend] = useState<string[]>([]);
   const [journals, setJournals] = useState<TakeJournal[]>([]);
   const [isHost, setIsHost] = useState(false);
   const guestGuidance = !producer && !isHost ? guestRecordingGuidance() : null;
@@ -203,6 +209,16 @@ export function Lobby({
   useEffect(() => {
     setIsHost(!!getHostToken(slug));
   }, [slug]);
+
+  const chosen = backups.filter((b) => toSend.includes(b.file.name));
+  // A host's own screen backup has the same name shape as a guest's, so only a
+  // visitor gets the button, and only for a backup recorded in this room.
+  const canSendRow = (name: string) => !isHost && parseBackupName(name)?.room === slug;
+  const hasSendableRow = backups.some((b) => canSendRow(b.file.name));
+
+  function toggleSend(fileName: string) {
+    setToSend((prev) => (prev.includes(fileName) ? prev.filter((n) => n !== fileName) : [...prev, fileName]));
+  }
 
   async function removeBackup(fileName: string) {
     // It may be the only copy of someone's recording.
@@ -360,6 +376,7 @@ export function Lobby({
       handedOffRef.current = true;
       mmRef.current?.stop();
       stream?.getTracks().forEach((t) => t.stop());
+      if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
       onJoin(emptyStream(), name.trim(), true, screenStream);
     } catch (e) {
       if (e instanceof Error && e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
@@ -597,6 +614,7 @@ export function Lobby({
               if (!stream || !name.trim()) return;
               if (!(await okToTakeSeat())) return;
               handedOffRef.current = true;
+              if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               onJoin(stream, name.trim());
             }}
           >
@@ -653,8 +671,18 @@ export function Lobby({
                 Backups on this device
               </h2>
               <p className="mt-1 text-[13px] leading-relaxed text-[#5f6368]">
-                Safety copies of recordings made in this browser. If a recording is missing a part, download
-                the matching backup — guests, send it to the host. They stay here until you delete them.
+                {hasSendableRow ? (
+                  <>
+                    Safety copies of recordings made in this browser. If the host’s recording is missing your
+                    part, press Send to host on the matching backup and join — it goes straight to their
+                    computer. They stay here until you delete them.
+                  </>
+                ) : (
+                  <>
+                    Safety copies of recordings made in this browser. If a recording is missing a part, download
+                    the matching backup — guests, send it to the host. They stay here until you delete them.
+                  </>
+                )}
               </p>
               <ul className="mt-3 divide-y divide-[#e1e5ea]">
                 {backups.map((b) => {
@@ -666,6 +694,8 @@ export function Lobby({
                   const details = `from ${new Date(b.file.lastModified).toLocaleString()}${room ? ` in room ${room}` : ''}`;
                   const what = `${isScreen ? 'screen backup' : `backup${typeLabel}`} ${details}`;
                   const title = `${isScreen ? 'Screen backup' : `Recording backup${typeLabel}`} ${details}`;
+                  const sendable = canSendRow(b.file.name);
+                  const isChosen = toSend.includes(b.file.name);
                   return (
                     <li
                       key={b.file.name}
@@ -675,7 +705,7 @@ export function Lobby({
                         <span>{title}</span>
                         <span className="whitespace-nowrap text-[#5f6368]"> · {formatSize(b.file.size)}</span>
                       </p>
-                      <div className="-ml-4 flex shrink-0 items-center gap-1">
+                      <div className="-ml-4 flex shrink-0 flex-wrap items-center gap-1">
                         <a
                           href={b.url}
                           download={b.file.name}
@@ -684,6 +714,18 @@ export function Lobby({
                         >
                           Download
                         </a>
+                        {sendable && (
+                          <button
+                            type="button"
+                            aria-pressed={isChosen}
+                            aria-label={`Send to host: ${what}`}
+                            disabled={!isChosen && chosen.length >= MAX_BACKUP_OFFERS_PER_PEER}
+                            onClick={() => toggleSend(b.file.name)}
+                            className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium transition-colors hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${isChosen ? 'bg-[#0b57d0]/10 ' : ''}text-[#0b57d0] ${focusRing}`}
+                          >
+                            {isChosen ? 'Will send to host' : 'Send to host'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => void removeBackup(b.file.name)}
@@ -697,6 +739,15 @@ export function Lobby({
                   );
                 })}
               </ul>
+              {chosen.length > 0 && (
+                <p role="status" className="mt-2 text-[13px] leading-relaxed text-[#5f6368]">
+                  {`Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes.${
+                    chosen.length >= MAX_BACKUP_OFFERS_PER_PEER
+                      ? ` You can send ${MAX_BACKUP_OFFERS_PER_PEER} at a time.`
+                      : ''
+                  }`}
+                </p>
+              )}
             </section>
           )}
           {/* Beside Join, like the backups: a host back after a browser crash

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck } from '@/lib/preflight';
@@ -634,6 +634,28 @@ describe('Lobby', () => {
     }
   });
 
+  it('shows no backups on the producer or present-only pages', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+      await waitFor(() => expect(findBackupsSpy).toHaveBeenCalled());
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Backups on this device' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+      unmount();
+
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+      await settle();
+      expect(screen.queryByRole('heading', { name: 'Backups on this device' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
   it('shows guest recording disclosure when viewer is not host', async () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     expect(screen.getByText(/The host can record this call/i)).toBeInTheDocument();
@@ -1250,6 +1272,247 @@ describe('Lobby', () => {
   });
 
   // On a phone the checklist is below Join, so a silent mic would go unseen.
+  // A room used every week collects old backups, and sending all of them
+  // unasked could be many gigabytes.
+  it('offers Send to host on this room’s guest backups only', async () => {
+    const mine = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const otherRoom = new File(['b'], 'openmeet-backup-1700000001000-abc-defg-hij.mp4', { lastModified: 1700000001000 });
+    const noRoom = new File(['c'], 'openmeet-backup.mp4', { lastModified: 1700000002000 });
+    const hostOwn = new File(['d'], 'openmeet-backup-host-1700000003000-xyz-abcd-pqr.mp4', { lastModified: 1700000003000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue([mine, otherRoom, noRoom, hostOwn]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const send = await screen.findByRole('button', { name: /^Send to host:/ });
+      expect(send).toHaveAccessibleName(/^Send to host: backup \(MP4\) from .* in room xyz-abcd-pqr$/);
+      expect(send).toHaveAttribute('type', 'button');
+      expect(send).not.toHaveClass('bg-[#0b57d0]/10');
+      expect(screen.getAllByRole('button', { name: /^Send to host:/ })).toHaveLength(1);
+      // Between the row's other two controls, and wrapping with them on a phone.
+      const row = send.closest('li')!;
+      const download = within(row).getByRole('link', { name: /^Download / });
+      const remove = within(row).getByRole('button', { name: /^Delete / });
+      expect(download.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(send.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(send.parentElement!.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+      unmount();
+
+      // A host's own screen backup has a guest's name shape; the token is what
+      // keeps the button off it.
+      localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      await screen.findByRole('heading', { name: 'Backups on this device' });
+      expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('marks a chosen backup and says it will go to the host, and undoes both on a second press', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const send = await screen.findByRole('button', { name: /^Send to host:/ });
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+
+      fireEvent.click(send);
+      expect(send).toHaveTextContent('Will send to host');
+      expect(send).toHaveAttribute('aria-pressed', 'true');
+      expect(send).toHaveClass('bg-[#0b57d0]/10');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes.'
+      );
+
+      fireEvent.click(send);
+      expect(send).toHaveTextContent('Send to host');
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends the chosen backup to the host just before joining', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(join);
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).toHaveBeenCalledWith([file]);
+      expect(onSendBackups.mock.invocationCallOrder[0]!).toBeLessThan(onJoin.mock.invocationCallOrder[0]!);
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends nothing when no backup was chosen', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      await screen.findByRole('button', { name: /^Send to host:/ });
+      fireEvent.click(join);
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).not.toHaveBeenCalled();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('drops a chosen backup that was deleted before joining', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    const deleteBackupSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'deleteBackup').mockResolvedValue(undefined);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Delete / }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^Send to host:/ })).toBeNull());
+
+      fireEvent.click(join);
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice'));
+      expect(onSendBackups).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+      deleteBackupSpy.mockRestore();
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends the chosen backup when the guest joins Present only', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const track = { kind: 'video', stop: vi.fn() };
+    navigator.mediaDevices.getDisplayMedia = vi.fn().mockResolvedValue({
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    });
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Bob' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: /join now/i })).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(screen.getByRole('button', { name: /present only/i }));
+
+      await waitFor(() => expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Bob', true, expect.anything()));
+      expect(onSendBackups).toHaveBeenCalledWith([file]);
+      expect(onSendBackups.mock.invocationCallOrder[0]!).toBeLessThan(onJoin.mock.invocationCallOrder[0]!);
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('sends no backup when the takeover question is answered no', async () => {
+    takeHeldElsewhere();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const onSendBackups = vi.fn();
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} onSendBackups={onSendBackups} />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(join);
+
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(onSendBackups).not.toHaveBeenCalled();
+      expect(onJoin).not.toHaveBeenCalled();
+    } finally {
+      confirm.mockRestore();
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('stops at eight chosen backups at a time, and says so', async () => {
+    const files = Array.from(
+      { length: 9 },
+      (_, i) => new File([`f${i}`], `openmeet-backup-${1700000000000 + i}-xyz-abcd-pqr.mp4`, { lastModified: 1700000000000 + i })
+    );
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue(files);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const buttons = await screen.findAllByRole('button', { name: /^Send to host:/ });
+      expect(buttons).toHaveLength(9);
+
+      for (const button of buttons.slice(0, 8)) fireEvent.click(button);
+      expect(buttons[8]).toBeDisabled();
+      expect(buttons[8]).toHaveClass('disabled:cursor-not-allowed', 'disabled:opacity-50');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Sent to the host after you join, once they’re in the room and accept. Keep the tab open until it finishes. You can send 8 at a time.'
+      );
+
+      fireEvent.click(buttons[0]!);
+      expect(buttons[8]).not.toBeDisabled();
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+
+  it('tells a guest with a backup of this room to press Send to host, and leaves the host’s own text alone', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      expect(await screen.findByText(/press Send to host on the matching backup and join/)).toBeInTheDocument();
+      unmount();
+
+      localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      expect(await screen.findByText(/guests, send it to the host/)).toBeInTheDocument();
+      expect(screen.queryByText(/press Send to host on the matching backup and join/)).toBeNull();
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+      findBackupsSpy.mockRestore();
+    }
+  });
+
   it('points to the checks from the Join panel when the mic stays silent', async () => {
     class FakeAudioContext {
       createMediaStreamSource() { return { connect() {} }; }

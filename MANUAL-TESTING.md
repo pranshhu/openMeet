@@ -101,6 +101,8 @@ kept saying "Recording".
 | 3.5 | Long recording | Record **5+ minutes** | No gaps or freezes mid-file. Scrub through the whole guest MP4 | ☐ | |
 | 3.6 | Very long WAV *(optional, slow)* | Record **4+ hours** | WAV reports its real duration, not ~51 min | ☐ | |
 | 3.7 | Disk pressure | Fill the host disk to near-full, then record | A visible disk error — not a silent stop | ☐ | |
+| 3.8 | Return a backup | Guest records a take, host ends it, guest leaves, reopens the link, presses **Send to host** on the row and joins; host presses **Save to folder** | `backup_…mp4` and `backup_…json` in the folder; the mp4 plays; both sides say saved and verified | ☐ | |
+| 3.9 | Return a backup across a reconnect | During a large transfer, turn the guest's network off for 10 s | The transfer continues and still verifies | ☐ | |
 
 ## 4 — Multiple takes
 

@@ -60,6 +60,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - While a take runs the guests' bytes are also kept in this browser, so a crash
   loses at most the last seconds, and a take that cannot keep that copy says so on
   screen and records as usual.
+- A guest can send a leftover backup straight to the host: press **Send to host**
+  in the lobby and join. It travels peer-to-peer into the host's recording folder,
+  is checked by SHA-256 and saved as `backup_<name>_<kind>_<time>` with a note on
+  how to align it.
 
 ### Changed
 

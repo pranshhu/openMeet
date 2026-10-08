@@ -504,10 +504,10 @@ describe('CallStage recording-capability labels', () => {
   // A guest can't see the host's disk, and the drain can give up at its cap:
   // "Saved" there was a promise the app couldn't keep, and gave no reason to
   // send the backup that holds the rest.
-  it('tells a guest whose last seconds may not have arrived to send their backup', () => {
+  it('tells a guest whose last seconds may not have arrived to rejoin and send their backup', () => {
     render(<CallStage {...baseProps} role="guest" phase="done" drained={false} backupUrl="blob:backup" />);
     expect(
-      screen.getByText(/may not have reached the host — download your backup and send it to them/)
+      screen.getByText(/may not have reached the host — rejoin and press Send to host on your backup, or download it/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/Sent to the host/)).toBeNull();
     expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();

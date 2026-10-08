@@ -353,6 +353,7 @@ All in the one folder the host picks, per take:
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
+| `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
 | `chat_<id>.txt` | Chat log from the take window (when messages sent) |
 
@@ -400,7 +401,12 @@ the screen that follows offers them too.
    `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
    no clock sync applies.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
-   Leftover backups are listed in the lobby, with Download and Delete. A guest's backup is never deleted
+   Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
+   browser, press **Send to host** on a backup there and join while the host is in the room; the host presses
+   **Save to folder** in the in-call notice, and the file lands in the recording folder as
+   `backup_<name>_<camera|audio|screen>_<UTC start>.<ext>` (`_2`, `_3` when that name is taken), with a `.json`
+   beside it once its SHA-256 matched. The offsets in `sync_<id>.json` do not apply to it — its own `.json` says how
+   to align it. A returned backup with no `.json` beside it did not finish. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.
    The host's own backup is cleared at their next lobby visit after a take that ended cleanly.
 4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
@@ -412,7 +418,9 @@ after a crash the host's files are missing or empty. The lobby then lists the ta
 **Unsaved recording**: **Save to folder** rebuilds the guests' files from this browser's
 crash copy, copies in the host's own camera file and WAV master from its backups, and
 writes `sync_<id>.json` and the chapters beside them. The last couple of seconds before
-the crash may be missing, and a guest's own backup still holds the rest. While a take
+the crash may be missing, and a guest's own backup still holds the rest — the participant
+copies are listed in the openMeet lobby with **Download**, or **Send to host** to return
+one while the host is in the room. While a take
 runs, the guests' bytes are also kept in this browser about every two seconds, so the copy
 is at most a couple of seconds behind; a take that cannot keep that copy says so on screen
 and records as usual. The copy is removed when the take ends cleanly, and kept for the

@@ -238,7 +238,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
-  Leftover backups are listed in the join panel, beside Join.
+  Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
+  room can choose it with **Send to host**; the choice is handed to the hook on join.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
@@ -474,7 +475,10 @@ unfinished send to each new connection to the host.
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
    `Stage` presenting mode renders it (+ a `presence` flag). Backup (host's or guest's own) → object
-   URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete).
+   URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete), where a
+   guest can also pick one to return: the choice rides the join into `sendBackups`, travels as
+   `backup#<name>` over the DataChannel, and lands on the host's **Save to folder**, which checks its
+   SHA-256, writes `backup_<name>_<kind>_<time>` and puts a note file beside it saying how to align it.
 6. **TURN/ICE** — `POST /api/turn-cred` → operator `TURN_URLS`, real Cloudflare TURN, or STUN-only
    stub; if the request fails, the client falls back to the STUN stub. **No symmetric-NAT
    detection / `iceTransportPolicy:'relay'`** — relies on native ICE fallback to the relay

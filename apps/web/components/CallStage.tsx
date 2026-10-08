@@ -583,7 +583,7 @@ export function CallStage({
               // The drain hit its cap or the sender gave up: the host's copy may
               // be short, and only this guest's backup has the rest.
               <span className="text-[#fdd663]">
-                {`Some of your recording may not have reached the host${backupUrl ? ' — download your backup and send it to them.' : '.'}`}
+                {`Some of your recording may not have reached the host${backupUrl ? ' — rejoin and press Send to host on your backup, or download it.' : '.'}`}
               </span>
             )}
             {!(isHost && summary) && backupUrl && (

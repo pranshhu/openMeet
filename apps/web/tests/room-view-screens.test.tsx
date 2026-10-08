@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 
 /**
@@ -113,6 +113,87 @@ describe('present-only device', () => {
     expect(screen.getByText('Connection lost — retrying…')).toBeInTheDocument();
     expect(screen.queryByText(/You’re presenting from this device/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
+  });
+});
+
+describe('guest waiting with an offered backup', () => {
+  const offered = [
+    { id: 'backup_asha_camera_20231114T221320000Z.mp4', kind: 'camera', size: 1, status: 'offered', percent: 0, from: 'Asha' },
+  ];
+
+  it('says the backup is offered as soon as the host joins', () => {
+    Object.assign(state, { phase: 'waiting', role: 'guest', localStream: empty, backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(
+      screen.getByText('Your backup is offered to the host as soon as they join. Keep this tab open.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Hang tight/)).toBeNull();
+  });
+
+  it('keeps the usual waiting copy without an offered backup', () => {
+    Object.assign(state, { phase: 'waiting', role: 'guest', localStream: empty, backupTransfers: [] });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Hang tight — the call starts as soon as the host arrives.')).toBeInTheDocument();
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+  });
+
+  it('keeps it off the host, whose own device holds no guest backup', () => {
+    Object.assign(state, { phase: 'waiting', role: 'host', localStream: empty, backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+    expect(screen.getByText('Share the invite link. You’ll connect automatically as people arrive.')).toBeInTheDocument();
+  });
+
+  it('keeps the note off the connecting screen', () => {
+    Object.assign(state, { phase: 'connecting', role: 'guest', localStream: empty, backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Joining the call. This usually takes a few seconds.')).toBeInTheDocument();
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+  });
+
+  it('leaves the presenting note in front of it', () => {
+    Object.assign(state, {
+      phase: 'waiting',
+      role: 'guest',
+      companion: true,
+      screenSharing: true,
+      localStream: empty,
+      backupTransfers: offered,
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText(/You’re presenting from this device/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+  });
+});
+
+describe('lobby', () => {
+  it('sends the chosen backup through the hook when the guest joins', async () => {
+    const file = new File(['a'], 'openmeet-backup-1700000000000-abc-defg-hij.mp4', { lastModified: 1700000000000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups').mockResolvedValue([file]);
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(empty),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    hook.sendBackups = vi.fn();
+    Object.assign(state, { phase: 'lobby' });
+    try {
+      render(<RoomView slug="abc-defg-hij" />);
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Asha' } });
+      const join = screen.getByRole('button', { name: /join now/i });
+      await waitFor(() => expect(join).not.toBeDisabled());
+      fireEvent.click(await screen.findByRole('button', { name: /^Send to host:/ }));
+      fireEvent.click(join);
+
+      await waitFor(() => expect(hook.sendBackups).toHaveBeenCalledWith([file]));
+    } finally {
+      findBackupsSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

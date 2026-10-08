@@ -83,7 +83,7 @@ export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
     startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
-    readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup,
+    readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, sendBackups,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -150,6 +150,7 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
+        onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream) =>
           void join(stream, name, producer, asCompanion, screenStream)
         }
@@ -161,7 +162,14 @@ export function RoomView({ slug }: { slug: string }) {
   const companionNote = state.companion && state.screenSharing
     ? 'You’re presenting from this device. Your screen appears for everyone once they’re connected.'
     : undefined;
+  // A guest waiting alone has nothing else to do but keep the tab open; say so
+  // while the backup is still only offered.
+  const offeredNote =
+    state.role !== 'host' && (state.backupTransfers ?? []).some((t) => t.status === 'offered')
+      ? 'Your backup is offered to the host as soon as they join. Keep this tab open.'
+      : undefined;
   if (state.phase === 'waiting') {
+    const note = companionNote ?? offeredNote;
     return (
       <WaitingRoom
         role={state.role}
@@ -170,7 +178,7 @@ export function RoomView({ slug }: { slug: string }) {
         onLeave={leave}
         onToggleMic={setMic}
         onToggleCam={setCam}
-        {...(companionNote ? { note: companionNote } : {})}
+        {...(note ? { note } : {})}
       />
     );
   }
