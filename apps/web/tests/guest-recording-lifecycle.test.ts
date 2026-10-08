@@ -951,6 +951,21 @@ describe('host backup after a take in useRoom', () => {
     expect(vi.mocked(startHostRecording).mock.calls.at(-1)?.[0].hostName).toBe('Host Hana');
   });
 
+  it('leaves the first guest file out of the summary when no guest channel was bound', async () => {
+    const { result } = await hostTake(undefined, {
+      hostStartMs: 1_000_000,
+      hostWriter: { fileName: 'host_rec-host-1.mp4' },
+      guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+      channelRef: { current: null },
+      receiver: { digestHex: async () => '', bytesWritten: 0 },
+    });
+
+    expect(result.current.state.summary?.fileList.map((f) => f.name)).toEqual(['host_rec-host-1.mp4']);
+    expect(result.current.state.summary?.guests).toBeUndefined();
+    const warnings = result.current.state.summary?.warnings ?? [];
+    expect(warnings.filter((w) => /WAV master|Clock sync|Integrity not verified/.test(w))).toEqual([]);
+  });
+
   /** The take notes a fake journal owns, in the shape take.json holds. */
   function fakeNotes() {
     return {

@@ -4,7 +4,10 @@ import {
   startHostRecording,
   endHostRecording,
   bindHostGuestChannel,
+  bindHostAudioChannel,
   collectFileChecks,
+  collectGuestReports,
+  allWriters,
   resumeHostRecording,
   startGuestRecording,
   startScreenRecording,
@@ -1034,6 +1037,113 @@ describe('host backup recording', () => {
     } finally {
       delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
     }
+  });
+
+  it('closes the empty first guest file before deleting it and leaves it out of the report', async () => {
+    const events: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async () => {},
+          close: async () => {
+            events.push(`close ${name}`);
+          },
+        }),
+      }),
+      removeEntry: async (name: string) => {
+        events.push(`remove ${name}`);
+      },
+    };
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-noguest',
+      localStream: fakeStream(),
+      dir: dir as never,
+    });
+
+    await endHostRecording(handles);
+
+    // The file is committed before it is removed: an open writer would not
+    // reach the disk, and removing first would leave it unclosed.
+    expect(events).toEqual([
+      'close host_test-rec-noguest.mp4',
+      'close guest_test-rec-noguest.mp4',
+      'remove guest_test-rec-noguest.mp4',
+    ]);
+    expect(await collectGuestReports(handles)).toEqual([]);
+    expect(allWriters(handles).map((w) => w.fileName)).toEqual(['host_test-rec-noguest.mp4']);
+  });
+
+  it('keeps the first guest file and reports it once a guest camera channel was bound', async () => {
+    const removed: string[] = [];
+    const dir = {
+      ...fakeDir(),
+      removeEntry: async (name: string) => {
+        removed.push(name);
+      },
+    };
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-user',
+      localStream: fakeStream(),
+      dir: dir as never,
+    });
+
+    await bindHostGuestChannel(
+      { label: 'recording', readyState: 'closed' } as never,
+      handles,
+      'peer-a'
+    );
+    await endHostRecording(handles);
+
+    expect(removed).toEqual([]);
+    const reports = await collectGuestReports(handles);
+    expect(reports.map((g) => g.file)).toEqual(['guest_test-rec-user.mp4']);
+  });
+
+  it('keeps the first guest file when only a WAV channel arrived', async () => {
+    const removed: string[] = [];
+    const dir = {
+      ...fakeDir(),
+      removeEntry: async (name: string) => {
+        removed.push(name);
+      },
+    };
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-wavonly',
+      localStream: fakeStream(),
+      dir: dir as never,
+    });
+
+    await bindHostAudioChannel(
+      { label: 'recording-audio', readyState: 'closed' } as never,
+      handles,
+      'peer-a'
+    );
+    await endHostRecording(handles);
+
+    expect(removed).toEqual([]);
+    const reports = await collectGuestReports(handles);
+    expect(reports.map((g) => g.file)).toEqual(['guest_test-rec-wavonly.mp4']);
+  });
+
+  it('a failing removeEntry does not fail the take and still leaves the file out of the report', async () => {
+    const dir = {
+      ...fakeDir(),
+      removeEntry: async () => {
+        throw new Error('folder is read-only');
+      },
+    };
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-reject',
+      localStream: fakeStream(),
+      dir: dir as never,
+    });
+
+    await expect(endHostRecording(handles)).resolves.toBeDefined();
+
+    // The empty file is still in the folder, so its writer is still open to walks.
+    expect(allWriters(handles).map((w) => w.fileName)).toContain('guest_test-rec-reject.mp4');
+    expect(await collectGuestReports(handles)).toEqual([]);
   });
 });
 

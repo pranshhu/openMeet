@@ -430,10 +430,11 @@ unfinished send to each new connection to the host.
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
   button copies the invite link instead and the summary stays. The summary's file list leaves out a
-  guest WAV that was never opened, host files a host companion never opened and empty guest screen
-  segments (deleted); every file it lists shows its verdict and, when it was checked, its size (a
-  file that was never created has no check, so no size); one that holds no bytes reads Empty, and
-  one warning says so whenever any file is not complete. Clock-sync needs the host to be
+  guest WAV that was never opened, host files a host companion never opened, empty guest screen
+  segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
+  file it lists shows its verdict and, when it was checked, its size (a file that was never created
+  has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
+  any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. Phones present a photo/video (`presentFile`) or the rear camera (`presentRearCamera`); a real screen comes from a second device joined with "Present only".
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
@@ -767,3 +768,6 @@ unfinished send to each new connection to the host.
 - **50 and 60 fps were checked with test cameras only.** No take from a real camera running at
   50 or 60 fps has been inspected (`MANUAL-TESTING.md` row 8.19). A camera that stops at 30 fps is
   never offered them.
+- **A take saved from the lobby after a crash still lists the first guest's camera file when no
+  guest was recorded.** The crash copy notes that file at Record; the save reports it as failed,
+  nothing committed.

@@ -248,6 +248,17 @@ describe('host ingest routes by source peer', () => {
     expect(written).toEqual([{ file: 'guest2_rec.mp4', position: 0, bytes: 250 }]);
   });
 
+  it('still reports the first guest when bytes arrived with no channel bound to it', async () => {
+    const h = await hostHandles([], [], []);
+
+    // Fed directly, so the receiver holds bytes while nothing was ever bound
+    // to it: only its own count says the file is not unused.
+    await h.receiver!.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 4, ts: 0 }));
+    await h.receiver!.handleMessage(new Uint8Array(4).buffer);
+
+    expect((await collectGuestReports(h)).map((g) => g.file)).toEqual(['guest_rec.mp4']);
+  });
+
   it('reuses one file per peer across a channel rebind', async () => {
     const opened: string[] = [];
     const written: Written[] = [];
@@ -2261,5 +2272,32 @@ describe('a take resumed from its journal', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps a resumed first guest file the crash copy replayed when no guest reconnects', async () => {
+    const written: Written[] = [];
+    const removed: string[] = [];
+    const dir = {
+      ...fakeDir([], written),
+      removeEntry: async (name: string) => {
+        removed.push(name);
+      },
+    };
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      dir: dir as never,
+      channels: [],
+    });
+
+    // The replayed parts are in the reopened file while this page's receiver
+    // has written nothing of its own.
+    expect(h.receiver?.bytesWritten).toBe(0);
+    expect(h.guestWriter?.size).toBe(200);
+    await endHostRecording(h);
+
+    expect(removed).toEqual([]);
+    expect((await collectGuestReports(h)).map((g) => g.file)).toEqual(['guest_rec.mp4']);
   });
 });
