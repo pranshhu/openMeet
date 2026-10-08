@@ -8,6 +8,7 @@ import {
   resumeHostRecording,
 } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
+import { presetById } from '@/lib/quality';
 import type { RecoveredFile } from '@/lib/take-recovery';
 import { findTakeJournals, type TakeJournal, type TakeNotes } from '@/lib/take-journal';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
@@ -72,9 +73,9 @@ function fakeDir() {
   };
 }
 
-function fakeStream() {
+function fakeStream(height = 1080) {
   const track = {
-    getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }),
+    getSettings: () => ({ width: 1920, height, frameRate: 30 }),
   };
   return {
     getTracks: () => [track],
@@ -170,6 +171,18 @@ describe('host backup recording', () => {
     expect(result.backup).toBeDefined();
     expect(result.backup).toBeInstanceOf(Blob);
     expect(result.backup?.size).toBeGreaterThan(0);
+  });
+
+  it('records the host camera and its backup at the same bitrate', async () => {
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-bitrate',
+      localStream: fakeStream(720),
+      dir: fakeDir() as never,
+    });
+    expect(
+      FakeMediaRecorder.instances.map((m) => (m.opts as MediaRecorderOptions).videoBitsPerSecond)
+    ).toEqual([presetById('720p').videoBps, presetById('720p').videoBps]);
+    await endHostRecording(handles);
   });
 
   it('names the host backup after its room, so the lobby can label it', async () => {

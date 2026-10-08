@@ -92,6 +92,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   single integrity line about the guests' camera files and the "ended early"
   notes. In the sync file, `integrity` and `guests[].integrity` carry the new
   wording; the `endedEarly` flags are unchanged.
+- Each camera backup is encoded at the same bitrate as the file it backs up
+  (it was 5 Mbps at every resolution).
 
 ### Fixed
 

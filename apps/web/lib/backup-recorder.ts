@@ -1,10 +1,10 @@
 import {
   CHUNK_TIMESLICE_MS,
   RECORDING_MIME,
-  RECORDING_VIDEO_BPS,
   RECORDING_AUDIO_BPS,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
+import { presetForTrack } from './quality';
 
 type MrFactory = (stream: MediaStream, opts: MediaRecorderOptions) => MediaRecorder;
 
@@ -297,7 +297,6 @@ export interface BackupRecorderOpts {
   stream?: MediaStream;
   mrFactory?: MrFactory;
   mimeType?: string;
-  videoBitsPerSecond?: number;
   audioBitsPerSecond?: number;
   // Injectable for tests; defaults to navigator.storage.getDirectory (OPFS).
   opfsRoot?: OpfsRootGetter;
@@ -394,7 +393,10 @@ export class BackupRecorder {
     const factory = this.opts.mrFactory ?? ((s, o) => new MediaRecorder(s, o));
     const mr = factory(this.opts.stream, {
       mimeType: this.opts.mimeType ?? RECORDING_MIME,
-      videoBitsPerSecond: this.opts.videoBitsPerSecond ?? RECORDING_VIDEO_BPS,
+      // Sized like the file this backs up: the preset for the camera's real
+      // resolution. A backup at another bitrate is not a stand-in for the take,
+      // and the lobby's storage estimate assumes the two match.
+      videoBitsPerSecond: presetForTrack(this.opts.stream.getVideoTracks?.()[0]).videoBps,
       audioBitsPerSecond: this.opts.audioBitsPerSecond ?? RECORDING_AUDIO_BPS,
     });
     this.mr = mr;
