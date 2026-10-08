@@ -392,6 +392,11 @@ export class PeerConnection {
     return pc.createDataChannel(label, { ordered: true });
   }
 
+  /** One channel per leftover backup sent back to the host, keyed by the backup's file name. */
+  createBackupChannel(name: string): RTCDataChannel {
+    return this.requirePc().createDataChannel(`${DATA_CHANNEL_BACKUP}#${name}`, { ordered: true });
+  }
+
   /**
    * One channel per screen-share stretch. A label can only be used once per
    * connection, so segments are suffixed; the host matches on the prefix.

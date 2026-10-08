@@ -63,7 +63,13 @@ import {
   type RecordingHandles,
   type TrackReading,
 } from './recording-controller';
-import { BackupIntake, refuseBackup, type BackupTransfer } from './backup-return';
+import {
+  attachBackupSends,
+  BackupIntake,
+  BackupSend,
+  refuseBackup,
+  type BackupTransfer,
+} from './backup-return';
 
 export type RoomPhase =
   | 'checking'
@@ -602,6 +608,7 @@ export function useRoom(slug: string) {
   // takes those and only those, so an offer that arrives after the click does
   // not get a file the host never saw.
   const backupShownRef = useRef<BackupTransfer[]>([]);
+  const backupSendsRef = useRef<BackupSend[]>([]);
   const takeRef = useRef(0);
   // Anything that went wrong during a take — a recording error or connection
   // warning, even one that later cleared — means its backup may hold the only
@@ -1242,6 +1249,11 @@ export function useRoom(slug: string) {
             (e) => setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }))
           );
         }
+        // The host's connection is new (first join, or rebuilt after a reconnect):
+        // every backup still on its way gets a fresh channel on it.
+        if (roleRef.current !== 'host' && remoteRole === 'host' && backupSendsRef.current.length > 0) {
+          void attachBackupSends(peer, backupSendsRef.current).catch(() => {});
+        }
         peersRef.current.set(remotePeerId, peer);
         syncSendQuality();
         // The first remote peer is "the" peer for recording and screen share,
@@ -1669,6 +1681,33 @@ export function useRoom(slug: string) {
   }, []);
 
   const declineBackups = useCallback(() => backupIntakeRef.current?.decline(), []);
+
+  /** Guest: send these leftover backups to the host, at once or as soon as the host is connected. */
+  const sendBackups = useCallback((files: File[]) => {
+    const report = () =>
+      setState((s) => ({ ...s, backupTransfers: backupSendsRef.current.map((b) => b.item) }));
+    const added: BackupSend[] = [];
+    let after: Promise<unknown> = Promise.all(backupSendsRef.current.map((b) => b.done));
+    for (const file of files) {
+      // The same backup chosen twice travels once.
+      if (backupSendsRef.current.some((b) => b.item.id === file.name && !b.settled)) continue;
+      const send = new BackupSend({
+        file,
+        after,
+        // A take being recorded here always goes first.
+        hold: () => recordingRef.current !== null,
+        onChange: report,
+      });
+      after = send.done;
+      backupSendsRef.current.push(send);
+      added.push(send);
+    }
+    report();
+    const hostId = remotePeersRef.current.find((r) => r.role === 'host')?.peerId;
+    const host = hostId ? peersRef.current.get(hostId) : undefined;
+    // Only the new ones: the others already have a channel on this connection.
+    if (host) void attachBackupSends(host, added).catch(() => {});
+  }, []);
 
   /**
    * What each file of the running take has recorded or received so far. The
@@ -2147,6 +2186,7 @@ export function useRoom(slug: string) {
 
   /** Let go of the room, every connection, the camera and the mic. */
   const release = useCallback(() => {
+    for (const b of backupSendsRef.current) b.cancel();
     void backupIntakeRef.current?.close();
     signalRef.current?.close();
     boardRef.current?.close();
@@ -2231,6 +2271,7 @@ export function useRoom(slug: string) {
   useEffect(() => {
     return () => {
       // Same reason as pagehide: never unmount holding an open writer.
+      for (const b of backupSendsRef.current) b.cancel();
       void backupIntakeRef.current?.close();
       const h = recordingRef.current;
       if (h) for (const w of allWriters(h)) void w.close();
@@ -2266,6 +2307,7 @@ export function useRoom(slug: string) {
     endRecording,
     acceptBackups,
     declineBackups,
+    sendBackups,
     addMarker,
     openMediaBoard,
     newTake,

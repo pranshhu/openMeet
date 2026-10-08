@@ -6,6 +6,19 @@ import { bindHostGuestChannel, startHostRecording } from '@/hooks/recording-cont
 import { fakeChannel, fakeFolder, flush, framesFor } from './backup-fakes';
 import type { FakeChannel, FakeFolderHandle } from './backup-fakes';
 
+// jsdom ships no Blob.prototype.arrayBuffer, and the one a real browser has is
+// what a backup send reads its slices with.
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.arrayBuffer !== 'function') {
+  Blob.prototype.arrayBuffer = function () {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
+
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let signalSent: any[] = [];
 
@@ -42,20 +55,32 @@ vi.mock('@/lib/media', () => ({
 }));
 
 vi.mock('@/lib/peer', () => ({
-  PeerConnection: vi.fn().mockImplementation(() => ({
-    start: vi.fn(),
-    close: vi.fn(),
-    setLocalStream: vi.fn(),
-    setLocalStreamAfterFirstOffer: vi.fn(),
-    createControlChannel: vi.fn(),
-    addTransceiver: vi.fn(),
-    restartIce: vi.fn(),
-    addTrack: vi.fn(),
-    connectionState: 'connected',
-    rawConnection: null,
-    setPeerCount: vi.fn(),
-    whenConnected: vi.fn().mockResolvedValue(undefined),
-  })),
+  PeerConnection: vi.fn().mockImplementation(() => {
+    const backupChannels: FakeChannel[] = [];
+    return {
+      start: vi.fn(),
+      // A real connection takes its channels down with it, so a send that is
+      // cancelled after the close can no longer say anything on it.
+      close: vi.fn(() => {
+        for (const channel of backupChannels) channel.close();
+      }),
+      setLocalStream: vi.fn(),
+      setLocalStreamAfterFirstOffer: vi.fn(),
+      createControlChannel: vi.fn(),
+      addTransceiver: vi.fn(),
+      restartIce: vi.fn(),
+      addTrack: vi.fn(),
+      connectionState: 'connected',
+      rawConnection: null,
+      setPeerCount: vi.fn(),
+      whenConnected: vi.fn().mockResolvedValue(undefined),
+      createBackupChannel: vi.fn((name: string) => {
+        const channel = fakeChannel(`backup#${name}`);
+        backupChannels.push(channel);
+        return channel;
+      }),
+    };
+  }),
 }));
 
 vi.mock('@/lib/recorder', async () => {
@@ -108,6 +133,60 @@ const OFFER = JSON.stringify({ type: 'backup_offer', size: 4096, key: 'k1' });
 
 const GUEST = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Asha' };
 const HOST = { peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Hana' };
+const OTHER_GUEST = { peerId: 'p-guest-2', ordinal: 3, role: 'guest', displayName: 'Bo' };
+
+/** The PeerConnection the hook built last, whose methods these tests inspect. */
+function lastPeer() {
+  return vi.mocked(PeerConnection).mock.results.at(-1)!.value as unknown as {
+    createBackupChannel: ReturnType<typeof vi.fn>;
+  };
+}
+
+/** Every backup channel any connection was asked for, oldest first. */
+function backupChannels(): FakeChannel[] {
+  return vi.mocked(PeerConnection).mock.results.flatMap((r) => {
+    const peer = r.value as unknown as { createBackupChannel: ReturnType<typeof vi.fn> };
+    return peer.createBackupChannel.mock.results.map((result) => result.value as FakeChannel);
+  });
+}
+
+function backupFile(name = BACKUP): File {
+  return new File([new Uint8Array([1, 2, 3, 4])], name);
+}
+
+/** Emits the role-assigned this tab would receive in a room holding `peers`. */
+async function assigned(result: { current: ReturnType<typeof useRoom> }, role: 'host' | 'guest', peers: any[]) {
+  act(() => {
+    emitSignal('role-assigned', {
+      type: 'role-assigned',
+      role,
+      peerId: role === 'host' ? 'p-host' : 'p-guest',
+      ordinal: role === 'host' ? 1 : 2,
+      peers,
+      recording: false,
+    });
+  });
+  await act(async () => {
+    await flush();
+  });
+}
+
+/** A tab that queued `files` before joining, then joins a room holding `peers`. */
+async function queuedBeforeJoining(
+  role: 'host' | 'guest',
+  files: File[],
+  peers: any[]
+) {
+  const { result, unmount } = renderHook(() => useRoom(ROOM));
+  act(() => {
+    result.current.sendBackups(files);
+  });
+  await act(async () => {
+    await result.current.join(fakeStream(), role === 'host' ? 'Host Hana' : 'Guest Gita');
+  });
+  await assigned(result, role, peers);
+  return { result, unmount };
+}
 
 function fakeStream() {
   return {
@@ -411,5 +490,264 @@ describe('a tab that cannot take a returned backup', () => {
     refused(channel);
     expect(result.current.state.backupTransfers).toEqual([]);
     expect(result.current.state.recordingError).toBeNull();
+  });
+});
+
+describe('a guest offering leftover backups', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers a queued backup to the host as soon as the host is there', async () => {
+    const { result } = await queuedBeforeJoining('guest', [backupFile()], [HOST]);
+    const channels = backupChannels();
+    expect(channels.map((c) => c.label)).toEqual([`backup#${BACKUP}`]);
+    expect(JSON.parse(channels[0]!.sent[0] as string)).toEqual({
+      type: 'backup_offer',
+      size: 4,
+      key: expect.any(String),
+    });
+    expect(result.current.state.backupTransfers).toEqual([
+      expect.objectContaining({ id: BACKUP, status: 'offered', size: 4 }),
+    ]);
+  });
+
+  it('queues the same backup once', async () => {
+    const { result } = await queuedBeforeJoining('guest', [backupFile(), backupFile()], [HOST]);
+    expect(backupChannels().map((c) => c.label)).toEqual([`backup#${BACKUP}`]);
+    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([BACKUP]);
+  });
+
+  it('gives each newly queued backup exactly one more channel, leaving the first alone', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const first = backupChannels()[0]!;
+    await act(async () => {
+      result.current.sendBackups([backupFile(BACKUP_2)]);
+      await flush();
+    });
+    const channels = backupChannels();
+    expect(channels.map((c) => c.label)).toEqual([`backup#${BACKUP}`, `backup#${BACKUP_2}`]);
+    expect(channels[0]).toBe(first);
+    expect(first.sent).toHaveLength(1);
+  });
+
+  it('waits with no channel while only another guest is in the room', async () => {
+    const { result } = await queuedBeforeJoining('guest', [backupFile()], [OTHER_GUEST]);
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers.map((t) => [t.id, t.status])).toEqual([
+      [BACKUP, 'offered'],
+    ]);
+  });
+
+  it('follows the host onto a rebuilt connection', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    expect(backupChannels()).toHaveLength(1);
+    act(() => {
+      emitSignal('peer-joined', {
+        type: 'peer-joined',
+        peerId: 'p-host-2',
+        ordinal: 1,
+        role: 'host',
+        displayName: 'Hana',
+      });
+    });
+    await act(async () => {
+      await flush();
+    });
+    expect(lastPeer().createBackupChannel).toHaveBeenCalledWith(BACKUP);
+    expect(backupChannels().map((c) => c.label)).toEqual([
+      `backup#${BACKUP}`,
+      `backup#${BACKUP}`,
+    ]);
+  });
+
+  it('holds a backup while a take records here, then sends it', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-x',
+        kind: 'camera',
+        filename: 'host_rec-x.mp4',
+      });
+    });
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const channel = backupChannels()[0]!;
+    act(() => {
+      channel.deliver(
+        JSON.stringify({ type: 'resume_offset', recordingId: 'x', lastByte: 0, lastIdx: -1 })
+      );
+    });
+    await act(async () => {
+      await flush();
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(channel.sent.filter((d) => d instanceof ArrayBuffer)).toHaveLength(0);
+
+    await act(async () => {
+      emitSignal('recording-stop', {
+        type: 'recording-stop',
+        from: 'host',
+        recordingId: 'rec-x',
+      });
+      await flush();
+    });
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          expect(channel.sent.filter((d) => d instanceof ArrayBuffer)).toHaveLength(1);
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  it('sequences multiple sends so the second waits for the first to finish', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile(BACKUP), backupFile(BACKUP_2)]);
+      await flush();
+    });
+    const [first, second] = backupChannels();
+    act(() => {
+      first!.deliver(
+        JSON.stringify({ type: 'resume_offset', recordingId: 'x', lastByte: 0, lastIdx: -1 })
+      );
+      second!.deliver(
+        JSON.stringify({ type: 'resume_offset', recordingId: 'y', lastByte: 0, lastIdx: -1 })
+      );
+    });
+    await act(async () => {
+      await flush();
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(first!.sent.filter((d) => d instanceof ArrayBuffer)).toHaveLength(1);
+    expect(second!.sent.filter((d) => d instanceof ArrayBuffer)).toEqual([]);
+  });
+
+  it('allows queuing the same backup again once its first send has settled', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const firstChannel = backupChannels()[0]!;
+    act(() => {
+      firstChannel.deliver(
+        JSON.stringify({ type: 'recording-finalized', sha256: 'wrong', totalBytes: 0 })
+      );
+    });
+    await act(async () => {
+      await flush();
+    });
+    expect(result.current.state.backupTransfers[0]?.status).toBe('failed');
+
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    expect(backupChannels().map((c) => c.label)).toEqual([
+      `backup#${BACKUP}`,
+      `backup#${BACKUP}`,
+    ]);
+  });
+
+  it('cancels an unfinished send on leave, telling the host before the connection goes', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const channel = backupChannels()[0]!;
+    await act(async () => {
+      await result.current.leave();
+      await flush();
+    });
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['failed']);
+    expect(JSON.parse(channel.sent.at(-1) as string)).toEqual({
+      type: 'stream-abandoned',
+      recordingId: BACKUP,
+      lastIdx: -1,
+    });
+    expect(channel.readyState).toBe('closed');
+  });
+
+  it('never creates a backup channel on a host tab, even with one queued', async () => {
+    const { result } = await queuedBeforeJoining('host', [backupFile()], [GUEST]);
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([BACKUP]);
+  });
+
+  it('never creates a backup channel on a host tab that hears of a host', async () => {
+    const { result } = await queuedBeforeJoining('host', [backupFile()], []);
+    act(() => {
+      emitSignal('peer-joined', {
+        type: 'peer-joined',
+        peerId: 'p-host-2',
+        ordinal: 1,
+        role: 'host',
+        displayName: 'Other',
+      });
+    });
+    await act(async () => {
+      await flush();
+    });
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([BACKUP]);
+  });
+
+  it('cancels an unfinished send when the tab goes away', async () => {
+    const { result, unmount } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const channel = backupChannels()[0]!;
+    unmount();
+    await act(async () => {
+      await flush();
+    });
+    expect(JSON.parse(channel.sent.at(-1) as string)).toEqual({
+      type: 'stream-abandoned',
+      recordingId: BACKUP,
+      lastIdx: -1,
+    });
+    expect(channel.readyState).toBe('closed');
+  });
+
+  it('leaves a waiting send alone on pagehide, which holds no file', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      await flush();
+    });
+    const channel = backupChannels()[0]!;
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    await act(async () => {
+      await flush();
+    });
+    expect(result.current.state.backupTransfers.map((t) => t.status)).toEqual(['offered']);
+    expect(channel.readyState).toBe('open');
+    expect(channel.sent).toHaveLength(1);
   });
 });

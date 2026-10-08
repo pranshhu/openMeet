@@ -86,6 +86,14 @@ describe('PeerConnection recording DataChannel', () => {
     expect(pc.created).toHaveLength(1);
   });
 
+  it('createBackupChannel opens an ordered channel labelled backup#<name>', () => {
+    const { peer, pc } = make();
+    peer.start();
+    const ch = peer.createBackupChannel('x.mp4');
+    expect((ch as unknown as { label: string }).label).toBe(`${DATA_CHANNEL_BACKUP}#x.mp4`);
+    expect(pc.created[0]!.opts).toMatchObject({ ordered: true });
+  });
+
   it('createRecordingChannel(key) suffixes the label with #<key>', () => {
     const { peer } = make();
     peer.start();

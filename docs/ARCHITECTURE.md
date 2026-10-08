@@ -279,6 +279,8 @@ register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presen
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
 stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
+`sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
+unfinished send to each new connection to the host.
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
@@ -287,7 +289,8 @@ stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes 
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
   `recording-audio` / `backup`, or prefix `recording-screen`). Guest **creates** the recording
   DataChannels;
-  host **receives** them. `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
+  host **receives** them; the guest also creates one `backup#<file name>` channel per returned backup
+  (`createBackupChannel`). `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
