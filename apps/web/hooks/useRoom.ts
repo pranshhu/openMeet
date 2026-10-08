@@ -2245,7 +2245,10 @@ export function useRoom(slug: string) {
             screen = await presentRearCamera();
             isRearCamera = true;
           } else if (source instanceof File) {
-            const res = await presentFile(source);
+            // Heard on a computer, where the presenter wears headphones. A phone
+            // on its loudspeaker, or a present-only device beside the one with
+            // the microphone, would put the sound back into the call.
+            const res = await presentFile(source, !isPhone() && !companionRef.current);
             screen = res.stream;
             customStop = res.stop;
           } else {

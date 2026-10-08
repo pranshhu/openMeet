@@ -447,7 +447,7 @@ unfinished send to each new connection to the host.
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
-- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only".
+- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device.
 - `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
   (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
   `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
@@ -821,3 +821,7 @@ unfinished send to each new connection to the host.
   nothing reads yet. If the host then saves instead of resuming, the guest's page counts those
   bytes as sent. The host's summary says that file ended early, and the guest's own backup holds
   all of it.
+- **A presented video keeps sounding while its presenter waits alone.** When everyone
+  else leaves and the tab shows "Everyone else left", there is no Stop presenting on
+  screen; on a computer the clip is heard until someone joins and the call is back, or
+  until Leave.

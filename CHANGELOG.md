@@ -105,6 +105,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad can fade: press **Fade** under it and it comes in over a
   second and a half when fired and goes out the same way when stopped. A second
   click cuts it.
+- A person who presents a video from a computer hears it too. A phone and a
+  Present-only device stay silent, so the sound is not picked up again by a
+  microphone.
 
 ### Changed
 

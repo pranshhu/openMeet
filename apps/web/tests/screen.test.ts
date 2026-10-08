@@ -159,10 +159,12 @@ describe('screen', () => {
         },
       };
       const mockSource = { connect: vi.fn() };
+      const mockSpeakers = { id: 'speakers' };
       const mockCloseAudio = vi.fn().mockResolvedValue(undefined);
       class MockAudioContext {
         createMediaElementSource = vi.fn(() => mockSource);
         createMediaStreamDestination = vi.fn(() => mockDest);
+        destination = mockSpeakers;
         close = mockCloseAudio;
       }
       globalThis.AudioContext = MockAudioContext as any;
@@ -178,6 +180,7 @@ describe('screen', () => {
 
         expect(mockCaptureStream).toHaveBeenCalledWith(30);
         expect(mockSource.connect).toHaveBeenCalledWith(mockDest);
+        expect(mockSource.connect).not.toHaveBeenCalledWith(mockSpeakers);
         // Video audio track must be added to the presented stream
         expect(stream.getAudioTracks()).toContain(mockAudioTrack);
 
@@ -190,6 +193,43 @@ describe('screen', () => {
         HTMLMediaElement.prototype.pause = origPause;
       }
     });
+
+    it('plays a video on this device too when asked to monitor it', async () => {
+      const mockAudioTrack = { kind: 'audio', id: 'video-audio', stop: vi.fn() };
+      const mockDest = {
+        stream: {
+          getAudioTracks: () => [mockAudioTrack],
+          getTracks: () => [mockAudioTrack],
+        },
+      };
+      const mockSource = { connect: vi.fn() };
+      const mockSpeakers = { id: 'speakers' };
+      class MockAudioContext {
+        createMediaElementSource = vi.fn(() => mockSource);
+        createMediaStreamDestination = vi.fn(() => mockDest);
+        destination = mockSpeakers;
+        close = vi.fn().mockResolvedValue(undefined);
+      }
+      globalThis.AudioContext = MockAudioContext as any;
+
+      const origPlay = HTMLMediaElement.prototype.play;
+      const origPause = HTMLMediaElement.prototype.pause;
+      HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+      HTMLMediaElement.prototype.pause = vi.fn();
+
+      try {
+        const file = new File(['fake-video-bytes'], 'clip.mp4', { type: 'video/mp4' });
+        const { stream, stop } = await presentFile(file, true);
+
+        expect(mockSource.connect).toHaveBeenCalledWith(mockSpeakers);
+        // The call still gets the sound.
+        expect(mockSource.connect).toHaveBeenCalledWith(mockDest);
+        expect(stream.getAudioTracks()).toContain(mockAudioTrack);
+        stop();
+      } finally {
+        HTMLMediaElement.prototype.play = origPlay;
+        HTMLMediaElement.prototype.pause = origPause;
+      }
+    });
   });
 });
-
