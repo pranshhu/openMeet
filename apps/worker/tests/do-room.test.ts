@@ -2600,6 +2600,33 @@ describe('Room DO — only a joined socket is in the room', () => {
       [h.ws, oldest.ws, newest.ws].forEach((w) => w.close());
     }, 30_000);
 
+    it('forgets a tab that has left before one that is still in the room', async () => {
+      const slug = 'pnr-stay-aaa';
+      await seedRoom(slug, 'tok-pnr-stay');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-stay' });
+      const stay = await enter(slug, 'S', { clientId: 'c-stay' });
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: stay.me.peerId, recorded: false }));
+      await until(() => ofType(stay.heard, 'peer-recorded').length > 0);
+
+      // Sixteen more tabs are set and leave, one at a time, while the first stays.
+      for (let i = 0; i < 16; i++) {
+        const g = await enter(slug, 'G', { clientId: `c-${i}` });
+        h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: g.me.peerId, recorded: false }));
+        await until(() => ofType(g.heard, 'peer-recorded').length > 0);
+        g.ws.close();
+        await until(() => ofType(h.heard, 'peer-left').length >= i + 1);
+      }
+
+      // The tab that never left is still set, and a joiner is told so.
+      const late = await enter(slug, 'L', { clientId: 'c-late' });
+      expect(late.me.peers.find((p) => p.peerId === stay.me.peerId)?.notRecorded).toBe(true);
+      // The first of the tabs that left is the one forgotten.
+      const first = await enter(slug, 'G0', { clientId: 'c-0' });
+      expect(first.me.notRecorded).toBeUndefined();
+
+      [h.ws, stay.ws, late.ws, first.ws].forEach((w) => w.close());
+    }, 30_000);
+
     it('forgets the setting when the session ends', async () => {
       const slug = 'pnr-ends-aaa';
       await seedRoom(slug, 'tok-pnr-ends');

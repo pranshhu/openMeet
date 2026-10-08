@@ -82,8 +82,8 @@ const MAX_PRODUCERS = 2;
  * bytes at two bytes a character outside Latin-1. A recording id is a UUID
  * and a filename `host_<uuid>.mp4`, and a take is one row, so no honest
  * session comes near the other three. A room seats four recorded guests, so
- * sixteen remembered tabs is generous: past that, the oldest is forgotten and
- * arrives as recorded the next time it connects.
+ * sixteen remembered tabs is generous: past that, the oldest tab that has left
+ * is forgotten and arrives as recorded the next time it connects.
  */
 const MAX_DISPLAY_NAME_LENGTH = 64;
 const MAX_USER_AGENT_LENGTH = 512;
@@ -611,10 +611,16 @@ export class Room implements DurableObject {
         // Only a guest whose tab sent a client id: that id is what the choice is
         // remembered by, and a choice that cannot be remembered is not announced.
         if (target?.role !== 'guest' || !target.clientId) break;
-        const others = this.notRecorded.filter((id) => id !== target.clientId);
-        this.notRecorded = parsed.recorded
-          ? others
-          : [...others, target.clientId].slice(-MAX_NOT_RECORDED_CLIENTS);
+        const next = this.notRecorded.filter((id) => id !== target.clientId);
+        if (!parsed.recorded) next.push(target.clientId);
+        // Past the bound, a tab that has left is forgotten before one that is
+        // still here: a guest in the room must not become recorded again
+        // because sixteen others came and went.
+        if (next.length > MAX_NOT_RECORDED_CLIENTS) {
+          const here = new Set(this.joinedPeers().map(({ p: pp }) => pp.clientId));
+          next.splice(Math.max(next.findIndex((id) => !here.has(id)), 0), 1);
+        }
+        this.notRecorded = next;
         await this.saveSession();
         // To everyone, the host too: its screen follows this answer, not its own click.
         for (const { ws: to } of this.joinedPeers()) {
