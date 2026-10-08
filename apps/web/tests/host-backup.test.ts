@@ -9,7 +9,7 @@ import {
 } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import type { RecoveredFile } from '@/lib/take-recovery';
-import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
+import { findTakeJournals, type TakeJournal, type TakeNotes } from '@/lib/take-journal';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
 
 /**
@@ -550,6 +550,7 @@ describe('host backup recording', () => {
     const entry = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'camera' as const };
     const opened: string[] = [];
     const { journal } = resumeJournal([entry]);
+    recovery.copy = async () => ({ name: 'host_rec.mp4', bytes: 500, source: 'backup' });
 
     const handles = await resumeHostRecording({
       journal,
@@ -557,6 +558,7 @@ describe('host backup recording', () => {
       localStream: fakeStream(),
       channels: [],
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(handles.resumed).toBe(true);
     expect(opened).toEqual(['host_rec_resumed.mp4']);
@@ -639,7 +641,11 @@ describe('host backup recording', () => {
       const opened: string[] = [];
       const { journal } = resumeJournal([cameraEntry, wavEntry, screenEntry]);
       recovery.calls.length = 0;
-      recovery.copy = () => new Promise<never>(() => {});
+      recovery.copy = async (...args) => ({
+        name: (args[2] as { file: string }).file,
+        bytes: 500,
+        source: 'backup',
+      });
 
       const videoTrack = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }) };
       const audioTrack = {};
@@ -667,6 +673,7 @@ describe('host backup recording', () => {
         [journal, expect.anything(), cameraEntry],
         [journal, expect.anything(), wavEntry],
       ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(handles.hostParts).toEqual([
         { name: 'host_rec.mp4', offsetMs: 0, kind: 'camera' },
         { name: 'host_rec.wav', offsetMs: 0, kind: 'wav' },
@@ -785,5 +792,182 @@ describe('host backup recording', () => {
     expect(handles.hostWriter?.fileName).toBe('host_new-id.mp4');
     expect(opened.some((name) => name.includes('_resumed'))).toBe(false);
     await endHostRecording(handles);
+  });
+
+  it('tells the host when the crash copy of the first guest file stops being kept', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const warn = vi.fn();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-dead',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => root as never,
+        onWarn: warn,
+      });
+      // Browser storage stops taking parts under the running take.
+      const take = root.entries.get(`openmeet-take-${handles.hostStartMs}-abc-defg-hij`) as FakeDirectoryHandle;
+      take.getDirectoryHandle = async () => {
+        throw new Error('storage gone');
+      };
+      const sent: string[] = [];
+      const ch = {
+        label: '',
+        binaryType: '',
+        readyState: 'open',
+        onmessage: null as ((ev: { data: unknown }) => void) | null,
+        send: (data: string) => {
+          sent.push(data);
+        },
+      };
+      await bindHostGuestChannel(ch as unknown as RTCDataChannel, handles, 'peer-a');
+
+      ch.onmessage?.({ data: JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }) });
+      ch.onmessage?.({ data: new ArrayBuffer(4) });
+      await new Promise((r) => setTimeout(r, 0));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      ch.onmessage?.({ data: JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }) });
+      ch.onmessage?.({ data: new ArrayBuffer(4) });
+
+      // The host's own backup may warn through the same callback; count this line only.
+      const stopped = () =>
+        warn.mock.calls.map((c) => c[0] as string).filter((m) => m.includes('Crash protection stopped'));
+      await vi.waitFor(() => expect(stopped()).toHaveLength(1));
+      // The guest is still acknowledged, from the folder write.
+      const acks = sent.map((m) => JSON.parse(m)).filter((m) => m.type === 'ack');
+      expect(acks.at(-1)).toMatchObject({ uptoIdx: 1, uptoOffset: 8 });
+
+      ch.readyState = 'closed';
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the first guest's clock-sync numbers in the crash copy's notes", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-meta',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => root as never,
+      });
+      const start = Date.now() - 100;
+      const receiver = handles.receiver!;
+      await receiver.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: start, rttMs: 12 })
+      );
+      expect(handles.journal!.notes.files[0]).toMatchObject({ guestStartHostMs: start, rttMs: 12 });
+
+      // The notes reach storage with the next commit, and a later session reads them back.
+      await receiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await receiver.handleMessage(JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      await vi.waitFor(async () => {
+        const [found] = await findTakeJournals(async () => root as never);
+        expect(found?.notes.files[0]).toMatchObject({
+          file: 'guest_test-rec-meta.mp4',
+          guestStartHostMs: start,
+          rttMs: 12,
+        });
+      });
+
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lists the part before the reload only once its copy is in the folder', async () => {
+    const camera = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'camera' as const };
+    const wav = { dir: 'openmeet-backup-host-audio-1-abc-defg-hij', file: 'host_rec.wav', kind: 'wav' as const };
+    const { journal } = resumeJournal([camera, wav]);
+    let finishWav: (file: RecoveredFile) => void = () => {};
+    recovery.copy = (...args) =>
+      (args[2] as { file: string }).file === 'host_rec.mp4'
+        ? Promise.resolve({ name: 'host_rec.mp4', bytes: 0, source: 'failed', reason: 'backup unavailable' })
+        : new Promise<RecoveredFile>((resolve) => {
+            finishWav = resolve;
+          });
+
+    const handles = await resumeHostRecording({
+      journal,
+      dir: trackingDir([], []) as never,
+      localStream: fakeStream(),
+      channels: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The camera copy failed and the WAV copy is still running: neither is a part yet.
+    expect(handles.hostParts?.map((p) => p.name)).toEqual(['host_rec_resumed.mp4']);
+    expect((await collectFileChecks(handles)).has('host_rec.mp4')).toBe(false);
+    expect((await collectFileChecks(handles)).has('host_rec.wav')).toBe(false);
+
+    finishWav({ name: 'host_rec.wav', bytes: 4400, source: 'backup' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // First parts first, and the copied file has a size the report can show.
+    expect(handles.hostParts?.map((p) => [p.name, p.offsetMs > 0])).toEqual([
+      ['host_rec.wav', false],
+      ['host_rec_resumed.mp4', true],
+    ]);
+    expect((await collectFileChecks(handles)).get('host_rec.wav')).toEqual({ bytes: 4400 });
+    expect((await collectFileChecks(handles)).has('host_rec.mp4')).toBe(false);
+    await endHostRecording(handles);
+  });
+
+  it('records the raw microphone, not the mixed stream, into the audio master after a resume', async () => {
+    const tracks: unknown[] = [];
+    class FakeTrackProcessor {
+      readable = new ReadableStream({
+        start(c) {
+          c.close();
+        },
+      });
+      constructor(o: { track: unknown }) {
+        tracks.push(o.track);
+      }
+    }
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor = FakeTrackProcessor;
+    try {
+      const videoTrack = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }) };
+      const mixTrack = { id: 'mix' };
+      const micTrack = { id: 'mic' };
+      const mixed = {
+        getTracks: () => [videoTrack, mixTrack],
+        getVideoTracks: () => [videoTrack],
+        getAudioTracks: () => [mixTrack],
+      } as unknown as MediaStream;
+      const mic = {
+        getTracks: () => [micTrack],
+        getVideoTracks: () => [],
+        getAudioTracks: () => [micTrack],
+      } as unknown as MediaStream;
+      const { journal } = resumeJournal();
+
+      const handles = await resumeHostRecording({
+        journal,
+        dir: trackingDir([], []) as never,
+        localStream: mixed,
+        micStream: mic,
+        channels: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(handles.hostPcm).toBeDefined();
+      expect(tracks.length).toBeGreaterThan(0);
+      // The WAV master and its backup both read the microphone itself.
+      expect(tracks.every((t) => t === micTrack)).toBe(true);
+      await endHostRecording(handles);
+    } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
   });
 });

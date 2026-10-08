@@ -110,6 +110,23 @@ export interface RecordingHandles {
   resumed?: boolean;
   /** The host's own files, first part first, each with its offset from hostStartMs. */
   hostParts?: { name: string; offsetMs: number; kind: 'camera' | 'wav' }[];
+  /** Pre-crash host files a resume copied into the folder from their backup, with their size. */
+  hostCopied?: Map<string, number>;
+  /**
+   * Guest files a resume left as the folder had them: the folder held more of
+   * them than the crash copy, and those bytes could not be carried over.
+   * Opening the name again would replace the file, so nothing in this take
+   * opens it.
+   */
+  keptFiles?: Set<string>;
+  /** Resumed guest files whose replay stopped short, so the folder file has a hole. */
+  shortFiles?: Set<string>;
+  /**
+   * Clock-sync numbers a resume read back from the notes, by guest slot. The
+   * guest measures once, on its first channel, so the receiver built after the
+   * reload never hears them.
+   */
+  slotClock?: Map<number, { startHostMs: number | null; rttMs: number | null }>;
   /** Surfaces a journal or backup warning for the caller to show. */
   onWarn?: (msg: string) => void;
 
@@ -182,6 +199,8 @@ export interface RecordingHandles {
   guestScreenSegments?: number;
   /** Guest screen segments whose channel is still open, with the sharer's peerId. */
   screenLive?: Map<number, string>;
+  /** Set at the first screen share refused for want of a free file name, so later refusals stay silent. */
+  screenRefused?: boolean;
   screenWriters?: FileWriter[];
   screenChannelRef?: { current: RTCDataChannel | null };
   screenEndedEarlyByFile?: Set<string>;
@@ -333,16 +352,19 @@ function screenFileName(role: 'host' | 'guest', recordingId: string, segment: nu
 
 /**
  * The first screen segment number the folder does not already hold, from `from`
- * upward. A resumed take restarts its counter, and opening a name replaces the
- * file behind it, so the folder itself is asked; the probe is bounded so a
- * folder that answers every name cannot spin here.
+ * onward, or null when none was found. A resumed take restarts its counter, and
+ * opening a name replaces the file behind it, so the folder itself is asked;
+ * the probe is bounded so a folder that answers every name cannot spin here,
+ * and a name that was not asked about is never handed out. `next` picks the
+ * number to try after one that is taken.
  */
 async function freeScreenSegment(
   dir: FsDirectoryHandle,
   role: 'host' | 'guest',
   recordingId: string,
-  from: number
-): Promise<number> {
+  from: number,
+  next: (taken: number) => number = (taken) => taken + 1
+): Promise<number | null> {
   let segment = from;
   for (let probes = 0; probes < MAX_SCREEN_PROBES; probes += 1) {
     try {
@@ -350,9 +372,55 @@ async function freeScreenSegment(
     } catch {
       return segment;
     }
-    segment += 1;
+    segment = next(segment);
   }
-  return segment;
+  return null;
+}
+
+/**
+ * Say once per take that a screen share got no file. Named the way a refused
+ * guest slot is, so the banner shows it as the plain statement it is. A guest's
+ * share is still in the backup its own browser keeps; the host's own is not
+ * recorded at all, and each is told so.
+ */
+function refuseScreenSegment(
+  h: RecordingHandles,
+  role: 'host' | 'guest',
+  onError?: (err: unknown) => void
+): void {
+  if (h.screenRefused) return;
+  h.screenRefused = true;
+  const refusal = new Error(
+    role === 'host'
+      ? 'Your screen is not being recorded: the folder has no free file name left for it.'
+      : 'A screen share was not saved here: the folder has no free file name left for it. The sharer has it in their own backup.'
+  );
+  refusal.name = 'GuestLimitError';
+  onError?.(refusal);
+}
+
+/** A file as the folder holds it now, or null when there is none or the handle cannot hand it over. */
+async function folderFile(dir: FsDirectoryHandle, name: string): Promise<{ size: number } | null> {
+  try {
+    const handle = await dir.getFileHandle(name);
+    return typeof handle.getFile === 'function' ? await handle.getFile() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keep a guest's clock-sync numbers in its file's note, for a take that is recovered or resumed. */
+function noteClock(
+  journal: TakeJournal | undefined,
+  file: string,
+  meta: { guestStartHostMs: number | null; rttMs: number | null }
+): void {
+  journal?.note((n) => {
+    const note = n.files.find((f) => f.file === file);
+    if (!note) return;
+    note.guestStartHostMs = meta.guestStartHostMs;
+    note.rttMs = meta.rttMs;
+  });
 }
 
 export interface StartHostArgs {
@@ -484,7 +552,12 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
       const c = channelRef.current;
       if (c && c.readyState === 'open') c.send(json);
     },
-    ...(journal ? { journalFile: journal.file(guestWriter.fileName) } : {}),
+    ...(journal
+      ? {
+          journalFile: journal.file(guestWriter.fileName),
+          onMeta: (meta) => noteClock(journal, guestWriter.fileName, meta),
+        }
+      : {}),
     ...(args.onWarn ? { onWarn: args.onWarn } : {}),
     ...(args.onError ? { onError: args.onError } : {}),
   });
@@ -600,6 +673,8 @@ async function ingestFor(
   if (cached) return cached;
   const dir = h.dir;
   if (!dir) return null; // host isn't recording; nothing to write into
+  // A resume left this file as the folder had it; opening its name would replace it.
+  if (h.keptFiles?.has(guestName(slot, h.recordingId, h.take ?? 1, ext))) return null;
 
   const openings = (h.guestOpenings ??= new Map());
   const inFlight = openings.get(key);
@@ -629,7 +704,9 @@ async function ingestFor(
         const c = ref.current;
         if (c && c.readyState === 'open') c.send(json);
       },
-      ...(h.journal ? { journalFile: h.journal.file(name) } : {}),
+      ...(h.journal
+        ? { journalFile: h.journal.file(name), onMeta: (meta) => noteClock(h.journal, name, meta) }
+        : {}),
       ...(h.onWarn ? { onWarn: h.onWarn } : {}),
       ...(onError ? { onError } : {}),
     });
@@ -784,22 +861,67 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
     const key = note.key ?? note.file;
     const slot = note.slot ?? guestSlot(h, key);
     (h.guestSlots ??= new Map()).set(key, slot);
+    // The guest may have left by the time the report is built, and the room
+    // then has no name for this slot.
+    rememberSlotName(h, slot, note.who);
+    if (note.kind === 'camera' && (note.guestStartHostMs != null || note.rttMs != null)) {
+      (h.slotClock ??= new Map()).set(slot, {
+        startHostMs: note.guestStartHostMs ?? null,
+        rttMs: note.rttMs ?? null,
+      });
+    }
 
-    const writer = new FileWriter();
-    await writer.openIn(dir, note.file);
-    const replayed = await args.journal.replay(note.file, { write: (position, data) => writer.write(position, data) });
     const position = await args.journal.file(note.file).position();
+    // Opening a name replaces the file behind it when the writer closes, and
+    // the folder can hold more of this file than the crash copy does: a page
+    // that is closing commits every file with all it had written, a few
+    // seconds ahead of the copy, and a Save rebuilds files there. Those bytes
+    // are carried into the reopened file, so nothing the folder held is lost
+    // when the guest never sends again.
+    const existing = await folderFile(dir, note.file);
+    const ahead = existing !== null && existing.size > (position?.end ?? 0);
+    const carry = ahead && existing instanceof Blob ? existing : null;
+    const writer = new FileWriter();
+    let kept = ahead && !carry;
+    if (!kept) {
+      await writer.openIn(dir, note.file);
+      if (carry) {
+        try {
+          await writer.write(0, carry);
+        } catch {
+          // The folder refused the copy. This writer is left unclosed on
+          // purpose: closing it would put a shorter file in place of the one
+          // that is there.
+          kept = true;
+        }
+      }
+    }
+    if (kept) {
+      (h.keptFiles ??= new Set()).add(note.file);
+      args.onError?.(
+        new Error(
+          `${note.file} in this folder holds more than the crash copy and could not be carried over, so it was left as it is and is not continued. The guest has the rest in their own backup.`
+        )
+      );
+      continue;
+    }
+
+    const replayed = await args.journal.replay(note.file, { write: (position, data) => writer.write(position, data) });
     // A part the folder refused leaves the file shorter than the journal says.
     // Say so, and seed the receiver from what really landed, so the end it
     // announces is the file's own. The missing part is not asked for again:
     // the guest already dropped what the host had acknowledged.
     const short = position !== null && replayed < position.end;
     if (short) {
+      (h.shortFiles ??= new Set()).add(note.file);
       args.onError?.(new Error('A guest file could not be fully rebuilt from the crash copy.'));
     }
     const from = position && (short ? { nextIdx: position.nextIdx, end: replayed } : position);
+    // The stored state is the digest of every byte up to the journal's
+    // position. A file with a hole does not hold those bytes, so the state is
+    // not handed over and no digest is claimed for the whole file.
     const resumeFrom = from
-      ? { ...from, ...(note.sha256State ? { sha256State: note.sha256State } : {}) }
+      ? { ...from, ...(note.sha256State && !short ? { sha256State: note.sha256State } : {}) }
       : undefined;
     const ref: { current: RTCDataChannel | null } = { current: null };
     const receiver = new ChunkReceiver({
@@ -848,10 +970,10 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
   h.guestScreenSegments = Math.max(screenNotes.length, ...screenNotes.map((note) => note.segment ?? 0));
 
   // The host's own files are not journaled, so these notes hold only the
-  // pre-crash backups. They are the first parts of the take's host track; a
-  // camera with no old backup still gets a part, it just has no pre-crash video.
+  // pre-crash backups. Each is a first part of the take's host track once its
+  // copy is in the folder; until then the track is the files opened below.
   const hostBackups = notes.backups.filter((b) => b.kind === 'camera' || b.kind === 'wav');
-  h.hostParts = hostBackups.map((b) => ({ name: b.file, offsetMs: 0, kind: b.kind as 'camera' | 'wav' }));
+  h.hostParts = [];
 
   const warn = args.onWarn ?? (args.onError ? (msg: string) => args.onError?.(new Error(msg)) : undefined);
   // Best-effort, and before the channels are bound: a host file that will not
@@ -866,9 +988,22 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
 
   // The pre-crash host part lives only in its backup, and assembling one can be
   // slow or fail: in the background, so it never holds up the resumed take and a
-  // missing copy costs only the part before the crash.
+  // missing copy costs only the part before the crash. A part is listed once its
+  // copy is in the folder, so the report never names a file that did not arrive.
   for (const entry of hostBackups) {
-    void copyBackupInto(args.journal, dir, entry).catch(() => {});
+    void copyBackupInto(args.journal, dir, entry)
+      .then((copied) => {
+        if (copied.source === 'failed') return;
+        const done = (h.hostCopied ??= new Map()).set(entry.file, copied.bytes);
+        // First parts first, in the notes' order, ahead of the files this run opened.
+        h.hostParts = [
+          ...hostBackups
+            .filter((b) => done.has(b.file))
+            .map((b) => ({ name: b.file, offsetMs: 0, kind: b.kind as 'camera' | 'wav' })),
+          ...(h.hostParts ?? []).filter((p) => !done.has(p.name)),
+        ];
+      })
+      .catch(() => {});
   }
 
   for (const { channel, peerId } of args.channels) {
@@ -1618,7 +1753,15 @@ export async function startScreenRecording(
       // The counter starts again after a resume, so the first share would open
       // the number the crashed tab left in the folder. Step past every name
       // already there; a fresh take's id is new, so it never probes.
-      segment = await freeScreenSegment(h.dir, 'host', h.recordingId, segment);
+      const free = await freeScreenSegment(h.dir, 'host', h.recordingId, segment);
+      if (free === null) {
+        // No name the folder was asked about is free, and an unasked one could
+        // be a file from before the crash.
+        rollback();
+        refuseScreenSegment(h, 'host', onError);
+        return;
+      }
+      segment = free;
       h.screenSegment = segment;
     }
     const writer = new FileWriter();
@@ -1767,14 +1910,22 @@ export async function bindHostScreenChannel(
 ): Promise<void> {
   channel.binaryType = 'arraybuffer';
   if (!h.dir) return;
-  let segment = Math.max(h.guestScreenSegments ?? 0, h.screenReceivers?.size ?? 0) + 1;
+  // A number is claimed before anything is awaited, so two shares arriving
+  // together never hold the same one.
+  const claim = () =>
+    (h.guestScreenSegments = Math.max(h.guestScreenSegments ?? 0, h.screenReceivers?.size ?? 0) + 1);
+  let segment: number | null = claim();
   if (h.resumed) {
     // After a resume the notes can be short of the numbers already handed out.
-    // Probing for a number the folder does not hold keeps a segment saved before
-    // the crash from being opened over. A fresh take reuses its own number.
-    segment = await freeScreenSegment(h.dir, 'guest', h.recordingId, segment);
+    // A number the folder already holds is given up for the next unclaimed one,
+    // which keeps a segment saved before the crash from being opened over. A
+    // fresh take reuses its own number.
+    segment = await freeScreenSegment(h.dir, 'guest', h.recordingId, segment, claim);
   }
-  h.guestScreenSegments = segment;
+  if (segment === null) {
+    refuseScreenSegment(h, 'guest', onError);
+    return;
+  }
   const writer = new FileWriter();
   await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment));
   // The share can stop while the file is opening. Its close event has fired by
@@ -1866,8 +2017,8 @@ export async function collectGuestReports(
       // Any WAV writer means a file in the folder, empty or not; a guest whose
       // browser never opened one has nothing to report.
       ...(h.guestWavWriter?.fileName ? { wavFile: h.guestWavWriter.fileName } : {}),
-      startHostMs: h.receiver.guestStartHostMs,
-      rttMs: h.receiver.syncRttMs,
+      startHostMs: h.receiver.guestStartHostMs ?? h.slotClock?.get(0)?.startHostMs ?? null,
+      rttMs: h.receiver.syncRttMs ?? h.slotClock?.get(0)?.rttMs ?? null,
       trackFps: h.receiver.senderFrameRate,
       sha256Written: writtenSha0,
       noWav: !h.guestWavWriter,
@@ -1900,8 +2051,8 @@ export async function collectGuestReports(
       ...(name ? { name } : {}),
       file: mp4Entry?.writer?.fileName || guestName(slot, h.recordingId, h.take ?? 1, 'mp4'),
       ...(wavEntry?.writer?.fileName ? { wavFile: wavEntry.writer.fileName } : {}),
-      startHostMs: mp4Entry?.receiver.guestStartHostMs ?? null,
-      rttMs: mp4Entry?.receiver.syncRttMs ?? null,
+      startHostMs: mp4Entry?.receiver.guestStartHostMs ?? h.slotClock?.get(slot)?.startHostMs ?? null,
+      rttMs: mp4Entry?.receiver.syncRttMs ?? h.slotClock?.get(slot)?.rttMs ?? null,
       trackFps: mp4Entry?.receiver.senderFrameRate ?? null,
       sha256Written: writtenSha,
       noWav: !wavEntry,
@@ -1985,7 +2136,11 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
     // sender said it had finished: a stopped or unfinished resumed file keeps
     // its received block, with the digest comparison withheld because no
     // digest can stand for the whole file, so it still reads Incomplete.
-    const recovered = Boolean(r?.resumed && r.receivedFinalized && !r.isAbandoned);
+    // A file whose replay stopped short has a hole, which is known and not
+    // merely unverified: it is never "recovered", and the sender's digest is
+    // compared, so it reads as differing from what was sent.
+    const short = Boolean(h.shortFiles?.has(w.fileName));
+    const recovered = Boolean(r?.resumed && r.receivedFinalized && !r.isAbandoned && !short);
     out.set(w.fileName, {
       bytes: w.size,
       ...(recovered
@@ -1995,13 +2150,15 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
               received: {
                 finalized: r.receivedFinalized,
                 abandoned: r.isAbandoned,
-                sha256Sent: r.resumed ? undefined : r.senderSha256 ?? undefined,
+                sha256Sent: r.resumed && !short ? undefined : r.senderSha256 ?? undefined,
                 sha256Written: await r.digestHex(),
               },
             }
           : {}),
     });
   }
+  // A pre-crash host part was written by its copy, not by a writer of this take.
+  for (const [name, bytes] of h.hostCopied ?? []) out.set(name, { bytes });
   // A finished call copy closed its own file and is not in allWriters; one the
   // take removed, or whose write or close failed, has no file to check.
   for (const c of keptCallCopies(h)) out.set(c.writer.fileName, { bytes: c.writer.size });

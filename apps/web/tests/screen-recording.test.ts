@@ -723,6 +723,53 @@ describe('screen recording', () => {
     expect(h.screenWriters).toHaveLength(49);
   });
 
+  it('tells the host when the crash copy of a screen file stops being kept', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const warns: string[] = [];
+      const h: RecordingHandles = { recordingId: 'r-dead', dir: fakeDir(), onWarn: (m) => warns.push(m) };
+      // Browser storage stops taking parts: the file reads dead once a commit ran.
+      const { journal } = fakeJournal();
+      let dead = false;
+      (journal as unknown as { file: unknown }).file = () => ({
+        append: () => {},
+        commit: async () => {
+          dead = true;
+        },
+        get dead() {
+          return dead;
+        },
+      });
+      h.journal = journal;
+      const sent: string[] = [];
+      const channel = new EventTarget() as unknown as RTCDataChannel;
+      (channel as any).readyState = 'open';
+      (channel as any).send = (data: string) => sent.push(data);
+      await bindHostScreenChannel(channel, h, undefined, 'peer-bob');
+
+      const fragment = (idx: number) => {
+        (channel as any).onmessage({ data: JSON.stringify({ idx, offset: idx * 4, size: 4, ts: 0 }) });
+        (channel as any).onmessage({ data: new ArrayBuffer(4) });
+      };
+      fragment(0);
+      await new Promise((r) => setTimeout(r, 0));
+      vi.setSystemTime(Date.now() + 2000);
+      fragment(1);
+
+      await vi.waitFor(() => expect(warns).toHaveLength(1));
+      expect(warns[0]).toContain('Crash protection stopped');
+      // The sharer is still acknowledged, from the folder write.
+      expect(sent.map((m) => JSON.parse(m)).at(-1)).toEqual({
+        type: 'ack',
+        recordingId: 'r-dead',
+        uptoIdx: 1,
+        uptoOffset: 8,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops the note of a guest share stopped before its first chunk', async () => {
     const removed: string[] = [];
     const dir = { ...fakeDir(), removeEntry: async (n: string) => { removed.push(n); } };
@@ -813,5 +860,31 @@ describe('a screen share after a resume', () => {
     expect(opened).toEqual(['host_screen_new-id.mp4']);
     expect(probes).toEqual([]);
     await stopScreenRecording(h);
+  });
+
+  it('records no host screen file when the folder has no free name for it', async () => {
+    installMediaRecorder();
+    const opened: string[] = [];
+    const lookups: string[] = [];
+    const errors: unknown[] = [];
+    // A folder that already holds every name it is asked about.
+    const dir = {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (opts?.create) opened.push(name);
+        else lookups.push(name);
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h: RecordingHandles = { recordingId: 'rec', resumed: true, dir };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null, (e) => errors.push(e));
+
+    expect(lookups).toHaveLength(50);
+    expect(opened).toEqual([]);
+    expect(h.screenRecorder).toBeUndefined();
+    expect(h.screenSegment).toBeUndefined();
+    expect(errors.map((e) => (e as Error).message)).toEqual([
+      'Your screen is not being recorded: the folder has no free file name left for it.',
+    ]);
   });
 });

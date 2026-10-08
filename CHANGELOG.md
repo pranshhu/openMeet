@@ -89,6 +89,18 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- **Resume recording** keeps what the folder already holds of a guest's file.
+  A page that reloads saves each file a few seconds ahead of the crash copy, and
+  the resume opened over it; those bytes are now carried into the continued
+  file. A file that cannot be carried is left as it is and named on screen.
+- A resumed file whose rebuild stopped short reads Incomplete in the summary and
+  `sync_<id>.json`, where it read "Complete. Matches what the guest sent".
+- A recovered or resumed take keeps each guest's start offset, so
+  `sync_<id>.json` gives the alignment where it said to align by waveform.
+- After a resume the host's files from before the reload are listed only once
+  their copy is in the folder, each with its size.
+- Two screen shares that start together after a resume get a file each, and a
+  share is refused, and said so, when the folder has no free name for it.
 - After a host reload, **Resume recording** and **Save what was recorded** run
   once and one at a time: a second click, or pressing the other button or Record
   while one is still working, does nothing.
