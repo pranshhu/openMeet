@@ -32,6 +32,8 @@ class FakePC {
     this.senders.push(sender);
   }
   getSenders() { return this.senders; }
+  transceivers: { direction: string; receiver: { track: { kind: string } } }[] = [];
+  getTransceivers() { return this.transceivers; }
   removeTrack(sender: unknown) { this.senders = this.senders.filter((s) => s !== sender); }
   async setLocalDescription(desc?: { type: string; sdp: string }) {
     this.localDescription = desc ?? { type: 'offer', sdp: 'local-offer' };
@@ -367,5 +369,38 @@ describe('PeerConnection.addTrack — what is sent as a screen', () => {
     const sender = pc.getSenders().find((s) => s.track === clip)!;
     expect(sender.params.encodings[0]).toEqual(sendEncoding(2, 'camera'));
     expect(sender.params.encodings[0]?.maxFramerate).toBeUndefined();
+  });
+});
+
+describe('PeerConnection.setIncomingVideoOff', () => {
+  const t = (kind: string, direction: string) => ({ direction, receiver: { track: { kind } } });
+
+  // What this side holds in a call where the other person also shares a screen:
+  // its own audio and camera, which receive too, and the screen it only receives.
+  function inCall() {
+    const { peer, pc } = setup(false);
+    peer.start();
+    pc.transceivers = [t('audio', 'sendrecv'), t('video', 'sendrecv'), t('video', 'recvonly')];
+    return { peer, pc, directions: () => pc.transceivers.map((x) => x.direction) };
+  }
+
+  it('stops taking the camera and a shared screen, keeps sending its own camera, and leaves audio alone', () => {
+    const { peer, directions } = inCall();
+    peer.setIncomingVideoOff(true);
+    expect(directions()).toEqual(['sendrecv', 'sendonly', 'inactive']);
+  });
+
+  it('takes them again when it is turned back', () => {
+    const { peer, directions } = inCall();
+    peer.setIncomingVideoOff(true);
+    peer.setIncomingVideoOff(false);
+    expect(directions()).toEqual(['sendrecv', 'sendrecv', 'recvonly']);
+  });
+
+  it('leaves a stopped transceiver alone: setting its direction throws in a browser', () => {
+    const { peer, pc, directions } = inCall();
+    pc.transceivers.push(t('video', 'stopped'));
+    peer.setIncomingVideoOff(true);
+    expect(directions()[3]).toBe('stopped');
   });
 });

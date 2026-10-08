@@ -220,6 +220,12 @@ export interface RoomState {
    */
   lowPower: boolean;
   /**
+   * This device has stopped taking everyone else's video, to spare a weak
+   * connection. It still hears the call and still sends its own picture, and
+   * no recording is affected.
+   */
+  incomingVideoOff: boolean;
+  /**
    * What each remote peer's browser can actually capture, keyed by peerId.
    * Lets the host see BEFORE pressing Record who won't be captured, and why,
    * instead of finding out at playback. Populated from `recording-capability`
@@ -590,6 +596,7 @@ export function useRoom(slug: string) {
     peerRecording: false,
     notRecorded: false,
     lowPower: false,
+    incomingVideoOff: false,
     capabilities: {},
     finalizingGuests: [],
     backupTransfers: [],
@@ -2182,6 +2189,12 @@ export function useRoom(slug: string) {
     setState((s) => ({ ...s, lowPower: on }));
   }, []);
 
+  /** Stop taking everyone else's video, or take it again, on every connection. */
+  const setIncomingVideoOff = useCallback((off: boolean) => {
+    for (const p of peersRef.current.values()) p.setIncomingVideoOff(off);
+    setState((s) => ({ ...s, incomingVideoOff: off }));
+  }, []);
+
   /**
    * Build the soundboard on first use and route its mix to every peer.
    *
@@ -2803,5 +2816,6 @@ export function useRoom(slug: string) {
     readTrackHealth,
     readLoad,
     setLowPower,
+    setIncomingVideoOff,
   };
 }

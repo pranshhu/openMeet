@@ -78,6 +78,7 @@ vi.mock('@/lib/peer', () => ({
       createRecordingAudioChannel: vi.fn().mockImplementation(channel),
       cpuLimited: vi.fn().mockResolvedValue(false),
       setLowPower: vi.fn(),
+      setIncomingVideoOff: vi.fn(),
     };
     peers.push(p);
     return p;
@@ -281,5 +282,66 @@ describe('useRoom.setLowPower', () => {
 
     expect(peers).toHaveLength(3);
     expect(peers[2].setLowPower).not.toHaveBeenCalled();
+  });
+});
+
+describe('useRoom.setIncomingVideoOff', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    peers = [];
+    vi.stubGlobal('MediaStream', FakeStream);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('stops and takes again incoming video on every connection and says so in state', async () => {
+    const { result } = await joinAs('guest', [
+      { peerId: 'h', ordinal: 1, role: 'host' },
+      { peerId: 'g2', ordinal: 3, role: 'guest' },
+    ]);
+
+    expect(peers).toHaveLength(2);
+    expect(result.current.state.incomingVideoOff).toBe(false);
+
+    act(() => {
+      result.current.setIncomingVideoOff(true);
+    });
+
+    expect(peers[0].setIncomingVideoOff).toHaveBeenLastCalledWith(true);
+    expect(peers[1].setIncomingVideoOff).toHaveBeenLastCalledWith(true);
+    expect(result.current.state.incomingVideoOff).toBe(true);
+
+    act(() => {
+      result.current.setIncomingVideoOff(false);
+    });
+
+    expect(peers[0].setIncomingVideoOff).toHaveBeenLastCalledWith(false);
+    expect(peers[1].setIncomingVideoOff).toHaveBeenLastCalledWith(false);
+    expect(result.current.state.incomingVideoOff).toBe(false);
+  });
+
+  it('leaves a take in progress alone', async () => {
+    const { result } = await joinAs('host', []);
+    act(() => {
+      emit('peer-joined', { peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      result.current.setIncomingVideoOff(true);
+    });
+    act(() => {
+      result.current.setIncomingVideoOff(false);
+    });
+
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.recordingError).toBeNull();
+    expect(startHostRecording).toHaveBeenCalledTimes(1);
   });
 });

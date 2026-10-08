@@ -74,6 +74,8 @@ export class PeerConnection {
   /** People in the room including us. 2 until told otherwise. */
   private peerCount = 2;
   private lowPower = false;
+  /** This side has stopped taking the other side's video. Its audio is never touched. */
+  private incomingVideoOff = false;
   /** Serializes handleSignal() calls so signals are processed strictly in order. */
   private signalTail: Promise<void> = Promise.resolve();
   // Lazily created by whenConnected() so a caller that never asks pays nothing.
@@ -322,6 +324,32 @@ export class PeerConnection {
     if (on === this.lowPower) return;
     this.lowPower = on;
     this.applySendQuality();
+  }
+
+  /**
+   * Stop, or take again, the video this connection receives: the camera and any
+   * shared screen. The far end's browser stops encoding and sending what the
+   * negotiated direction does not ask for, so this frees the link itself, which
+   * hiding a picture would not. Sound, and everything this side sends, go on.
+   */
+  setIncomingVideoOff(off: boolean): void {
+    this.incomingVideoOff = off;
+    this.applyIncomingVideo();
+  }
+
+  /**
+   * Set the receive half of every video transceiver and leave its send half
+   * alone. A changed direction makes the browser ask for a negotiation, which
+   * the handler in start() turns into an offer. A stopped transceiver throws
+   * when its direction is set, and the other side's offer can stop one.
+   */
+  private applyIncomingVideo(): void {
+    for (const t of this.pc?.getTransceivers() ?? []) {
+      if (t.receiver.track.kind !== 'video' || t.direction === 'stopped') continue;
+      const sends = t.direction === 'sendrecv' || t.direction === 'sendonly';
+      if (this.incomingVideoOff) t.direction = sends ? 'sendonly' : 'inactive';
+      else t.direction = sends ? 'sendrecv' : 'recvonly';
+    }
   }
 
   /**

@@ -325,6 +325,10 @@ unfinished send to each new connection to the host.
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
   `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
+  `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
+  `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is
+  negotiated like any other, and the far browser then stops encoding and sending that video
+  to this connection, so no message of ours has to ask it.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
 
