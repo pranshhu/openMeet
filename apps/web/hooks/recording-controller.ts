@@ -1620,6 +1620,22 @@ function pendingReceivers(h: RecordingHandles): ChunkReceiver[] {
   return out;
 }
 
+/**
+ * Slot 0's camera file is opened before any guest exists. True when the take
+ * ended with no guest having sent into it: no camera channel was ever bound,
+ * no WAV arrived, and the file holds nothing. The size is asked of the file
+ * itself: after a resume it holds what the crash copy replayed, which the
+ * receiver's own count does not include.
+ */
+function guestSlot0Unused(h: RecordingHandles): boolean {
+  return (
+    !h.channelRef?.current &&
+    !h.wavReceiver &&
+    (h.receiver?.bytesWritten ?? 0) === 0 &&
+    (h.guestWriter?.size ?? 0) === 0
+  );
+}
+
 export async function endHostRecording(
   h: RecordingHandles,
   opts?: {
@@ -1725,6 +1741,17 @@ export async function endHostRecording(
   const closed = await Promise.allSettled(allWriters(h).map((w) => w.close()));
   const failed = closed.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failed) throw failed.reason;
+
+  // Nobody sent into slot 0: its file is empty, so it is neither kept nor listed.
+  if (h.guestWriter && h.dir?.removeEntry && guestSlot0Unused(h)) {
+    try {
+      await h.dir.removeEntry(h.guestWriter.fileName);
+      // Gone from the folder, so gone from everything that walks the take's files.
+      delete h.guestWriter;
+    } catch {
+      // The empty file stays in the folder; it is still left out of the report.
+    }
+  }
   return { backup, wavBackup };
 }
 
@@ -2116,7 +2143,7 @@ export async function collectGuestReports(
   const out: GuestSyncInput[] = [];
 
   // Slot 0
-  if (h.receiver) {
+  if (h.receiver && !guestSlot0Unused(h)) {
     const peerId0 = h.slotPeerIds?.get(0);
     // The name the room still lists wins; a guest who left is named by the
     // name their slot was bound with.

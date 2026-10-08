@@ -210,6 +210,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   has not written its first bytes, and does not save or delete a recording
   another tab is continuing. A take whose crash copy stopped part-way is not
   offered **Resume recording** after a reload.
+- A take in which no guest was recorded no longer leaves an empty
+  `guest_<id>.mp4` in the recording folder, or warnings about it in the
+  summary.
 
 ### Security
 
