@@ -1,4 +1,4 @@
-import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_SAMPLE_RATE } from '@openmeet/protocol';
 import { DEFAULT_QUALITY_ID, presetForTrack } from './quality';
 import { cameraConstraints, micConstraints } from './media';
 import { watchMic, type MicWarning } from './mic-watch';
@@ -52,6 +52,7 @@ export class SwitchableMedia {
   private levelTap: ChannelSplitterNode | null = null;
   private stopMicWatch: (() => void) | null = null;
   private qualityId: string;
+  private frameRate: number;
   private options: SwitchableMediaOptions;
 
   constructor(localStream: MediaStream, options: SwitchableMediaOptions = {}) {
@@ -59,6 +60,13 @@ export class SwitchableMedia {
     const rawCamTrack = localStream.getVideoTracks()[0] ?? null;
     const rawMicTrack = localStream.getAudioTracks()[0] ?? null;
     this.qualityId = options.qualityId ?? (rawCamTrack ? presetForTrack(rawCamTrack).id : DEFAULT_QUALITY_ID);
+    // The request rides on the track, so nothing is threaded from the lobby. Asked-for
+    // before delivered: a first camera that fell short must not hold the next one back.
+    const asked = rawCamTrack?.getConstraints?.().frameRate;
+    this.frameRate =
+      (typeof asked === 'number' ? asked : asked?.ideal) ||
+      rawCamTrack?.getSettings?.().frameRate ||
+      RECORDING_FRAME_RATE;
     this.isFallback = !isTrackGeneratorSupported();
 
     this._currentCameraTrack = rawCamTrack;
@@ -203,7 +211,7 @@ export class SwitchableMedia {
       }
       if (oldTrack) oldTrack.stop?.();
 
-      const constraints = cameraConstraints(target, qualityId);
+      const constraints = cameraConstraints(target, qualityId, this.frameRate);
       const newStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
       const newTrack = newStream.getVideoTracks()[0];
       if (!newTrack) return;
@@ -225,14 +233,14 @@ export class SwitchableMedia {
 
     let newStream: MediaStream;
     try {
-      const constraints = cameraConstraints(target, qualityId);
+      const constraints = cameraConstraints(target, qualityId, this.frameRate);
       newStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
     } catch (err) {
       if (phone && oldTrack) {
         try {
           const oldDevId = oldTrack.getSettings?.().deviceId;
           const restored = await navigator.mediaDevices.getUserMedia({
-            video: cameraConstraints(oldDevId, qualityId),
+            video: cameraConstraints(oldDevId, qualityId, this.frameRate),
             audio: false,
           });
           const restoredTrack = restored.getVideoTracks()[0] ?? null;

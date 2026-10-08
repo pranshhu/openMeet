@@ -178,7 +178,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.5 | WAV master is clean | Check the WAV after 8.4 | Contains the mic **only** — no board audio baked in | ☐ | |
 | 8.6 | Quality picker | Pick 720p, record, `ffprobe` | Output really is 720p | ☐ | |
 | 8.7 | Device switch | Change mic in the lobby | Preview keeps working | ☐ | |
-| 8.8 | Camera switch mid-take | Chromium: record, switch camera from the call's camera menu, record on | Recording doesn't stop; the MP4 plays through the switch without corruption, even if the resolution changed | ☐ | |
+| 8.8 | Camera switch mid-take | Chromium: record, switch camera from the call's camera menu, record on | Recording doesn't stop; the MP4 plays through the switch without corruption, even if the resolution changed; a frame rate picked in the lobby is kept | ☐ | |
 | 8.9 | Mic switch mid-take | Chromium: record, switch to a mic with a different sample rate (a Bluetooth headset is usually 16 or 24 kHz), record on | MP4 and WAV both play at normal speed and pitch through the switch; each WAV's duration matches its own MP4 | ☐ | |
 | 8.10 | Switch mid-take on Safari / iPhone | Record, try to switch camera or mic on that side | "Switch after this take"; the take carries on; switching works once it ends | ☐ | |
 | 8.11 | Track panel | Host and one guest, record, click **Tracks OK** in the top bar | The host's Camera and WAV master say **OK**, the guest's say **Receiving**, each size grows about every 2 s; opening it moves nothing; **Esc** closes it | ☐ | |
