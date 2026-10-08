@@ -296,6 +296,71 @@ describe('SwitchableMedia', () => {
       expect(videoConstraints.width).toEqual({ ideal: 3840 });
     });
 
+    describe('frame rate across a camera switch', () => {
+      // A lobby camera asked for `asked` fps that reports `delivered`.
+      const lobbyCam = (delivered?: number, asked?: unknown) =>
+        Object.assign(
+          createMockTrack('video', 'cam-1', delivered === undefined ? {} : { frameRate: delivered }),
+          asked === undefined ? {} : { getConstraints: () => ({ frameRate: asked }) }
+        );
+      const switchedTo = async (cam: MediaStreamTrack) => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMockStream(undefined, createMockTrack('video', 'cam-2')));
+        vi.stubGlobal('navigator', { userAgent: 'test-desktop', mediaDevices: { getUserMedia } });
+        const sm = new SwitchableMedia(createMockStream(createMockTrack('audio', 'mic-1'), cam));
+        await sm.switchCamera('cam-2');
+        return (getUserMedia.mock.calls[0]![0].video as MediaTrackConstraints).frameRate;
+      };
+
+      it('asks the new camera for the rate the lobby camera was asked for, not the one it delivered', async () => {
+        expect(await switchedTo(lobbyCam(15, { ideal: 25 }))).toEqual({ ideal: 25 });
+      });
+
+      it('honours a bare number as the lobby camera request', async () => {
+        expect(await switchedTo(lobbyCam(15, 25))).toEqual({ ideal: 25 });
+      });
+
+      it('falls back to the delivered rate, then to 30', async () => {
+        expect(await switchedTo(lobbyCam(24))).toEqual({ ideal: 24 });
+        expect(await switchedTo(lobbyCam())).toEqual({ ideal: 30 });
+        expect(await switchedTo(lobbyCam(undefined, { ideal: 0 }))).toEqual({ ideal: 30 });
+      });
+
+      it('asks the reopened old camera for the same rate when a phone switch fails', async () => {
+        const getUserMedia = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('no rear camera'))
+          .mockResolvedValue(createMockStream(undefined, createMockTrack('video', 'cam-1')));
+        vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia } });
+        const lobbyStream = createMockStream(createMockTrack('audio', 'mic-1'), lobbyCam(30, { ideal: 25 }));
+
+        const sm = new SwitchableMedia(lobbyStream);
+        await expect(sm.switchCamera('environment')).rejects.toThrow('no rear camera');
+
+        expect(getUserMedia).toHaveBeenCalledTimes(2);
+        const restored = getUserMedia.mock.calls[1]![0].video as MediaTrackConstraints;
+        expect(restored.deviceId).toEqual({ exact: 'cam-1' });
+        expect(restored.frameRate).toEqual({ ideal: 25 });
+      });
+
+      it('keeps the lobby rate for a later switch instead of the rate of the camera switched to', async () => {
+        const cam2 = Object.assign(createMockTrack('video', 'cam-2', { frameRate: 30 }), {
+          getConstraints: () => ({ frameRate: { ideal: 30 } }),
+        });
+        const getUserMedia = vi
+          .fn()
+          .mockResolvedValueOnce(createMockStream(undefined, cam2))
+          .mockResolvedValue(createMockStream(undefined, createMockTrack('video', 'cam-3')));
+        vi.stubGlobal('navigator', { userAgent: 'test-desktop', mediaDevices: { getUserMedia } });
+        const lobbyStream = createMockStream(createMockTrack('audio', 'mic-1'), lobbyCam(15, { ideal: 25 }));
+
+        const sm = new SwitchableMedia(lobbyStream);
+        await sm.switchCamera('cam-2');
+        await sm.switchCamera('cam-3');
+
+        expect((getUserMedia.mock.calls[1]![0].video as MediaTrackConstraints).frameRate).toEqual({ ideal: 25 });
+      });
+    });
+
     it('exposes real active mic and camera device IDs across switches', async () => {
       const initialCam = createMockTrack('video', 'cam-1', { width: 1280, height: 720 });
       const initialMic = createMockTrack('audio', 'mic-1', { sampleRate: 48000, channelCount: 1 });
@@ -500,6 +565,20 @@ describe('SwitchableMedia', () => {
       // Keeps the raw tracks directly
       expect(sm.stream.getVideoTracks()[0]?.id).toBe('cam-1');
       expect(sm.stream.getAudioTracks()[0]?.id).toBe('mic-1');
+    });
+
+    it('asks a switched camera for the lobby camera frame rate', async () => {
+      const cam = Object.assign(createMockTrack('video', 'cam-1', { frameRate: 15 }), {
+        getConstraints: () => ({ frameRate: { ideal: 25 } }),
+      });
+      const lobbyStream = createMockStream(createMockTrack('audio', 'mic-1'), cam);
+      const getUserMedia = vi.fn().mockResolvedValue(createMockStream(undefined, createMockTrack('video', 'cam-2')));
+      vi.stubGlobal('navigator', { userAgent: 'test-safari', mediaDevices: { getUserMedia } });
+
+      const sm = new SwitchableMedia(lobbyStream);
+      await sm.switchCamera('cam-2');
+
+      expect((getUserMedia.mock.calls[0]![0].video as MediaTrackConstraints).frameRate).toEqual({ ideal: 25 });
     });
 
     it('uses replaceTrack on peer senders and refuses switching during a take', async () => {

@@ -78,6 +78,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   sent when the crash copy kept the checksum state of the bytes it holds; when
   it did not, the file reads "not verified" and says why, and a file with a
   known hole reads "Incomplete".
+- A camera switched to during the call keeps the frame rate picked in the
+  lobby.
 
 ### Changed
 

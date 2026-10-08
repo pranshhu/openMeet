@@ -652,7 +652,8 @@ unfinished send to each new connection to the host.
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
-    Real camera settings are delegated from the real track.
+    Real camera settings are delegated from the real track. A switched-to camera is asked for the
+    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) with the initial mic's channel count,
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
