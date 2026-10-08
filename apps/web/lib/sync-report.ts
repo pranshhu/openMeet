@@ -37,6 +37,8 @@ export interface GuestSyncInput {
   trackFps?: number | null | undefined;
   /** Digest of what the host wrote; absent when the host cannot prove the whole file. */
   sha256Written?: string | undefined;
+  /** This guest's file continued after a browser reload; no single digest covers it. */
+  resumed?: boolean | undefined;
 }
 
 export interface ScreenSegmentInput {
@@ -102,6 +104,10 @@ export interface SyncReportInput {
   callCopiesCapped?: boolean | undefined;
   /** The take was rebuilt from the browser's crash copy, not closed by a live End & save. */
   interrupted?: boolean | undefined;
+  /** The take continued after a browser reload. */
+  resumed?: boolean | undefined;
+  /** The host's own files, each with its offset from hostStartMs; the take's first file first. */
+  hostParts?: { name: string; offsetMs: number; kind: 'camera' | 'wav' }[] | undefined;
 }
 
 export interface SummaryFile {
@@ -170,11 +176,15 @@ export function formatBytes(n: number): string {
 // so joined emoji and scripts that need them survive.
 export const sanitizeText = (s: string) => s.replace(/[\p{Cc}\p{Z}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]+/gu, ' ');
 
-// A name comes from another participant and ends up in text on the host's disk.
+// A name comes from another participant and ends up in text on the host's disk,
+// so every use of one goes through this first.
+const cleanNameOf = (name: unknown): string =>
+  typeof name === 'string' ? sanitizeText(name).trim() : '';
+
 // A name with no letter, digit, punctuation or symbol left after cleaning has
 // nothing a reader could use to tell who is meant, so it is not shown.
 const whoOf = (name: unknown, fallback: string): string => {
-  const clean = typeof name === 'string' ? sanitizeText(name).trim() : '';
+  const clean = cleanNameOf(name);
   return /[\p{L}\p{N}\p{P}\p{S}]/u.test(clean) ? clean : fallback;
 };
 
@@ -387,9 +397,17 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   const markers = input.markers ?? [];
   const screenSegments = input.screenSegments ?? [];
   const screenFiles = screenSegments.map((s) => s.file);
+  // The host's own track is one file per part once a take is picked up after a
+  // reload: the pre-crash part and the file written from the reload onward.
+  const hostParts = input.hostParts ?? [];
+  const hostFilePart = hostParts.find((p) => p.name === hostFile);
+  const hostWavPart = hostParts.find((p) => p.name === input.hostWavFile);
+  const extraHostParts = hostParts.filter(
+    (p) => p.name !== hostFile && p.name !== input.hostWavFile
+  );
   // A guest's display name is theirs to choose, and this goes to the host's disk.
   const callCopies = (input.callCopies ?? []).map((c) => {
-    const name = typeof c.name === 'string' ? sanitizeText(c.name).trim() : '';
+    const name = cleanNameOf(c.name);
     return { file: c.file, offsetMs: c.offsetMs, ...(name ? { name } : {}) };
   });
 
@@ -411,6 +429,12 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   const warnings: string[] = [];
   if (input.interrupted) {
     warnings.push('This recording was interrupted — the files were rebuilt from the browser’s copy after it closed.');
+  }
+  if (input.resumed) {
+    warnings.push(
+      "This recording continued after a browser reload, so the host's own track is in two files. " +
+        "Each one's offset from the start is in hostParts."
+    );
   }
   const guestReports: NonNullable<SyncReportData['guests']> = [];
   const timelineGuests: {
@@ -444,14 +468,16 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       cmd,
     });
   };
-  if (hostFile) align(hostFile, 0, 'Host');
-  if (input.hostWavFile) align(input.hostWavFile, 0, 'Host', true);
+  if (hostFile) align(hostFile, hostFilePart?.offsetMs ?? 0, 'Host');
+  if (input.hostWavFile) align(input.hostWavFile, hostWavPart?.offsetMs ?? 0, 'Host', true);
+  for (const p of extraHostParts) align(p.name, p.offsetMs, 'Host', p.kind === 'wav');
 
   for (const g of guests) {
     const { slot } = g;
     const key = slot === 0 ? 'guest' : `guest${slot + 1}`;
     const defaultName = slot === 0 ? 'Guest' : `Guest ${slot + 1}`;
-    const displayName = g.name || defaultName;
+    const cleanName = cleanNameOf(g.name);
+    const displayName = cleanName || defaultName;
 
     filesRecord[key] = g.file;
     audioMastersRecord[key] = g.wavFile ?? null;
@@ -459,14 +485,14 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     const remuxKey = slot === 0 ? 'remuxGuest' : `remuxGuest${slot + 1}`;
     seekabilityMap[remuxKey] = remuxCmd(g.file);
     remuxCommands.push({
-      label: `Make the ${slot === 0 && !g.name ? 'guest' : displayName} file seekable (lossless)`,
+      label: `Make the ${slot === 0 && !cleanName ? 'guest' : displayName} file seekable (lossless)`,
       cmd: remuxCmd(g.file),
     });
 
     if (g.wavFile) {
       combineMap[key] = muxWavCmd(g.file, g.wavFile);
       combineCommands.push({
-        label: `${slot === 0 && !g.name ? 'Guest' : displayName}: pair video with the uncompressed audio master`,
+        label: `${slot === 0 && !cleanName ? 'Guest' : displayName}: pair video with the uncompressed audio master`,
         cmd: muxWavCmd(g.file, g.wavFile),
       });
     } else if (g.noWav) {
@@ -487,7 +513,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         alignmentLines.push(`Clock sync unavailable for ${displayName} — align by audio waveform.`);
       }
     } else {
-      if (guests.length === 1 && !g.name) {
+      if (guests.length === 1 && !cleanName) {
         alignmentLines.push(
           guestMinusHostMs >= 0
             ? `Guest started ${guestMinusHostMs} ms AFTER host. Shift the guest clip +${guestMinusHostMs} ms (later) relative to host.`
@@ -503,8 +529,18 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     }
 
     // Integrity: the camera file's verdict, under the key scripts already read.
-    const camera = fileVerdict(input.checks?.get(g.file), whoOf(g.name, 'the guest'), 'video');
+    // A resumed file is two stretches joined in one name, so no single digest of
+    // what was sent can stand for it, and that is said rather than left generic.
+    const camera = g.resumed
+      ? {
+          status: 'unverified' as const,
+          text: 'Not verified — this file continued after a browser reload, so no single digest covers it.',
+        }
+      : fileVerdict(input.checks?.get(g.file), whoOf(cleanName, 'the guest'), 'video');
     const integrity = { ok: camera.status === 'complete', text: camera.text };
+    if (g.resumed) {
+      warnings.push(guests.length === 1 ? integrity.text : `${displayName}: ${integrity.text}`);
+    }
 
     if (g.drained === false) {
       warnings.push(
@@ -520,7 +556,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
 
     guestReports.push({
       slot,
-      ...(g.name ? { name: g.name } : {}),
+      ...(cleanName ? { name: cleanName } : {}),
       file: g.file,
       wavFile: g.wavFile ?? null,
       offsetMs: guestMinusHostMs,
@@ -531,7 +567,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     });
     timelineGuests.push({
       slot,
-      name: g.name,
+      name: cleanName || undefined,
       file: g.file,
       startUnixMs: g.startHostMs,
       offsetMs: guestMinusHostMs,
@@ -547,22 +583,48 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   const alignment = alignmentLines.join('\n');
 
   const fileList: SummaryFile[] = [
-    ...(hostFile ? [{ name: hostFile, kind: 'video' as const }] : []),
-    ...guests.map((g) => ({
-      name: g.file,
-      kind: 'video' as const,
-      ...(g.name ? { participant: g.name } : {}),
-    })),
-    ...(input.hostWavFile ? [{ name: input.hostWavFile, kind: 'audio' as const }] : []),
+    ...(hostFile
+      ? [
+          {
+            name: hostFile,
+            kind: 'video' as const,
+            ...(hostFilePart && hostFilePart.offsetMs > 0
+              ? { detail: `continues from ${seconds(hostFilePart.offsetMs)} s` }
+              : {}),
+          },
+        ]
+      : []),
+    ...guests.map((g) => {
+      const participant = cleanNameOf(g.name);
+      return {
+        name: g.file,
+        kind: 'video' as const,
+        ...(participant ? { participant } : {}),
+      };
+    }),
+    ...(input.hostWavFile
+      ? [
+          {
+            name: input.hostWavFile,
+            kind: 'audio' as const,
+            ...(hostWavPart && hostWavPart.offsetMs > 0
+              ? { detail: `continues from ${seconds(hostWavPart.offsetMs)} s` }
+              : {}),
+          },
+        ]
+      : []),
     ...guests
       .filter((g) => Boolean(g.wavFile))
-      .map((g) => ({
-        name: g.wavFile!,
-        kind: 'audio' as const,
-        ...(g.name ? { participant: g.name } : {}),
-      })),
+      .map((g) => {
+        const participant = cleanNameOf(g.name);
+        return {
+          name: g.wavFile!,
+          kind: 'audio' as const,
+          ...(participant ? { participant } : {}),
+        };
+      }),
     ...screenSegments.map((s) => {
-      const sharer = s.sharer;
+      const sharer = cleanNameOf(s.sharer);
       const parts = [
         sharer,
         `+${s.offsetMs}ms`,
@@ -579,6 +641,13 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       kind: 'call' as const,
       detail: [c.name, `+${c.offsetMs}ms`].filter(Boolean).join(', '),
       ...(c.name ? { participant: c.name } : {}),
+    })),
+    // Appended after every other row so a resumed take never pushes the
+    // host file, or a guest's, out of the position a reader expects.
+    ...extraHostParts.map((p) => ({
+      name: p.name,
+      kind: p.kind === 'wav' ? ('audio' as const) : ('video' as const),
+      detail: p.offsetMs > 0 ? `continues from ${seconds(p.offsetMs)} s` : 'the part before the reload',
     })),
   ].map((f: SummaryFile) => {
     const c = input.checks?.get(f.name);
@@ -612,6 +681,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   const report = {
     recordingId,
     files: filesRecord,
+    ...(hostParts.length > 0
+      ? { hostParts: hostParts.map((p) => ({ file: p.name, offsetMs: p.offsetMs, kind: p.kind })) }
+      : {}),
     timeline: {
       hostStartUnixMs: hostStartMs,
       guestStartUnixMs: guests[0]?.startHostMs ?? null, // expressed on the host clock

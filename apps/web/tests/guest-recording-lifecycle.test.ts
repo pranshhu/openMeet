@@ -1569,6 +1569,118 @@ describe('host backup after a take in useRoom', () => {
     );
   });
 
+  it('names both files of a resumed take in the summary and sync.json', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+
+    const { result } = await hostTake(undefined, {
+      recordingId: 'rec-resume',
+      dir: fakeDir as never,
+      hostStartMs: 1_000_000,
+      resumed: true,
+      hostParts: [
+        { name: 'host_r.mp4', offsetMs: 0, kind: 'camera' },
+        { name: 'host_r_resumed.mp4', offsetMs: 90_000, kind: 'camera' },
+      ],
+      hostWriter: { fileName: 'host_r_resumed.mp4', size: 2048 },
+    });
+
+    expect(result.current.state.summary?.fileList.map((f) => f.name)).toEqual(
+      expect.arrayContaining(['host_r_resumed.mp4', 'host_r.mp4'])
+    );
+
+    const syncJson = JSON.parse(
+      new TextDecoder().decode(writtenFiles.get('sync_rec-resume.json')?.data)
+    ) as {
+      hostParts: { file: string; offsetMs: number; kind: string }[];
+      verification: { file: string }[];
+    };
+    expect(syncJson.hostParts).toEqual([
+      { file: 'host_r.mp4', offsetMs: 0, kind: 'camera' },
+      { file: 'host_r_resumed.mp4', offsetMs: 90_000, kind: 'camera' },
+    ]);
+    expect(syncJson.verification.map((v) => v.file)).toEqual(
+      expect.arrayContaining(['host_r_resumed.mp4', 'host_r.mp4'])
+    );
+  });
+
+  it('marks a guest file that continued after a reload as not verifiable', async () => {
+    const { result } = await hostTake(undefined, {
+      guestWriter: { fileName: 'guest_rec-r.mp4', size: 512 },
+      receiver: {
+        fileName: 'guest_rec-r.mp4',
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        receivedFinalized: true,
+        isAbandoned: false,
+        guestStartHostMs: 1_000_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+        resumed: true,
+      },
+    });
+
+    const why =
+      'Not verified — this file continued after a browser reload, so no single digest covers it.';
+    expect(result.current.state.summary?.guests?.[0]?.integrity).toEqual({ ok: false, text: why });
+    expect(result.current.state.summary?.warnings).toContain(why);
+    // Only the guest's file was resumed, so the take-level reload line, which
+    // is about the host's own track, is not there.
+    expect(result.current.state.summary?.warnings.join(' ')).not.toContain(
+      "the host's own track is in two files"
+    );
+  });
+
+  it('marks an extra guest slot that continued after a reload as not verifiable', async () => {
+    const { result } = await hostTake(
+      undefined,
+      {
+        guestWriter: { fileName: 'guest1_rec.mp4', size: 512 },
+        receiver: {
+          fileName: 'guest1_rec.mp4',
+          digestHex: async () => 'abc',
+          senderSha256: 'abc',
+          receivedFinalized: true,
+          isAbandoned: false,
+          guestStartHostMs: 1_000_500,
+          syncRttMs: 10,
+          bytesWritten: 1,
+        },
+        guestSlots: new Map([['peer-2', 1]]),
+        guestReceivers: new Map([
+          [
+            'peer-2:mp4',
+            {
+              writer: { fileName: 'guest2_rec-r.mp4', size: 512 },
+              receiver: {
+                fileName: 'guest2_rec-r.mp4',
+                digestHex: async () => 'abc',
+                senderSha256: 'abc',
+                receivedFinalized: true,
+                isAbandoned: false,
+                guestStartHostMs: 1_000_500,
+                syncRttMs: 10,
+                bytesWritten: 1,
+                resumed: true,
+              },
+            },
+          ],
+        ]),
+      },
+      [
+        { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Guest 1' },
+        { peerId: 'peer-2', ordinal: 3, role: 'guest', displayName: 'Guest 2' },
+      ]
+    );
+
+    const why =
+      'Not verified — this file continued after a browser reload, so no single digest covers it.';
+    expect(result.current.state.summary?.guests?.find((g) => g.slot === 1)?.integrity).toEqual({
+      ok: false,
+      text: why,
+    });
+    expect(result.current.state.summary?.warnings).toContain(`Guest 2: ${why}`);
+  });
+
   it('finalizes cleanly when reading file sizes fails', async () => {
     vi.mocked(collectFileChecks).mockImplementationOnce(() => {
       throw new Error('size read failed');

@@ -650,6 +650,270 @@ describe('post-session report', () => {
   });
 });
 
+describe('a resumed take', () => {
+  const RELOAD =
+    'This recording continued after a browser reload, so the host\'s own track is in two files. ' +
+    "Each one's offset from the start is in hostParts.";
+  const NOT_VERIFIED =
+    'Not verified — this file continued after a browser reload, so no single digest covers it.';
+  const hostParts = [
+    { name: 'host_r.mp4', offsetMs: 0, kind: 'camera' as const },
+    { name: 'host_r_resumed.mp4', offsetMs: 90_000, kind: 'camera' as const },
+  ];
+  const input = {
+    recordingId: 'r',
+    hostFile: 'host_r_resumed.mp4',
+    hostStartMs: 1_000_000,
+    resumed: true,
+    hostParts,
+    guests: [{ slot: 0, name: 'Bob', file: 'guest_r.mp4', startHostMs: 1_000_500, rttMs: 10 }],
+    checks: new Map<string, FileCheck>([['host_r.mp4', { bytes: 5 }]]),
+  };
+
+  it("lists the host's own track once per part, with each part's offset", () => {
+    // Removal that must fail this test: dropping the hostParts handling, or
+    // keying the extra part off offset 0 instead of off the file name.
+    const r = buildSyncReport(input);
+
+    const hostNames = r.data.fileList.map((f) => f.name).filter((n) => n.startsWith('host_r'));
+    expect(hostNames).toEqual(['host_r_resumed.mp4', 'host_r.mp4']);
+    expect(r.data.fileList.find((f) => f.name === 'host_r.mp4')).toMatchObject({
+      kind: 'video',
+      detail: 'the part before the reload',
+      bytes: 5,
+      verdict: { status: 'complete', text: 'Complete. Recorded on this computer.' },
+    });
+    expect(r.data.fileList.find((f) => f.name === 'host_r_resumed.mp4')).toMatchObject({
+      kind: 'video',
+      detail: 'continues from 90.000 s',
+    });
+
+    const j = JSON.parse(r.json) as {
+      hostParts: { file: string; offsetMs: number; kind: string }[];
+      verification: { file: string }[];
+      aligned: { files: { file: string; padMs: number | null; cmd?: string }[] };
+    };
+    expect(j.hostParts).toEqual([
+      { file: 'host_r.mp4', offsetMs: 0, kind: 'camera' },
+      { file: 'host_r_resumed.mp4', offsetMs: 90_000, kind: 'camera' },
+    ]);
+    expect(j.verification.map((v) => v.file)).toEqual([
+      'host_r_resumed.mp4',
+      'guest_r.mp4',
+      'host_r.mp4',
+    ]);
+    expect(j.aligned.files).toEqual([
+      {
+        file: 'host_r_resumed.mp4',
+        padMs: 90_000,
+        cmd: 'ffmpeg -itsoffset 90.000 -i "host_r_resumed.mp4" -c copy -tag:v avc1 -movflags +faststart "host_r_resumed_aligned.mp4"',
+      },
+      { file: 'host_r.mp4', padMs: 0 },
+      {
+        file: 'guest_r.mp4',
+        padMs: 500,
+        cmd: 'ffmpeg -itsoffset 0.500 -i "guest_r.mp4" -c copy -tag:v avc1 -movflags +faststart "guest_r_aligned.mp4"',
+      },
+    ]);
+    expect(r.data.warnings).toContain(RELOAD);
+    expect(r.data.commands).toContainEqual({
+      label: 'Host: aligned copy of the video (starts 90.000 s in)',
+      cmd: 'ffmpeg -itsoffset 90.000 -i "host_r_resumed.mp4" -c copy -tag:v avc1 -movflags +faststart "host_r_resumed_aligned.mp4"',
+    });
+
+    // hostParts alone is not a reload: same files, no take-level notice, and
+    // the field is absent from sync.json unless there are parts to list.
+    const beforeReload = buildSyncReport({
+      ...input,
+      resumed: undefined,
+      hostParts: undefined,
+      hostFile: 'host_r.mp4',
+    });
+    expect(beforeReload.data.warnings.some((w) => w === RELOAD)).toBe(false);
+    expect((JSON.parse(beforeReload.json) as { hostParts?: unknown }).hostParts).toBeUndefined();
+
+    // A host file at offset 0 gets no detail row.
+    const partAtZero = buildSyncReport({
+      ...input,
+      resumed: undefined,
+      hostFile: 'host_r.mp4',
+      hostParts: [{ name: 'host_r.mp4', offsetMs: 0, kind: 'camera' }],
+    });
+    expect(partAtZero.data.fileList.find((f) => f.name === 'host_r.mp4')?.detail).toBeUndefined();
+
+    // The two take-level lines sit together, interrupted first.
+    const rebuilt = buildSyncReport({ ...input, interrupted: true });
+    expect(rebuilt.data.warnings[0]).toBe(
+      'This recording was interrupted — the files were rebuilt from the browser’s copy after it closed.'
+    );
+    expect(rebuilt.data.warnings[1]).toBe(RELOAD);
+  });
+
+  it("gives each WAV part its own offset, kind and aligned copy", () => {
+    // Removal that must fail this test: ignoring the WAV part's own offset (or
+    // its kind), which would list it as video and align it at zero.
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r_resumed.mp4',
+      hostWavFile: 'host_r_resumed.wav',
+      hostStartMs: 1_000_000,
+      resumed: true,
+      hostParts: [
+        { name: 'host_r.mp4', offsetMs: 0, kind: 'camera' },
+        { name: 'host_r_resumed.mp4', offsetMs: 90_000, kind: 'camera' },
+        { name: 'host_r.wav', offsetMs: 0, kind: 'wav' },
+        { name: 'host_r_resumed.wav', offsetMs: 90_000, kind: 'wav' },
+      ],
+      guests: [],
+    });
+
+    expect(r.data.fileList.find((f) => f.name === 'host_r.wav')).toMatchObject({
+      kind: 'audio',
+      detail: 'the part before the reload',
+    });
+    expect(r.data.fileList.find((f) => f.name === 'host_r_resumed.wav')).toMatchObject({
+      kind: 'audio',
+      detail: 'continues from 90.000 s',
+    });
+
+    const aligned = (
+      JSON.parse(r.json) as {
+        aligned: { files: { file: string; padMs: number | null; cmd?: string }[] };
+      }
+    ).aligned.files;
+    expect(aligned).toEqual([
+      {
+        file: 'host_r_resumed.mp4',
+        padMs: 90_000,
+        cmd: 'ffmpeg -itsoffset 90.000 -i "host_r_resumed.mp4" -c copy -tag:v avc1 -movflags +faststart "host_r_resumed_aligned.mp4"',
+      },
+      {
+        file: 'host_r_resumed.wav',
+        padMs: 90_000,
+        cmd: 'ffmpeg -i "host_r_resumed.wav" -af "adelay=90000:all=1" -c:a pcm_s24le -rf64 auto "host_r_resumed_aligned.wav"',
+      },
+      { file: 'host_r.mp4', padMs: 0 },
+      { file: 'host_r.wav', padMs: 0 },
+    ]);
+  });
+
+  it('says why a resumed guest file is not verified', () => {
+    // Removal that must fail this test: dropping the resumed verdict branch,
+    // which brings the generic not-checked sentence back.
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r.mp4',
+      hostStartMs: 1_000_000,
+      guests: [{ slot: 0, file: 'guest_rec1.mp4', startHostMs: 1_000_500, rttMs: 10, resumed: true }],
+      checks: new Map<string, FileCheck>([['host_r.mp4', { bytes: 10 }]]),
+    });
+
+    expect(r.data.guests?.[0]?.integrity).toEqual({ ok: false, text: NOT_VERIFIED });
+    expect(r.data.warnings).toContain(NOT_VERIFIED);
+    expect(r.data.warnings.join(' ')).not.toContain('one of the digests is missing');
+    expect(r.data.integrity).toEqual({
+      ok: false,
+      text: "Not every file is complete and verified (1 of 2). Each file's verdict says why.",
+    });
+    expect((JSON.parse(r.json) as { guests: { integrity: { text: string } }[] }).guests[0]?.integrity.text)
+      .toBe(NOT_VERIFIED);
+  });
+
+  it('cleans a participant name before it reaches the report', () => {
+    // Removal that must fail this test: using g.name and s.sharer raw, the way
+    // the call-copy names would be if they skipped sanitizeText.
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r.mp4',
+      hostStartMs: 1_000_000,
+      guests: [
+        {
+          slot: 0,
+          name: 'Sam\n\u202Eevil',
+          file: 'guest_evil.mp4',
+          startHostMs: 1_000_500,
+          rttMs: 10,
+          drained: false,
+        },
+        { slot: 1, name: '   ', file: 'guest_blank.mp4', startHostMs: 1_000_500, rttMs: 10 },
+      ],
+      screenSegments: [{ file: 'host_screen_evil.mp4', offsetMs: 1000, sharer: 'Ann\n\u202Eevil' }],
+    });
+
+    for (const w of r.data.warnings) {
+      expect(w).not.toContain('\n');
+      expect(w).not.toContain('\u202E');
+    }
+    expect(r.data.warnings).toContain(
+      'Sam evil could not finish sending within the drain window — the file may be short. ' +
+        'Use the guest backup for the tail.'
+    );
+    expect(r.data.fileList.find((f) => f.name === 'guest_evil.mp4')?.participant).toBe('Sam evil');
+    expect(r.data.fileList.find((f) => f.name === 'guest_blank.mp4')?.participant).toBeUndefined();
+    expect(r.data.fileList.find((f) => f.name === 'host_screen_evil.mp4')).toMatchObject({
+      participant: 'Ann evil',
+      detail: 'Ann evil, +1000ms',
+    });
+
+    const j = JSON.parse(r.json) as {
+      guests: { name?: string }[];
+      timeline: { guests: { name?: string }[] };
+    };
+    expect(j.guests.map((g) => g.name)).toEqual(['Sam evil', undefined]);
+    expect(j.timeline.guests.map((g) => g.name)).toEqual(['Sam evil', undefined]);
+  });
+
+  it('gives an extra resumed part and an extra WAV part their offsets and commands', () => {
+    // Removal that must fail this test: ignoring offsetMs > 0 for extra host parts
+    // (which would mark them as 'the part before the reload'), or failing to pass wav
+    // to align for extra parts (which would generate a video -itsoffset instead of adelay).
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r_resumed2.mp4',
+      hostWavFile: 'host_r_resumed2.wav',
+      hostStartMs: 1_000_000,
+      resumed: true,
+      hostParts: [
+        { name: 'host_r.mp4', offsetMs: 0, kind: 'camera' },
+        { name: 'host_r_part1.mp4', offsetMs: 40_000, kind: 'camera' },
+        { name: 'host_r_resumed2.mp4', offsetMs: 80_000, kind: 'camera' },
+        { name: 'host_r_part1.wav', offsetMs: 40_000, kind: 'wav' },
+        { name: 'host_r_resumed2.wav', offsetMs: 80_000, kind: 'wav' },
+      ],
+      guests: [],
+    });
+
+    expect(r.data.fileList.find((f) => f.name === 'host_r_part1.mp4')?.detail).toBe('continues from 40.000 s');
+    expect(r.data.fileList.find((f) => f.name === 'host_r_part1.wav')?.detail).toBe('continues from 40.000 s');
+    expect(r.data.fileList.find((f) => f.name === 'host_r.mp4')?.detail).toBe('the part before the reload');
+
+    const aligned = (
+      JSON.parse(r.json) as {
+        aligned: { files: { file: string; padMs: number | null; cmd?: string }[] };
+      }
+    ).aligned.files;
+    expect(aligned.find((f) => f.file === 'host_r_part1.wav')?.cmd).toContain('adelay=40000');
+  });
+
+  it('prefixes warning with guest name when one of multiple guests is resumed', () => {
+    // Removal that must fail this test: omitting displayName prefix in the resumed warning
+    // when guests.length > 1.
+    const r = buildSyncReport({
+      recordingId: 'r',
+      hostFile: 'host_r.mp4',
+      hostStartMs: 1_000_000,
+      guests: [
+        { slot: 0, name: 'Alice', file: 'guest_a.mp4', startHostMs: 1_000_500, rttMs: 10, resumed: true },
+        { slot: 1, name: 'Bob', file: 'guest_b.mp4', startHostMs: 1_000_500, rttMs: 10 },
+      ],
+      checks: new Map<string, FileCheck>([['host_r.mp4', { bytes: 10 }]]),
+    });
+
+    expect(r.data.warnings).toContain(`Alice: ${NOT_VERIFIED}`);
+    expect(r.data.warnings).not.toContain(NOT_VERIFIED);
+  });
+});
+
 describe('buildChatLog', () => {
   const opts = { startMs: 10_000, endMs: 30_000, localName: 'Ana' };
 

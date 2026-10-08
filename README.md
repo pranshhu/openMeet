@@ -392,7 +392,7 @@ the screen that follows offers them too.
 
 1. **Remux:** Run the `+faststart` remux commands in `sync.json` (`seekability`) so clips are seekable:
    `ffmpeg -i "<file>.mp4" -c copy -tag:v avc1 -movflags +faststart "<file>_seekable.mp4"`
-2. **Timeline:** Import everything and offset each guest clip by its `offsetMs` in `timeline.guests` (`timeline.guestMinusHostMs` in a two-person session); screen segments carry their own offset in `timeline.screenSegments`. If an offset is null, align by waveform.
+2. **Timeline:** Import everything and offset each guest clip by its `offsetMs` in `timeline.guests` (`timeline.guestMinusHostMs` in a two-person session); screen segments carry their own offset in `timeline.screenSegments`. For a take whose host reloaded, `hostParts` lists the host's own files, each with its offset from the start. If an offset is null, align by waveform.
    Or run the aligned-copy commands first (`aligned` in `sync.json`, also under Editor
    commands in the summary): each writes an `_aligned` copy that starts at the host's
    start, so the copies and the host's files all go at 00:00. WAV copies get real silence;

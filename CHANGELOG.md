@@ -70,6 +70,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After a resume the host's own camera and WAV master are recorded to a second
   file (`host_<id>_resumed.mp4`/`.wav`), with the part before the crash copied
   into the folder from the take's backup beside it.
+- An interrupted or resumed take's `sync.json` names every file of the host's own
+  track, each with its offset from the start, and a file that continued after a
+  reload reads "not verified" and says why: no single digest covers it.
 
 ### Changed
 

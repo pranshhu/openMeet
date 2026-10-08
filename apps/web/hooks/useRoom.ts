@@ -2257,6 +2257,8 @@ export function useRoom(slug: string) {
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
             callCopies: collectCallCopies(h),
             callCopiesCapped: h.callCopiesCapped,
+            ...(h.resumed ? { resumed: true } : {}),
+            ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),
           };
           let report: SyncReport;
           try {

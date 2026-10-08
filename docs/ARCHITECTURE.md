@@ -309,8 +309,10 @@ unfinished send to each new connection to the host.
   **synchronously** in `ondataavailable`, serializes `blob.arrayBuffer()` via a `tail` promise
   chain to preserve order; skips empty blobs.
 - `chunk-sender.ts` (guest egress): `sendChunk` → `hash.update` → `buffer.add` → `enqueueOrSend`.
-  Backpressure: `bufferedAmount>16MiB` → queue + pause recorder; drains + resumes at ≤8MiB
-  (hysteresis). Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
+  Backpressure: `bufferedAmount>16MiB` → queue, drains at ≤8MiB (hysteresis). The pause half exists
+  (`setPaused`, `onBackpressure`) but no take-time caller passes the hook — the three `new
+  ChunkSender` calls in `recording-controller.ts` pass none — so no recorder is ever paused by it.
+  Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
   own header `idx`/`offset`; `rawSend` = one fragment's two-frame header+payload. Ack truncates
   retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
   `drain()` polls 100ms until empty or 30s cap.
@@ -335,8 +337,8 @@ unfinished send to each new connection to the host.
   `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
   (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
   `QuotaExceededError`→`DiskFullError`.
-- `retransmit-buffer.ts`: FIFO capped at 32MiB by bytes; always keeps ≥1 item; `truncate(idx)`,
-  `since(idx)`.
+- `retransmit-buffer.ts`: FIFO keeping every chunk that was not acked; it stores a `cap` and never
+  reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
   the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
   so it stays idempotent / updatable. Two independent digests (guest=sent, host=written) compared at
@@ -369,8 +371,11 @@ unfinished send to each new connection to the host.
   `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
-  the host start, with `sharer` display name on each entry, and `callCopies.files[]`, each call-audio
-  copy with its offset from the host start and the guest's name — plus integrity verdicts,
+  the host start, with `sharer` display name on each entry, `callCopies.files[]`, each call-audio
+  copy with its offset from the host start and the guest's name, and `hostParts[]`, each file of the
+  host's own track with its offset from the start — a resumed take's own track is two files, and a
+  file that continued after a reload reads "not verified" because no single digest covers it — plus
+  integrity verdicts,
   a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
@@ -466,7 +471,12 @@ unfinished send to each new connection to the host.
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
-   `buffer.since(lastIdx)`; idempotent dedupe; 32MiB cap (beyond → BackupRecorder only).
+   `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
+   until they pass `STREAM_BACKLOG_CAP_BYTES` (256 MiB), after which the stream is abandoned and the
+   guest's own backup keeps the rest. A take also keeps a crash journal in browser storage: small
+   closed parts, an ack meaning the journal already holds those bytes, so the lobby can rebuild a
+   take from it after the tab closes. A resumed take continues each guest's file where the journal
+   stopped, while the host's own camera and WAV become a second file (`host_<id>_resumed.*`).
    **Full WS reconnect rebuilds the PeerConnection; `startPeer` (`useRoom.ts`) calls
    `rebindGuestRecording` for the guest's connection to the host, which recreates the camera
    (and WAV, if present) recording DataChannels, `ChunkSender.rebind()`s the existing senders onto
@@ -566,11 +576,13 @@ unfinished send to each new connection to the host.
   `recordCapability` and the lobby's browser notes say so before anyone records.
   WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
   import, flaky Premiere), and WebM→MP4 needs a lossy transcode.
-- **Guest recording RAM is bounded** — `sha256.ts` streams (incremental, O(1)) and
-  `backup-recorder.ts` spills to OPFS, so guest memory is ~the 2s timeslice + the 32MiB retransmit
-  cap, not the recording length. Raising `RECORDING_VIDEO_BPS` is bounded by disk, not RAM. The only
-  buffer that grows on failure is the retransmit buffer, capped at 32MiB (beyond that,
-  BackupRecorder/OPFS only).
+- **Guest recording RAM is one timeslice, plus everything the host has not acked** — `sha256.ts`
+  streams (incremental, O(1)) and `backup-recorder.ts` spills to OPFS, so the recorder itself holds
+  one timeslice; but the retransmit buffer keeps every chunk that was not acked and reads no byte
+  cap, and a backed-up DataChannel does not pause the recorder. The only bound is
+  `STREAM_BACKLOG_CAP_BYTES` (256 MiB, `constants.ts`) checked in `ChunkSender.sendChunk`, after
+  which that stream is abandoned and the guest's backup keeps the rest. Raising
+  `RECORDING_VIDEO_BPS` is bounded by disk, not RAM.
 - `DiskFullError` surfaces as a `recordingError` **banner**, deliberately NOT `phase:'error'` —
   switching phase unmounts `CallStage`, which takes "End & save" with it, and that button is the
   only thing that closes the file handle. CallStage plays two short beeps and, if the tab is
@@ -623,6 +635,9 @@ unfinished send to each new connection to the host.
   shows "Press End & save to keep this recording", but its files stop at the takeover, and
   the rest of each guest's part exists only in that guest's backup. The new tab records
   only from its own new take.
+- **A resumed take's own track is two files, and openMeet does not join them.** The pre-crash part
+  is recovered from the take's backup and the rest is written to `host_<id>_resumed.*`; both are
+  listed with their offsets in `hostParts` and `aligned`, and an editor places them itself.
 - **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
   running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
   markers; takes started later include them. The WAV master is mic-only by design.
