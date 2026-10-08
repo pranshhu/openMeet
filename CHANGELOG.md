@@ -127,6 +127,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A returned backup that stalled is dismissed, and one still running stopped,
   while other transfers keep arriving, and a backup the host saved is announced
   at once instead of waiting for the rest.
+- Resuming a take no longer logs a database error on the server.
 
 ### Security
 

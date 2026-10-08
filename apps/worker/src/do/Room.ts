@@ -535,21 +535,33 @@ export class Room implements DurableObject {
           parsed.filename.length <= MAX_FILENAME_LENGTH &&
           (parsed.kind === 'camera' || parsed.kind === 'screen')
         ) {
+          // Counted before the insert so concurrent announcements cannot both
+          // pass the cap check; a row that never lands gives the seat back.
           this.recordingCount++;
           await this.saveSession();
-          await insertRecording(this.env.DB, {
-            id: parsed.recordingId,
-            session_id: this.sessionId,
-            participant_id: p.participantId,
-            kind: parsed.kind,
-            filename: parsed.filename,
-            total_bytes: 0,
-            last_offset: 0,
-            sha256: null,
-            status: 'recording',
-            started_at: Date.now(),
-            finalized_at: null,
-          }).catch((e) => console.error('room:insertRecording', e));
+          try {
+            const written = await insertRecording(this.env.DB, {
+              id: parsed.recordingId,
+              session_id: this.sessionId,
+              participant_id: p.participantId,
+              kind: parsed.kind,
+              filename: parsed.filename,
+              total_bytes: 0,
+              last_offset: 0,
+              sha256: null,
+              status: 'recording',
+              started_at: Date.now(),
+              finalized_at: null,
+            });
+            if (!written) {
+              this.recordingCount--;
+              await this.saveSession();
+            }
+          } catch (e) {
+            this.recordingCount--;
+            await this.saveSession();
+            console.error('room:insertRecording', e);
+          }
         }
         break;
       case 'recording-stop':

@@ -3,6 +3,7 @@ import { SELF, env } from 'cloudflare:test';
 import { runInDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
 import type { ServerMessage } from '@openmeet/protocol';
 import { Room } from '../src/do/Room.js';
+import { insertRecording } from '../src/db/queries.js';
 
 async function createRoom(ip?: string): Promise<{ slug: string; hostToken: string }> {
   const res = await SELF.fetch('https://test/api/rooms', {
@@ -914,7 +915,7 @@ describe('Room DO — D1 persistence', () => {
     ws.close();
   });
 
-  it('logs an error when insertRecording fails', async () => {
+  it('logs an error and takes the count back when insertRecording fails', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const { slug, hostToken } = await createRoom('10.0.19.99');
@@ -922,21 +923,15 @@ describe('Room DO — D1 persistence', () => {
       ws.send(JSON.stringify({ type: 'join', displayName: 'H', userAgent: 'ua' }));
       await waitForMessage(ws);
 
-      const session = await env.DB.prepare('SELECT id FROM sessions WHERE room_slug = ?')
-        .bind(slug)
-        .first<{ id: string }>();
-      const participant = await env.DB.prepare('SELECT id FROM participants WHERE session_id = ?')
-        .bind(session!.id)
-        .first<{ id: string }>();
-
-      const recordingId = crypto.randomUUID();
+      // A database that refuses this one row stands in for the real failures
+      // an insert can hit. A conflicting id no longer reaches the catch:
+      // resuming a take is not an error.
+      const recordingId = 'r-insert-refused';
       await env.DB.prepare(
-        `INSERT INTO recordings (id, session_id, participant_id, kind, filename,
-          total_bytes, last_offset, sha256, status, started_at, finalized_at)
-         VALUES (?, ?, ?, 'camera', 'pre-existing.mp4', 0, 0, NULL, 'recording', 1, NULL)`
-      )
-        .bind(recordingId, session!.id, participant!.id)
-        .run();
+        `CREATE TRIGGER refuse_take BEFORE INSERT ON recordings
+           WHEN NEW.id = '${recordingId}'
+           BEGIN SELECT RAISE(ABORT, 'refused'); END`
+      ).run();
 
       ws.send(
         JSON.stringify({
@@ -955,8 +950,16 @@ describe('Room DO — D1 persistence', () => {
       const matchingCall = errorSpy.mock.calls.find((c) => c[0] === 'room:insertRecording');
       expect(matchingCall, 'expected console.error with room:insertRecording').toBeDefined();
       expect(matchingCall![0]).toBe('room:insertRecording');
+
+      // No row was written, so the session must not have spent one.
+      const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(slug));
+      const stored = await runInDurableObject(stub, async (_instance, state) =>
+        state.storage.get<{ recordingCount?: number }>('session')
+      );
+      expect(stored?.recordingCount).toBe(0);
       ws.close();
     } finally {
+      await env.DB.prepare('DROP TRIGGER IF EXISTS refuse_take').run();
       errorSpy.mockRestore();
     }
   });
@@ -2011,6 +2014,131 @@ describe('Room DO — only a joined socket is in the room', () => {
     await until(async () => (await count(newSession!.id)) >= 1);
     expect(await count(newSession!.id)).toBe(1);
     host3.ws.close();
+  });
+
+  // A host that reloads mid-take resumes the file it was already writing and
+  // announces the SAME id again, because the guests follow one take. The row
+  // for that id already exists, so the second announcement must not insert a
+  // second one, must not log a database error, and must leave the first
+  // announcement's file name in place.
+  it('keeps the recording row and the first file name when a take is announced again', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const slug = 'rec-resu-mea';
+      await seedRoom(slug, 'tok-rec-resume');
+      const host = await enter(slug, 'H', { hostToken: 'tok-rec-resume' });
+      const guest = await enter(slug, 'G');
+      const rec = crypto.randomUUID();
+
+      host.ws.send(started(rec, { filename: 'host_first.mp4' }));
+      await until(() => ofType(guest.heard, 'recording-started').length >= 1);
+      host.ws.send(started(rec, { filename: 'host_second.mp4' }));
+      await until(() => ofType(guest.heard, 'recording-started').length >= 2);
+      await settle();
+
+      const session = await sessionOf(slug);
+      const rows = await env.DB.prepare('SELECT id, filename FROM recordings WHERE session_id = ?')
+        .bind(session!.id)
+        .all<{ id: string; filename: string }>();
+      expect(rows.results).toEqual([{ id: rec, filename: 'host_first.mp4' }]);
+      expect(errorSpy.mock.calls.filter((c) => c[0] === 'room:insertRecording')).toEqual([]);
+
+      // The resume still reaches the guests, or they never learn the take is
+      // running again.
+      expect(ofType(guest.heard, 'recording-started').filter((m) => m.recordingId === rec)).toHaveLength(2);
+      host.ws.close();
+      guest.ws.close();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  // The cap counts takes, and a resume is the same take. Spending a row on it
+  // would shorten the session every time a host reloads the tab.
+  it('does not spend a row from the session cap when a take is announced again', async () => {
+    const slug = 'rec-resu-cap';
+    await seedRoom(slug, 'tok-rec-resume-cap');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-resume-cap' });
+    const rec = crypto.randomUUID();
+
+    host.ws.send(started(rec, { filename: 'host_first.mp4' }));
+    const session = await sessionOf(slug);
+    const count = async () =>
+      (await env.DB.prepare('SELECT COUNT(*) AS n FROM recordings WHERE session_id = ?')
+        .bind(session!.id)
+        .first<{ n: number }>())!.n;
+    await until(async () => (await count()) === 1);
+
+    host.ws.send(started(rec, { filename: 'host_second.mp4' }));
+    await settle();
+    expect(await count()).toBe(1);
+
+    const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(slug));
+    const stored = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ recordingCount?: number }>('session')
+    );
+    expect(stored?.recordingCount).toBe(1);
+
+    // A different take still gets its row: the cap must not drift downward.
+    const next = crypto.randomUUID();
+    host.ws.send(started(next, { filename: 'host_next.mp4' }));
+    await until(async () => (await count()) === 2);
+    expect(await count()).toBe(2);
+    host.ws.close();
+  });
+
+  it('writes one row per distinct take id', async () => {
+    const slug = 'rec-twoo-ids';
+    await seedRoom(slug, 'tok-rec-two-ids');
+    const host = await enter(slug, 'H', { hostToken: 'tok-rec-two-ids' });
+    const first = crypto.randomUUID();
+    const second = crypto.randomUUID();
+
+    host.ws.send(started(first, { filename: 'host_a.mp4' }));
+    host.ws.send(started(second, { filename: 'host_b.mp4' }));
+
+    const session = await sessionOf(slug);
+    const rows = () =>
+      env.DB.prepare('SELECT id, filename FROM recordings WHERE session_id = ? ORDER BY filename')
+        .bind(session!.id)
+        .all<{ id: string; filename: string }>();
+    await until(async () => (await rows()).results.length === 2);
+    expect((await rows()).results).toEqual([
+      { id: first, filename: 'host_a.mp4' },
+      { id: second, filename: 'host_b.mp4' },
+    ]);
+    host.ws.close();
+  });
+
+  it('insertRecording reports whether it wrote the row', async () => {
+    const slug = 'ins-bool-aaa';
+    await seedRoom(slug, 'tok-ins-rec-bool');
+    const host = await enter(slug, 'H', { hostToken: 'tok-ins-rec-bool' });
+    const session = await sessionOf(slug);
+    const participant = await env.DB.prepare('SELECT id FROM participants WHERE session_id = ?')
+      .bind(session!.id)
+      .first<{ id: string }>();
+    const row = {
+      id: 'r-insert-bool',
+      session_id: session!.id,
+      participant_id: participant!.id,
+      kind: 'camera',
+      filename: 'host_bool.mp4',
+      total_bytes: 0,
+      last_offset: 0,
+      sha256: null,
+      status: 'recording',
+      started_at: Date.now(),
+      finalized_at: null,
+    };
+
+    expect(await insertRecording(env.DB, row)).toBe(true);
+    expect(await insertRecording(env.DB, { ...row, filename: 'host_again.mp4' })).toBe(false);
+    const stored = await env.DB.prepare('SELECT filename FROM recordings WHERE id = ?')
+      .bind(row.id)
+      .first<{ filename: string }>();
+    expect(stored?.filename).toBe('host_bool.mp4');
+    host.ws.close();
   });
 
   it('truncates an over-long displayName and userAgent in D1 and in peer-joined', async () => {

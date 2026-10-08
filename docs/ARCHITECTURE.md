@@ -172,6 +172,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `leave`→broadcast `peer-left` + close 1000.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture),
   but **persisted to D1 only by the host** (`insertRecording`, capped at 256 rows per session).
+  A take announced again under its own id — a host resuming after a reload — keeps the row it
+  already has, file name and start time from the first announcement, and spends no second slot.
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
   **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
   `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
