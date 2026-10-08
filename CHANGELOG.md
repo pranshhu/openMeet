@@ -89,6 +89,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- Browser storage that stops answering during a take no longer holds back the
+  guests' recordings: after 15 seconds crash protection stops for that file, the
+  call says so, and the recording carries on.
+- A guest file that continued after a host reload is checked against the right
+  bytes when browser storage was slow before the crash, instead of being
+  reported as damaged.
 - A lost fragment no longer leaves a silent hole in a live recording: the host
   asks the guest to resend from the last fragment it has.
 - Two screen shares starting at the same moment no longer write into one file.

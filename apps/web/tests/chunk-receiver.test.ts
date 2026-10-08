@@ -160,6 +160,119 @@ describe('ChunkReceiver', () => {
     expect(r.syncRttMs).toBeNull();
   });
 
+  it('hands onMeta the start and round trip it accepted, and nothing when it accepted neither', async () => {
+    const onMeta = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      onMeta,
+    });
+    const meta = (fields: object) =>
+      r.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'r1', ...fields }));
+
+    // Nothing usable: a start in the future, a round trip that is not a number.
+    await meta({ guestStartHostMs: Date.now() + 60_000, rttMs: 'fast' });
+    await r.handleMessage(
+      '{"type":"recording_meta","recordingId":"r1","guestStartHostMs":1e999,"rttMs":-1e999}'
+    );
+    await meta({});
+    expect(onMeta).not.toHaveBeenCalled();
+
+    const start = Date.now() - 500;
+    await meta({ guestStartHostMs: start, rttMs: 'fast' });
+    expect(onMeta).toHaveBeenCalledTimes(1);
+    expect(onMeta).toHaveBeenLastCalledWith({ guestStartHostMs: start, rttMs: null });
+
+    // A later message with only a usable round trip keeps the start already accepted.
+    await meta({ guestStartHostMs: Date.now() + 60_000, rttMs: 12 });
+    expect(onMeta).toHaveBeenCalledTimes(2);
+    expect(onMeta).toHaveBeenLastCalledWith({ guestStartHostMs: start, rttMs: 12 });
+    expect(onMeta.mock.calls[1]![0]).toEqual({
+      guestStartHostMs: r.guestStartHostMs,
+      rttMs: r.syncRttMs,
+    });
+  });
+
+  it('keeps the numbers it accepted, and does not reject, when onMeta throws', async () => {
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      onMeta: () => {
+        throw new Error('the notes could not be changed');
+      },
+    });
+    await expect(
+      r.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'r1', guestStartHostMs: 987654, rttMs: 42 })
+      )
+    ).resolves.toBeUndefined();
+    expect(r.guestStartHostMs).toBe(987654);
+    expect(r.syncRttMs).toBe(42);
+  });
+
+  it('accepts a guest start equal to the host clock and a zero rtt', async () => {
+    const onMeta = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      onMeta,
+    });
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await r.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'r1', guestStartHostMs: now, rttMs: 0 })
+      );
+      expect(r.guestStartHostMs).toBe(now);
+      expect(r.syncRttMs).toBe(0);
+      expect(onMeta).toHaveBeenCalledWith({ guestStartHostMs: now, rttMs: 0 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keeps a finite round trip even when it is negative', async () => {
+    const onMeta = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      onMeta,
+    });
+    // Finiteness alone decides: a negative measurement is still a number the
+    // guest reported, and the report is the only thing that reads it.
+    await r.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'r1', rttMs: -5 }));
+    expect(r.guestStartHostMs).toBeNull();
+    expect(r.syncRttMs).toBe(-5);
+    expect(onMeta).toHaveBeenCalledWith({ guestStartHostMs: null, rttMs: -5 });
+  });
+
+  it('takes only finite numbers for the start and round trip, not numeric strings', async () => {
+    const onMeta = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      onMeta,
+    });
+    // A string that reads as a number is still the wrong type from the peer,
+    // and a stored one would reach the crash copy's notes as text.
+    await r.handleMessage(
+      JSON.stringify({
+        type: 'recording_meta',
+        recordingId: 'r1',
+        guestStartHostMs: String(Date.now() - 500),
+        rttMs: '12',
+      })
+    );
+    expect(r.guestStartHostMs).toBeNull();
+    expect(r.syncRttMs).toBeNull();
+    expect(onMeta).not.toHaveBeenCalled();
+  });
+
   it('leaves senderSha256 unset when recording-finalized sha256 is not a string or exceeds 64 characters', async () => {
     const r1 = new ChunkReceiver({
       recordingId: 'r1',
@@ -2315,5 +2428,242 @@ describe('ChunkReceiver — journal-backed acks', () => {
     await settle();
     expect(journal.commit).toHaveBeenCalledTimes(1);
     expect(onWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the commit timer once a commit answers, and latches only itself when one does not', async () => {
+    const answered = fakeJournalFile();
+    const sent: string[] = [];
+    const r = receiver(answered, sent);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+    expect(acks(sent)).toHaveLength(1);
+    // A commit that answered left no timer ready to latch this file later.
+    expect(vi.getTimerCount()).toBe(0);
+
+    const silent = fakeJournalFile();
+    silent.commit = vi.fn(() => new Promise<void>(() => {}));
+    const warned: string[] = [];
+    const r2 = receiver(silent, [], () => warned.push('warned'));
+    await deliver(r2, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r2, 1, 4);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(warned).toEqual(['warned']);
+    // The latch belongs to this receiver: the take's other files keep their crash copy.
+    expect(silent.dead).toBe(false);
+  });
+
+  it('files under each index the hash state of exactly the fragments below it, however late the commit runs', async () => {
+    const frag = (i: number) => Uint8Array.from({ length: 100 }, (_, k) => (i * 31 + k) & 0xff);
+    const feed = async (to: ChunkReceiver, i: number) => {
+      await to.handleMessage(encodeChunkHeader({ idx: i, offset: i * 100, size: 100, ts: 0 }));
+      await to.handleMessage(frag(i).buffer);
+    };
+    const digestOfFirst = (count: number) => {
+      const h = new StreamingSha256();
+      for (let i = 0; i < count; i++) h.update(frag(i));
+      return h.digestHex();
+    };
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    const commits: { nextIdx: number; state: Sha256State }[] = [];
+    journal.commit = vi.fn((nextIdx: number, state?: Sha256State) => {
+      commits.push({ nextIdx, state: state! });
+      // The first commit is slow, the way storage is on a machine under load.
+      return commits.length === 1 ? gate.promise : Promise.resolve();
+    });
+    const r = receiver(journal, []);
+
+    await feed(r, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await feed(r, 1); // the first commit starts and stays in flight
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await feed(r, 2); // a commit for index 3 is queued behind it
+    await feed(r, 3); // these two arrive before that commit runs
+    await feed(r, 4);
+    gate.resolve();
+    await settle();
+
+    expect(commits.map((c) => c.nextIdx)).toEqual([2, 3]);
+    const late = commits[1]!;
+    expect(late.state.length).toBe(300);
+    expect(await StreamingSha256.fromJSON(late.state)!.digestHex()).toBe(await digestOfFirst(3));
+
+    // What a resume does with that state: the guest replays from index 3.
+    const resumed = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      resumeFrom: { nextIdx: 3, end: 500, sha256State: { nextIdx: late.nextIdx, ...late.state } },
+    });
+    expect(resumed.resumed).toBe(false);
+    for (const i of [3, 4, 5]) await feed(resumed, i);
+    expect(await resumed.digestHex()).toBe(await digestOfFirst(6));
+  });
+
+  it('ends crash protection for the file when a commit does not answer within 15 seconds', async () => {
+    const journal = fakeJournalFile();
+    journal.commit = vi.fn(() => new Promise<void>(() => {}));
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4); // this commit never answers
+    await vi.advanceTimersByTimeAsync(CHUNK_TIMESLICE_MS);
+    await deliver(r, 2, 8); // queued behind it
+    await vi.advanceTimersByTimeAsync(15_000 - CHUNK_TIMESLICE_MS - 1);
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(acks(sent)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledWith(
+      'Crash protection stopped for this take — browser storage would not take it.'
+    );
+    // Everything the folder holds, not only what the stalled commit covered.
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+
+    // From here the file is acknowledged on the folder write, like one with no crash copy.
+    for (let i = 3; i < 8; i++) await deliver(r, i, i * 4);
+    expect(journal.append).toHaveBeenCalledTimes(3);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toHaveLength(2);
+    expect(acks(sent)[1]).toMatchObject({ uptoIdx: 7, uptoOffset: 32 });
+
+    r.flushAck();
+    expect(acks(sent)).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps crash protection when a slow commit answers inside the 15 seconds', async () => {
+    const journal = fakeJournalFile();
+    const gate = deferred();
+    let calls = 0;
+    journal.commit = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? gate.promise : Promise.resolve();
+    });
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await vi.advanceTimersByTimeAsync(14_999);
+    await deliver(r, 2, 8);
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(onWarn).not.toHaveBeenCalled();
+    expect(journal.append).toHaveBeenCalledTimes(3);
+    expect(journal.commit).toHaveBeenCalledTimes(2);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+      { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
+    ]);
+  });
+
+  it('sends the fallback ack after a commit ran out of time even when the warning throws', async () => {
+    const journal = fakeJournalFile();
+    journal.commit = vi.fn(() => new Promise<void>(() => {}));
+    const sent: string[] = [];
+    const onWarn = vi.fn(() => {
+      throw new Error('the notice could not be shown');
+    });
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+
+    await deliver(r, 2, 8);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it('latches before the warning, so a notice that feeds the file again cannot reopen its crash copy', async () => {
+    const journal = fakeJournalFile();
+    journal.commit = vi.fn(() => new Promise<void>(() => {}));
+    const sent: string[] = [];
+    let r!: ChunkReceiver;
+    const onWarn = vi.fn(() => {
+      // The file is already latched while the notice runs, so a tail ack asked
+      // for from here takes the folder-write path instead of queueing a commit.
+      r.flushAck();
+    });
+    r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    // One ack from the flushAck in the notice, one from the fallback.
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+  });
+
+  it('warns and falls back when the journal was already dead before a commit could be queued', async () => {
+    const journal = fakeJournalFile();
+    journal.dead = true;
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+
+    // The commit resolves at once for a dead journal; the receiver still has to
+    // notice, tell the host, and ack the bytes the folder holds.
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledWith(
+      'Crash protection stopped for this take — browser storage would not take it.'
+    );
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
+    ]);
+  });
+
+  it('warns and falls back on a dead journal when only the tail ack is asked for', async () => {
+    const journal = fakeJournalFile();
+    journal.dead = true;
+    const sent: string[] = [];
+    const onWarn = vi.fn();
+    const r = receiver(journal, sent, onWarn);
+
+    await deliver(r, 0, 0);
+    r.flushAck();
+    await settle();
+
+    // flushAck is the only commit some files ever queue, and a dead journal
+    // must be reported there too rather than acking as if storage took it.
+    expect(journal.commit).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(acks(sent)).toEqual([
+      { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
+    ]);
   });
 });

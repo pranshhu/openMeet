@@ -12,7 +12,7 @@ import {
   type RecordingMeta,
 } from '@openmeet/protocol';
 import type { FileWriter } from './fs-writer';
-import { StreamingSha256 } from './sha256';
+import { StreamingSha256, type Sha256State } from './sha256';
 import { cleanFps } from './quality';
 import type { JournalFile } from './take-journal';
 
@@ -28,8 +28,14 @@ export interface ChunkReceiverOpts {
   maxBytes?: number;
   /** The take's crash copy for this file. Without it acks behave exactly as before. */
   journalFile?: JournalFile;
-  /** One message when the journal dies and the receiver falls back to acking the folder write. */
+  /** One message when the journal dies or a commit does not answer in time, and the receiver falls back to acking the folder write. */
   onWarn?: (msg: string) => void;
+  /**
+   * The guest's start on the host clock and the clock-sync round trip, as this
+   * receiver holds them after a `recording_meta` it took a value from; null for
+   * one it has not accepted. A guest can repeat the message: the last call wins.
+   */
+  onMeta?: (meta: { guestStartHostMs: number | null; rttMs: number | null }) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
   resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
 }
@@ -42,6 +48,9 @@ export const MAX_OFFSET_JUMP_BYTES = 64 * 1024 * 1024;
 /** Gap answers in a row that left the expected index where it was. */
 const GAP_ASKS_BEFORE_GIVING_UP = 5;
 
+/** How long one commit to the crash copy may take before this file goes on without one. */
+const COMMIT_TIMEOUT_MS = 15_000;
+
 export class ChunkReceiver {
   private readonly recordingId: string;
   private readonly writer: FileWriter;
@@ -50,6 +59,7 @@ export class ChunkReceiver {
   private readonly maxBytes: number | undefined;
   private readonly journalFile: JournalFile | undefined;
   private readonly onWarn: ((msg: string) => void) | undefined;
+  private readonly onMeta: ChunkReceiverOpts['onMeta'];
   /** The wire index the next accepted fragment must carry. Claimed before the write, since the next frame can arrive while it is pending. */
   private nextIdx = 0;
   /** When a gap was last answered with resume_offset, so one lost fragment cannot become a message per frame. */
@@ -73,9 +83,9 @@ export class ChunkReceiver {
   /** Zero until the first fragment arrives; stamped when a commit is queued, so a file commits at most once per timeslice. */
   private lastCommitAt = 0;
   /**
-   * Commits run one after another: the journal returns the commit already in
-   * flight to a second caller, and acking on that promise would cover bytes
-   * no part closed.
+   * Commits of this file run one after another: the next starts once the one
+   * before it has answered or run out of time, so each ack leaves in order
+   * and names only the bytes its own commit closed.
    */
   private commitChain: Promise<void> = Promise.resolve();
   private _bytesWritten = 0;
@@ -109,6 +119,7 @@ export class ChunkReceiver {
     this.maxBytes = opts.maxBytes;
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
+    this.onMeta = opts.onMeta;
     const from = opts.resumeFrom;
     // A position the journal could not have produced is no position: the take
     // then starts this file where it would have without one.
@@ -409,11 +420,17 @@ export class ChunkReceiver {
     // The guest reports its start on this clock, and started before it could
     // report: a later time is not a start. Left unset, the report says to align
     // by waveform rather than pad a file by an amount the sender made up.
-    if (Number.isFinite(m.guestStartHostMs) && m.guestStartHostMs <= Date.now()) {
-      this._guestStartHostMs = m.guestStartHostMs;
-    }
-    if (Number.isFinite(m.rttMs)) {
-      this._syncRttMs = m.rttMs;
+    const start = Number.isFinite(m.guestStartHostMs) && m.guestStartHostMs <= Date.now();
+    const rtt = Number.isFinite(m.rttMs);
+    if (start) this._guestStartHostMs = m.guestStartHostMs;
+    if (rtt) this._syncRttMs = m.rttMs;
+    if (!start && !rtt) return;
+    // The numbers are stored before anyone is told, and a listener that throws
+    // must not reject handleMessage: nothing awaits it.
+    try {
+      this.onMeta?.({ guestStartHostMs: this._guestStartHostMs, rttMs: this._syncRttMs });
+    } catch {
+      // The live report still reads the getters.
     }
   }
 
@@ -431,10 +448,14 @@ export class ChunkReceiver {
 
   /** Queue one commit behind any earlier one, so its ack covers exactly its own bytes. */
   private queueCommit(nextIdx: number, uptoOffset: number): void {
+    // Read with the index, not when the commit runs: a commit queued behind a
+    // slow one runs after later fragments were hashed, and the state filed
+    // under `nextIdx` must digest exactly the fragments below it.
+    const state = this.hash.toJSON();
     // commit() never rejects. A control send that does must not stop the next
     // commit, and must not surface from the finalize path's flushAck either.
     this.commitChain = this.commitChain
-      .then(() => this.commitAndAck(nextIdx, uptoOffset))
+      .then(() => this.commitAndAck(nextIdx, uptoOffset, state))
       .catch(() => {});
   }
 
@@ -442,10 +463,20 @@ export class ChunkReceiver {
    * Close the bytes gathered so far and acknowledge exactly them, not the
    * bytes that arrived while the commit was in flight.
    */
-  private async commitAndAck(nextIdx: number, uptoOffset: number): Promise<void> {
+  private async commitAndAck(nextIdx: number, uptoOffset: number, state: Sha256State): Promise<void> {
     if (this.journalDead) return;
-    await this.journalFile!.commit(nextIdx, this.hash.toJSON());
-    if (this.journalFile!.dead) {
+    // Storage that stops answering would hold back every later ack, and a guest
+    // that is never acknowledged gives its stream up. The wait is bounded, and
+    // running out of time ends the crash copy for this file like a dead journal.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = await Promise.race([
+      this.journalFile!.commit(nextIdx, state).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), COMMIT_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!answered || this.journalFile!.dead) {
       // The latch comes first: a warning callback that throws must not leave
       // the guest without the folder-write ack or the next commit unlatched.
       this.journalDead = true;

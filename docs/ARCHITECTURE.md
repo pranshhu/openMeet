@@ -334,8 +334,9 @@ unfinished send to each new connection to the host.
   and stops at its first refusal; acks every 5 chunks / 10s (with a journal file attached, after
   each journal commit instead, so an ack means the bytes are in a closed journal part; a commit
   window holds at most 8 separate runs of bytes, so a sender that scatters its offsets further is
-  acknowledged from the folder write for the runs the journal did not take; a journal that fails
-  falls back to the folder-write ack with one warning); `answerResume` replies
+  acknowledged from the folder write for the runs the journal did not take; a journal that fails,
+  or a commit that does not answer within 15 s, falls back to the folder-write ack for that file
+  with one warning, and the take goes on); `answerResume` replies
   `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
   where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
@@ -346,8 +347,9 @@ unfinished send to each new connection to the host.
   reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
   the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
-  so it stays idempotent / updatable. The running state is committed with the journal position it
-  describes, so a resumed file's digest still covers the whole take. Two independent digests
+  so it stays idempotent / updatable. The running state is read when a commit is queued, together
+  with the index it is filed under, and committed with that journal position, so a resumed file's
+  digest still covers the whole take. Two independent digests
   (guest=sent, host=written) compared at finalize for every guest file (camera, WAV, each screen
   segment).
 - `backup-recorder.ts`: a 2nd MediaRecorder over the same stream, on **both** host
@@ -389,7 +391,8 @@ unfinished send to each new connection to the host.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
-  `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta; at finalize the host
+  `recording_meta`. Host (`ChunkReceiver`) answers pings + captures the meta (and hands the pair it
+  accepted to its optional `onMeta`); at finalize the host
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
   the host start, with `sharer` display name on each entry, `callCopies.files[]`, each call-audio
