@@ -27,7 +27,8 @@ import { StatusScreen } from './StatusScreen';
  */
 export function recordCapability(
   role: string | null,
-  producer = false
+  producer = false,
+  notRecorded = false
 ): { canRecord: boolean; reason: string | null; blocked: boolean } {
   if (role === 'producer' || producer) {
     return {
@@ -36,6 +37,8 @@ export function recordCapability(
       reason: 'You’re a producer — you are watching and are not recorded.',
     };
   }
+  // The line under the status bar says it; "you’ll be captured automatically" would be false.
+  if (notRecorded && role !== 'host') return { canRecord: false, blocked: false, reason: null };
   if (!isRecordingSupported()) {
     return {
       canRecord: false,
@@ -89,7 +92,7 @@ export function RoomView({ slug }: { slug: string }) {
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
-  const record = recordCapability(state.role, producer);
+  const record = recordCapability(state.role, producer, state.notRecorded);
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
   // the next lobby. Rejoin reloads, so ask before any way out of the page.
@@ -283,6 +286,7 @@ export function RoomView({ slug }: { slug: string }) {
       screenSharing={state.screenSharing}
       canRecord={record.canRecord}
       roomRecording={state.peerRecording}
+      notRecorded={state.notRecorded}
       capabilities={state.capabilities}
       finalizingGuests={state.finalizingGuests}
       recordBlocked={record.blocked}

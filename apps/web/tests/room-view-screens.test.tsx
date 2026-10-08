@@ -445,6 +445,51 @@ describe('recording', () => {
       vi.useRealTimers();
     }
   });
+
+  // The room moved this viewer out of the take. The status bar says so, and it
+  // must not also promise that the viewer will be captured.
+  it('tells a guest the host set as not recorded what is left out', () => {
+    const guest = {
+      phase: 'in-call',
+      role: 'guest',
+      peerRecording: false,
+      notRecorded: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    };
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = { isTypeSupported: () => true };
+    try {
+      Object.assign(state, guest);
+      const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+      expect(
+        screen.getByText(
+          'The host has set you as not recorded — your camera, microphone, screen and chat messages are left out of the recording.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/captured automatically/)).toBeNull();
+      unmount();
+
+      // The control: with the same stub, an ordinary guest IS told it will be
+      // captured, so the absence above is the room's setting, not the stub.
+      Object.assign(state, guest, { notRecorded: false });
+      render(<RoomView slug="abc-defg-hij" />);
+      expect(screen.getByText(/captured automatically/)).toBeInTheDocument();
+    } finally {
+      delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    }
+  });
 });
 
 const inCall = {

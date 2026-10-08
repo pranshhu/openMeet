@@ -45,6 +45,32 @@ describe('recordCapability', () => {
     expect(res.reason).not.toMatch(/captured/i);
   });
 
+  // Guarded before the codec check: a guest the host left out of the recording
+  // has nothing to say about capture, even in a browser that can't record.
+  it('says nothing about capture to a guest the host set as not recorded', () => {
+    expect(recordCapability('guest', false, true)).toEqual({
+      canRecord: false,
+      blocked: false,
+      reason: null,
+    });
+  });
+
+  it('still tells a guest that will be captured that the host starts the recording', () => {
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = { isTypeSupported: () => true };
+    expect(recordCapability('guest')).toEqual({
+      canRecord: false,
+      blocked: false,
+      reason: 'The host starts the recording — you’ll be captured automatically.',
+    });
+  });
+
+  // The flag is about a guest the host left out; it must not turn the host's own
+  // path into a silent "nothing to record".
+  it('does not let the not-recorded flag short-circuit the host’s own path', () => {
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = { isTypeSupported: () => true };
+    expect(recordCapability('host', false, true).blocked).toBe(true);
+  });
+
   // No phone browser can write to a folder: naming a browser there sent
   // someone already in Chrome to Chrome.
   it('tells a host on a phone to record from a computer', () => {

@@ -134,6 +134,7 @@ export function CallStage({
   onSaveRecording,
   takeNotice,
   recoveryBusy = false,
+  notRecorded,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -221,6 +222,8 @@ export function CallStage({
   takeNotice?: string | null;
   /** A Resume or a Save of the interrupted take is running, so neither can be pressed, nor Record. */
   recoveryBusy?: boolean;
+  /** The host set this viewer as not recorded. */
+  notRecorded?: boolean;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -462,8 +465,12 @@ export function CallStage({
   const isHost = role === 'host';
   // Name tags truncate, so the one warning a host must not miss gets a line of its own.
   const unrecordable = isHost
-    ? remotePeers.filter((p) => capabilities[p.peerId]?.mp4 === false).map((p) => p.name ?? 'A guest')
+    ? remotePeers
+        .filter((p) => !p.notRecorded && capabilities[p.peerId]?.mp4 === false)
+        .map((p) => p.name ?? 'A guest')
     : [];
+  // Said to everyone, on a line of its own like the warning above: name tags truncate.
+  const notRecordedNames = remotePeers.filter((p) => p.notRecorded).map((p) => p.name ?? 'A guest');
   const phone = isPhone();
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
@@ -638,6 +645,18 @@ export function CallStage({
           {unrecordable.join(', ')} won’t be recorded — their browser can’t record MP4.
         </p>
       )}
+      {(notRecorded || notRecordedNames.length > 0) && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
+        >
+          {notRecorded &&
+            'The host has set you as not recorded — your camera, microphone, screen and chat messages are left out of the recording.'}
+          {notRecorded && notRecordedNames.length > 0 && ' '}
+          {notRecordedNames.length > 0 &&
+            `${notRecordedNames.join(', ')} ${notRecordedNames.length === 1 ? 'is' : 'are'} not being recorded.`}
+        </p>
+      )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {recordUnavailableReason}
@@ -779,7 +798,12 @@ export function CallStage({
                 With the teleprompter open (Record is its main moment) the top
                 band is its controls, so on desktop both toasts drop to the
                 stage's bottom centre, clear of the name tag and the PiP. */}
-            <RecordingNotice recording={roomRecording} host={role === 'host'} className={toastPlace} />
+            <RecordingNotice
+              recording={roomRecording}
+              host={role === 'host'}
+              notRecorded={!!notRecorded}
+              className={toastPlace}
+            />
             {/* Saving takes up to ~45 s while the last seconds arrive. Leave is
                 off until it finishes, so this says why and what to do. */}
             {phase === 'finalizing' && (

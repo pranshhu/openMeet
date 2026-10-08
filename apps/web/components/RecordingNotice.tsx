@@ -18,10 +18,13 @@ export const NOTICE_MS = 7000;
 export function RecordingNotice({
   recording,
   host,
+  notRecorded = false,
   className = 'top-3',
 }: {
   recording: boolean;
   host: boolean;
+  /** The host set this viewer as not recorded. */
+  notRecorded?: boolean;
   /** Where it sits in its positioned parent. */
   className?: string;
 }) {
@@ -44,13 +47,17 @@ export function RecordingNotice({
     <div className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 ${className}`}>
       <div
         role="alert"
-        className="flex items-center gap-3 rounded-full bg-[#ea4335] px-5 py-2.5 text-sm font-medium text-white shadow-2xl"
+        className="flex max-w-md items-center gap-3 rounded-3xl bg-[#ea4335] px-5 py-2.5 text-sm font-medium text-white shadow-2xl"
       >
         <span
           className="h-2.5 w-2.5 shrink-0 rounded-full bg-white"
           style={{ animation: 'om-rec-pulse 1.4s ease-in-out infinite' }}
         />
-        {host ? 'Recording started' : 'This call and chat are now being recorded'}
+        {host
+          ? 'Recording started'
+          : notRecorded
+            ? 'This call is now being recorded. Your camera, microphone, screen and chat are left out.'
+            : 'This call and chat are now being recorded'}
       </div>
     </div>
   );

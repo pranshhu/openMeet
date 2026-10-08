@@ -356,6 +356,143 @@ describe('CallStage recording-capability labels', () => {
     expect(screen.getByRole('img', { name: 'Sharing screen' })).toBeInTheDocument();
   });
 
+  // The line is said to everyone: a guest set as not recorded can be heard
+  // through someone else's microphone, so it is a state of the room, not a
+  // private setting.
+  it('tells every viewer which guest is not being recorded', () => {
+    const peers = [
+      { peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true },
+      { peerId: 'p-dan', name: 'Dan', stream: null },
+    ];
+    const { unmount } = render(<CallStage {...baseProps} role="guest" remotePeers={peers} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Carol is not being recorded.');
+    unmount();
+
+    render(<CallStage {...baseProps} role="host" remotePeers={peers} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Carol is not being recorded.');
+  });
+
+  it('lists two guests who are not being recorded as a plural', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        remotePeers={[
+          { peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true },
+          { peerId: 'p-dan', name: 'Dan', stream: null, notRecorded: true },
+        ]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Carol, Dan are not being recorded.');
+  });
+
+  it('calls a guest who joined with no name A guest', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        remotePeers={[{ peerId: 'p-carol', name: null, stream: null, notRecorded: true }]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('A guest is not being recorded.');
+  });
+
+  it('says nothing about not being recorded when nobody is set', () => {
+    render(<CallStage {...baseProps} role="guest" remotePeers={[{ peerId: 'p-dan', name: 'Dan', stream: null }]} />);
+    expect(screen.queryByText(/not being recorded|set you as not recorded/)).toBeNull();
+    // No empty line and no blank row either.
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('tells the viewer the host set as not recorded exactly what is left out', () => {
+    const copy =
+      'The host has set you as not recorded — your camera, microphone, screen and chat messages are left out of the recording.';
+    const { unmount } = render(<CallStage {...baseProps} role="guest" notRecorded />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+    unmount();
+
+    // After a take it was recorded in: its own capture is off, and the take
+    // that is running now leaves it out.
+    render(<CallStage {...baseProps} role="guest" phase="done" roomRecording notRecorded />);
+    expect(screen.getByRole('status')).toHaveTextContent(copy);
+  });
+
+  it('puts the viewer’s sentence and the others’ in one line, one space apart', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="guest"
+        notRecorded
+        remotePeers={[{ peerId: 'p-carol', name: 'Carol', stream: null, notRecorded: true }]}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'left out of the recording. Carol is not being recorded.'
+    );
+  });
+
+  it('tells the viewer set as not recorded what the running recording leaves out', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording notRecorded />);
+    expect(
+      screen.getByText('This call is now being recorded. Your camera, microphone, screen and chat are left out.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the consent toast as it was for a recorded guest and for the host', () => {
+    const { unmount } = render(<CallStage {...baseProps} role="guest" roomRecording />);
+    expect(screen.getByText('This call and chat are now being recorded')).toBeInTheDocument();
+    unmount();
+
+    render(<CallStage {...baseProps} role="host" roomRecording />);
+    expect(screen.getByText('Recording started')).toBeInTheDocument();
+  });
+
+  // The added sentence is longer than a phone's width, so the pill has to
+  // become the same soft card the finalizing toast uses.
+  it('lets the longer consent toast wrap as a card, not a pill', () => {
+    render(<CallStage {...baseProps} role="guest" roomRecording notRecorded />);
+    const alert = screen.getByRole('alert');
+    expect(alert.className).toMatch(/\bmax-w-md\b/);
+    expect(alert.className).toMatch(/\brounded-3xl\b/);
+    expect(alert.className).not.toMatch(/\brounded-full\b/);
+  });
+
+  it('does not warn the host about a guest they chose not to record', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null, notRecorded: true }]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    expect(screen.getByText('Bob is not being recorded.')).toBeInTheDocument();
+    expect(screen.queryByText('Bob won’t be recorded — their browser can’t record MP4.')).toBeNull();
+  });
+
+  // A state, not a problem: neutral colour, and after the yellow line a host
+  // must not miss.
+  it('keeps the not-recorded line neutral and after the capability warning', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        role="host"
+        remoteStream={{} as MediaStream}
+        remotePeers={[
+          { peerId: 'p1', name: 'Bob', stream: null },
+          { peerId: 'p2', name: 'Carol', stream: null, notRecorded: true },
+        ]}
+        capabilities={{ p1: { mp4: false, wav: true } }}
+      />
+    );
+    const warning = screen.getByText('Bob won’t be recorded — their browser can’t record MP4.');
+    const line = screen.getByText('Carol is not being recorded.');
+    expect(line.className).toMatch(/text-white\/80/);
+    expect(line.className).not.toMatch(/text-\[#fdd663\]/);
+    expect(warning.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('renders "Mark this moment" for guests during recording, but not "End & save recording"', () => {
     render(<CallStage {...baseProps} role="guest" phase="recording" />);
     expect(screen.getByLabelText(/Mark this moment/)).toBeInTheDocument();
