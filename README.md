@@ -420,7 +420,9 @@ crash copy, copies in the host's own camera file and WAV master from its backups
 writes `sync_<id>.json` and the chapters beside them. The last couple of seconds before
 the crash may be missing, and a guest's own backup still holds the rest — the participant
 copies are listed in the openMeet lobby with **Download**, or **Send to host** to return
-one while the host is in the room. While a take
+one while the host is in the room. If the guests are still in the call, the host does not
+have to save at all: **Resume recording** in the in-call notice continues the same take
+under its own id, and the guests' files carry on from where they stopped. While a take
 runs, the guests' bytes are also kept in this browser about every two seconds, so the copy
 is at most a couple of seconds behind; a take that cannot keep that copy says so on screen
 and records as usual. The copy is removed when the take ends cleanly, and kept for the

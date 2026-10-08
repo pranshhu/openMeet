@@ -3,7 +3,11 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom, MAX_RELAYED_MARKERS } from '@/hooks/useRoom';
 import { PeerConnection } from '@/lib/peer';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, type RecordingHandles } from '@/hooks/recording-controller';
+import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, resumeHostRecording, type RecordingHandles } from '@/hooks/recording-controller';
+import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
+import { isTakeLockHeld } from '@/lib/take-lock';
+import { saveRecoveredTake } from '@/lib/take-recovery';
+import { pickRecordingDirectory } from '@/lib/fs-writer';
 import { patchRecording } from '@/lib/api';
 import { buildSyncReport } from '@/lib/sync-report';
 import { bytesPerHour, presetById } from '@/lib/quality';
@@ -147,9 +151,28 @@ vi.mock('@/hooks/recording-controller', async () => {
     })),
     endHostRecording: vi.fn().mockResolvedValue({ backup: null }),
     startScreenRecording: vi.fn().mockResolvedValue(undefined),
+    resumeHostRecording: vi.fn(),
     collectFileChecks: vi.fn(actual.collectFileChecks),
     syncCallCopies: vi.fn(actual.syncCallCopies),
   };
+});
+
+vi.mock('@/lib/take-journal', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/take-journal')>('@/lib/take-journal');
+  return { ...actual, findTakeJournals: vi.fn().mockResolvedValue([]) };
+});
+
+vi.mock('@/lib/take-lock', () => ({
+  isTakeLockHeld: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('@/lib/take-recovery', () => ({
+  saveRecoveredTake: vi.fn(),
+}));
+
+vi.mock('@/lib/fs-writer', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/fs-writer')>('@/lib/fs-writer');
+  return { ...actual, pickRecordingDirectory: vi.fn() };
 });
 
 vi.mock('@/lib/sync-report', async () => {
@@ -3305,5 +3328,437 @@ describe('guest slots belong to the peers a host records', () => {
     expect(handles.guestSlots?.get('g')).toBe(0);
     expect(handles.channel).toBe(camera);
     expect(result.current.state.recordingError).toBeNull();
+  });
+});
+
+describe('resuming a crashed take from inside the call', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    vi.mocked(findTakeJournals).mockResolvedValue([]);
+    vi.mocked(isTakeLockHeld).mockResolvedValue(false);
+    vi.mocked(resumeHostRecording).mockReset();
+    vi.mocked(saveRecoveredTake).mockReset();
+    vi.mocked(pickRecordingDirectory).mockReset();
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  const guest = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' };
+
+  /** This browser's crash copy of the room's take, as findTakeJournals hands it back. */
+  function takeJournal(
+    over: {
+      notesOk?: boolean;
+      dead?: boolean;
+      room?: string;
+      take?: number;
+      recordingId?: string;
+      files?: TakeJournal['notes']['files'];
+    } = {}
+  ): TakeJournal {
+    return {
+      dirName: 'openmeet-take-1',
+      notes: {
+        room: over.room ?? 'xyz-test-room',
+        recordingId: over.recordingId ?? 'rec-1',
+        take: over.take ?? 1,
+        hostStartMs: 1_000_000,
+        files: over.files ?? [{ file: 'guest_rec.mp4', kind: 'camera', key: 'R1', slot: 0 }],
+        backups: [],
+        markers: [],
+      },
+      notesOk: over.notesOk ?? true,
+      dead: over.dead ?? false,
+      bytes: 0,
+    } as unknown as TakeJournal;
+  }
+
+  const stream = () =>
+    ({
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    }) as unknown as MediaStream;
+
+  /** A host back in the room after a reload: joined, told its role, nothing recording. */
+  async function hostAfterReload() {
+    const { result, unmount } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(stream(), 'Host Hana');
+    });
+    return { result, unmount };
+  }
+
+  /** The room's role-assigned, with the offer's storage lookups flushed. */
+  async function assignHost(over: Record<string, unknown> = {}) {
+    await act(async () => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [guest],
+        recording: false,
+        ...over,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  /** The real onDataChannel of the connection to the room's guest. */
+  function guestChannel(label: string) {
+    const channel = Object.assign(new EventTarget(), {
+      label,
+      readyState: 'open',
+      send: vi.fn(),
+      close: vi.fn(),
+    }) as unknown as RTCDataChannel;
+    act(() => {
+      vi.mocked(PeerConnection)
+        .mock.calls.map(([o]) => o)
+        .reverse()
+        .find((o) => o.remotePeerId === 'p-guest')!
+        .onDataChannel!(channel);
+    });
+    return channel;
+  }
+
+  const saved = (source: 'journal' | 'failed') => ({
+    name: 'guest_rec.mp4',
+    bytes: source === 'failed' ? 0 : 10,
+    source,
+  });
+
+  it('offers a resume after a reload only when this tab is idle and no other tab holds the take', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+
+    vi.mocked(isTakeLockHeld).mockResolvedValueOnce(true);
+    await assignHost();
+    expect(result.current.state.resumeOffer).toBeNull();
+
+    await assignHost();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+
+    guestChannel('recording#R1');
+    await vi.waitFor(() =>
+      expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: true })
+    );
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.resumeOffer).toBeNull();
+
+    await assignHost();
+    expect(result.current.state.resumeOffer).toBeNull();
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('is not offered to a guest, nor for another room, an unreadable or a dead journal', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([
+      takeJournal({ room: 'other-room' }),
+      takeJournal({ notesOk: false }),
+      takeJournal({ dead: true }),
+    ]);
+
+    await assignHost();
+    expect(result.current.state.resumeOffer).toBeNull();
+
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost({
+      role: 'guest',
+      peerId: 'p-guest',
+      peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+    });
+    expect(result.current.state.resumeOffer).toBeNull();
+  });
+
+  it('keeps a screen channel without offering it, and leaves the state alone while the offer stands', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+
+    // A screen channel carries the key of the guest's file, but a screen
+    // segment is never resumed, so the offer must not change — and an offer
+    // that does not change must not cost a render.
+    const before = result.current.state;
+    guestChannel('recording-screen-1#R1');
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+    expect(result.current.state).toBe(before);
+
+    guestChannel('recording#R1');
+    await vi.waitFor(() =>
+      expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: true })
+    );
+  });
+
+  it('replaces a rebinding channel instead of stacking it', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([
+      takeJournal({ files: [{ file: 'guest_rec.mp4', kind: 'camera', key: 'R2', slot: 0 }] }),
+    ]);
+    await assignHost();
+    vi.mocked(resumeHostRecording).mockResolvedValue({
+      recordingId: 'rec-1',
+      take: 1,
+      hostStartMs: 1_000,
+    });
+
+    guestChannel('recording#R1');
+    const other = guestChannel('recording#R2');
+    const rebound = guestChannel('recording#R1');
+
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+
+    const channels = vi.mocked(resumeHostRecording).mock.calls[0]![0].channels;
+    expect(channels).toHaveLength(2);
+    expect(channels[0]!.channel).toBe(other);
+    expect(channels[1]!.channel).toBe(rebound);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('normalises screen sequence numbers so repeated shares do not stack', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+
+    guestChannel('recording-screen-1#R1');
+    const screen2 = guestChannel('recording-screen-2#R1');
+
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+
+    const channels = vi.mocked(resumeHostRecording).mock.calls[0]![0].channels;
+    expect(channels).toHaveLength(1);
+    expect(channels[0]!.channel).toBe(screen2);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('binds only the most recent twelve pending channels', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    vi.mocked(resumeHostRecording).mockResolvedValue({
+      recordingId: 'rec-1',
+      take: 1,
+      hostStartMs: 1_000,
+    });
+
+    const sent = Array.from({ length: 14 }, (_, i) => guestChannel(`recording#R${i + 1}`));
+
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+
+    const channels = vi.mocked(resumeHostRecording).mock.calls[0]![0].channels;
+    expect(channels).toHaveLength(12);
+    expect(channels[0]!.channel).toBe(sent[2]);
+    expect(channels[11]!.channel).toBe(sent[13]);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('resumes the same take and re-announces its id', async () => {
+    const { result } = await hostAfterReload();
+    const journal = takeJournal();
+    vi.mocked(findTakeJournals).mockResolvedValue([journal]);
+    await assignHost();
+    guestChannel('recording#R1');
+    await vi.waitFor(() =>
+      expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: true })
+    );
+
+    vi.mocked(resumeHostRecording).mockResolvedValue({
+      recordingId: 'rec-1',
+      take: 1,
+      hostStartMs: 1_000,
+    });
+    signalSent = [];
+
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+
+    const args = vi.mocked(resumeHostRecording).mock.calls[0]![0];
+    expect(args.journal).toBe(journal);
+    expect(args.channels.map((c) => c.channel.label)).toEqual(['recording#R1']);
+    expect(signalSent).toContainEqual({
+      type: 'recording-started',
+      recordingId: 'rec-1',
+      kind: 'camera',
+      filename: 'host_rec-1.mp4',
+    });
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.peerRecording).toBe(true);
+    expect(result.current.state.resumeOffer).toBeNull();
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('saves what was recorded into the chosen folder and reports it', async () => {
+    const { result } = await hostAfterReload();
+    const journal = takeJournal();
+    vi.mocked(findTakeJournals).mockResolvedValue([journal]);
+    await assignHost();
+    const folder = fakeDirectory().dir;
+    vi.mocked(pickRecordingDirectory).mockResolvedValue(folder as never);
+    vi.mocked(saveRecoveredTake).mockResolvedValue({
+      files: [saved('journal'), saved('failed')],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+
+    await act(async () => {
+      await result.current.saveRecordingFromCall();
+    });
+
+    expect(vi.mocked(pickRecordingDirectory)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(saveRecoveredTake).mock.calls[0]![0]).toBe(journal);
+    expect(vi.mocked(saveRecoveredTake).mock.calls[0]![1]).toBe(folder);
+    expect(result.current.state.resumeOffer).toBeNull();
+    expect(result.current.state.takeNotice).toBe('Saved 1 file to your folder.');
+  });
+
+  it('starts no second save while the folder prompt is open', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+
+    let openPrompt: (dir: unknown) => void = () => {};
+    vi.mocked(pickRecordingDirectory).mockReturnValue(
+      new Promise((resolve) => {
+        openPrompt = resolve;
+      }) as never
+    );
+    vi.mocked(saveRecoveredTake).mockResolvedValue({
+      files: [saved('journal')],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+
+    let first = Promise.resolve();
+    let second = Promise.resolve();
+    await act(async () => {
+      first = result.current.saveRecordingFromCall();
+      second = result.current.saveRecordingFromCall();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(vi.mocked(pickRecordingDirectory)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      openPrompt(fakeDirectory().dir);
+      await first;
+      await second;
+    });
+    expect(vi.mocked(saveRecoveredTake)).toHaveBeenCalledTimes(1);
+    expect(result.current.state.takeNotice).toBe('Saved 1 file to your folder.');
+  });
+
+  it('keeps the offer when the sync file could not be written', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    vi.mocked(pickRecordingDirectory).mockResolvedValue(fakeDirectory().dir as never);
+    vi.mocked(saveRecoveredTake).mockResolvedValue({
+      files: [saved('journal')],
+      json: null,
+      chapters: false,
+    });
+
+    await act(async () => {
+      await result.current.saveRecordingFromCall();
+    });
+
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+    expect(result.current.state.takeNotice).toMatch(/The sync file could not be written\.$/);
+  });
+
+  it('changes nothing when the folder prompt is cancelled', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    vi.mocked(pickRecordingDirectory).mockRejectedValue(
+      Object.assign(new Error('cancelled'), { name: 'AbortError' })
+    );
+
+    await act(async () => {
+      await result.current.saveRecordingFromCall();
+    });
+
+    expect(vi.mocked(saveRecoveredTake)).not.toHaveBeenCalled();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+    expect(result.current.state.recordingError).toBeNull();
+
+    vi.mocked(resumeHostRecording).mockRejectedValueOnce(
+      Object.assign(new Error('cancelled'), { name: 'AbortError' })
+    );
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+    expect(result.current.state.recordingError).toBeNull();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+  });
+
+  it('clears the offer and the saved notice when a new take starts', async () => {
+    const { result } = await hostAfterReload();
+    vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+    await assignHost();
+    vi.mocked(pickRecordingDirectory).mockResolvedValue(fakeDirectory().dir as never);
+    vi.mocked(saveRecoveredTake).mockResolvedValue({
+      files: [saved('journal')],
+      json: 'sync_rec-1.json',
+      chapters: false,
+    });
+    await act(async () => {
+      await result.current.saveRecordingFromCall();
+    });
+    expect(result.current.state.takeNotice).toBe('Saved 1 file to your folder.');
+
+    await assignHost();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.resumeOffer).toBeNull();
+    expect(result.current.state.takeNotice).toBeNull();
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    await assignHost();
+    expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: false });
+    await act(async () => {
+      await result.current.saveRecordingFromCall();
+    });
+    expect(result.current.state.takeNotice).toBe('Saved 1 file to your folder.');
+
+    act(() => {
+      result.current.newTake();
+    });
+    expect(result.current.state.resumeOffer).toBeNull();
+    expect(result.current.state.takeNotice).toBeNull();
   });
 });

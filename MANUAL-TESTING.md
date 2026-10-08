@@ -103,6 +103,9 @@ kept saying "Recording".
 | 3.7 | Disk pressure | Fill the host disk to near-full, then record | A visible disk error — not a silent stop | ☐ | |
 | 3.8 | Return a backup | Guest records a take, host ends it, guest leaves, reopens the link, presses **Send to host** on the row and joins; host presses **Save to folder** | `backup_…mp4` and `backup_…json` in the folder; the mp4 plays; both sides say saved and verified | ☐ | |
 | 3.9 | Return a backup across a reconnect | During a large transfer, turn the guest's network off for 10 s | The transfer continues and still verifies | ☐ | |
+| 3.10 | Save from the lobby after a host crash | Record 30 s, close the host tab, reopen the room, press **Save to folder** on the **Unsaved recording** row | The guests' files and the host's own copies land in the folder with `sync_…json` beside them | ☐ | |
+| 3.11 | **Resume recording** | With the guests still connected, reload the host tab and press **Resume recording** in the in-call notice | The same take id is re-announced, and the host's copies of the guests' files continue from where they stopped | ☐ | |
+| 3.12 | Guest tab through the host's reload | Keep the guest tab open while the host reloads and resumes | The guest's next fragments land after the resume, and its own backup is untouched | ☐ | |
 
 ## 4 — Multiple takes
 

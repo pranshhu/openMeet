@@ -469,3 +469,34 @@ describe('returned backups', () => {
     expect(dismissBackup).toHaveBeenCalledWith(stalled[0]!.id);
   });
 });
+
+describe('interrupted take', () => {
+  it('hands the resume offer and its two actions to the call screen', () => {
+    const resumeRecording = vi.fn();
+    const saveRecordingFromCall = vi.fn();
+    Object.assign(hook, { resumeRecording, saveRecordingFromCall });
+    Object.assign(state, inCall, {
+      role: 'host',
+      resumeOffer: { take: 1, canResume: true },
+      takeNotice: null,
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume recording' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save what was recorded' }));
+
+    expect(resumeRecording).toHaveBeenCalledTimes(1);
+    expect(saveRecordingFromCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the saved line to the call screen', () => {
+    Object.assign(state, inCall, {
+      role: 'host',
+      resumeOffer: null,
+      takeNotice: 'Saved 1 file to your folder.',
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByText('Saved 1 file to your folder.')).toBeInTheDocument();
+  });
+});

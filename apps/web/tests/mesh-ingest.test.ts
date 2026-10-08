@@ -718,16 +718,17 @@ describe('host ingest keys guest slots by the channel-label key when present, no
 });
 
 /**
- * useRoom.ts keeps a `audioChannelsRef` map of a guest's WAV channel,
- * keyed by socket peerId, and binds every entry it holds when Record is
- * clicked. It used not to be cleared between takes. A guest mints a fresh
- * recordingId (the channel-label key) per take, so a dead take-1 channel left
- * in that map claims slot 0 in take 2 before the real take-2 channel arrives
- * — opening a WAV nobody writes, and pushing the guest's real files to slot 1.
+ * useRoom.ts keeps the recording channels that arrived while no take was
+ * running in one pending list, and binds every entry it holds when Record is
+ * clicked; a resume binds them instead. It used not to be cleared between
+ * takes. A guest mints a fresh recordingId (the channel-label key) per take,
+ * so a dead take-1 channel left pending claims slot 0 in take 2 before the
+ * real take-2 channel arrives — opening a WAV nobody writes, and pushing the
+ * guest's real files to slot 1.
  *
- * This models useRoom's exact sequence (map.set on channel arrival, bind-loop
- * at Record time, clear on newTake) with a plain Map standing in for the
- * private `audioChannelsRef`, using the real bindHostAudioChannel/
+ * This models useRoom's exact sequence (list append on channel arrival, bind at
+ * Record time, forgetting the list for the next take) with a plain Map standing
+ * in for the private pending list, using the real bindHostAudioChannel/
  * bindHostGuestChannel/guestSlot from recording-controller.ts. Driving the
  * actual useRoom hook end-to-end would additionally require mocking
  * SignalClient, PeerConnection, MediaManager, host-token, getTurnCred/getRoom
@@ -756,13 +757,13 @@ describe('a stale take-1 audio channel must not claim slot 0 in take 2', () => {
   }
 
   it('slot 0 goes to the real take-2 guest; nothing is ever opened for the dead take-1 key', async () => {
-    // Mirrors useRoom.ts's private audioChannelsRef: Map<peerId, RTCDataChannel>.
+    // Mirrors useRoom.ts's private pending list: one entry per guest and kind.
     const audioChannelsRef = new Map<string, RTCDataChannel>();
 
     // Take 1: the guest's WAV channel arrives and is stored (onDataChannel).
     audioChannelsRef.set('peer-a', fakeChannel('recording-audio#R1'));
 
-    // newTake(): the fix clears audioChannelsRef here.
+    // newTake(): forgetPreTakeGuestChannels empties the pending list here.
     audioChannelsRef.clear();
 
     // Take 2 starts with fresh handles (a new startHostRecording call).
@@ -771,7 +772,7 @@ describe('a stale take-1 audio channel must not claim slot 0 in take 2', () => {
     const h2 = await hostHandlesFor('rec2', opened, written);
 
     // Record is clicked for take 2 before the guest's new channels arrive —
-    // only whatever audioChannelsRef still holds gets bound here.
+    // only whatever the pending list still holds gets bound here.
     for (const [pid, ac] of audioChannelsRef) await bindHostAudioChannel(ac, h2, pid);
 
     // The guest's real take-2 channels then arrive via onDataChannel.

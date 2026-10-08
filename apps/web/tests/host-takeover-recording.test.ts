@@ -4,7 +4,7 @@ import {
   handleGuestRecordingStarted,
   recordingErrorOnPeerJoined,
 } from '@/hooks/useRoom';
-import type { RecordingHandles } from '@/hooks/recording-controller';
+import type { PendingRecordingChannel, RecordingHandles } from '@/hooks/recording-controller';
 
 describe('host takeover and take start channel handling', () => {
   it('channels arriving before a take starts are forgotten and not closed at take start', () => {
@@ -21,20 +21,21 @@ describe('host takeover and take start channel handling', () => {
       close: audioClose,
     } as unknown as RTCDataChannel;
 
-    const hostChannelRef = { current: staleVideoChannel as RTCDataChannel | null };
-    const audioChannelsRef = {
-      current: new Map<string, RTCDataChannel>([['peer-1', staleAudioChannel]]),
+    const pending = {
+      current: [
+        { channel: staleVideoChannel, peerId: 'peer-1' },
+        { channel: staleAudioChannel, peerId: 'peer-1' },
+      ] as PendingRecordingChannel[],
     };
 
-    forgetPreTakeGuestChannels(hostChannelRef, audioChannelsRef);
+    forgetPreTakeGuestChannels(pending);
 
     // Channels from before the take must NOT be closed (closing them stalls guest drain)
     expect(videoClose).not.toHaveBeenCalled();
     expect(audioClose).not.toHaveBeenCalled();
 
-    // Refs are cleared so take start cannot bind them to fresh receivers
-    expect(hostChannelRef.current).toBeNull();
-    expect(audioChannelsRef.current.size).toBe(0);
+    // The list is cleared so take start cannot bind them to fresh receivers
+    expect(pending.current).toEqual([]);
   });
 });
 

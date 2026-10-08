@@ -127,6 +127,10 @@ export function CallStage({
   onAcceptBackups,
   onDeclineBackups,
   onDismissBackup,
+  resumeOffer,
+  onResumeRecording,
+  onSaveRecording,
+  takeNotice,
 }: {
   role: Role | null;
   phase: 'in-call' | 'recording' | 'finalizing' | 'done';
@@ -204,6 +208,12 @@ export function CallStage({
   onDeclineBackups?: () => void;
   /** The host gave up on a dead returned backup. */
   onDismissBackup?: (id: string) => void;
+  /** A take in this room ended without its files and its crash copy is here. */
+  resumeOffer?: { take: number; canResume: boolean } | null;
+  onResumeRecording?: () => void;
+  onSaveRecording?: () => void;
+  /** One line after an interrupted take was saved from inside the call. */
+  takeNotice?: string | null;
 }) {
   const [micOn, setMicOn] = useState(
     () => (localStream ? localStream.getAudioTracks().some((t) => t.enabled) : true)
@@ -654,6 +664,28 @@ export function CallStage({
           className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
         >
           {batteryNote}
+        </p>
+      )}
+      {resumeOffer && (
+        <div role="status" className="mb-1 flex max-w-[92vw] flex-wrap items-center justify-center gap-x-2 gap-y-1 self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          <span>Recording was interrupted. This browser still has the take.</span>
+          {resumeOffer.canResume && (
+            <button
+              type="button"
+              onClick={onResumeRecording}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-7"
+            >
+              Resume recording
+            </button>
+          )}
+          <button type="button" onClick={onSaveRecording} className={guestLink}>
+            Save what was recorded
+          </button>
+        </div>
+      )}
+      {takeNotice && (
+        <p role="status" className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
+          {takeNotice}
         </p>
       )}
       {micNote && (

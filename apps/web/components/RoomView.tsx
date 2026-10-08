@@ -84,6 +84,7 @@ export function RoomView({ slug }: { slug: string }) {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, toggleScreenShare,
     startRecording, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, sendBackups,
+    resumeRecording, saveRecordingFromCall,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -283,6 +284,10 @@ export function RoomView({ slug }: { slug: string }) {
       wavBackupUrl={state.wavBackupBlobUrl}
       recordingError={state.recordingError ?? state.connectionWarning}
       micWarning={state.micWarning}
+      resumeOffer={state.resumeOffer}
+      takeNotice={state.takeNotice}
+      onResumeRecording={() => void resumeRecording()}
+      onSaveRecording={() => void saveRecordingFromCall()}
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}

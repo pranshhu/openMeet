@@ -64,6 +64,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   in the lobby and join. It travels peer-to-peer into the host's recording folder,
   is checked by SHA-256 and saved as `backup_<name>_<kind>_<time>` with a note on
   how to align it.
+- Coming back to a room where the guests are still connected, the host is offered
+  **Resume recording** to continue the interrupted take under the same id, or
+  **Save what was recorded** to rebuild it in the folder instead.
 
 ### Changed
 

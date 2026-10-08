@@ -1871,3 +1871,55 @@ describe('returned backups', () => {
     expect(onDeclineBackups).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('interrupted take notice', () => {
+  it('offers to continue the same take and to save what was recorded', () => {
+    const onResumeRecording = vi.fn();
+    const onSaveRecording = vi.fn();
+    render(
+      <CallStage
+        {...baseProps}
+        resumeOffer={{ take: 1, canResume: true }}
+        onResumeRecording={onResumeRecording}
+        onSaveRecording={onSaveRecording}
+      />
+    );
+
+    const notice = screen
+      .getByText('Recording was interrupted. This browser still has the take.')
+      .closest('[role="status"]');
+    expect(notice).not.toBeNull();
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: 'Resume recording' }));
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: 'Save what was recorded' }));
+    expect(onResumeRecording).toHaveBeenCalledTimes(1);
+    expect(onSaveRecording).toHaveBeenCalledTimes(1);
+  });
+
+  // The offer only appears when a pending channel would really continue a file,
+  // so with none there is one action, not a dead button.
+  it('offers only to save when nothing pending would continue the take', () => {
+    render(<CallStage {...baseProps} resumeOffer={{ take: 1, canResume: false }} />);
+
+    expect(
+      screen.getByText('Recording was interrupted. This browser still has the take.')
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Resume recording' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save what was recorded' })).toBeTruthy();
+  });
+
+  it('shows no notice when no take was interrupted', () => {
+    render(<CallStage {...baseProps} />);
+
+    expect(
+      screen.queryByText('Recording was interrupted. This browser still has the take.')
+    ).toBeNull();
+    expect(screen.queryByText('Save what was recorded')).toBeNull();
+  });
+
+  it('reports a take saved from inside the call as a status line', () => {
+    render(<CallStage {...baseProps} takeNotice="Saved 1 file to your folder." />);
+
+    expect(screen.getByText('Saved 1 file to your folder.').getAttribute('role')).toBe('status');
+    expect(screen.queryByText('Recording was interrupted. This browser still has the take.')).toBeNull();
+  });
+});
