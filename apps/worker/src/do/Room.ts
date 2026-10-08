@@ -590,6 +590,19 @@ export class Room implements DurableObject {
           fromPeerId: p.peerId,
         });
         break;
+      case 'peer-recorded': {
+        // The host's choice for the takes that follow. Refused from anyone else,
+        // and while a take is running, so who is recorded never changes under a
+        // capture already in progress.
+        if (p.role !== 'host' || this.recording || typeof parsed.recorded !== 'boolean') break;
+        const target = this.joinedPeers().find(({ p: pp }) => pp.peerId === parsed.peerId)?.p;
+        if (target?.role !== 'guest') break;
+        // To everyone, the host too: its screen follows this answer, not its own click.
+        for (const { ws: to } of this.joinedPeers()) {
+          this.send(to, { type: 'peer-recorded', peerId: target.peerId, recorded: parsed.recorded });
+        }
+        break;
+      }
     }
   }
 

@@ -94,6 +94,12 @@ export type ClientRecordingCapability = {
   note?: BrowserNote;
 };
 
+/**
+ * The host chooses whether one guest is recorded in the takes that follow.
+ * Acted on only from the host, and never while a take is running.
+ */
+export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
 export type ClientMessage =
   | ClientJoin
   | ClientWebrtcOffer
@@ -107,7 +113,8 @@ export type ClientMessage =
   | ClientMarker
   | ClientLeave
   | ClientPing
-  | ClientRecordingCapability;
+  | ClientRecordingCapability
+  | ClientPeerRecorded;
 
 export interface PeerInfo {
   peerId: string;
@@ -226,6 +233,12 @@ export type ServerRecordingCapability = {
   fromPeerId: string;
 };
 
+/**
+ * The Room's own answer to a host's ClientPeerRecorded, sent to every peer
+ * in the room, the host included. Not a relay: it carries no `from`.
+ */
+export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -242,7 +255,8 @@ export type ServerMessage =
   | ServerRoomClosed
   | ServerPong
   | ServerError
-  | ServerRecordingCapability;
+  | ServerRecordingCapability
+  | ServerPeerRecorded;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -258,6 +272,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'leave',
   'ping',
   'recording-capability',
+  'peer-recorded',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -277,6 +292,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'pong',
   'error',
   'recording-capability',
+  'peer-recorded',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {

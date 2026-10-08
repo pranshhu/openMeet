@@ -2377,4 +2377,119 @@ describe('Room DO — only a joined socket is in the room', () => {
     a.ws.close();
     idle.close();
   });
+
+  describe('not recorded', () => {
+    it("acts on only the host's request, and tells everyone", async () => {
+      const slug = 'pnr-host-aaa';
+      await seedRoom(slug, 'tok-pnr-host');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-host' });
+      const a = await enter(slug, 'A');
+      const b = await enter(slug, 'B');
+      const p = await enter(slug, 'P', { producer: true });
+
+      // Neither a guest's word nor a producer's counts, whoever it names.
+      b.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      p.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await settle();
+      for (const w of [h, a, b, p]) expect(ofType(w.heard, 'peer-recorded')).toEqual([]);
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      await until(() => [h, a, b, p].every((w) => ofType(w.heard, 'peer-recorded').length > 0));
+      for (const w of [h, a, b, p]) {
+        expect(ofType(w.heard, 'peer-recorded')).toEqual([
+          { type: 'peer-recorded', peerId: a.me.peerId, recorded: false },
+        ]);
+      }
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: true }));
+      await until(() => [h, a, b, p].every((w) => ofType(w.heard, 'peer-recorded').length > 1));
+      for (const w of [h, a, b, p]) {
+        expect(ofType(w.heard, 'peer-recorded').map((m) => m.recorded)).toEqual([false, true]);
+      }
+
+      [h.ws, a.ws, b.ws, p.ws].forEach((w) => w.close());
+    });
+
+    it('refuses a change to who is recorded while a take is running', async () => {
+      const slug = 'pnr-take-aaa';
+      await seedRoom(slug, 'tok-pnr-take');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-take' });
+      const a = await enter(slug, 'A');
+      const rec = crypto.randomUUID();
+
+      h.ws.send(started(rec));
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+      h.ws.send(JSON.stringify({ type: 'recording-stop', recordingId: rec }));
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+      expect(a.heard.map((m) => m.type)).toEqual([
+        'role-assigned',
+        'recording-started',
+        'recording-stop',
+        'peer-recorded',
+      ]);
+
+      [h.ws, a.ws].forEach((w) => w.close());
+    });
+
+    it('ignores a request that names nothing usable, without closing the socket', async () => {
+      const slug = 'pnr-ignr-aaa';
+      await seedRoom(slug, 'tok-pnr-ignore');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-ignore' });
+      const a = await enter(slug, 'A');
+      const p = await enter(slug, 'P', { producer: true });
+
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: 'no' }));
+      for (const peerId of ['nobody', h.me.peerId, p.me.peerId]) {
+        h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId, recorded: false }));
+      }
+      // A valid request on the same socket, after all of the above.
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: false }));
+
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+      await settle();
+
+      for (const w of [h, a, p]) {
+        expect(ofType(w.heard, 'peer-recorded')).toEqual([
+          { type: 'peer-recorded', peerId: a.me.peerId, recorded: false },
+        ]);
+        expect(ofType(w.heard, 'error')).toEqual([]);
+      }
+
+      [h.ws, a.ws, p.ws].forEach((w) => w.close());
+    });
+
+    it('tells only joined sockets, and names only a joined guest', async () => {
+      const slug = 'pnr-unjo-ina';
+      await seedRoom(slug, 'tok-pnr-unjoined');
+      const h = await enter(slug, 'H', { hostToken: 'tok-pnr-unjoined' });
+      const a = await enter(slug, 'A');
+      const lurker = await openWs(slug);
+      const idle = collect(lurker);
+      const lurkerId = await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (_i, state) =>
+        state
+          .getWebSockets()
+          .map((ws) => (ws.deserializeAttachment() as { peerId: string }).peerId)
+          .find((id) => id !== h.me.peerId && id !== a.me.peerId)!
+      );
+
+      // A socket that never joined is not in the room, so it can neither be
+      // named nor told.
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: lurkerId, recorded: false }));
+      h.ws.send(JSON.stringify({ type: 'peer-recorded', peerId: a.me.peerId, recorded: true }));
+
+      await until(() => ofType(a.heard, 'peer-recorded').length > 0);
+      await settle();
+      for (const w of [h, a]) {
+        expect(ofType(w.heard, 'peer-recorded')).toEqual([
+          { type: 'peer-recorded', peerId: a.me.peerId, recorded: true },
+        ]);
+      }
+      expect(idle).toEqual([]);
+
+      [h.ws, a.ws].forEach((w) => w.close());
+      lurker.close();
+    });
+  });
 });

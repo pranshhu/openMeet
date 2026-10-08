@@ -64,10 +64,12 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (13 variants) ↔ `ServerMessage` (16).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (14 variants) ↔ `ServerMessage` (17).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
-  `fromPeerId` on all but `recording-started|stop`. SDP/ICE take an optional `to` (peerId) so
+  `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
+  **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
+  no `from`. SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -185,6 +187,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
   **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
   `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
+- `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
+  joined guest; the DO then sends `peer-recorded` to every joined peer, the host included.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps

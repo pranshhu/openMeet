@@ -67,6 +67,11 @@ describe('ws-messages type guards', () => {
     ).toBe(true);
   });
 
+  it('identifies peer-recorded on both the client and server unions', () => {
+    expect(isClientMessage({ type: 'peer-recorded', peerId: 'p1', recorded: false })).toBe(true);
+    expect(isServerMessage({ type: 'peer-recorded', peerId: 'p1', recorded: false })).toBe(true);
+  });
+
   it('defines WS_CLOSE_REPLACED as 4006', () => {
     expect(WS_CLOSE_REPLACED).toBe(4006);
   });
