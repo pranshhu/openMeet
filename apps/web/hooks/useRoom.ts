@@ -659,6 +659,7 @@ export function useRoom(slug: string) {
   const camOnRef = useRef(true);
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
+  const incomingVideoOffRef = useRef(false);
   const companionRef = useRef(false);
   // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
   // which read refs.
@@ -1203,6 +1204,7 @@ export function useRoom(slug: string) {
           p.setPeerCount(count);
           // Off is a connection's default, so only a mode that is on needs telling.
           if (lowPowerRef.current) p.setLowPower(true);
+          if (incomingVideoOffRef.current) p.setIncomingVideoOff(true);
         }
       };
 
@@ -2191,6 +2193,7 @@ export function useRoom(slug: string) {
 
   /** Stop taking everyone else's video, or take it again, on every connection. */
   const setIncomingVideoOff = useCallback((off: boolean) => {
+    incomingVideoOffRef.current = off;
     for (const p of peersRef.current.values()) p.setIncomingVideoOff(off);
     setState((s) => ({ ...s, incomingVideoOff: off }));
   }, []);

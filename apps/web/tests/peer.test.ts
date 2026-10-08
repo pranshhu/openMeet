@@ -403,4 +403,42 @@ describe('PeerConnection.setIncomingVideoOff', () => {
     peer.setIncomingVideoOff(true);
     expect(directions()[3]).toBe('stopped');
   });
+
+  // The directions as they stand when a local description is made: that is
+  // what the offer or the answer carries to the other side.
+  function described(pc: FakePC) {
+    const seen: string[][] = [];
+    const real = pc.setLocalDescription.bind(pc);
+    pc.setLocalDescription = async (desc) => {
+      seen.push(pc.transceivers.map((x) => x.direction));
+      await real(desc);
+    };
+    return seen;
+  }
+
+  it('answers an offer that brings a new video with that video already turned down', async () => {
+    const { peer, pc } = setup(true);
+    peer.start();
+    peer.setIncomingVideoOff(true);
+    // Applying a remote offer is what creates the transceivers on this side.
+    const apply = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (desc) => {
+      pc.transceivers = [t('audio', 'recvonly'), t('video', 'recvonly')];
+      await apply(desc);
+    };
+    const seen = described(pc);
+    await peer.handleSignal({ type: 'webrtc-offer', sdp: 'remote-offer', from: 'guest', fromPeerId: 'p-guest' });
+    expect(seen).toEqual([['recvonly', 'inactive']]);
+  });
+
+  it('offers a camera added while it is off as send-only', async () => {
+    const { peer, pc } = setup(false);
+    peer.start();
+    peer.setIncomingVideoOff(true);
+    // What addTrack leaves behind for a microphone and a camera.
+    pc.transceivers = [t('audio', 'sendrecv'), t('video', 'sendrecv')];
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toEqual([['sendrecv', 'sendonly']]);
+  });
 });

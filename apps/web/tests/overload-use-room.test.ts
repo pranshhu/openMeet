@@ -345,3 +345,67 @@ describe('useRoom.setIncomingVideoOff', () => {
     expect(startHostRecording).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useRoom.setIncomingVideoOff, for a connection that opens later', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    peers = [];
+    vi.stubGlobal('MediaStream', FakeStream);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('tells it, and only while incoming video is off', async () => {
+    const { result } = await joinAs('host', []);
+
+    act(() => {
+      emit('peer-joined', { peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' });
+    });
+    expect(peers).toHaveLength(1);
+    expect(peers[0].setIncomingVideoOff).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.setIncomingVideoOff(true);
+    });
+    act(() => {
+      emit('peer-joined', { peerId: 'g2', ordinal: 3, role: 'guest', displayName: 'B' });
+    });
+    expect(peers).toHaveLength(2);
+    expect(peers[1].setIncomingVideoOff).toHaveBeenCalledWith(true);
+
+    act(() => {
+      result.current.setIncomingVideoOff(false);
+    });
+    act(() => {
+      emit('peer-joined', { peerId: 'g3', ordinal: 4, role: 'guest', displayName: 'C' });
+    });
+    expect(peers).toHaveLength(3);
+    expect(peers[2].setIncomingVideoOff).not.toHaveBeenCalled();
+  });
+
+  it('tells every connection rebuilt after this tab reconnects', async () => {
+    const { result } = await joinAs('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+    act(() => {
+      result.current.setIncomingVideoOff(true);
+    });
+
+    // A reconnect is answered with role-assigned again. After a Room restart
+    // everyone is back under a new peer id.
+    act(() => {
+      emit('role-assigned', {
+        role: 'guest',
+        peerId: 'me-2',
+        ordinal: 9,
+        peers: [{ peerId: 'h-2', ordinal: 1, role: 'host', displayName: 'h' }],
+        recording: false,
+      });
+    });
+
+    expect(peers).toHaveLength(2);
+    expect(peers[1].setIncomingVideoOff).toHaveBeenCalledWith(true);
+    expect(result.current.state.incomingVideoOff).toBe(true);
+  });
+});

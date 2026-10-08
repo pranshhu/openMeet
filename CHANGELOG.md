@@ -113,7 +113,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   shared screen are unchanged.
 - **Stop incoming video**, in the call's camera menu, for a weak connection: the
   other participants stop sending you their camera and shared screen. You still
-  hear everyone, they still see you, and no recording is affected.
+  hear everyone, they still see you, and no recording is affected. It stays off
+  for someone who joins later, after a reconnect, and for a screen share that
+  starts while it is on.
 
 ### Changed
 

@@ -98,6 +98,9 @@ export class PeerConnection {
     pc.onnegotiationneeded = async () => {
       try {
         this.makingOffer = true;
+        // A track added while incoming video is off brings a transceiver that
+        // would ask for the other side's video; the offer must not carry that.
+        if (this.incomingVideoOff) this.applyIncomingVideo();
         await pc.setLocalDescription();
         const sdp = pc.localDescription?.sdp ?? '';
         this.opts.sendSignal({ type: 'webrtc-offer', sdp, ...this.addr() });
@@ -495,6 +498,10 @@ export class PeerConnection {
     await pc.setRemoteDescription(description as RTCSessionDescriptionInit);
     await this.flushPendingCandidates();
     if (description.type === 'offer') {
+      // The offer may have brought a new video (someone joined, or started to
+      // share a screen). Turned down here, the answer itself says so and the
+      // other side never starts sending it.
+      if (this.incomingVideoOff) this.applyIncomingVideo();
       await pc.setLocalDescription();
       const sdp = pc.localDescription?.sdp ?? '';
       this.opts.sendSignal({ type: 'webrtc-answer', sdp, ...this.addr() });
