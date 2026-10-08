@@ -4,7 +4,7 @@ import {
   RECORDING_AUDIO_BPS,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
-import { presetForTrack } from './quality';
+import { cameraVideoBps } from './quality';
 
 type MrFactory = (stream: MediaStream, opts: MediaRecorderOptions) => MediaRecorder;
 
@@ -394,9 +394,10 @@ export class BackupRecorder {
     const mr = factory(this.opts.stream, {
       mimeType: this.opts.mimeType ?? RECORDING_MIME,
       // Sized like the file this backs up: the preset for the camera's real
-      // resolution. A backup at another bitrate is not a stand-in for the take,
-      // and the lobby's storage estimate assumes the two match.
-      videoBitsPerSecond: presetForTrack(this.opts.stream.getVideoTracks?.()[0]).videoBps,
+      // resolution, at the level joined with. A backup at another bitrate is not
+      // a stand-in for the take, and the lobby's storage estimate assumes the
+      // two match.
+      videoBitsPerSecond: cameraVideoBps(this.opts.stream.getVideoTracks?.()[0]),
       audioBitsPerSecond: this.opts.audioBitsPerSecond ?? RECORDING_AUDIO_BPS,
     });
     this.mr = mr;

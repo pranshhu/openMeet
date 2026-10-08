@@ -10,7 +10,7 @@ import { ChunkSender } from '@/lib/chunk-sender';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { BackupRecorder, type OpfsRootGetter } from '@/lib/backup-recorder';
 import { ClockSync } from '@/lib/clock-sync';
-import { presetForTrack } from '@/lib/quality';
+import { cameraVideoBps, presetForTrack } from '@/lib/quality';
 import {
   DATA_CHANNEL_RECORDING,
   DATA_CHANNEL_RECORDING_AUDIO,
@@ -599,7 +599,7 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
       // From the ACTUAL negotiated resolution: capture constraints are `ideal`, so
       // a camera that quietly degraded would otherwise be encoded at a bitrate
       // sized for a frame it never produced.
-      videoBitsPerSecond: presetForTrack(args.localStream.getVideoTracks()[0]).videoBps,
+      videoBitsPerSecond: cameraVideoBps(args.localStream.getVideoTracks()[0]),
       // Fire-and-forget by design (ordering is preserved by FileWriter's write
       // chain), but a rejection must still reach the UI rather than vanish.
       onChunk: (c) => { hw.write(c.header.offset, c.payload).catch((e) => args.onError?.(e)); },
@@ -844,7 +844,7 @@ async function startResumedHostTracks(
   h.hostRecorder = new ChunkRecorder({
     mimeType,
     stream: args.localStream,
-    videoBitsPerSecond: presetForTrack(args.localStream.getVideoTracks()[0]).videoBps,
+    videoBitsPerSecond: cameraVideoBps(args.localStream.getVideoTracks()[0]),
     onChunk: (c) => { hw.write(c.header.offset, c.payload).catch((e) => args.onError?.(e)); },
     ...(args.onError ? { onError: args.onError } : {}),
   });
@@ -1203,7 +1203,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
   const guestRecorder = new ChunkRecorder({
     mimeType,
     stream: args.localStream,
-    videoBitsPerSecond: presetForTrack(args.localStream.getVideoTracks()[0]).videoBps,
+    videoBitsPerSecond: cameraVideoBps(args.localStream.getVideoTracks()[0]),
     onChunk: (c) => sender.sendChunk(c),
     ...(args.onError ? { onError: args.onError } : {}),
   });

@@ -89,10 +89,10 @@ export function supportedPresets(track: MediaStreamTrack | undefined): QualityPr
 /**
  * The preset matching a live track's ACTUAL resolution.
  *
- * Recording reads the encode bitrate from here rather than from the user's
- * choice, so a camera that silently degraded (constraints are `ideal`) gets the
- * bitrate its real resolution deserves instead of one sized for a frame it never
- * produced. Nothing has to be threaded from the Lobby to the recorder.
+ * Recording sizes its bitrate from here rather than from the resolution the
+ * user asked for, so a camera that silently degraded (constraints are `ideal`)
+ * gets the bitrate its real resolution deserves instead of one sized for a
+ * frame it never produced.
  */
 export function presetForTrack(track: MediaStreamTrack | undefined): QualityPreset {
   const h = track?.getSettings?.().height;
@@ -102,6 +102,64 @@ export function presetForTrack(track: MediaStreamTrack | undefined): QualityPres
     if (Math.abs(p.height - h) < Math.abs(best.height - h)) best = p;
   }
   return best;
+}
+
+/**
+ * How hard the encoder is pushed at a given resolution: a factor on the
+ * preset's bitrate, so every resolution has the same steps.
+ */
+export interface BitrateLevel {
+  id: string;
+  label: string;
+  factor: number;
+}
+
+export const BITRATE_LEVELS: BitrateLevel[] = [
+  { id: 'standard', label: 'Standard', factor: 1 },
+  { id: 'high', label: 'High', factor: 1.5 },
+  { id: 'max', label: 'Maximum', factor: 2 },
+];
+
+export const DEFAULT_BITRATE_ID = 'standard';
+
+/**
+ * Ceiling for every level: what the 4K preset already asks, so no level puts
+ * more through a guest's recording channel than a preset does. A guest's
+ * stream is abandoned once STREAM_BACKLOG_CAP_BYTES are waiting for an ack,
+ * so the bitrate decides how long a stalled link is ridden out: about 85 s
+ * here, less for every bit above it.
+ */
+export const MAX_VIDEO_BPS = 25_000_000;
+
+/** The levels a preset can use without passing the ceiling. */
+export function bitrateLevels(p: QualityPreset): BitrateLevel[] {
+  return BITRATE_LEVELS.filter((l) => p.videoBps * l.factor <= MAX_VIDEO_BPS);
+}
+
+/**
+ * The preset at a bitrate level: the same frame, more bits. A level the
+ * preset cannot use, or an id nobody defined, leaves it at Standard.
+ */
+export function atBitrate(p: QualityPreset, levelId: string): QualityPreset {
+  const level = bitrateLevels(p).find((l) => l.id === levelId);
+  return level ? { ...p, videoBps: p.videoBps * level.factor } : p;
+}
+
+// The level this tab joined with. Held here rather than read back from
+// storage, so the recorder uses what the lobby showed even where storage is
+// blocked or another tab picked differently.
+let joinedBitrateId = DEFAULT_BITRATE_ID;
+
+export function chooseBitrate(levelId: string): void {
+  joinedBitrateId = levelId;
+}
+
+/**
+ * Encode bitrate for a camera recording and its backup: the preset for the
+ * track's real resolution, at the level joined with.
+ */
+export function cameraVideoBps(track: MediaStreamTrack | undefined): number {
+  return atBitrate(presetForTrack(track), joinedBitrateId).videoBps;
 }
 
 /** Human-readable actual capture format, for the lobby and the summary screen. */

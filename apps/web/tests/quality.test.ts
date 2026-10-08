@@ -1,8 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { RECORDING_AUDIO_BPS, STREAM_BACKLOG_CAP_BYTES } from '@openmeet/protocol';
 import {
   QUALITY_PRESETS, presetById, presetForTrack, supportedPresets,
   bytesPerHour, formatPerHour, describeTrack, DEFAULT_QUALITY_ID,
   cleanFps, frameRateFrom,
+  DEFAULT_BITRATE_ID, atBitrate, bitrateLevels, cameraVideoBps, chooseBitrate,
+  BITRATE_LEVELS,
 } from '@/lib/quality';
 
 const track = (caps?: Partial<MediaTrackCapabilities>, settings?: Partial<MediaTrackSettings>) =>
@@ -63,6 +66,56 @@ describe('presetForTrack', () => {
 
   it('defaults when the track reports nothing', () => {
     expect(presetForTrack(undefined).id).toBe(DEFAULT_QUALITY_ID);
+  });
+});
+
+describe('bitrate levels', () => {
+  afterEach(() => chooseBitrate(DEFAULT_BITRATE_ID));
+
+  // First in the block, so it reads the level the module starts with.
+  it('gives a camera track its preset at the level joined with', () => {
+    expect(cameraVideoBps(track(undefined, { height: 720 }))).toBe(2_500_000);
+    chooseBitrate('high');
+    expect(cameraVideoBps(track(undefined, { height: 720 }))).toBe(3_750_000);
+  });
+
+  it('multiplies the preset bitrate by the level', () => {
+    const p = presetById('1080p');
+    expect(atBitrate(p, 'standard').videoBps).toBe(5_000_000);
+    expect(atBitrate(p, 'high').videoBps).toBe(7_500_000);
+    expect(atBitrate(p, 'max').videoBps).toBe(10_000_000);
+  });
+
+  it('leaves an unknown level at Standard', () => {
+    const p = presetById('1080p');
+    expect(atBitrate(p, 'nope')).toEqual(p);
+  });
+
+  it('offers no level past the ceiling', () => {
+    expect(bitrateLevels(presetById('4k')).map((l) => l.id)).toEqual(['standard']);
+    expect(atBitrate(presetById('4k'), 'max').videoBps).toBe(25_000_000);
+    for (const p of QUALITY_PRESETS) expect(bitrateLevels(p)[0]?.id).toBe('standard');
+  });
+
+  // A guest's stream is abandoned once the backlog cap is waiting for an ack.
+  // The 4K preset rides out 85 s of a stalled link; no level may do worse.
+  it('keeps every offered bitrate inside what the recording channel is sized for', () => {
+    for (const p of QUALITY_PRESETS) {
+      for (const l of bitrateLevels(p)) {
+        const bytesPerSec = (atBitrate(p, l.id).videoBps + RECORDING_AUDIO_BPS) / 8;
+        expect(STREAM_BACKLOG_CAP_BYTES / bytesPerSec).toBeGreaterThanOrEqual(80);
+      }
+    }
+  });
+
+  // The picker and the recorder both read this list, so ids, labels and steps
+  // are a contract: a later slice shows the labels and joins by the id.
+  it('offers Standard, High and Maximum as the three steps', () => {
+    expect(BITRATE_LEVELS.map((l) => [l.id, l.label, l.factor])).toEqual([
+      ['standard', 'Standard', 1],
+      ['high', 'High', 1.5],
+      ['max', 'Maximum', 2],
+    ]);
   });
 });
 
