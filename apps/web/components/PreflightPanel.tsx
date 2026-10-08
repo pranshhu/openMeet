@@ -9,7 +9,7 @@ import {
   codecCheck, connectionCheck, diskCheck, folderCheck, micCheck, overallLevel, probeIce, wavCheck,
   type Check, type CheckLevel,
 } from '@/lib/preflight';
-import { atBitrate, presetById } from '@/lib/quality';
+import { atBitrate, presetAt, presetById } from '@/lib/quality';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
 
@@ -28,6 +28,7 @@ export function PreflightPanel({
   stream,
   qualityId,
   bitrateId,
+  frameRate,
   isHost,
   onLevel,
 }: {
@@ -36,6 +37,8 @@ export function PreflightPanel({
   qualityId: string;
   /** Bitrate level id; the storage and folder figures are for the preset at this level. */
   bitrateId: string;
+  /** What the camera delivers; 50 and 60 fps cost more per hour. */
+  frameRate?: number | null | undefined;
   isHost?: boolean;
   /** The worst level across the checks, whenever it changes. */
   onLevel?: (level: CheckLevel) => void;
@@ -80,15 +83,16 @@ export function PreflightPanel({
   }, [stream]);
 
   useEffect(() => {
-    const preset = atBitrate(presetById(qualityId), bitrateId);
+    const preset = presetAt(atBitrate(presetById(qualityId), bitrateId), frameRate);
     void navigator.storage
       ?.estimate?.()
       .then((e) => setDisk(diskCheck(e.quota, e.usage, preset, host)))
       .catch(() => setDisk(diskCheck(undefined, undefined, preset, host)));
     // `host` is false on the first render and set by Lobby's own effect, so the
     // check has to re-run when it arrives — a host's disk line differs. The two
-    // ids are strings: atBitrate returns a new object and would re-run per frame.
-  }, [qualityId, bitrateId, host]);
+    // ids and the rate are primitives: atBitrate and presetAt return new objects
+    // and would re-run per frame.
+  }, [qualityId, bitrateId, frameRate, host]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,7 +114,7 @@ export function PreflightPanel({
     wavCheck(isPcmCaptureSupported()),
     ...(disk ? [disk] : []),
     // Only the host writes everyone's files, so only the host needs the figure.
-    ...(host ? [folderCheck(atBitrate(presetById(qualityId), bitrateId))] : []),
+    ...(host ? [folderCheck(presetAt(atBitrate(presetById(qualityId), bitrateId), frameRate))] : []),
     ...(conn ? [conn] : []),
   ];
   const worst = overallLevel(checks);

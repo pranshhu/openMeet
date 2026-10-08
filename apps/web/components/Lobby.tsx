@@ -23,6 +23,7 @@ import {
   describeTrack,
   formatPerHour,
   frameRateFrom,
+  presetAt,
   presetById,
   supportedPresets,
 } from '@/lib/quality';
@@ -935,7 +936,7 @@ export function Lobby({
                 >
                   {presets.map((q) => (
                     <option key={q.id} value={q.id}>
-                      {`Quality: ${q.label} · ${formatPerHour(atBitrate(q, bitrateId), 2)} per person`}
+                      {`Quality: ${q.label} · ${formatPerHour(presetAt(atBitrate(q, bitrateId), deliveredFps), 2)} per person`}
                     </option>
                   ))}
                 </select>
@@ -950,7 +951,7 @@ export function Lobby({
                 >
                   {levels.map((l) => (
                     <option key={l.id} value={l.id}>
-                      {`Bitrate: ${l.label} · up to ${atBitrate(shownPreset, l.id).videoBps / 1e6} Mbps`}
+                      {`Bitrate: ${l.label} · up to ${presetAt(atBitrate(shownPreset, l.id), deliveredFps).videoBps / 1e6} Mbps`}
                     </option>
                   ))}
                 </select>
@@ -991,6 +992,7 @@ export function Lobby({
                 stream={stream}
                 qualityId={shownQuality}
                 bitrateId={shownBitrate}
+                frameRate={deliveredFps}
                 isHost={isHost}
                 onLevel={setCheckLevel}
               />

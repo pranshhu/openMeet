@@ -85,6 +85,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A bitrate choice in the lobby: Standard, High or Maximum (4K has Standard
   only). Your camera and its backup are recorded at the level you pick, and the
   disk estimates follow it.
+- The lobby's size figures (per-hour estimates, bitrate labels, storage and
+  folder checks) follow a camera that delivers 50 or 60 fps.
 
 ### Changed
 
