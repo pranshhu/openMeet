@@ -188,6 +188,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.15 | Guest's track panel | As the guest in a take, open the indicator; then disable the guest's wifi for 30 s and re-enable it | Camera and WAV master read **Reaching the host**; within about 20 s of the drop they read **Not reaching the host for …**; once reconnected they return to **Reaching the host** (after a moment of **… MB still to send**) | ☐ | |
 | 8.16 | Track alert over the open panel | Record, open the track list, then pull the recording folder's drive (or fill it) on a phone about 360 px wide | The red banner is fully readable above the open list | ☐ | |
 | 8.17 | Frame-rate picker | Pick 25 fps in the lobby, record 30 s, `ffprobe` the MP4 | The lobby's "Capturing" line read `@ 25fps`; `avg_frame_rate` is about 25 | ☐ | |
+| 8.18 | Bitrate picker | In the lobby pick **Bitrate: High**, join, record 30 s of a moving picture, End & save; do the same at **Standard**; `ffprobe -v error -select_streams v:0 -show_entries stream=bit_rate` each camera MP4. Do it once on each of Linux, macOS and Windows | The High file holds about 1.5 times the video bitrate of the Standard file, on both the host's and the guest's file. Note the figure itself per system: on Linux a 30 fps file holds about half the figure the picker names (see Known limitations) | ☐ | |
 
 ## 9 — Deploy
 
@@ -217,6 +218,11 @@ Also not covered automatically. Needs 3 browser profiles.
 - **Recording needs Chromium.** Firefox can't record. Safari can't host, and a
   Safari guest is recorded as video only (no WAV). Brave hosts only after enabling
   brave://flags/#file-system-access-api.
+- **A camera file can hold less than the bitrate its level names.** The figure in the
+  lobby ("up to 5 Mbps") is what the encoder is asked for. Chrome on Linux has only a
+  software H.264 encoder, which spends that figure over 60 frames a second whatever the
+  camera delivers: a 30 fps file holds about half of it, a 24 fps file about 40%.
+  Not measured on macOS or Windows.
 - **Phones can't share a screen.** They present a photo, a video or the rear
   camera; a real screen comes from a second device joined with **Present only**.
 - **Mid-take camera or mic switching needs Chromium.** Safari and iPhone switch

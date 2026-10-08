@@ -82,6 +82,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   lobby.
 - The lobby shows the frame rate the camera delivers exactly (29.97 rather than a
   rounded 30) and says when it is not the rate picked.
+- A bitrate choice in the lobby: Standard, High or Maximum (4K has Standard
+  only). Your camera and its backup are recorded at the level you pick, and the
+  disk estimates follow it.
 
 ### Changed
 

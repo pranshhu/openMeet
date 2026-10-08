@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
-import { diskCheck } from '@/lib/preflight';
-import { presetById } from '@/lib/quality';
+import { diskCheck, folderCheck } from '@/lib/preflight';
+import { DEFAULT_BITRATE_ID, atBitrate, cameraVideoBps, chooseBitrate, presetById } from '@/lib/quality';
 import { formatBytes } from '@/lib/sync-report';
 import type { TakeJournal } from '@/lib/take-journal';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
@@ -62,6 +62,153 @@ describe('Lobby', () => {
         enumerateDevices: vi.fn().mockResolvedValue([]),
       },
     });
+  });
+
+  // A pick writes om_bitrate and Join sets the tab's level; neither may reach
+  // the next test.
+  afterEach(() => {
+    localStorage.removeItem('om_bitrate');
+    chooseBitrate(DEFAULT_BITRATE_ID);
+  });
+
+  // The pickers render only when devices are listed.
+  const stubDevices = (stream: MediaStream, extra: Record<string, unknown> = {}) =>
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+        enumerateDevices: vi.fn().mockResolvedValue(DEVICES),
+      },
+      ...extra,
+    });
+  // What a 1080p camera would be recorded at in this tab.
+  const recorderBps = () =>
+    cameraVideoBps({ getSettings: () => ({ height: 1080 }) } as unknown as MediaStreamTrack);
+
+  it('offers Standard, High and Maximum bitrate and remembers the pick', async () => {
+    stubDevices(fakeStream());
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    const select = (await screen.findByLabelText('Recording bitrate')) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'Bitrate: Standard · up to 5 Mbps',
+      'Bitrate: High · up to 7.5 Mbps',
+      'Bitrate: Maximum · up to 10 Mbps',
+    ]);
+    expect(select).toHaveValue('standard');
+    fireEvent.change(select, { target: { value: 'high' } });
+    expect(select).toHaveValue('high');
+    expect(localStorage.getItem('om_bitrate')).toBe('high');
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('sizes the storage and folder figures for the remembered bitrate', async () => {
+    localStorage.setItem('om_bitrate', 'max');
+    localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+    try {
+      stubDevices(fakeStream(), {
+        storage: { estimate: vi.fn().mockResolvedValue({ quota: 100e9, usage: 0 }) },
+      });
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      const atMax = atBitrate(presetById('1080p'), 'max');
+      // The DOM query collapses the message's non-breaking space.
+      const text = (m: string) => m.replace(/\s+/g, ' ');
+      await waitFor(() =>
+        expect(screen.getByText(text(diskCheck(100e9, 0, atMax).message))).toBeInTheDocument()
+      );
+      expect(screen.getByText(text(folderCheck(atMax).message))).toBeInTheDocument();
+      const select = screen.getByLabelText('Recording bitrate');
+      expect(select).toHaveValue('max');
+      expect(
+        screen.getByRole('option', { name: /^Quality: 1080p · ~5\.6 GB\/hr per person$/ })
+      ).toBeInTheDocument();
+      fireEvent.change(select, { target: { value: 'standard' } });
+      await waitFor(() =>
+        expect(
+          screen.getByText(text(diskCheck(100e9, 0, presetById('1080p')).message))
+        ).toBeInTheDocument()
+      );
+    } finally {
+      localStorage.removeItem('om_host_xyz-abcd-pqr');
+    }
+  });
+
+  it('joins at the bitrate picked, even when storage refuses the write', async () => {
+    stubDevices(fakeStream());
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+    const onJoin = vi.fn();
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      const select = await screen.findByLabelText('Recording bitrate');
+      fireEvent.change(select, { target: { value: 'high' } });
+      expect(select).toHaveValue('high');
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Join now' }));
+      await waitFor(() => expect(onJoin).toHaveBeenCalled());
+      expect(recorderBps()).toBe(7_500_000);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('shows Standard when the remembered level is not offered at 4K, and joins at Standard', async () => {
+    const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ sampleRate: 48000 }) };
+    const video = {
+      kind: 'video',
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: () => ({ width: 3840, height: 2160, frameRate: 30 }),
+      getCapabilities: () => ({ width: { max: 3840 }, height: { max: 2160 } }),
+    };
+    const cam4k = {
+      getTracks: () => [audio, video],
+      getAudioTracks: () => [audio],
+      getVideoTracks: () => [video],
+    } as unknown as MediaStream;
+    localStorage.setItem('om_quality', '4k');
+    localStorage.setItem('om_bitrate', 'max');
+    try {
+      stubDevices(cam4k);
+      const onJoin = vi.fn();
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+      await waitFor(() => expect(screen.getByLabelText('Recording quality')).toHaveValue('4k'));
+      const select = screen.getByLabelText('Recording bitrate') as HTMLSelectElement;
+      expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+        'Bitrate: Standard · up to 25 Mbps',
+      ]);
+      // Each quality is priced at the remembered level, not at the Standard one.
+      expect(
+        screen.getByRole('option', { name: /^Quality: 1080p · ~5\.6 GB\/hr per person$/ })
+      ).toBeInTheDocument();
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Join now' }));
+      await waitFor(() => expect(onJoin).toHaveBeenCalled());
+      expect(recorderBps()).toBe(5_000_000);
+    } finally {
+      localStorage.removeItem('om_quality');
+    }
+  });
+
+  // Like the disk estimate, the options are for the resolution this camera can
+  // deliver: a remembered 4K must not price them at 4K.
+  it('sizes the bitrate options for the resolution the camera can deliver', async () => {
+    localStorage.setItem('om_quality', '4k');
+    localStorage.setItem('om_bitrate', 'max');
+    try {
+      stubDevices(cam720Stream());
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+      await waitFor(() => expect(screen.getByLabelText('Recording quality')).toHaveValue('720p'));
+      const select = screen.getByLabelText('Recording bitrate') as HTMLSelectElement;
+      expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+        'Bitrate: Standard · up to 2.5 Mbps',
+        'Bitrate: High · up to 3.75 Mbps',
+        'Bitrate: Maximum · up to 5 Mbps',
+      ]);
+      expect(select).toHaveValue('max');
+    } finally {
+      localStorage.removeItem('om_quality');
+    }
   });
 
   it('requires a name: Join enabled only after media grant AND a name', async () => {
@@ -963,11 +1110,11 @@ describe('Lobby', () => {
       storage: { estimate: vi.fn().mockResolvedValue({ quota: 1e9, usage: 0 }) },
     });
     const { rerender } = render(
-      <PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost={false} />
+      <PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" bitrateId="standard" isHost={false} />
     );
     await waitFor(() => expect(screen.getByText(/under an hour at this quality/)).toBeInTheDocument());
     expect(screen.queryByText(/without that copy/)).toBeNull();
-    rerender(<PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" isHost />);
+    rerender(<PreflightPanel slug="xyz-abcd-pqr" stream={null} qualityId="720p" bitrateId="standard" isHost />);
     await waitFor(() => expect(screen.getByText(/without that copy/)).toBeInTheDocument());
   });
 
@@ -1015,7 +1162,7 @@ describe('Lobby', () => {
   it('shows a visible focus ring on the camera, microphone and quality pickers', async () => {
     (navigator.mediaDevices.enumerateDevices as ReturnType<typeof vi.fn>).mockResolvedValue(DEVICES);
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
-    for (const name of ['Camera', 'Microphone', 'Recording quality', 'Frame rate']) {
+    for (const name of ['Camera', 'Microphone', 'Recording quality', 'Recording bitrate', 'Frame rate']) {
       const select = await screen.findByLabelText(name);
       // The select drops its native outline, so its visible box must take over.
       expect(select.closest('label')?.className).toMatch(/focus-within:ring/);
