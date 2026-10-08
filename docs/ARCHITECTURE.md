@@ -744,3 +744,11 @@ unfinished send to each new connection to the host.
 - **A returned backup is not held back during a take.** The host does not pause an incoming
   transfer while it records; a recorded guest's own tab waits, and a sender that does not wait
   makes the host write while it records.
+- **A camera file can hold less than the bitrate its level names.** `cameraVideoBps` is what
+  `MediaRecorder` is asked for, and `MediaRecorder` takes no frame rate. Chrome's software H.264
+  encoder (the only one on Linux) gives each frame the asked figure divided by 60, so a file
+  reaches the figure only at 60 fps: about half of it at 30 fps and 40% at 24 fps, measured on
+  Chrome for Linux with a bare `MediaRecorder` as well as in the app. The levels keep their ratio
+  (1 : 1.5 : 2). The lobby names the figure as "up to", and its size figures use it, so they
+  overstate there. Not measured on macOS, Windows or a hardware encoder; asking for more to make
+  up for it would double the files wherever the encoder does use the real frame rate.

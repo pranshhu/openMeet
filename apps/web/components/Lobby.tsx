@@ -950,7 +950,7 @@ export function Lobby({
                 >
                   {levels.map((l) => (
                     <option key={l.id} value={l.id}>
-                      {`Bitrate: ${l.label} · ${atBitrate(shownPreset, l.id).videoBps / 1e6} Mbps`}
+                      {`Bitrate: ${l.label} · up to ${atBitrate(shownPreset, l.id).videoBps / 1e6} Mbps`}
                     </option>
                   ))}
                 </select>

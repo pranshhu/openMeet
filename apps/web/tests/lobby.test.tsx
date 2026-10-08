@@ -90,9 +90,9 @@ describe('Lobby', () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     const select = (await screen.findByLabelText('Recording bitrate')) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      'Bitrate: Standard · 5 Mbps',
-      'Bitrate: High · 7.5 Mbps',
-      'Bitrate: Maximum · 10 Mbps',
+      'Bitrate: Standard · up to 5 Mbps',
+      'Bitrate: High · up to 7.5 Mbps',
+      'Bitrate: Maximum · up to 10 Mbps',
     ]);
     expect(select).toHaveValue('standard');
     fireEvent.change(select, { target: { value: 'high' } });
@@ -175,7 +175,7 @@ describe('Lobby', () => {
       await waitFor(() => expect(screen.getByLabelText('Recording quality')).toHaveValue('4k'));
       const select = screen.getByLabelText('Recording bitrate') as HTMLSelectElement;
       expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-        'Bitrate: Standard · 25 Mbps',
+        'Bitrate: Standard · up to 25 Mbps',
       ]);
       // Each quality is priced at the remembered level, not at the Standard one.
       expect(
@@ -201,9 +201,9 @@ describe('Lobby', () => {
       await waitFor(() => expect(screen.getByLabelText('Recording quality')).toHaveValue('720p'));
       const select = screen.getByLabelText('Recording bitrate') as HTMLSelectElement;
       expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-        'Bitrate: Standard · 2.5 Mbps',
-        'Bitrate: High · 3.75 Mbps',
-        'Bitrate: Maximum · 5 Mbps',
+        'Bitrate: Standard · up to 2.5 Mbps',
+        'Bitrate: High · up to 3.75 Mbps',
+        'Bitrate: Maximum · up to 5 Mbps',
       ]);
       expect(select).toHaveValue('max');
     } finally {
