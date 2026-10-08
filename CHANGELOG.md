@@ -118,7 +118,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Each camera backup is encoded at the same bitrate as the file it backs up
   (it was 5 Mbps at every resolution).
 - Audio is recorded in mono by default, which halves the uncompressed master
-  (about 518 MB per hour per person).
+  (about 518 MB per hour per person). A take recorded with the media board open
+  has a two-channel audio track in its camera MP4, so stereo pads keep their
+  stereo; the voice is the same on both channels and the WAV master stays mono.
 - The host's recording files carry the host's name after the role:
   `host-ana_<id>.mp4` instead of `host_<id>.mp4`.
 

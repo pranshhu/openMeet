@@ -495,7 +495,11 @@ unfinished send to each new connection to the host.
   board says so for that take. A pad set to loop (`setLoop`) repeats until it is stopped, and
   the switch reaches a pad that is already playing. Each pad plays through a gain node of its
   own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
-  when stopped, counts as playing until it is silent, and is cut by a second stop.
+  when stopped, counts as playing until it is silent, and is cut by a second stop. The mix
+  destination keeps the browser's default of two channels, so the MP4 (and backup) of a take with
+  the board open has a two-channel audio track even when the microphone is recorded in mono: a
+  stereo pad keeps its stereo and the voice is the same on both channels. The WAV master follows
+  `recordedChannels` either way.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can
