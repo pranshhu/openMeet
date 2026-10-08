@@ -169,7 +169,10 @@ export function Lobby({
   // Same shape as joiningRef: opening the folder prompt is awaited, so a second
   // press could otherwise start a second save over the same journal.
   const savingRef = useRef(false);
-  const [savedLine, setSavedLine] = useState<string | null>(null);
+  // From the chosen folder to the end of the rebuild, which can take minutes:
+  // Save and Delete wait, so neither runs under it.
+  const [saving, setSaving] = useState(false);
+  const [saveNote, setSaveNote] = useState<{ text: string; problem: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,8 +241,24 @@ export function Lobby({
     });
   }
 
+  /**
+   * The rows were read when the page opened. A take another tab has started
+   * or resumed since then may be writing into the same crash copy, so the
+   * room's lock is asked again right before anything touches it.
+   */
+  async function recordingElsewhere(): Promise<boolean> {
+    if (!(await isTakeLockHeld(slug))) return false;
+    setJournals([]);
+    setSaveNote({
+      text: 'Another tab in this browser is recording this room, so nothing was changed here. End that recording, then reload this page.',
+      problem: true,
+    });
+    return true;
+  }
+
   async function removeUnsaved(j: TakeJournal) {
     if (!window.confirm('Delete this unsaved recording? It can’t be recovered.')) return;
+    if (await recordingElsewhere()) return;
     await deleteTakeJournal(j.dirName);
     setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
   }
@@ -251,18 +270,27 @@ export function Lobby({
       // A cancelled prompt is a no-op, not a failure: the journal stays.
       const folder = await pickRecordingDirectory().catch(() => null);
       if (!folder) return;
+      // After the prompt, which stays open for as long as the host likes.
+      if (await recordingElsewhere()) return;
+      setSaveNote(null);
+      setSaving(true);
       const result: SaveResult = await saveRecoveredTake(j, folder);
       const saved = result.files.filter((f) => f.source !== 'failed').length;
-      if (result.json === null) {
-        // The take is only saved once its sync file is: the row stays so the
-        // host can try the folder again.
-        setSavedLine(`Saved ${saved} file(s) to your folder. The sync file could not be written.`);
+      const unsaved = result.unsaved ?? [];
+      const lines = [`Saved ${saved} ${saved === 1 ? 'file' : 'files'} to your folder.`];
+      if (unsaved.length > 0) lines.push(`Not saved: ${unsaved.join(', ')}.`);
+      if (result.json === null) lines.push('The sync file could not be written.');
+      if (result.kept) {
+        // Something is still only in this browser: the row stays so the host
+        // can save again.
+        lines.push('The unsaved recording is still here: try again, or choose another folder.');
       } else {
         setJournals((prev) => prev.filter((x) => x.dirName !== j.dirName));
-        setSavedLine(`Saved ${saved} file(s) to your folder.`);
       }
+      setSaveNote({ text: lines.join(' '), problem: result.kept === true || unsaved.length > 0 });
     } finally {
       savingRef.current = false;
+      setSaving(false);
     }
   }
 
@@ -776,16 +804,18 @@ export function Lobby({
                       <button
                         type="button"
                         onClick={() => void saveUnsaved(j)}
+                        disabled={saving}
                         aria-label={`Save the unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()} to a folder`}
-                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 sm:min-h-9 ${focusRing}`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${focusRing}`}
                       >
                         Save to folder
                       </button>
                       <button
                         type="button"
                         onClick={() => void removeUnsaved(j)}
+                        disabled={saving}
                         aria-label={`Delete unsaved recording from ${new Date(j.notes.hostStartMs).toLocaleString()}`}
-                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#b3261e] transition-colors hover:bg-[#b3261e]/10 sm:min-h-9 ${focusRing}`}
+                        className={`inline-flex min-h-11 items-center rounded-full px-4 font-medium text-[#b3261e] transition-colors enabled:hover:bg-[#b3261e]/10 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 ${focusRing}`}
                       >
                         Delete
                       </button>
@@ -795,11 +825,20 @@ export function Lobby({
               </ul>
             </section>
           )}
-          {/* Outside the section: a successful save removes the last row, and the
-              line it leaves behind has to outlive it. */}
-          {savedLine && (
+          {saving && (
             <p role="status" className="w-full text-left text-[13px] leading-relaxed text-[#5f6368]">
-              {savedLine}
+              Saving the recording to your folder. Keep this tab open until it finishes.
+            </p>
+          )}
+          {/* Outside the section: a successful save removes the last row, and the
+              line it leaves behind has to outlive it. A problem is an alert, so
+              it is read out even when the host has looked away. */}
+          {saveNote && (
+            <p
+              role={saveNote.problem ? 'alert' : 'status'}
+              className={`w-full text-left text-[13px] leading-relaxed break-words ${saveNote.problem ? 'text-[#b3261e]' : 'text-[#5f6368]'}`}
+            >
+              {saveNote.text}
             </p>
           )}
         </div>

@@ -128,6 +128,16 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   while other transfers keep arriving, and a backup the host saved is announced
   at once instead of waiting for the rest.
 - Resuming a take no longer logs a database error on the server.
+- **Save to folder** on an unsaved recording keeps the browser's copy when a file
+  could not be written in full or the sync file failed, and names what was not
+  saved, instead of removing the copy and reporting it saved. It also rebuilds
+  files the copy holds without a note, and a WAV master that a closed or reloaded
+  page left in the folder with a header declaring no audio gets a header that
+  matches its length when the recording is saved or resumed.
+- A lobby opened in another tab no longer removes the crash copy of a take that
+  has not written its first bytes, and does not save or delete a recording
+  another tab is continuing. A take whose crash copy stopped part-way is not
+  offered **Resume recording** after a reload.
 
 ### Security
 

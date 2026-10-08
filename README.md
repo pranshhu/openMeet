@@ -107,8 +107,9 @@ GUEST browser  ──WebRTC (media tracks + recording DataChannels)──▶  HO
 
 Chunks carry an absolute byte **offset**, not a sequence number, so the receiver writes
 each one straight to its final position. Nothing is reassembled in memory on either
-side, retransmits are idempotent, and a crash leaves a file that's correct up to the
-last chunk written.
+side, and retransmits are idempotent. The browser puts a file in the folder only when it
+is closed, so a take cut short by a crash is rebuilt from a copy kept in the browser: see
+[If the host's browser crashes](#if-the-hosts-browser-crashes).
 
 | Package | What |
 |---|---|
@@ -374,7 +375,9 @@ to `avc1` by the remux commands below, which is what editors expect.
 
 The host starts recording for everyone. Participants see a pre-join disclosure
 plus an on-screen notice and REC pill. Files (including in-call chat) land only on the
-host's disk, plus a backup in each participant's own browser storage; nothing is
+host's disk, plus a backup in each participant's own browser storage and a crash copy of
+each take's guest recordings in the host's browser storage, removed when the take ends
+cleanly (see [If the host's browser crashes](#if-the-hosts-browser-crashes)); nothing is
 uploaded. During a take the host also records each recorded guest's live call audio
 into the host's folder, a copy that starts only after that guest's browser has begun
 its own recording. **The host is responsible for getting consent where the law requires
@@ -417,8 +420,12 @@ Chrome keeps File System Access writes in a temporary file until the file is clo
 after a crash the host's files are missing or empty. The lobby then lists the take as
 **Unsaved recording**: **Save to folder** rebuilds the guests' files from this browser's
 crash copy, copies in the host's own camera file and WAV master from its backups, and
-writes `sync_<id>.json` and the chapters beside them. The last couple of seconds before
-the crash may be missing, and a guest's own backup still holds the rest — the participant
+writes `sync_<id>.json` and the chapters beside them. If a file cannot be written in full
+(a full disk, a folder that lost permission), the lobby names it and keeps the recording
+listed, so it can be saved again; the browser's copy is removed only once everything it
+holds is in the folder. The last few seconds before
+the crash may be missing (up to about eight when it comes in the first seconds of a
+take), and a guest's own backup still holds the rest — the participant
 copies are listed in the openMeet lobby with **Download**, or **Send to host** to return
 one while the host is in the room. If the guests are still in the call, the host does not
 have to save at all: **Resume recording** in the in-call notice continues the same take
@@ -427,10 +434,17 @@ the same browser can still be checked end to end, because the checksum state is 
 the crash copy. The host's own camera and WAV master become a second file after a resume,
 `host_<id>_resumed.mp4` and `host_<id>_resumed.wav`, with the part before the crash copied
 into the folder from the take's backup so both parts sit beside each other. While a take
-runs, the guests' bytes are also kept in this browser about every two seconds, so the copy
-is at most a couple of seconds behind; a take that cannot keep that copy says so on screen
-and records as usual. The copy is removed when the take ends cleanly, and kept for the
-lobby when a file could not be closed.
+runs, the guests' bytes are also kept in this browser every few seconds, so the copy is a
+few seconds behind, usually three to four and up to about eight at the very start of a
+take; a take that cannot keep that copy says so on screen
+and records as usual. A take whose copy stopped part-way is not offered in the call after
+a reload; the lobby still lists what the copy holds. The copy is removed when the take
+ends cleanly, and kept for the lobby when a file could not be closed.
+
+An unsaved recording holds the guests' camera, microphone and screen recordings, their
+names and the chapter markers, in this browser on the host's computer and nowhere else. It
+stays there until it is saved or deleted in the lobby of the room it was recorded in, or
+until the site's data is cleared in the browser.
 
 ---
 

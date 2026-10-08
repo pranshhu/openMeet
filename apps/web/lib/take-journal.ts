@@ -8,6 +8,7 @@ import {
   type OpfsRootGetter,
 } from './backup-recorder';
 import { StreamingSha256, type Sha256State } from './sha256';
+import { isTakeLockHeld } from './take-lock';
 
 /** One recorded file the journal holds parts for. Names, not bytes, so take.json stays small. */
 export interface JournalFileNote {
@@ -74,12 +75,14 @@ export interface TakeJournal {
   readonly notesOk: boolean;
   /** Bytes in every part of this journal, including parts written by an earlier session. */
   readonly bytes: number;
-  /** A commit failed twice: no file of this journal takes another byte. */
+  /** A commit failed twice: no file of this journal takes another byte. The failure may have happened in this session or in the one that wrote the journal. */
   readonly dead: boolean;
-  /** Change the notes; they are saved with the next commit (crash-safe-d makes this durable). */
+  /** Change the notes; the next commit of any file writes them to take.json. */
   note(change: (n: TakeNotes) => void): void;
   /** The journal file for a folder file name. A name that is not a plain file name gets a dead no-op: `dead` true, `position()` null, `parts()` empty, `commit()` resolves without writing. */
   file(name: string): JournalFile;
+  /** The name of every file directory this journal holds on disk, noted or not. [] when the directory cannot be read. Never rejects. */
+  fileNames(): Promise<string[]>;
   /** Write every committed part of `name`, in order, at its own offset. Resolves with the file's end offset; a part it cannot read ends the walk. Never rejects. */
   replay(name: string, into: { write(position: number, data: Blob): Promise<void> }): Promise<number>;
   /** Mark finished and remove the journal. Never rejects. */
@@ -91,6 +94,9 @@ const NOTES_FILE = 'take.json';
 const ROOM_RE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
 const PART_RE = /^(\d{6})-(\d+)-(\d+)\.part$/;
 const FINISHED_MARK = 'finished';
+// Left when a part failed twice, so the next session knows the take went on
+// without its crash copy.
+const DEAD_MARK = 'dead';
 // Anchored and exactly thirteen digits, like parseBackupName: the listing
 // parses the number back out of the name, so a leading zero or an unsafe
 // integer would not round-trip.
@@ -98,6 +104,8 @@ const TAKE_DIR_RE = /^openmeet-take-(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})$/;
 // The directory names tryOpenOpfs writes, with and without its optional parts.
 const BACKUP_DIR_RE = /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d{13}(?:-[a-z]{3}-[a-z]{4}-[a-z]{3})?$/;
 const KEY_RE = /^[A-Za-z0-9-]{0,64}$/;
+// The take's id becomes part of file names in the recording folder.
+const ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const MAX_NOTES_TEXT = 200;
 const MAX_BACKUPS = 16;
 
@@ -264,7 +272,10 @@ class JournalFileImpl implements JournalFile {
       if (!(await this.writePart(name, run))) {
         // A journal finished under this commit lost its directory on purpose:
         // that is not storage refusing a take that is still running.
-        if (!this.journal.state.finished) this.journal.state.dead = true;
+        if (!this.journal.state.finished) {
+          this.journal.state.dead = true;
+          void this.journal.markDead();
+        }
         this.runs = [];
         if (this.waiting) {
           this.waiting.resolve();
@@ -275,8 +286,8 @@ class JournalFileImpl implements JournalFile {
       this.seq += 1;
       this.journal.state.bytes += run.size;
     }
-    // The state covers exactly the bytes these parts closed, so it is kept
-    // beside the index the commit ends at: position() then proves both.
+    // The state is kept beside the index it was committed with: a reader may
+    // use it only when that index is the one position() reports.
     const fileNote = this.journal.notes.files.find((f) => f.file === this.name);
     if (hashState && fileNote) {
       this.journal.note(() => {
@@ -414,6 +425,27 @@ class TakeJournalImpl implements TakeJournal {
     return file;
   }
 
+  async fileNames(): Promise<string[]> {
+    try {
+      const names: string[] = [];
+      for (const entry of await getDirEntries(this.dir)) {
+        if (isDirectoryHandle(entry) && entry.name && isJournalFileName(entry.name)) names.push(entry.name);
+      }
+      return names;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Storage that refused a part twice may refuse this too; the journal is dead either way. Never rejects. */
+  async markDead(): Promise<void> {
+    try {
+      await this.dir.getFileHandle(DEAD_MARK, { create: true });
+    } catch {
+      // Without the mark the next session reads this journal as alive.
+    }
+  }
+
   async replay(name: string, into: { write(position: number, data: Blob): Promise<void> }): Promise<number> {
     const file = this.file(name);
     return file instanceof JournalFileImpl ? file.replayInto(into) : 0;
@@ -513,11 +545,12 @@ function markerFrom(value: unknown): TakeNotes['markers'][number] | null {
   return marker;
 }
 
-/** The record a take.json holds, or null when it is not one. Unknown extra keys are ignored, so a later ticket can add one. */
+/** The record a take.json holds, or null when it is not one. Unknown extra keys are ignored, so a record a newer build wrote still reads. */
 function notesFrom(value: unknown): TakeNotes | null {
   if (!isRecord(value)) return null;
   const room = shortString(value.room, 64);
-  const recordingId = shortString(value.recordingId, 64);
+  const recordingId =
+    typeof value.recordingId === 'string' && ID_RE.test(value.recordingId) ? value.recordingId : undefined;
   if (room === undefined || recordingId === undefined) return null;
   if (typeof value.take !== 'number' || !Number.isSafeInteger(value.take) || value.take < 1) return null;
   if (typeof value.hostStartMs !== 'number' || !Number.isFinite(value.hostStartMs) || value.hostStartMs < 0) return null;
@@ -597,7 +630,8 @@ export async function openTakeJournal(
 
     // A continued journal starts where the last session stopped: its bytes and
     // the next seq of every file directory are read back once, here.
-    const state: JournalState = { dead: false, finished: false, bytes: 0 };
+    const dead = await dir.getFileHandle(DEAD_MARK).then(() => true, () => false);
+    const state: JournalState = { dead, finished: false, bytes: 0 };
     const seqByName = new Map<string, number>();
     try {
       for (const entry of await getDirEntries(dir)) {
@@ -691,7 +725,11 @@ export async function findTakeJournals(root?: OpfsRootGetter): Promise<TakeJourn
 
       const recordOnDisk = await entry.getFileHandle(NOTES_FILE).then(() => true, () => false);
       if (!(await hasPart(entry)) && (!recordOnDisk || !journal.notesOk)) {
-        await rootDir.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        // A take's directory holds nothing until its first commit, so while a
+        // tab records this room an empty one may be that take's, not a leftover.
+        if (!(await isTakeLockHeld(match[2]!))) {
+          await rootDir.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        }
         continue;
       }
       found.push({ startedMs: Number(match[1]), journal });

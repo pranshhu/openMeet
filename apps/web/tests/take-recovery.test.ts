@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { copyBackupInto, recoverTake, saveRecoveredTake } from '@/lib/take-recovery';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
-import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
+import { findTakeJournals, openTakeJournal, type TakeJournal, type TakeNotes } from '@/lib/take-journal';
+import { WAV_HEADER_BYTES, wavHeader } from '@/lib/wav';
+import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
 
 function fakeWritable() {
   const calls: { position: number; data: unknown }[] = [];
@@ -126,12 +128,6 @@ function fakeJournal(
     const held = files[name] ?? { parts: [] };
     return {
       parts: () => Promise.resolve(held.parts.map(({ offset, size }) => ({ offset, size }))),
-      // The last part's end, as take-journal.ts reports it: 44 for a WAV whose
-      // final write was the header rewrite at offset 0.
-      position: () => {
-        const last = held.parts[held.parts.length - 1];
-        return Promise.resolve(last ? { nextIdx: 0, end: last.offset + last.size } : null);
-      },
       replay: async (into: { write(position: number, data: Blob): Promise<void> }) => {
         if (held.failReplay) throw new Error('replay failed');
         let end = 0;
@@ -147,7 +143,12 @@ function fakeJournal(
     file(name).replay(into)
   );
   const finish = vi.fn().mockResolvedValue(undefined);
-  return { journal: { notes, root, file, replay, finish } as unknown as TakeJournal, file, finish };
+  // As the real journal: a directory exists only for a file that got a part,
+  // and bytes counts every part of every directory.
+  const held = Object.entries(files).filter(([, f]) => f.parts.length > 0);
+  const fileNames = () => Promise.resolve(held.map(([name]) => name));
+  const bytes = held.reduce((n, [, f]) => n + f.parts.reduce((m, p) => m + p.size, 0), 0);
+  return { journal: { notes, root, file, replay, finish, fileNames, bytes } as unknown as TakeJournal, file, finish };
 }
 
 function notesWith(over: Partial<TakeNotes> = {}): TakeNotes {
@@ -204,8 +205,8 @@ describe('recoverTake', () => {
   });
 
   it('measures the journal version by its furthest part, not its last one', async () => {
-    // Removal that must fail this test: taking the length from position().end,
-    // or from the last part's offset + size, so a completed WAV reads as 44.
+    // Removal that must fail this test: taking the length from the last part's
+    // offset + size, so a completed WAV reads as 44.
     const notes = notesWith({ files: [{ file: 'host_r.wav', kind: 'wav' }] });
     const { journal } = fakeJournal(notes, {
       'host_r.wav': { parts: [part(100, 10), part(0, 44)] },
@@ -618,6 +619,7 @@ describe('saveRecoveredTake', () => {
       files: [{ name: 'guest_r.mp4', bytes: 3, source: 'journal' }],
       json: null,
       chapters: false,
+      kept: true,
     });
     expect(finish).not.toHaveBeenCalled();
   });
@@ -640,6 +642,7 @@ describe('saveRecoveredTake', () => {
         files: [{ name: 'guest_r.mp4', bytes: 3, source: 'journal' }],
         json: null,
         chapters: false,
+        kept: true,
       });
       expect(finish).not.toHaveBeenCalled();
     } finally {
@@ -703,5 +706,372 @@ describe('saveRecoveredTake', () => {
       })
     );
     expect(json.verification).toContainEqual(expect.objectContaining({ file: 'guest_r.mp4', status: 'unverified' }));
+  });
+});
+
+/**
+ * A recording folder that keeps bytes at their positions. A file is in the
+ * folder only once its writable closed, as in the browser, and a writable
+ * starts empty unless it was opened keeping what the file holds.
+ */
+class DiskFolder {
+  readonly files = new Map<string, Uint8Array>();
+  /** One entry per file opened for writing, in order. */
+  readonly opened: string[] = [];
+  /** name -> the most bytes that file may reach; a write past it rejects like a full disk. */
+  readonly room = new Map<string, number>();
+  /** Names that cannot be opened for writing: held open by another program, or read-only. */
+  readonly locked = new Set<string>();
+  /** As Chrome: once a write was refused, closing the file fails and nothing of it is kept. */
+  failedWriteLosesFile = false;
+
+  async getFileHandle(name: string, opts?: { create?: boolean }) {
+    if (!this.files.has(name)) {
+      if (!opts?.create) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+      this.files.set(name, new Uint8Array(0));
+    }
+    return {
+      name,
+      getFile: async () => new Blob([this.files.get(name)! as BlobPart]),
+      createWritable: async (opts?: { keepExistingData?: boolean }) => {
+        if (this.locked.has(name)) throw Object.assign(new Error('locked'), { name: 'NoModificationAllowedError' });
+        this.opened.push(name);
+        let buf = opts?.keepExistingData ? this.files.get(name)!.slice() : new Uint8Array(0);
+        let refused = false;
+        return {
+          write: async (arg: { position: number; data: ArrayBuffer | ArrayBufferView | Blob }) => {
+            const d = arg.data;
+            const bytes =
+              d instanceof Blob
+                ? new Uint8Array(await d.arrayBuffer())
+                : d instanceof ArrayBuffer
+                  ? new Uint8Array(d)
+                  : new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+            const end = arg.position + bytes.length;
+            const cap = this.room.get(name);
+            if (cap !== undefined && end > cap) {
+              refused = true;
+              throw Object.assign(new Error('full'), { name: 'QuotaExceededError' });
+            }
+            if (end > buf.length) {
+              const next = new Uint8Array(end);
+              next.set(buf);
+              buf = next;
+            }
+            buf.set(bytes, arg.position);
+          },
+          close: async () => {
+            if (refused && this.failedWriteLosesFile) throw new Error('the stream is in an errored state');
+            this.files.set(name, buf);
+          },
+        };
+      },
+    };
+  }
+}
+
+describe('saving a take from its crash copy', () => {
+  const ROOM = 'xyz-abcd-pqr';
+  const START = 1_760_000_000_000;
+  const TAKE_DIR = `openmeet-take-${START}-${ROOM}`;
+  const asFolder = (f: DiskFolder) => f as unknown as FsDirectoryHandle;
+  const fill = (n: number, v: number) => new Uint8Array(n).fill(v).buffer;
+
+  /** A take's crash copy as a crash leaves it: `parts` committed parts of 1000 bytes for each named file. */
+  async function crashedTake(files: Record<string, number>, noted = Object.keys(files)) {
+    const root = new FakeDirectoryHandle('root');
+    const getRoot = async () => root as never;
+    const live = (await openTakeJournal({ room: ROOM, recordingId: 'rec1', take: 1, hostStartMs: START }, getRoot))!;
+    noted.forEach((file, slot) => live.note((n) => n.files.push({ file, kind: 'camera', slot, who: `Guest ${slot + 1}` })));
+    for (const [name, parts] of Object.entries(files)) {
+      const file = live.file(name);
+      for (let i = 0; i < parts; i++) {
+        file.append(i * 1000, fill(1000, i + 1));
+        await file.commit(i + 1);
+      }
+    }
+    const takeDir = root.entries.get(TAKE_DIR) as FakeDirectoryHandle;
+    // The next page load lists what storage holds.
+    const listed = async () => (await findTakeJournals(getRoot))[0]!;
+    return { root, takeDir, listed };
+  }
+
+  const reportIn = (folder: DiskFolder, name: string) => JSON.parse(new TextDecoder().decode(folder.files.get(name)!));
+
+  it('puts every committed byte in the folder and then removes the crash copy', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 2 });
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result).toEqual({
+      files: [{ name: 'guest_rec1.mp4', bytes: 2000, source: 'journal' }],
+      json: 'sync_rec1.json',
+      chapters: false,
+    });
+    expect([...folder.files.get('guest_rec1.mp4')!.slice(998, 1002)]).toEqual([1, 1, 2, 2]);
+    expect(take.root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('keeps the crash copy when the folder runs out of room part way through a file', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 4 });
+    const full = new DiskFolder();
+    full.room.set('guest_rec1.mp4', 2500);
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(full));
+
+    expect(result.files).toEqual([
+      { name: 'guest_rec1.mp4', bytes: 2000, source: 'failed', reason: 'rebuilt only in part' },
+    ]);
+    expect(result.unsaved).toEqual(['guest_rec1.mp4']);
+    expect(result.kept).toBe(true);
+    expect(take.root.entries.has(TAKE_DIR)).toBe(true);
+    // The sync file describes the folder as it is: a file that stops early.
+    expect(reportIn(full, 'sync_rec1.json').verification).toContainEqual(
+      expect.objectContaining({ file: 'guest_rec1.mp4', bytes: 2000, status: 'incomplete' })
+    );
+
+    // Nothing was lost: a folder with room takes all of it, and only then does the copy go.
+    const roomy = new DiskFolder();
+    const again = await saveRecoveredTake(await take.listed(), asFolder(roomy));
+    expect(again.files).toEqual([{ name: 'guest_rec1.mp4', bytes: 4000, source: 'journal' }]);
+    expect(again.kept).toBeUndefined();
+    expect(again.unsaved).toBeUndefined();
+    expect(take.root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('keeps the crash copy when a refused write costs the whole file, as Chrome does', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 3 });
+    const full = new DiskFolder();
+    full.room.set('guest_rec1.mp4', 1500);
+    full.failedWriteLosesFile = true;
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(full));
+
+    expect(result.files).toEqual([{ name: 'guest_rec1.mp4', bytes: 0, source: 'failed', reason: 'recovery failed' }]);
+    expect(result.unsaved).toEqual(['guest_rec1.mp4']);
+    expect(result.json).toBe('sync_rec1.json');
+    expect(result.kept).toBe(true);
+    expect(take.root.entries.has(TAKE_DIR)).toBe(true);
+  });
+
+  it('keeps the crash copy when the folder refuses one of two files', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 1, 'guest2_rec1.mp4': 3 });
+    const folder = new DiskFolder();
+    folder.locked.add('guest2_rec1.mp4');
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files.map((f) => [f.name, f.source, f.bytes])).toEqual([
+      ['guest_rec1.mp4', 'journal', 1000],
+      ['guest2_rec1.mp4', 'failed', 0],
+    ]);
+    expect(result.unsaved).toEqual(['guest2_rec1.mp4']);
+    expect(result.kept).toBe(true);
+    expect(take.root.entries.has(TAKE_DIR)).toBe(true);
+  });
+
+  it('keeps the crash copy when one of its parts cannot be read', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 4 });
+    const fileDir = take.takeDir.entries.get('guest_rec1.mp4') as FakeDirectoryHandle;
+    const second = fileDir.entries.get([...fileDir.entries.keys()].sort()[1]!) as FakeFileHandle;
+    second.getFile = async () => {
+      throw Object.assign(new Error('gone'), { name: 'NotReadableError' });
+    };
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    // What can be read is saved, and the parts behind the unreadable one stay in storage.
+    expect(folder.files.get('guest_rec1.mp4')!.length).toBe(1000);
+    expect(result.kept).toBe(true);
+    expect(take.root.entries.has(TAKE_DIR)).toBe(true);
+  });
+
+  it('rebuilds a file whose note never reached storage', async () => {
+    // The second guest's parts are committed; the record on disk was written before its note.
+    const take = await crashedTake({ 'guest_rec1.mp4': 1, 'guest2_rec1.mp4': 2 }, ['guest_rec1.mp4']);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files).toEqual([
+      { name: 'guest_rec1.mp4', bytes: 1000, source: 'journal' },
+      { name: 'guest2_rec1.mp4', bytes: 2000, source: 'journal' },
+    ]);
+    expect(folder.files.get('guest2_rec1.mp4')!.length).toBe(2000);
+    const report = reportIn(folder, 'sync_rec1.json');
+    expect(report.guests.map((g: { slot: number; file: string }) => [g.slot, g.file])).toEqual([
+      [0, 'guest_rec1.mp4'],
+      [1, 'guest2_rec1.mp4'],
+    ]);
+    expect(result.kept).toBeUndefined();
+    expect(take.root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('rebuilds every file when the record is missing or damaged, and names the sync file by the start time', async () => {
+    for (const damage of ['missing', 'damaged'] as const) {
+      const take = await crashedTake({ 'guest_rec1.mp4': 2, 'guest_rec1.wav': 1, 'guest_screen_rec1.mp4': 1 });
+      if (damage === 'missing') take.takeDir.entries.delete('take.json');
+      else (take.takeDir.entries.get('take.json') as FakeFileHandle).content = new TextEncoder().encode('{"room":"xyz-ab');
+      const folder = new DiskFolder();
+
+      const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+      expect(result.files.map((f) => [f.name, f.source, f.bytes])).toEqual([
+        ['guest_rec1.mp4', 'journal', 2000],
+        ['guest_rec1.wav', 'journal', 1000],
+        ['guest_screen_rec1.mp4', 'journal', 1000],
+      ]);
+      expect(result.json).toBe(`sync_${START}.json`);
+      const report = reportIn(folder, `sync_${START}.json`);
+      expect(report.guests).toHaveLength(1);
+      expect(report.guests[0]).toMatchObject({ slot: 0, file: 'guest_rec1.mp4', wavFile: 'guest_rec1.wav' });
+      expect(report.timeline.screenSegments).toEqual([{ file: 'guest_screen_rec1.mp4', offsetMs: 0, endedEarly: true }]);
+      expect(result.kept).toBeUndefined();
+      expect(take.root.entries.has(TAKE_DIR)).toBe(false);
+    }
+  });
+  it('rebuilds the directories no note names in name order', async () => {
+    // Both are un-noted, and the crash copy made guest_rec1 first while its name sorts last.
+    const take = await crashedTake({ 'guest_rec1.mp4': 1, 'guest2_rec1.mp4': 1 }, []);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files.map((f) => f.name)).toEqual(['guest2_rec1.mp4', 'guest_rec1.mp4']);
+  });
+
+  it('marks an un-noted directory as a guest file the crash copy rebuilt', async () => {
+    // guest2 has parts and no note: the checks must not fall back to "recorded here".
+    const take = await crashedTake({ 'guest_rec1.mp4': 1, 'guest2_rec1.mp4': 2 }, ['guest_rec1.mp4']);
+    const folder = new DiskFolder();
+
+    await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    const report = reportIn(folder, 'sync_rec1.json');
+    expect(report.verification).toContainEqual(
+      expect.objectContaining({ file: 'guest2_rec1.mp4', bytes: 2000, status: 'unverified' })
+    );
+  });
+
+  it('names the host file whose backup could not be copied', async () => {
+    const take = await crashedTake({ 'guest_rec1.mp4': 1 });
+    const journal = await take.listed();
+    // The backup directory is not in storage, so the copy cannot be made.
+    journal.notes.backups.push({
+      dir: 'openmeet-backup-host-camera-1760000000000-xyz-abcd-pqr',
+      file: 'host_rec1.mp4',
+      kind: 'camera',
+    });
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(journal, asFolder(folder));
+
+    expect(result.files).toContainEqual({
+      name: 'host_rec1.mp4',
+      bytes: 0,
+      source: 'failed',
+      reason: 'backup unavailable',
+    });
+    expect(result.unsaved).toEqual(['host_rec1.mp4']);
+  });
+
+  const FMT = { sampleRate: 48000, channels: 1, bitDepth: 24 };
+  /** A WAV as it sits in the folder: `audio` bytes of sound behind a header that declares `declared` of them. */
+  function wavBytes(audio: number, declared: number): Uint8Array<ArrayBuffer> {
+    const bytes = new Uint8Array(WAV_HEADER_BYTES + audio);
+    bytes.set(new Uint8Array(wavHeader(FMT, declared)));
+    for (let i = 0; i < audio; i++) bytes[WAV_HEADER_BYTES + i] = (i * 7 + 3) & 0xff;
+    return bytes;
+  }
+
+  it('gives a kept guest WAV whose header declares no audio the header its length calls for', async () => {
+    // The closing page committed the folder's file whole, with the placeholder header.
+    const take = await crashedTake({ 'guest_rec1.wav': 2 });
+    const folder = new DiskFolder();
+    folder.files.set('guest_rec1.wav', wavBytes(2456, 0));
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2500, source: 'kept' }]);
+    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2456, 2456));
+    expect(result.kept).toBeUndefined();
+  });
+
+  it('gives a kept host WAV the same repair, on the save path and when called for a resume', async () => {
+    const backup = 'openmeet-backup-host-audio-1760000000000-xyz-abcd-pqr';
+    const take = await crashedTake({ 'guest_rec1.mp4': 1 });
+    const stored = await take.root.getDirectoryHandle(backup, { create: true });
+    const chunk = await (await stored.getFileHandle('000000.part', { create: true })).createWritable();
+    await chunk.write(wavBytes(956, 0));
+    await chunk.close();
+    const entry = { dir: backup, file: 'host_rec1.wav', kind: 'wav' as const };
+    const journal = await take.listed();
+    journal.notes.backups.push(entry);
+
+    // The resume path copies the host's backups with this call alone.
+    const resumed = new DiskFolder();
+    resumed.files.set('host_rec1.wav', wavBytes(2456, 0));
+    expect(await copyBackupInto(journal, asFolder(resumed), entry)).toEqual({
+      name: 'host_rec1.wav',
+      bytes: 2500,
+      source: 'kept',
+    });
+    expect(resumed.files.get('host_rec1.wav')).toEqual(wavBytes(2456, 2456));
+
+    const saved = new DiskFolder();
+    saved.files.set('host_rec1.wav', wavBytes(2456, 0));
+    const result = await saveRecoveredTake(journal, asFolder(saved));
+    expect(result.files).toContainEqual({ name: 'host_rec1.wav', bytes: 2500, source: 'kept' });
+    expect(saved.files.get('host_rec1.wav')).toEqual(wavBytes(2456, 2456));
+    // Kept, as before the repair: the verdict of a file recorded on this computer.
+    expect(reportIn(saved, 'sync_rec1.json').verification).toContainEqual(
+      expect.objectContaining({ file: 'host_rec1.wav', bytes: 2500, status: 'complete' })
+    );
+  });
+
+  it('leaves alone a kept WAV whose header is right, a kept .wav with no WAV header, and a kept .mp4', async () => {
+    const take = await crashedTake({ 'guest_rec1.wav': 2, 'guest2_rec1.wav': 2, 'guest_rec1.mp4': 2 });
+    const folder = new DiskFolder();
+    const right = wavBytes(2456, 2456);
+    // The header's bytes never landed: there is no format here to declare a length for.
+    const headless = wavBytes(2456, 0).fill(0, 0, WAV_HEADER_BYTES);
+    // An MP4 never starts like this; the name alone must keep the repair away from it.
+    const video = wavBytes(2456, 0);
+    folder.files.set('guest_rec1.wav', right);
+    folder.files.set('guest2_rec1.wav', headless);
+    folder.files.set('guest_rec1.mp4', video);
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files.map((f) => [f.name, f.source])).toEqual([
+      ['guest_rec1.wav', 'kept'],
+      ['guest2_rec1.wav', 'kept'],
+      ['guest_rec1.mp4', 'kept'],
+    ]);
+    // The sync file is the only thing the folder was opened to write.
+    expect(folder.opened).toEqual(['sync_rec1.json']);
+    expect(folder.files.get('guest_rec1.wav')).toBe(right);
+    expect(folder.files.get('guest2_rec1.wav')).toBe(headless);
+    expect(folder.files.get('guest_rec1.mp4')).toBe(video);
+  });
+
+  it('keeps a WAV as it is when the repair cannot be written', async () => {
+    const cannotOpen = new DiskFolder();
+    cannotOpen.locked.add('guest_rec1.wav');
+    const cannotWrite = new DiskFolder();
+    // No room for a single byte: the header write is refused.
+    cannotWrite.room.set('guest_rec1.wav', 0);
+
+    for (const folder of [cannotOpen, cannotWrite]) {
+      const take = await crashedTake({ 'guest_rec1.wav': 2 });
+      folder.files.set('guest_rec1.wav', wavBytes(2456, 0));
+
+      const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+      expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2500, source: 'kept' }]);
+      expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2456, 0));
+    }
   });
 });

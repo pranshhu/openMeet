@@ -242,6 +242,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
   Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
   room can choose it with **Send to host**; the choice is handed to the hook on join.
+  A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save
+  to folder and Delete; both are disabled while a save runs, and a save that left something out
+  says so in an alert and keeps the row.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
@@ -363,7 +366,20 @@ unfinished send to each new connection to the host.
   no second screen encode; the host's are finalized with its camera/WAV backups after a clean take.
   While a take runs, its guest files are also kept in a crash journal (`lib/take-journal.ts`): one
   directory per take (`openmeet-take-<startMs>-<slug>`) holding each file's acknowledged bytes in
-  small closed parts. A take reopened from that journal replays the parts into the same folder files
+  small closed parts. A journal whose part failed twice leaves a `dead` mark that the next open
+  reads back, so a take whose crash copy stopped part-way is not offered for a resume.
+  `findTakeJournals` lists what a crash left; a directory with no part and no usable record is
+  removed, but not while a tab holds that room's take lock, because a live take's directory is
+  empty until its first commit. The lobby's Save to folder is `saveRecoveredTake`
+  (`lib/take-recovery.ts`): it rebuilds every file directory the journal holds, named in
+  `take.json` or not (`fileNames`), copies in the host's own backups, writes the sync file, and
+  removes the journal only when every part reached the folder and the sync file was written;
+  otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
+  file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
+  header does not match its length gets its two size fields set from the length
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
+  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  a resume gives the host's own WAV the same repair through `copyBackupInto`. A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero, and the hash state the commit stored beside its position lets the digest cover the part
   before the resume as well. A screen file already in the folder is never replaced — the resumed host
@@ -549,7 +565,8 @@ unfinished send to each new connection to the host.
   its files end there — see Known gaps. The Room itself never refuses a host. A second tab
   is asked earlier, in its own lobby: while a host's take is live its tab holds a Web Lock
   (`lib/take-lock.ts`), and `Lobby` asks before it hands the stream to `join` while another tab
-  holds it. The host token exists only in the browser that created the room, so the tabs that
+  holds it. It asks the same lock again before it saves or deletes an unsaved recording, because
+  its rows were read when the page opened. The host token exists only in the browser that created the room, so the tabs that
   can take the seat are the tabs that share that lock. Only a join through the lobby is asked:
   a tab already in the call that reconnects is not, and neither is a producer link.
 - **Negotiation is presence-gated and joiner-offers** (`useRoom`): exactly one side offers first per

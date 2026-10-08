@@ -507,11 +507,12 @@ describe('Lobby', () => {
     });
     try {
       fireEvent.click(saveButton(when));
-      await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+      const line = await screen.findByText('Saved 1 file to your folder.');
 
+      expect(line).toHaveAttribute('role', 'status');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(pickSpy).toHaveBeenCalledTimes(1);
       expect(saveSpy).toHaveBeenCalledWith(journal, folder);
-      expect(screen.getByRole('status').textContent).toBe('Saved 1 file(s) to your folder.');
       expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
     } finally {
       pickSpy.mockRestore();
@@ -587,14 +588,16 @@ describe('Lobby', () => {
       files: [{ name: 'guest_r.mp4', bytes: 1024, source: 'journal' }],
       json: null,
       chapters: false,
+      kept: true,
     });
     try {
       fireEvent.click(saveButton(when));
-      await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+      const line = await screen.findByRole('alert');
 
-      expect(screen.getByRole('status').textContent).toBe(
-        'Saved 1 file(s) to your folder. The sync file could not be written.'
+      expect(line.textContent).toBe(
+        'Saved 1 file to your folder. The sync file could not be written. The unsaved recording is still here: try again, or choose another folder.'
       );
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
       expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
     } finally {
       pickSpy.mockRestore();
@@ -602,6 +605,160 @@ describe('Lobby', () => {
       findJournalsSpy.mockRestore();
     }
   });
+
+  it('keeps the row and names the files that were not saved', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [
+        { name: 'guest_r.mp4', bytes: 1024, source: 'journal' },
+        { name: 'host_r.mp4', bytes: 2048, source: 'backup' },
+        { name: 'guest2_r.mp4', bytes: 512, source: 'failed', reason: 'rebuilt only in part' },
+        { name: 'guest2_r.wav', bytes: 0, source: 'failed', reason: 'nothing was committed' },
+      ],
+      json: 'sync_rec-1.json',
+      chapters: false,
+      kept: true,
+      unsaved: ['guest2_r.mp4'],
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByRole('alert');
+
+      expect(line.textContent).toBe(
+        'Saved 2 files to your folder. Not saved: guest2_r.mp4. ' +
+          'The unsaved recording is still here: try again, or choose another folder.'
+      );
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(screen.getByText(`Recording from ${when}`)).toBeInTheDocument();
+      // The row can be saved again.
+      expect(saveButton(when)).not.toBeDisabled();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('says so when the host’s own file could not be copied, though the rest was saved', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+      files: [
+        { name: 'guest_r.mp4', bytes: 1024, source: 'journal' },
+        { name: 'host_r.mp4', bytes: 0, source: 'failed', reason: 'backup unavailable' },
+      ],
+      json: 'sync_rec-1.json',
+      chapters: false,
+      unsaved: ['host_r.mp4'],
+    });
+    try {
+      fireEvent.click(saveButton(when));
+      const line = await screen.findByRole('alert');
+
+      expect(line.textContent).toBe('Saved 1 file to your folder. Not saved: host_r.mp4.');
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  it('holds Save and Delete back while a rebuild runs, and says it is running', async () => {
+    const { when, findJournalsSpy } = await renderUnsaved();
+    const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+    const pickSpy = vi
+      .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+      .mockResolvedValue(folder);
+    let finish!: (result: { files: []; json: string; chapters: boolean }) => void;
+    const saveSpy = vi
+      .spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake')
+      .mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const deleteSpy = vi
+      .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+      .mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const deleteButton = () => screen.getByRole('button', { name: `Delete unsaved recording from ${when}` });
+    try {
+      fireEvent.click(saveButton(when));
+      const running = await screen.findByText(
+        'Saving the recording to your folder. Keep this tab open until it finishes.'
+      );
+
+      expect(running).toHaveAttribute('role', 'status');
+      expect(saveButton(when)).toBeDisabled();
+      expect(deleteButton()).toBeDisabled();
+      fireEvent.click(deleteButton());
+      await settle();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(deleteSpy).not.toHaveBeenCalled();
+
+      await act(async () => { finish({ files: [], json: 'sync_rec-1.json', chapters: false }); });
+      expect(screen.queryByText(/^Saving the recording/)).not.toBeInTheDocument();
+      expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+    } finally {
+      pickSpy.mockRestore();
+      saveSpy.mockRestore();
+      deleteSpy.mockRestore();
+      confirm.mockRestore();
+      findJournalsSpy.mockRestore();
+    }
+  });
+
+  for (const press of ['save', 'delete'] as const) {
+    it(`does not ${press} under a take another tab started after this page opened`, async () => {
+      const { request } = takeHeldElsewhere();
+      let recording = false;
+      request.mockImplementation(async (name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+        cb(recording && name === 'openmeet-take:xyz-abcd-pqr' ? null : {})
+      );
+      const { when, findJournalsSpy } = await renderUnsaved();
+      const folder = { getFileHandle: vi.fn() } as unknown as FsDirectoryHandle;
+      const pickSpy = vi
+        .spyOn(await import('@/lib/fs-writer'), 'pickRecordingDirectory')
+        .mockResolvedValue(folder);
+      const saveSpy = vi.spyOn(await import('@/lib/take-recovery'), 'saveRecoveredTake').mockResolvedValue({
+        files: [],
+        json: 'sync_rec-1.json',
+        chapters: false,
+      });
+      const deleteSpy = vi
+        .spyOn(await import('@/lib/take-journal'), 'deleteTakeJournal')
+        .mockResolvedValue(undefined);
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      try {
+        // The row was listed with the lock free; a take starts in another tab.
+        recording = true;
+        fireEvent.click(
+          press === 'save'
+            ? saveButton(when)
+            : screen.getByRole('button', { name: `Delete unsaved recording from ${when}` })
+        );
+        const line = await screen.findByRole('alert');
+
+        expect(line.textContent).toBe(
+          'Another tab in this browser is recording this room, so nothing was changed here. ' +
+            'End that recording, then reload this page.'
+        );
+        expect(screen.queryByText(`Recording from ${when}`)).not.toBeInTheDocument();
+        expect(saveSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).not.toHaveBeenCalled();
+      } finally {
+        pickSpy.mockRestore();
+        saveSpy.mockRestore();
+        deleteSpy.mockRestore();
+        confirm.mockRestore();
+        findJournalsSpy.mockRestore();
+      }
+    });
+  }
 
   it('still deletes an unsaved recording beside Save', async () => {
     // Removal that must fail this test: the Delete button's onClick.

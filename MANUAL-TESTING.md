@@ -103,9 +103,10 @@ kept saying "Recording".
 | 3.7 | Disk pressure | Fill the host disk to near-full, then record | A visible disk error — not a silent stop | ☐ | |
 | 3.8 | Return a backup | Guest records a take, host ends it, guest leaves, reopens the link, presses **Send to host** on the row and joins; host presses **Save to folder** | `backup_…mp4` and `backup_…json` in the folder; the mp4 plays; both sides say saved and verified | ☐ | |
 | 3.9 | Return a backup across a reconnect | During a large transfer, turn the guest's network off for 10 s | The transfer continues and still verifies | ☐ | |
-| 3.10 | Save from the lobby after a host crash | Record 30 s, close the host tab, reopen the room, press **Save to folder** on the **Unsaved recording** row | The guests' files and the host's own copies land in the folder with `sync_…json` beside them | ☐ | |
+| 3.10 | Save from the lobby after a host crash | Record 30 s, close the host tab, reopen the room, press **Save to folder** on the **Unsaved recording** row | The guests' files and the host's own copies land in the folder with `sync_…json` beside them; the 2.8 snippet on each WAV prints `declared data == actual data` | ☐ | |
 | 3.11 | **Resume recording** | With the guests still connected, reload the host tab and press **Resume recording** in the in-call notice | The same take id is re-announced, and the host's copies of the guests' files continue from where they stopped; after the take the folder holds `host_<id>.mp4` and `host_<id>_resumed.mp4` | ☐ | |
 | 3.12 | Guest tab through the host's reload | Keep the guest tab open while the host reloads and resumes | The guest's next fragments land after the resume, and its own backup is untouched | ☐ | |
+| 3.13 | Save to a folder that is too small | After a host crash (as in the row *Save from the lobby after a host crash*), press **Save to folder** and pick a folder on a drive with less free space than the row's size | The lobby names the files that were not saved and the **Unsaved recording** row stays; a second **Save to folder** into a folder with room puts every file there and the row goes | ☐ | |
 
 ## 4 — Multiple takes
 

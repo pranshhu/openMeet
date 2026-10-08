@@ -1598,7 +1598,7 @@ describe('take journal — small closed parts in browser storage', () => {
     await putText(dir, 'take.json', JSON.stringify(record({
       recordingId: 'r6',
       hostStartMs: 1759824000123,
-      future: { added: 'by a later ticket' },
+      future: { added: 'by a newer build' },
       files: [
         { file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0, who: 'Bob', guestStartHostMs: null, rttMs: 12, startedAtMs: 5 },
         { file: 'guest_b.mp4', kind: 'camera', key: 'k'.repeat(65) },
@@ -1658,6 +1658,9 @@ describe('take journal — small closed parts in browser storage', () => {
     const outOfBounds: Record<string, unknown>[] = [
       { room: 'r'.repeat(65) },
       { recordingId: 'r'.repeat(65) },
+      { recordingId: '../../evil' },
+      { recordingId: '' },
+      { recordingId: 42 },
       { take: 0 },
       { hostStartMs: -1 },
       { files: 'nope' },
@@ -1672,7 +1675,7 @@ describe('take journal — small closed parts in browser storage', () => {
 
     const found = await listed(root);
     expect(found.map((j) => j.dirName)).toEqual([...names].reverse());
-    expect(found.map((j) => j.notesOk)).toEqual([false, false, false, false, false, false]);
+    expect(found.map((j) => j.notesOk)).toEqual(outOfBounds.map(() => false));
   });
 
   it('the notes are written after the parts of their commit', async () => {
@@ -1742,6 +1745,85 @@ describe('take journal — small closed parts in browser storage', () => {
       throw new Error('locked');
     };
     expect((await listed(locked)).map((j) => j.dirName)).toEqual([liveDir]);
+  });
+
+  it('leaves an empty journal alone while a tab records its room', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const live = (await open(root))!;
+    live.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', slot: 0 }));
+    const otherRoom = 'openmeet-take-1759824000000-xyz-abcd-pqr';
+    await root.getDirectoryHandle(otherRoom, { create: true });
+    // A tab of this browser holds the take lock of abc-defg-hij, and of no other room.
+    const request = vi.fn(async (name: string, _opts: unknown, cb: (lock: unknown) => unknown) =>
+      cb(name === 'openmeet-take:abc-defg-hij' ? null : {})
+    );
+    vi.stubGlobal('navigator', { locks: { request } });
+    try {
+      // Another tab opens a lobby before the take's first commit.
+      expect(await listed(root)).toEqual([]);
+      expect(root.entries.has(TAKE_DIR)).toBe(true);
+      expect(root.entries.has(otherRoom)).toBe(false);
+
+      // The take goes on, and its bytes are there for the next listing.
+      live.file('guest_r.mp4').append(0, ab(1000));
+      await live.file('guest_r.mp4').commit(1);
+      const found = await listed(root);
+      expect(found.map((j) => j.dirName)).toEqual([TAKE_DIR]);
+      expect(found[0]!.bytes).toBe(1000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a journal that stopped taking bytes says so to the next session', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0 }));
+    const file = journal.file('guest_r.mp4');
+    file.append(0, ab(100));
+    await file.commit(1);
+    expect((await listed(root))[0]!.dead).toBe(false);
+
+    // Storage starts refusing writes into the file's directory; reads still work.
+    const takeDir = takeDirOf(root);
+    const realGet = takeDir.getDirectoryHandle.bind(takeDir);
+    takeDir.getDirectoryHandle = async (name, opts) => {
+      if (opts?.create) throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+      return realGet(name, opts);
+    };
+    file.append(100, ab(100));
+    await file.commit(2);
+    expect(journal.dead).toBe(true);
+    // The mark is written without holding the commit: give it a turn.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const [again] = await listed(root);
+    expect(again!.dead).toBe(true);
+    // What it holds can still be read back and saved.
+    expect(again!.bytes).toBe(100);
+    const wrote: number[] = [];
+    const end = await again!.replay('guest_r.mp4', { write: async (position, data) => void wrote.push(position, data.size) });
+    expect([end, ...wrote]).toEqual([100, 0, 100]);
+  });
+
+  it('fileNames lists every file directory on disk, noted or not, and nothing else', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    journal.file('guest_r.mp4').append(0, ab(4));
+    await journal.file('guest_r.mp4').commit(1);
+    journal.file('guest2_r.mp4').append(0, ab(4));
+    await journal.file('guest2_r.mp4').commit(1);
+    journal.file('never_committed.mp4');
+    await takeDirOf(root).getDirectoryHandle('not-a-recording', { create: true });
+
+    expect((await journal.fileNames()).sort()).toEqual(['guest2_r.mp4', 'guest_r.mp4']);
+    expect((await (await listed(root))[0]!.fileNames()).sort()).toEqual(['guest2_r.mp4', 'guest_r.mp4']);
+
+    takeDirOf(root).values = () => {
+      throw new Error('listing failed');
+    };
+    await expect(journal.fileNames()).resolves.toEqual([]);
   });
 
   it('findTakeJournals lists newest first', async () => {
