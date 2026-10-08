@@ -404,7 +404,20 @@ describe('host backup recording', () => {
       const notesFile = take.entries.get('take.json') as FakeFileHandle;
       await vi.waitFor(() => {
         expect(JSON.parse(new TextDecoder().decode(notesFile.content)).files).toEqual([
-          { file: 'guest_test-rec-j.mp4', kind: 'camera', slot: 0 },
+          {
+            file: 'guest_test-rec-j.mp4',
+            kind: 'camera',
+            slot: 0,
+            // The 8 bytes of the part, and the hash state that covers them.
+            sha256State: {
+              nextIdx: 2,
+              words: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+              ],
+              remainder: [0, 0, 0, 0, 0, 0, 0, 0],
+              length: 8,
+            },
+          },
         ]);
       });
 

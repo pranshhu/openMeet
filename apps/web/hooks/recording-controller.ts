@@ -798,6 +798,9 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       args.onError?.(new Error('A guest file could not be fully rebuilt from the crash copy.'));
     }
     const from = position && (short ? { nextIdx: position.nextIdx, end: replayed } : position);
+    const resumeFrom = from
+      ? { ...from, ...(note.sha256State ? { sha256State: note.sha256State } : {}) }
+      : undefined;
     const ref: { current: RTCDataChannel | null } = { current: null };
     const receiver = new ChunkReceiver({
       recordingId: notes.recordingId,
@@ -806,7 +809,7 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
         const c = ref.current;
         if (c && c.readyState === 'open') c.send(json);
       },
-      ...(from ? { resumeFrom: from } : {}),
+      ...(resumeFrom ? { resumeFrom } : {}),
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),

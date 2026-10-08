@@ -31,7 +31,7 @@ export interface ChunkReceiverOpts {
   /** One message when the journal dies and the receiver falls back to acking the folder write. */
   onWarn?: (msg: string) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
-  resumeFrom?: { nextIdx: number; end: number };
+  resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
 }
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
@@ -117,7 +117,16 @@ export class ChunkReceiver {
       this.lastIdx = from.nextIdx - 1;
       this.lastOffset = Math.max(0, from.end);
       this.resumeBase = this.lastOffset;
-      this._resumed = true;
+      // The journal committed this state at exactly this position, so the digest
+      // can cover the whole file. Anything else — a state from another commit, a
+      // corrupt one — is not proof of these bytes, and the digest stays partial.
+      const state = from.sha256State;
+      this._resumed = !(
+        typeof state === 'object' &&
+        state !== null &&
+        (state as { nextIdx?: unknown }).nextIdx === from.nextIdx &&
+        this.hash.restore(state)
+      );
     }
   }
 
@@ -145,7 +154,11 @@ export class ChunkReceiver {
     return this.lastOffset;
   }
 
-  /** This file began mid-stream; its digest covers only the part this tab received. */
+  /**
+   * This file began mid-stream without a hash state that matches its position,
+   * so its digest covers only the part this tab received. False when the state
+   * was restored, because the digest then covers the whole file.
+   */
   get resumed(): boolean {
     return this._resumed;
   }
@@ -431,7 +444,7 @@ export class ChunkReceiver {
    */
   private async commitAndAck(nextIdx: number, uptoOffset: number): Promise<void> {
     if (this.journalDead) return;
-    await this.journalFile!.commit(nextIdx);
+    await this.journalFile!.commit(nextIdx, this.hash.toJSON());
     if (this.journalFile!.dead) {
       // The latch comes first: a warning callback that throws must not leave
       // the guest without the folder-write ack or the next commit unlatched.

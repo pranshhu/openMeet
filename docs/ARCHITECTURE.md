@@ -341,8 +341,10 @@ unfinished send to each new connection to the host.
   reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
   the 8-word state + a ≤64B remainder, does **not** retain chunks). `digestHex` finalizes on a clone
-  so it stays idempotent / updatable. Two independent digests (guest=sent, host=written) compared at
-  finalize for every guest file (camera, WAV, each screen segment).
+  so it stays idempotent / updatable. The running state is committed with the journal position it
+  describes, so a resumed file's digest still covers the whole take. Two independent digests
+  (guest=sent, host=written) compared at finalize for every guest file (camera, WAV, each screen
+  segment).
 - `backup-recorder.ts`: a 2nd MediaRecorder over the same stream, on **both** host
   (`startHostRecording`) and guest (`beginGuestRecording`), plus a WAV master backup (its own
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
@@ -361,10 +363,11 @@ unfinished send to each new connection to the host.
   directory per take (`openmeet-take-<startMs>-<slug>`) holding each file's acknowledged bytes in
   small closed parts. A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
-  zero. A screen file already in the folder is never replaced — the resumed host probes for a free
-  segment number instead — and screen notes are bounded at 48 while camera and WAV notes are never
-  refused by that bound. A resumed take opens `host_<id>_resumed.mp4`/`.wav` for the host's own
-  tracks beside the recovered first part, and records both in `hostParts`.
+  zero, and the hash state the commit stored beside its position lets the digest cover the part
+  before the resume as well. A screen file already in the folder is never replaced — the resumed host
+  probes for a free segment number instead — and screen notes are bounded at 48 while camera and WAV
+  notes are never refused by that bound. A resumed take opens `host_<id>_resumed.mp4`/`.wav` for the
+  host's own tracks beside the recovered first part, and records both in `hostParts`.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via
@@ -374,8 +377,8 @@ unfinished send to each new connection to the host.
   the host start, with `sharer` display name on each entry, `callCopies.files[]`, each call-audio
   copy with its offset from the host start and the guest's name, and `hostParts[]`, each file of the
   host's own track with its offset from the start — a resumed take's own track is two files, and a
-  file that continued after a reload reads "not verified" because no single digest covers it — plus
-  integrity verdicts,
+  file that continued after a reload reads "not verified" when the crash copy kept no hash state, so
+  no single digest covers it — plus integrity verdicts,
   a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host

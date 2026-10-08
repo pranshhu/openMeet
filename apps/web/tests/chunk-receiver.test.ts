@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChunkReceiver, MAX_OFFSET_JUMP_BYTES, RESUME_ASK_INTERVAL_MS } from '@/lib/chunk-receiver';
 import { CHUNK_TIMESLICE_MS, encodeChunkHeader } from '@openmeet/protocol';
+import { StreamingSha256, type Sha256State } from '@/lib/sha256';
 import type { JournalFile } from '@/lib/take-journal';
 
 function fakeWriter() {
@@ -9,7 +10,7 @@ function fakeWriter() {
 
 type FakeJournalFile = Omit<JournalFile, 'dead' | 'commit'> & {
   dead: boolean;
-  commit: (nextIdx: number) => Promise<void>;
+  commit: (nextIdx: number, hashState?: Sha256State) => Promise<void>;
 };
 
 function fakeJournalFile(): FakeJournalFile {
@@ -361,6 +362,67 @@ describe('ChunkReceiver', () => {
     });
     expect(r.resumed).toBe(true);
     expect(r.lastOffsetValue).toBe(0);
+  });
+
+  /** Four distinct 4-byte fragments, and the state that has them all. */
+  const FRAGMENTS = [1, 2, 3, 4].map((n) => new Uint8Array([n, n + 1, n + 2, n + 3]));
+  function stateAfter(count: number, nextIdx: number) {
+    const h = new StreamingSha256();
+    for (let i = 0; i < count; i++) h.update(FRAGMENTS[i]!);
+    return { nextIdx, ...h.toJSON() };
+  }
+
+  async function deliverFrom(r: ChunkReceiver, first: number) {
+    for (let i = first; i < FRAGMENTS.length; i++) {
+      await r.handleMessage(encodeChunkHeader({ idx: i, offset: i * 4, size: 4, ts: 1 }));
+      await r.handleMessage(FRAGMENTS[i]!.buffer);
+    }
+  }
+
+  it('digests the whole file when the resume carries the state of the bytes before it', async () => {
+    const whole = new StreamingSha256();
+    for (const fragment of FRAGMENTS) whole.update(fragment);
+
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      resumeFrom: { nextIdx: 2, end: 8, sha256State: stateAfter(2, 2) },
+    });
+
+    expect(r.resumed).toBe(false);
+    await deliverFrom(r, 2);
+    expect(await r.digestHex()).toBe(await whole.digestHex());
+  });
+
+  it('reports a resume without a state as partial', () => {
+    for (const sha256State of [undefined, null]) {
+      const r = new ChunkReceiver({
+        recordingId: 'r1',
+        writer: fakeWriter() as never,
+        sendControl: vi.fn(),
+        resumeFrom: { nextIdx: 2, end: 8, ...(sha256State !== undefined ? { sha256State } : {}) },
+      });
+
+      expect(r.resumed).toBe(true);
+    }
+  });
+
+  it('ignores a state committed at another position, keeping the digest partial', async () => {
+    const rest = new StreamingSha256();
+    rest.update(FRAGMENTS[2]!);
+    rest.update(FRAGMENTS[3]!);
+
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: fakeWriter() as never,
+      sendControl: vi.fn(),
+      resumeFrom: { nextIdx: 2, end: 8, sha256State: stateAfter(2, 1) },
+    });
+
+    expect(r.resumed).toBe(true);
+    await deliverFrom(r, 2);
+    expect(await r.digestHex()).toBe(await rest.digestHex());
   });
 
   it('reports a write failure via onError instead of throwing', async () => {
@@ -1907,7 +1969,7 @@ describe('ChunkReceiver — journal-backed acks', () => {
     await deliver(r, 2, 8);
     await settle();
     expect(journal.commit).toHaveBeenCalledTimes(1);
-    expect(journal.commit).toHaveBeenCalledWith(3);
+    expect(journal.commit).toHaveBeenCalledWith(3, expect.any(Object));
     await settle();
     expect(acks(sent)).toEqual([
       { type: 'ack', recordingId: 'r1', uptoIdx: 2, uptoOffset: 12 },
@@ -1917,7 +1979,25 @@ describe('ChunkReceiver — journal-backed acks', () => {
     await deliver(r, 3, 12);
     await settle();
     expect(journal.commit).toHaveBeenCalledTimes(2);
-    expect(journal.commit).toHaveBeenLastCalledWith(4);
+    expect(journal.commit).toHaveBeenLastCalledWith(4, expect.any(Object));
+  });
+
+  it('hands the journal the hash state of exactly the bytes it commits', async () => {
+    const journal = fakeJournalFile();
+    const states: unknown[] = [];
+    journal.commit = vi.fn(async (_nextIdx: number, state?: unknown) => {
+      states.push(state);
+    });
+    const r = receiver(journal, []);
+
+    await deliver(r, 0, 0);
+    vi.advanceTimersByTime(CHUNK_TIMESLICE_MS);
+    await deliver(r, 1, 4);
+    await settle();
+
+    const expected = new StreamingSha256();
+    expected.update(new Uint8Array(8));
+    expect(states).toEqual([expected.toJSON()]);
   });
 
   it('acks the bytes the commit closed, not the ones that arrived while it ran', async () => {
@@ -1975,7 +2055,7 @@ describe('ChunkReceiver — journal-backed acks', () => {
       { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 8 },
     ]);
     expect(journal.commit).toHaveBeenCalledTimes(2);
-    expect(journal.commit).toHaveBeenLastCalledWith(3);
+    expect(journal.commit).toHaveBeenLastCalledWith(3, expect.any(Object));
   });
 
   it('stamps the timeslice when the commit is queued, not when it resolves', async () => {
@@ -2081,7 +2161,7 @@ describe('ChunkReceiver — journal-backed acks', () => {
     expect(journal.commit).not.toHaveBeenCalled();
     expect(r.flushAck()).toBeUndefined();
     await settle();
-    expect(journal.commit).toHaveBeenCalledWith(1);
+    expect(journal.commit).toHaveBeenCalledWith(1, expect.any(Object));
     expect(acks(sent)).toEqual([
       { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
     ]);
@@ -2097,7 +2177,7 @@ describe('ChunkReceiver — journal-backed acks', () => {
     expect(r.flushAck()).toBeUndefined();
     await settle();
 
-    expect(journal.commit).toHaveBeenCalledWith(1);
+    expect(journal.commit).toHaveBeenCalledWith(1, expect.any(Object));
     expect(journal.dead).toBe(false);
     expect(acks(sent)).toEqual([
       { type: 'ack', recordingId: 'r1', uptoIdx: 0, uptoOffset: 4 },
@@ -2149,7 +2229,7 @@ describe('ChunkReceiver — journal-backed acks', () => {
     await r.handleMessage(new Uint8Array(6).buffer);
 
     await settle();
-    expect(journal.commit).toHaveBeenCalledWith(2);
+    expect(journal.commit).toHaveBeenCalledWith(2, expect.any(Object));
     expect(acks(sent)).toEqual([
       { type: 'ack', recordingId: 'r1', uptoIdx: 1, uptoOffset: 10 },
     ]);

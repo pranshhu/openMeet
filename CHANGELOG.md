@@ -73,6 +73,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - An interrupted or resumed take's `sync.json` names every file of the host's own
   track, each with its offset from the start, and a file that continued after a
   reload reads "not verified" and says why: no single digest covers it.
+- A take resumed in the same browser can still be verified end to end: each
+  crash copy is committed with the checksum state of the bytes it holds, so the
+  digest covers the whole file, not only what arrived after the reload.
 
 ### Changed
 

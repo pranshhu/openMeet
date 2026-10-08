@@ -1360,6 +1360,112 @@ describe('take journal — small closed parts in browser storage', () => {
     });
   });
 
+  it('a commit keeps the hash state beside the position it committed', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const first = (await open(root))!;
+    first.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1', slot: 0 }));
+    const state = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [9, 10, 11], length: 3 };
+    first.file('guest_r.mp4').append(0, ab(4));
+    await first.file('guest_r.mp4').commit(1, state);
+
+    const second = (await open(root))!;
+    expect(second.notesOk).toBe(true);
+    expect(second.notes.files[0]?.sha256State).toEqual({ nextIdx: 1, ...state });
+    expect(await second.file('guest_r.mp4').position()).toEqual({ nextIdx: 1, end: 4 });
+  });
+
+  it('drops a sha256State that does not describe a running hash, keeping the note', async () => {
+    const words = [1, 2, 3, 4, 5, 6, 7, 8];
+    const good = { nextIdx: 1, words, remainder: [9, 10, 11], length: 3 };
+    const cases: unknown[] = [
+      { ...good, words: [...words, 9] },
+      { ...good, length: -1 },
+      { ...good, remainder: [9, 10] },
+      { ...good, nextIdx: -1 },
+      { ...good, nextIdx: 1.5 },
+    ];
+
+    for (const sha256State of cases) {
+      const root = new FakeDirectoryHandle('root');
+      const journal = (await open(root))!;
+      journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1' }));
+      journal.file('guest_r.mp4').append(0, ab(4));
+      await journal.file('guest_r.mp4').commit(1);
+      await putText(
+        takeDirOf(root),
+        'take.json',
+        JSON.stringify({
+          room: 'abc-defg-hij',
+          recordingId: 'r1',
+          take: 1,
+          hostStartMs: 1759824000000,
+          files: [{ file: 'guest_r.mp4', kind: 'camera', key: 'k1', sha256State }],
+          backups: [],
+          markers: [],
+        })
+      );
+
+      const reopened = (await open(root))!;
+      expect(reopened.notesOk).toBe(true);
+      expect(reopened.notes.files).toEqual([{ file: 'guest_r.mp4', kind: 'camera', key: 'k1' }]);
+    }
+  });
+
+  it('a failed commit and a commit with no state leave the previous state alone', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1' }));
+    const file = journal.file('guest_r.mp4');
+    const first = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [], length: 0 };
+    file.append(0, ab(4));
+    await file.commit(1, first);
+
+    file.append(4, ab(4));
+    await file.commit(2);
+    expect(journal.notes.files[0]?.sha256State).toEqual({ nextIdx: 1, ...first });
+
+    const fileDir = await takeDirOf(root).getDirectoryHandle('guest_r.mp4', { create: true });
+    fileDir.getFileHandle = async () => {
+      throw new Error('disk full');
+    };
+    file.append(8, ab(4));
+    await expect(file.commit(3, { words: first.words, remainder: [], length: 8 })).resolves.toBeUndefined();
+    expect(file.dead).toBe(true);
+    expect(journal.notes.files[0]?.sha256State).toEqual({ nextIdx: 1, ...first });
+  });
+
+  it('coalesced commits keep the hash state of the later commit', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera', key: 'k1' }));
+    const file = journal.file('guest_r.mp4');
+    const state1 = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [], length: 0 };
+    const state2 = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [1, 2, 3, 4], length: 4 };
+    const state3 = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [1, 2, 3, 4, 5, 6, 7, 8], length: 8 };
+
+    file.append(0, ab(4));
+    const p1 = file.commit(1, state1);
+    file.append(4, ab(4));
+    const p2 = file.commit(2, state2);
+    file.append(8, ab(4));
+    const p3 = file.commit(3, state3);
+
+    await Promise.all([p1, p2, p3]);
+
+    const reopened = (await open(root))!;
+    expect(reopened.notes.files[0]?.sha256State).toEqual({ nextIdx: 3, ...state3 });
+  });
+
+  it('committing a file with no note entry does not throw or fail', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const file = journal.file('unnoted.mp4');
+    file.append(0, ab(4));
+    const state = { words: [1, 2, 3, 4, 5, 6, 7, 8], remainder: [], length: 0 };
+    await expect(file.commit(1, state)).resolves.toBeUndefined();
+    expect(file.dead).toBe(false);
+  });
+
   it('take.json is written once per change, not once per commit', async () => {
     const root = new FakeDirectoryHandle('root');
     const journal = (await open(root))!;

@@ -3,6 +3,7 @@ import { encodeChunkHeader, CHUNK_TIMESLICE_MS } from '@openmeet/protocol';
 import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
 import { MAX_OFFSET_JUMP_BYTES } from '@/lib/chunk-receiver';
+import { StreamingSha256 } from '@/lib/sha256';
 import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import {
   bindHostGuestChannel,
@@ -165,7 +166,14 @@ function fakeJournal() {
   return { journal, parts };
 }
 
-type ResumeNote = { file: string; kind: 'camera' | 'wav' | 'screen'; key?: string; slot?: number; segment?: number };
+type ResumeNote = {
+  file: string;
+  kind: 'camera' | 'wav' | 'screen';
+  key?: string;
+  slot?: number;
+  segment?: number;
+  sha256State?: { nextIdx: number; words: number[]; remainder: number[]; length: number };
+};
 type JournalPosition = { nextIdx: number; end: number };
 
 /**
@@ -1230,6 +1238,48 @@ describe('a take resumed from its journal', () => {
       status: 'unverified',
       text: 'Not verified. This file was rebuilt from the browser’s crash copy, so there was no checksum to compare.',
     });
+  });
+
+  it('digests the whole resumed file when the note kept the state of its position', async () => {
+    const written: Written[] = [];
+    // The state a first receiver committed after fragments 0-1: 200 bytes.
+    const prior = new StreamingSha256();
+    prior.update(new Uint8Array(200));
+    const j = resumeJournal([{ ...r1Note, sha256State: { nextIdx: 2, ...prior.toJSON() } }], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    expect(await j.journal.file('guest_rec.mp4').position()).toEqual({ nextIdx: 2, end: 200 });
+    await sendChunk(channel, 2, 200, 100);
+    await sendChunk(channel, 3, 300, 100);
+
+    const all = new Uint8Array(400);
+    const expected = [...new Uint8Array(await crypto.subtle.digest('SHA-256', all))]
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    expect((await collectGuestReports(h, undefined)).find((g) => g.slot === 0)?.sha256Written).toBe(expected);
+  });
+
+  it('reports no written digest for a resumed file whose note kept no state', async () => {
+    const written: Written[] = [];
+    const j = resumeJournal([r1Note], r1Position, r1Parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      directoryPicker: async () => fakeDir([], written),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    await sendChunk(channel, 2, 200, 100);
+    await sendChunk(channel, 3, 300, 100);
+
+    expect((await collectGuestReports(h, undefined)).find((g) => g.slot === 0)?.sha256Written).toBeUndefined();
   });
 
   it('keeps the journal slots and keys, so each guest file keeps its own bytes', async () => {

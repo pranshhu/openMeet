@@ -7,6 +7,7 @@ import {
   type OpfsFileHandle,
   type OpfsRootGetter,
 } from './backup-recorder';
+import { StreamingSha256, type Sha256State } from './sha256';
 
 /** One recorded file the journal holds parts for. Names, not bytes, so take.json stays small. */
 export interface JournalFileNote {
@@ -25,6 +26,8 @@ export interface JournalFileNote {
   rttMs?: number | null;
   /** Screen stretch start on the host clock; absent for camera and WAV files. */
   startedAtMs?: number | null;
+  /** The hash state of everything committed so far, and the wire index it was committed at. */
+  sha256State?: { nextIdx: number; words: number[]; remainder: number[]; length: number };
 }
 
 /** What a take cannot read back from its parts: which take it is, and what each file is. */
@@ -52,7 +55,7 @@ export interface JournalFile {
   /** Memory only: no I/O, no copy. Bytes that do not continue the previous run start a new run. */
   append(offset: number, data: ArrayBuffer): void;
   /** Close the runs appended before this call, one closed part per run, in order; a call waits behind a part already being written, so it resolves only once its own bytes are on disk (or the journal gave up). Never rejects. */
-  commit(nextIdx: number): Promise<void>;
+  commit(nextIdx: number, hashState?: Sha256State): Promise<void>;
   /** What the parts on disk prove. Null when nothing usable is committed. */
   position(): Promise<{ nextIdx: number; end: number } | null>;
   /** The committed parts of this file, in seq order: where each one's bytes go and how long it is. */
@@ -148,7 +151,12 @@ class JournalFileImpl implements JournalFile {
   private seq: number;
   private inFlight: Promise<void> | null = null;
   // At most one commit waits behind the one in flight; later callers share it.
-  private waiting: { promise: Promise<void>; resolve: () => void; nextIdx: number } | null = null;
+  private waiting: {
+    promise: Promise<void>;
+    resolve: () => void;
+    nextIdx: number;
+    hashState: Sha256State | undefined;
+  } | null = null;
 
   constructor(
     private readonly journal: TakeJournalImpl,
@@ -176,11 +184,11 @@ class JournalFileImpl implements JournalFile {
     this.runs.push({ offset, size: data.byteLength, buffers: [data] });
   }
 
-  commit(nextIdx: number): Promise<void> {
+  commit(nextIdx: number, hashState?: Sha256State): Promise<void> {
     if (this.dead || this.journal.state.finished) return Promise.resolve();
     const idx = Number.isSafeInteger(nextIdx) && nextIdx >= 0 ? nextIdx : 0;
     if (!this.inFlight) {
-      const started = this.writeRuns(idx);
+      const started = this.writeRuns(idx, hashState);
       this.inFlight = started;
       void started.then(() => this.pump());
       return started;
@@ -190,9 +198,10 @@ class JournalFileImpl implements JournalFile {
       const promise = new Promise<void>((r) => {
         resolve = r;
       });
-      this.waiting = { promise, resolve, nextIdx: idx };
+      this.waiting = { promise, resolve, nextIdx: idx, hashState };
     } else if (idx > this.waiting.nextIdx) {
       this.waiting.nextIdx = idx;
+      this.waiting.hashState = hashState;
     }
     return this.waiting.promise;
   }
@@ -238,7 +247,7 @@ class JournalFileImpl implements JournalFile {
       waiting.resolve();
       return;
     }
-    const started = this.writeRuns(waiting.nextIdx);
+    const started = this.writeRuns(waiting.nextIdx, waiting.hashState);
     this.inFlight = started;
     void started.then(() => {
       waiting.resolve();
@@ -246,7 +255,7 @@ class JournalFileImpl implements JournalFile {
     });
   }
 
-  private async writeRuns(nextIdx: number): Promise<void> {
+  private async writeRuns(nextIdx: number, hashState?: Sha256State): Promise<void> {
     if (this.dead) return;
     const runs = this.runs;
     this.runs = [];
@@ -265,6 +274,19 @@ class JournalFileImpl implements JournalFile {
       }
       this.seq += 1;
       this.journal.state.bytes += run.size;
+    }
+    // The state covers exactly the bytes these parts closed, so it is kept
+    // beside the index the commit ends at: position() then proves both.
+    const fileNote = this.journal.notes.files.find((f) => f.file === this.name);
+    if (hashState && fileNote) {
+      this.journal.note(() => {
+        fileNote.sha256State = {
+          nextIdx,
+          words: hashState.words,
+          remainder: hashState.remainder,
+          length: hashState.length,
+        };
+      });
     }
     await this.journal.flushNotes();
   }
@@ -453,7 +475,21 @@ function fileNoteFrom(value: unknown): JournalFileNote | null {
   const rtt = value.rttMs;
   if (rtt === null || (typeof rtt === 'number' && Number.isFinite(rtt))) note.rttMs = rtt;
   if (typeof value.startedAtMs === 'number' && Number.isFinite(value.startedAtMs)) note.startedAtMs = value.startedAtMs;
+  const sha256State = sha256StateFrom(value.sha256State);
+  if (sha256State) note.sha256State = sha256State;
   return note;
+}
+
+/**
+ * The hash state a note carries, or null when the record is not one. The
+ * hasher's own reader decides the shape; a `nextIdx` that is not a position
+ * makes it unusable whatever the words are.
+ */
+function sha256StateFrom(value: unknown): JournalFileNote['sha256State'] | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.nextIdx !== 'number' || !Number.isSafeInteger(value.nextIdx) || value.nextIdx < 0) return null;
+  const hash = StreamingSha256.fromJSON(value);
+  return hash ? { nextIdx: value.nextIdx, ...hash.toJSON() } : null;
 }
 
 function backupNoteFrom(value: unknown): TakeNotes['backups'][number] | null {
