@@ -97,6 +97,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   host saves no file from them, from the next take on; a backup of an earlier take
   that they send back is still offered to the host, and everyone is told who is
   not recorded.
+- A computer can present a photo or a video file to the call, from the arrow
+  beside **Present**. It is shown, and recorded during a take, the way a shared
+  screen is.
 
 ### Changed
 

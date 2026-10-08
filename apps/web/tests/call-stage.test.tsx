@@ -766,6 +766,124 @@ describe('CallStage recording-capability labels', () => {
     expect(screen.queryByText('Rear camera')).toBeNull();
   });
 
+  it('with getDisplayMedia, the arrow beside Present offers a photo or video and no rear camera', () => {
+    const onToggleScreen = vi.fn();
+    render(<CallStage {...baseProps} onToggleScreen={onToggleScreen} />);
+    const arrow = screen.getByRole('button', { name: 'Choose what to present' });
+    expect(arrow).toHaveAttribute('aria-haspopup', 'menu');
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('A photo or video')).toBeNull();
+
+    fireEvent.click(arrow);
+    expect(arrow).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('menu', { name: 'Present options' })).toBeInTheDocument();
+    expect(screen.getByText('A photo or video')).toBeInTheDocument();
+    expect(screen.queryByText('Rear camera')).toBeNull();
+    // The file input is visually hidden, so its label shows the keyboard focus.
+    expect(screen.getByText('A photo or video').closest('label')?.className).toMatch(/focus-within:ring-2/);
+    // Opening the menu presents nothing by itself.
+    expect(onToggleScreen).not.toHaveBeenCalled();
+
+    const fileInput = document.querySelector('input[type="file"][accept*="image/"][accept*="video/"]') as HTMLInputElement;
+    const file = new File(['test'], 'clip.mp4', { type: 'video/mp4' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    expect(onToggleScreen).toHaveBeenCalledTimes(1);
+    expect(onToggleScreen).toHaveBeenCalledWith(file);
+    expect(screen.queryByText('A photo or video')).toBeNull();
+  });
+
+  it('presenting the screen from the button closes the photo or video menu', () => {
+    const onToggleScreen = vi.fn();
+    render(<CallStage {...baseProps} onToggleScreen={onToggleScreen} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose what to present' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Present screen' }));
+    expect(onToggleScreen).toHaveBeenCalledWith();
+    expect(screen.queryByText('A photo or video')).toBeNull();
+  });
+
+  // Kept in place while presenting, so the bar does not move under the pointer.
+  it('switches the arrow off and hides its menu while presenting, and has no arrow where the button opens the menu', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    const arrow = screen.getByRole('button', { name: 'Choose what to present' });
+    expect(arrow).toBeEnabled();
+    fireEvent.click(arrow);
+    expect(screen.getByText('A photo or video')).toBeInTheDocument();
+
+    rerender(<CallStage {...baseProps} screenSharing />);
+    expect(screen.getByRole('button', { name: 'Choose what to present' })).toBeDisabled();
+    expect(screen.queryByText('A photo or video')).toBeNull();
+
+    rerender(<CallStage {...baseProps} screenShareSupported={false} />);
+    expect(screen.queryByRole('button', { name: 'Choose what to present' })).toBeNull();
+  });
+
+  // The arrow is a split pill like the mic and camera arrows, and its menu sits
+  // above the control, centred on it. A phone has neither.
+  it('draws the present arrow as a split pill with its menu above the control', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    const arrow = screen.getByRole('button', { name: 'Choose what to present' });
+    expect(arrow.className).toMatch(/h-12 w-11/);
+    expect(arrow.className).toMatch(/sm:w-9/);
+    expect(arrow.parentElement?.className).toMatch(/rounded-full bg-\[#3c4043\]/);
+
+    fireEvent.click(arrow);
+    const menu = screen.getByRole('menu', { name: 'Present options' });
+    expect(menu.className).toMatch(/bottom-full/);
+    expect(menu.className).toMatch(/left-1\/2 -translate-x-1\/2/);
+
+    rerender(<CallStage {...baseProps} screenShareSupported={false} />);
+    expect(
+      screen.getByRole('button', { name: 'Present a photo, video or your rear camera' }).parentElement?.className
+    ).not.toMatch(/rounded-full/);
+  });
+
+  it('closes the photo or video menu on Escape and hands focus back to its arrow', () => {
+    render(<CallStage {...baseProps} />);
+    const arrow = screen.getByRole('button', { name: 'Choose what to present' });
+    fireEvent.click(arrow);
+    (document.querySelector('input[type="file"][accept*="image/"]') as HTMLInputElement).focus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('A photo or video')).toBeNull();
+    expect(document.activeElement).toBe(arrow);
+  });
+
+  // Two menus open at once sit on top of each other above the bar.
+  it('closes the photo or video menu when the microphone, camera or record menu opens', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remotePeers={[{ peerId: 'g1', name: 'Bob', role: 'guest', stream: null }]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+    for (const other of ['Select microphone', 'Select camera', 'Choose who is recorded']) {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose what to present' }));
+      expect(screen.getByText('A photo or video')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: other }));
+      expect(screen.queryByText('A photo or video')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: other }));
+    }
+  });
+
+  it('opening the photo or video menu closes the microphone, camera and record menus', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remotePeers={[{ peerId: 'g1', name: 'Bob', role: 'guest', stream: null }]}
+        onSetPeerRecorded={vi.fn()}
+      />
+    );
+    for (const other of ['Select microphone', 'Select camera', 'Choose who is recorded']) {
+      const arrow = screen.getByRole('button', { name: other });
+      fireEvent.click(arrow);
+      expect(arrow).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(screen.getByRole('button', { name: 'Choose what to present' }));
+      expect(arrow).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(screen.getByRole('button', { name: 'Choose what to present' }));
+    }
+  });
+
   it('shows placeholder instead of video frame when presenting rear camera on mobile device', () => {
     const origUserAgent = navigator.userAgent;
     try {

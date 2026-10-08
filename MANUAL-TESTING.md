@@ -135,6 +135,7 @@ Not covered by the automated test at all.
 | 5.6 | Phone presents a photo or video | Join from a phone as a guest, tap **Present**, pick **A photo or video** | Everyone sees it in the spotlight; the phone sees it too. During a recording it lands as a `guest_screen_*.mp4` | ☐ | |
 | 5.7 | Phone presents its rear camera | Tap **Present**, pick **Rear camera**, then stop presenting | Everyone sees the rear camera; stopping brings the face camera back | ☐ | |
 | 5.8 | Present only, laptop + phone | Phone joins as a guest. A laptop in another profile opens the invite link, chooses **Present only** and picks a screen. Host records ~30 s | The laptop has no camera tile; its screen shows as "*name* (Presenting)". The folder has the phone's files plus a `guest_screen_*.mp4` from the laptop, and no camera or WAV file from the laptop | ☐ | |
+| 5.9 | Computer presents a photo or video | On a computer, click the arrow beside **Present**, pick **A photo or video** and choose a video with sound; then do the same with a photo during a recording | Everyone else sees it in the spotlight and hears the video; the presenter sees it labelled "What you're presenting"; **Stop presenting** ends it. The photo shown during the recording lands as a `*_screen_*.mp4` | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 
