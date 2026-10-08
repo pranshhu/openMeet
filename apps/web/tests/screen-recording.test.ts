@@ -740,3 +740,78 @@ describe('screen recording', () => {
     expect(journal.notes.files).toEqual([]);
   });
 });
+
+/**
+ * A resumed take starts its segment counter again, so the first share after the
+ * reload would open the number the crashed tab left in the folder — and opening
+ * a name replaces the file. The folder itself is asked which numbers are free.
+ */
+describe('a screen share after a resume', () => {
+  /** `seeded` are the names already in the folder: only those resolve a probe. */
+  function seededDir(opened: string[], probes: string[], seeded: string[]) {
+    const holds = new Set(seeded);
+    return {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (!opts?.create) {
+          probes.push(name);
+          if (!holds.has(name)) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+        } else {
+          opened.push(name);
+          holds.add(name);
+        }
+        return {
+          name,
+          createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+        };
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+  }
+
+  it('opens the next free number instead of the file the crash left', async () => {
+    installMediaRecorder();
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      resumed: true,
+      dir: seededDir(opened, probes, ['host_screen_rec.mp4']),
+    };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+
+    expect(opened).toEqual(['host_screen_rec_2.mp4']);
+    expect(probes[0]).toBe('host_screen_rec.mp4');
+    expect(h.screenSegment).toBe(2);
+    await stopScreenRecording(h);
+  });
+
+  it('steps past every screen file the folder holds', async () => {
+    installMediaRecorder();
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      resumed: true,
+      dir: seededDir(opened, probes, ['host_screen_rec.mp4', 'host_screen_rec_2.mp4']),
+    };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+
+    expect(opened).toEqual(['host_screen_rec_3.mp4']);
+    expect(h.screenSegment).toBe(3);
+    await stopScreenRecording(h);
+  });
+
+  it('leaves a fresh take to open its own number without probing', async () => {
+    installMediaRecorder();
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const h: RecordingHandles = { recordingId: 'new-id', dir: seededDir(opened, probes, ['host_screen_new-id.mp4']) };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+
+    expect(opened).toEqual(['host_screen_new-id.mp4']);
+    expect(probes).toEqual([]);
+    await stopScreenRecording(h);
+  });
+});

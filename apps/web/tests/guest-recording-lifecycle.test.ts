@@ -3376,20 +3376,22 @@ describe('resuming a crashed take from inside the call', () => {
     } as unknown as TakeJournal;
   }
 
+  const hostCameraTrack = { kind: 'video' };
   const stream = () =>
     ({
-      getTracks: () => [],
+      getTracks: () => [hostCameraTrack],
       getAudioTracks: () => [{ kind: 'audio' }],
-      getVideoTracks: () => [{ kind: 'video' }],
+      getVideoTracks: () => [hostCameraTrack],
     }) as unknown as MediaStream;
 
   /** A host back in the room after a reload: joined, told its role, nothing recording. */
   async function hostAfterReload() {
     const { result, unmount } = renderHook(() => useRoom('xyz-test-room'));
+    const joinedStream = stream();
     await act(async () => {
-      await result.current.join(stream(), 'Host Hana');
+      await result.current.join(joinedStream, 'Host Hana');
     });
-    return { result, unmount };
+    return { result, unmount, joinedStream };
   }
 
   /** The room's role-assigned, with the offer's storage lookups flushed. */
@@ -3580,7 +3582,7 @@ describe('resuming a crashed take from inside the call', () => {
   });
 
   it('resumes the same take and re-announces its id', async () => {
-    const { result } = await hostAfterReload();
+    const { result, joinedStream } = await hostAfterReload();
     const journal = takeJournal();
     vi.mocked(findTakeJournals).mockResolvedValue([journal]);
     await assignHost();
@@ -3603,15 +3605,31 @@ describe('resuming a crashed take from inside the call', () => {
     const args = vi.mocked(resumeHostRecording).mock.calls[0]![0];
     expect(args.journal).toBe(journal);
     expect(args.channels.map((c) => c.channel.label)).toEqual(['recording#R1']);
+    // The host's own post-crash part is recorded from the tracks this tab
+    // joined with: the MP4 stream (no board, so its own tracks unmixed) and the
+    // raw mic.
+    expect(args.localStream.getVideoTracks()).toEqual([joinedStream.getVideoTracks()[0]]);
+    expect(args.micStream?.getTracks()).toEqual(joinedStream.getTracks());
     expect(signalSent).toContainEqual({
       type: 'recording-started',
       recordingId: 'rec-1',
       kind: 'camera',
-      filename: 'host_rec-1.mp4',
+      filename: 'host_rec-1_resumed.mp4',
     });
     expect(result.current.state.phase).toBe('recording');
     expect(result.current.state.peerRecording).toBe(true);
     expect(result.current.state.resumeOffer).toBeNull();
+
+    // A marker taken now still sits on the original take's timeline: the
+    // resumed take anchors it to the crash's hostStartMs (1_000 here), not to
+    // the moment this tab rejoined.
+    const markerFloor = Date.now() - 1_000;
+    act(() => {
+      result.current.addMarker('after resume');
+    });
+    const atMs = result.current.state.markers.at(-1)!.atMs;
+    expect(atMs).toBeGreaterThanOrEqual(markerFloor);
+    expect(atMs).toBeLessThan(markerFloor + 5_000);
 
     await act(async () => {
       await result.current.endRecording();

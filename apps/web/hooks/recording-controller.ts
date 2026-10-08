@@ -19,6 +19,7 @@ import {
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import { patchWavHeader } from '@/lib/wav';
 import { openTakeJournal, type TakeJournal } from '@/lib/take-journal';
+import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
 import { sanitizeText } from '@/lib/sync-report';
 import type { CallCopyInput, FileCheck, GuestSyncInput, ScreenSegmentInput } from '@/lib/sync-report';
@@ -107,6 +108,8 @@ export interface RecordingHandles {
    * folder are never replaced, so a number is probed instead of reused.
    */
   resumed?: boolean;
+  /** The host's own files, first part first, each with its offset from hostStartMs. */
+  hostParts?: { name: string; offsetMs: number; kind: 'camera' | 'wav' }[];
   /** Surfaces a journal or backup warning for the caller to show. */
   onWarn?: (msg: string) => void;
 
@@ -215,6 +218,15 @@ export function takeName(
   return take <= 1 ? `${prefix}_${recordingId}.${ext}` : `${prefix}_${recordingId}_take${take}.${ext}`;
 }
 
+/**
+ * `host_<id>_resumed.mp4` for the host's own track after a reload. A running
+ * MediaRecorder cannot continue the file the crashed tab left, and opening its
+ * name again would replace it, so the part after the crash gets its own file.
+ */
+export function resumedName(recordingId: string, ext: 'mp4' | 'wav'): string {
+  return `host_${recordingId}_resumed.${ext}`;
+}
+
 export async function writeTakeSidecars(
   dir: FsDirectoryHandle,
   files: { name: string; content: string }[]
@@ -317,6 +329,30 @@ function screenFileName(role: 'host' | 'guest', recordingId: string, segment: nu
   return segment <= 1
     ? `${role}_screen_${recordingId}.mp4`
     : `${role}_screen_${recordingId}_${segment}.mp4`;
+}
+
+/**
+ * The first screen segment number the folder does not already hold, from `from`
+ * upward. A resumed take restarts its counter, and opening a name replaces the
+ * file behind it, so the folder itself is asked; the probe is bounded so a
+ * folder that answers every name cannot spin here.
+ */
+async function freeScreenSegment(
+  dir: FsDirectoryHandle,
+  role: 'host' | 'guest',
+  recordingId: string,
+  from: number
+): Promise<number> {
+  let segment = from;
+  for (let probes = 0; probes < MAX_SCREEN_PROBES; probes += 1) {
+    try {
+      await dir.getFileHandle(screenFileName(role, recordingId, segment));
+    } catch {
+      return segment;
+    }
+    segment += 1;
+  }
+  return segment;
 }
 
 export interface StartHostArgs {
@@ -629,8 +665,87 @@ export interface ResumeHostArgs {
   dir?: FsDirectoryHandle;
   directoryPicker?: DirectoryPicker;
   channels: PendingRecordingChannel[];
+  /** The host's own capture, as `startHostRecording` receives it. */
+  localStream: MediaStream;
+  /** The raw mic, when the recording stream carries the board's mix instead. */
+  micStream?: MediaStream | undefined;
   onError?: (err: unknown) => void;
   onWarn?: (msg: string) => void;
+}
+
+/**
+ * Open the host's own camera and WAV for the part of the take after a resume.
+ *
+ * Mirrors `startHostRecording`'s host half, with one difference: the files are
+ * named `_resumed`, because `openIn` replaces a name it opens and the crashed
+ * tab's file must survive beside it. Each opened file is appended to
+ * `hostParts` with its offset from the take's start.
+ */
+async function startResumedHostTracks(
+  h: RecordingHandles,
+  args: ResumeHostArgs,
+  dir: FsDirectoryHandle,
+  warn: ((msg: string) => void) | undefined
+): Promise<void> {
+  const notes = args.journal.notes;
+  const hasLocalMedia = args.localStream.getTracks().length > 0;
+  if (!hasLocalMedia) return;
+  const mimeType = pickRecordingMime();
+  if (!mimeType) throw new UnsupportedCodecError();
+
+  // Stamped once, before either file opens: it is the start of this run.
+  const offsetMs = Math.max(0, Date.now() - notes.hostStartMs);
+  const parts = (h.hostParts ??= []);
+
+  const hostWriter = new FileWriter();
+  await hostWriter.openIn(dir, resumedName(notes.recordingId, 'mp4'));
+  h.hostWriter = hostWriter;
+  parts.push({ name: hostWriter.fileName, offsetMs, kind: 'camera' });
+  const hw = hostWriter;
+  h.hostRecorder = new ChunkRecorder({
+    mimeType,
+    stream: args.localStream,
+    videoBitsPerSecond: presetForTrack(args.localStream.getVideoTracks()[0]).videoBps,
+    onChunk: (c) => { hw.write(c.header.offset, c.payload).catch((e) => args.onError?.(e)); },
+    ...(args.onError ? { onError: args.onError } : {}),
+  });
+  h.videoFps = args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate;
+
+  if (isPcmCaptureSupported() && args.localStream.getAudioTracks().length > 0) {
+    const hostWavWriter = new FileWriter();
+    await hostWavWriter.openIn(dir, resumedName(notes.recordingId, 'wav'));
+    h.hostWavWriter = hostWavWriter;
+    parts.push({ name: hostWavWriter.fileName, offsetMs, kind: 'wav' });
+    const w = hostWavWriter;
+    h.hostPcm = new PcmRecorder({
+      stream: args.micStream ?? args.localStream,
+      onChunk: (c) => { w.write(c.header.offset, c.payload).catch((e) => args.onError?.(e)); },
+      ...(args.onError ? { onError: args.onError } : {}),
+    });
+  }
+
+  h.backup = new BackupRecorder({
+    mimeType,
+    stream: args.localStream,
+    fileName: 'openmeet-backup-host',
+    ...(notes.room ? { room: notes.room } : {}),
+    ...(warn ? { onWarn: warn } : {}),
+  });
+
+  if (isPcmCaptureSupported() && args.localStream.getAudioTracks().length > 0) {
+    h.wavBackup = new BackupRecorder({
+      mimeType: 'audio/wav',
+      stream: args.micStream ?? args.localStream,
+      fileName: 'openmeet-backup-host-audio',
+      ...(notes.room ? { room: notes.room } : {}),
+      ...(warn ? { onWarn: warn } : {}),
+    });
+  }
+
+  h.hostRecorder.start();
+  h.hostPcm?.start();
+  h.backup.start();
+  h.wavBackup?.start();
 }
 
 /**
@@ -728,6 +843,30 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
     (note) => note.kind === 'screen' && note.file.startsWith('guest_screen')
   );
   h.guestScreenSegments = Math.max(screenNotes.length, ...screenNotes.map((note) => note.segment ?? 0));
+
+  // The host's own files are not journaled, so these notes hold only the
+  // pre-crash backups. They are the first parts of the take's host track; a
+  // camera with no old backup still gets a part, it just has no pre-crash video.
+  const hostBackups = notes.backups.filter((b) => b.kind === 'camera' || b.kind === 'wav');
+  h.hostParts = hostBackups.map((b) => ({ name: b.file, offsetMs: 0, kind: b.kind as 'camera' | 'wav' }));
+
+  const warn = args.onWarn ?? (args.onError ? (msg: string) => args.onError?.(new Error(msg)) : undefined);
+  // Best-effort, and before the channels are bound: a host file that will not
+  // open costs the take's post-crash host part, never the guests' resumed files.
+  try {
+    await startResumedHostTracks(h, args, dir, warn);
+  } catch {
+    warn?.(
+      'The host’s own camera and microphone could not be recorded after the resume; the guests’ files are unaffected.'
+    );
+  }
+
+  // The pre-crash host part lives only in its backup, and assembling one can be
+  // slow or fail: in the background, so it never holds up the resumed take and a
+  // missing copy costs only the part before the crash.
+  for (const entry of hostBackups) {
+    void copyBackupInto(args.journal, dir, entry).catch(() => {});
+  }
 
   for (const { channel, peerId } of args.channels) {
     const kind = recordingChannelKind(channel.label);
@@ -1452,7 +1591,7 @@ export async function startScreenRecording(
   const track = screen.getVideoTracks()[0];
   if (!track || track.readyState === 'ended') return;
 
-  const segment = (h.screenSegment ?? 0) + 1;
+  let segment = (h.screenSegment ?? 0) + 1;
   h.screenSegment = segment;
 
   const rollback = () => {
@@ -1472,6 +1611,13 @@ export async function startScreenRecording(
 
   if (role === 'host') {
     if (!h.dir) return;
+    if (h.resumed) {
+      // The counter starts again after a resume, so the first share would open
+      // the number the crashed tab left in the folder. Step past every name
+      // already there; a fresh take's id is new, so it never probes.
+      segment = await freeScreenSegment(h.dir, 'host', h.recordingId, segment);
+      h.screenSegment = segment;
+    }
     const writer = new FileWriter();
     await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment));
     if (screen.getVideoTracks()[0]?.readyState === 'ended') {
@@ -1621,16 +1767,9 @@ export async function bindHostScreenChannel(
   let segment = Math.max(h.guestScreenSegments ?? 0, h.screenReceivers?.size ?? 0) + 1;
   if (h.resumed) {
     // After a resume the notes can be short of the numbers already handed out.
-    // Probe for a number the folder does not hold, so a segment saved before
-    // the crash is never opened over. A fresh take reuses its own number.
-    for (let probes = 0; probes < MAX_SCREEN_PROBES; probes += 1) {
-      try {
-        await h.dir.getFileHandle(screenFileName('guest', h.recordingId, segment));
-      } catch {
-        break;
-      }
-      segment += 1;
-    }
+    // Probing for a number the folder does not hold keeps a segment saved before
+    // the crash from being opened over. A fresh take reuses its own number.
+    segment = await freeScreenSegment(h.dir, 'guest', h.recordingId, segment);
   }
   h.guestScreenSegments = segment;
   const writer = new FileWriter();

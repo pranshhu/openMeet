@@ -360,7 +360,8 @@ unfinished send to each new connection to the host.
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero. A screen file already in the folder is never replaced — the resumed host probes for a free
   segment number instead — and screen notes are bounded at 48 while camera and WAV notes are never
-  refused by that bound.
+  refused by that bound. A resumed take opens `host_<id>_resumed.mp4`/`.wav` for the host's own
+  tracks beside the recovered first part, and records both in `hostParts`.
 - `clock-sync.ts` `ClockSync` + `sync-report.ts` `buildSyncReport`: the two files start at independent
   click times, so the guest runs an NTP-style offset estimate over the recording DC (`clock_ping`↔
   `clock_pong`, min-RTT sample), then reports its recorder start on the **host clock** via

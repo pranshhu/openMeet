@@ -60,6 +60,7 @@ import {
   collectFileChecks,
   collectTrackHealth,
   takeName,
+  resumedName,
   writeTakeSidecars,
   syncCallCopies,
   resumeHostRecording,
@@ -1725,6 +1726,11 @@ export function useRoom(slug: string) {
       const h = await resumeHostRecording({
         journal,
         channels: pendingChannelsRef.current,
+        // The host's own track is recorded from here on, so it needs the same
+        // streams a fresh take passes: the MP4 stream (board mix included) and
+        // the raw mic for the WAV master.
+        localStream: withBoardAudio(localStreamRef.current!, boardRef.current),
+        micStream: localStreamRef.current ?? undefined,
         onError,
         onWarn: (msg) => setState((s) => ({ ...s, recordingError: msg })),
       });
@@ -1732,12 +1738,14 @@ export function useRoom(slug: string) {
       resumeJournalRef.current = null;
       recordingRef.current = h;
       dirRef.current = h.dir ?? dirRef.current;
+      // Still the original take's start: the markers and every offset in the
+      // report are measured from it, across both host files.
       hostStartRef.current = h.hostStartMs ?? Date.now();
       signalRef.current?.send({
         type: 'recording-started',
         recordingId: h.recordingId,
         kind: 'camera',
-        filename: takeName('host', h.recordingId, h.take ?? 1, 'mp4'),
+        filename: resumedName(h.recordingId, 'mp4'),
       });
       phaseRef.current = 'recording';
       setState((s) => ({ ...s, phase: 'recording', peerRecording: true, resumeOffer: null, recordingError: null }));

@@ -1,8 +1,38 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CHUNK_TIMESLICE_MS } from '@openmeet/protocol';
-import { startHostRecording, endHostRecording, bindHostGuestChannel, collectFileChecks } from '@/hooks/recording-controller';
+import {
+  startHostRecording,
+  endHostRecording,
+  bindHostGuestChannel,
+  collectFileChecks,
+  resumeHostRecording,
+} from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
+import type { RecoveredFile } from '@/lib/take-recovery';
+import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
+
+/**
+ * `copyBackupInto` replaced by a plain function, not a spy: vitest's spies keep
+ * a handle on the promises a mock returns, so a rejection that escaped the
+ * resume would never surface as an unhandled rejection through one.
+ */
+const recovery = vi.hoisted(() => ({
+  copy: undefined as undefined | ((...args: unknown[]) => Promise<RecoveredFile>),
+  calls: [] as unknown[][],
+}));
+
+vi.mock('@/lib/take-recovery', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/take-recovery')>();
+  return {
+    ...actual,
+    copyBackupInto: (...args: unknown[]) => {
+      recovery.calls.push(args);
+      if (recovery.copy) return recovery.copy(...args);
+      return (actual.copyBackupInto as (...a: unknown[]) => Promise<RecoveredFile>)(...args);
+    },
+  };
+});
 
 class FakeMediaRecorder {
   static instances: FakeMediaRecorder[] = [];
@@ -53,10 +83,61 @@ function fakeStream() {
   } as unknown as MediaStream;
 }
 
+/**
+ * A journal as a resumed take reads it: the take's id, its original start 90 s
+ * ago and the backups this browser wrote before the crash. No real storage.
+ */
+function resumeJournal(backups: TakeNotes['backups'] = []) {
+  const finish = vi.fn().mockResolvedValue(undefined);
+  const notes: TakeNotes = {
+    room: 'abc-defg-hij',
+    recordingId: 'rec',
+    take: 1,
+    hostStartMs: Date.now() - 90_000,
+    files: [],
+    backups,
+    markers: [],
+  };
+  const journal = {
+    dirName: 'openmeet-take-1-abc-defg-hij',
+    notes,
+    finish,
+    note: (change: (n: TakeNotes) => void) => change(notes),
+    file: () => ({ append: () => {}, commit: async () => {}, dead: false }),
+  } as unknown as TakeJournal;
+  return { journal, finish };
+}
+
+/** A folder that records the names it opened (with create) and the names it closed. */
+function trackingDir(opened: string[], closed: string[], seeded: string[] = []) {
+  const holds = new Set(seeded);
+  return {
+    getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+      if (opts?.create) {
+        opened.push(name);
+        holds.add(name);
+      } else if (!holds.has(name)) {
+        throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+      }
+      return {
+        name,
+        createWritable: async () => ({
+          write: async () => {},
+          close: async () => {
+            closed.push(name);
+          },
+        }),
+      };
+    },
+  };
+}
+
 describe('host backup recording', () => {
   beforeEach(() => {
     FakeMediaRecorder.instances = [];
     (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+    recovery.copy = undefined;
+    recovery.calls.length = 0;
   });
 
   afterEach(() => {
@@ -450,5 +531,246 @@ describe('host backup recording', () => {
     } finally {
       stuck.mockRestore();
     }
+  });
+
+  it("records the host's own track into a second file after a resume", async () => {
+    const entry = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'camera' as const };
+    const opened: string[] = [];
+    const { journal } = resumeJournal([entry]);
+
+    const handles = await resumeHostRecording({
+      journal,
+      dir: trackingDir(opened, []) as never,
+      localStream: fakeStream(),
+      channels: [],
+    });
+
+    expect(handles.resumed).toBe(true);
+    expect(opened).toEqual(['host_rec_resumed.mp4']);
+    expect(handles.hostWriter?.fileName).toBe('host_rec_resumed.mp4');
+    expect(handles.hostRecorder).toBeDefined();
+    expect(handles.backup).toBeDefined();
+    const cameraParts = (handles.hostParts ?? []).filter((p) => p.kind === 'camera');
+    expect(cameraParts.map((p) => p.name)).toEqual(['host_rec.mp4', 'host_rec_resumed.mp4']);
+    expect(cameraParts[0]!.offsetMs).toBe(0);
+    // The second part starts where the crash cut the take: 90 s after the start.
+    expect(cameraParts[1]!.offsetMs).toBeGreaterThanOrEqual(90_000);
+    expect(cameraParts[1]!.offsetMs).toBeLessThan(91_000);
+    await endHostRecording(handles);
+  });
+
+  it('copies the pre-crash host part into the folder in the background', async () => {
+    const entry = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'camera' as const };
+    const folder = trackingDir([], []);
+    const { journal } = resumeJournal([entry]);
+    recovery.calls.length = 0;
+    recovery.copy = () => new Promise<never>(() => {});
+
+    const handles = await resumeHostRecording({
+      journal,
+      dir: folder as never,
+      localStream: fakeStream(),
+      channels: [],
+    });
+
+    expect(handles.hostWriter?.fileName).toBe('host_rec_resumed.mp4');
+    expect(recovery.calls).toEqual([[journal, folder, entry]]);
+    await endHostRecording(handles);
+  });
+
+  it('a backup that cannot be copied does not fail the resume', async () => {
+    const entry = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'wav' as const };
+    const { journal } = resumeJournal([entry]);
+    recovery.calls.length = 0;
+    // A rejection the resume does not swallow surfaces as an unhandled
+    // rejection, which the listener below would catch.
+    let rejectCopy: (reason: unknown) => void = () => {};
+    recovery.copy = () =>
+      new Promise<never>((_resolve, reject) => {
+        rejectCopy = reject;
+      });
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    try {
+      await expect(
+        resumeHostRecording({
+          journal,
+          dir: trackingDir([], []) as never,
+          localStream: fakeStream(),
+          channels: [],
+        })
+      ).resolves.toBeDefined();
+      rejectCopy(new Error('backup unavailable'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+    }
+  });
+
+  it("records host camera and WAV into second files and copies only camera and wav backups", async () => {
+    class FakeTrackProcessor {
+      readable = new ReadableStream({
+        start(c) {
+          c.close();
+        },
+      });
+    }
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor = FakeTrackProcessor;
+
+    try {
+      const cameraEntry = { dir: 'openmeet-backup-host-1-cam', file: 'host_rec.mp4', kind: 'camera' as const };
+      const wavEntry = { dir: 'openmeet-backup-host-2-wav', file: 'host_rec.wav', kind: 'wav' as const };
+      const screenEntry = { dir: 'openmeet-backup-host-3-screen', file: 'host_screen_rec.mp4', kind: 'screen' as const };
+      const opened: string[] = [];
+      const { journal } = resumeJournal([cameraEntry, wavEntry, screenEntry]);
+      recovery.calls.length = 0;
+      recovery.copy = () => new Promise<never>(() => {});
+
+      const videoTrack = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 30 }) };
+      const audioTrack = {};
+      const stream = {
+        getTracks: () => [videoTrack, audioTrack],
+        getVideoTracks: () => [videoTrack],
+        getAudioTracks: () => [audioTrack],
+      } as unknown as MediaStream;
+
+      const handles = await resumeHostRecording({
+        journal,
+        dir: trackingDir(opened, []) as never,
+        localStream: stream,
+        channels: [],
+      });
+
+      expect(opened).toEqual(['host_rec_resumed.mp4', 'host_rec_resumed.wav']);
+      expect(handles.hostWriter?.fileName).toBe('host_rec_resumed.mp4');
+      expect(handles.hostWavWriter?.fileName).toBe('host_rec_resumed.wav');
+      expect(handles.hostPcm).toBeDefined();
+      expect(handles.wavBackup).toBeDefined();
+
+      // Screen backups must not be copied or in hostParts
+      expect(recovery.calls).toEqual([
+        [journal, expect.anything(), cameraEntry],
+        [journal, expect.anything(), wavEntry],
+      ]);
+      expect(handles.hostParts).toEqual([
+        { name: 'host_rec.mp4', offsetMs: 0, kind: 'camera' },
+        { name: 'host_rec.wav', offsetMs: 0, kind: 'wav' },
+        { name: 'host_rec_resumed.mp4', offsetMs: expect.any(Number), kind: 'camera' },
+        { name: 'host_rec_resumed.wav', offsetMs: expect.any(Number), kind: 'wav' },
+      ]);
+      await endHostRecording(handles);
+    } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  it("a host setup that fails costs only the host's part of the resume", async () => {
+    const warn = vi.fn();
+    const { journal } = resumeJournal();
+    FakeMediaRecorder.isTypeSupported = () => false;
+    try {
+      const handles = await resumeHostRecording({
+        journal,
+        dir: fakeDir() as never,
+        localStream: fakeStream(),
+        channels: [],
+        onWarn: warn,
+      });
+
+      expect(handles.hostWriter).toBeUndefined();
+      expect(handles.hostRecorder).toBeUndefined();
+      expect(handles.backup).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(typeof warn.mock.calls[0]![0]).toBe('string');
+    } finally {
+      FakeMediaRecorder.isTypeSupported = () => true;
+    }
+  });
+
+  it('asks for the folder once and opens no fresh-take name after a resume', async () => {
+    const opened: string[] = [];
+    const prompts: string[] = [];
+    const folder = trackingDir(opened, []);
+    const { journal } = resumeJournal();
+
+    const handles = await resumeHostRecording({
+      journal,
+      directoryPicker: async () => {
+        prompts.push('ask');
+        return folder as never;
+      },
+      localStream: fakeStream(),
+      channels: [],
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(handles.dir).toBe(folder);
+    // A fresh take's host_rec.mp4/guest_rec.mp4 must not be opened over the
+    // files the crashed session left: only the resumed name is new here.
+    expect(opened).toEqual(['host_rec_resumed.mp4']);
+    await endHostRecording(handles);
+  });
+
+  it('starts no more recorders than a fresh take does for the same stream', async () => {
+    const stream = fakeStream();
+    FakeMediaRecorder.instances = [];
+    const fresh = await startHostRecording({ recordingId: 'fresh', localStream: stream, dir: fakeDir() as never });
+    const freshRecorders = FakeMediaRecorder.instances.length;
+    await endHostRecording(fresh);
+
+    const { journal } = resumeJournal();
+    FakeMediaRecorder.instances = [];
+    const resumed = await resumeHostRecording({
+      journal,
+      dir: fakeDir() as never,
+      localStream: stream,
+      channels: [],
+    });
+    expect(FakeMediaRecorder.instances).toHaveLength(freshRecorders);
+    await endHostRecording(resumed);
+  });
+
+  it('endHostRecording closes the resumed host file and marks nothing', async () => {
+    const opened: string[] = [];
+    const closed: string[] = [];
+    const markFinalized = vi.spyOn(BackupRecorder.prototype, 'markFinalized');
+    const { journal, finish } = resumeJournal();
+    try {
+      const handles = await resumeHostRecording({
+        journal,
+        dir: trackingDir(opened, closed) as never,
+        localStream: fakeStream(),
+        channels: [],
+      });
+      for (const mr of FakeMediaRecorder.instances) {
+        if (mr.state === 'recording') mr.emit(64);
+      }
+
+      const { backup } = await endHostRecording(handles);
+
+      expect(backup).toBeInstanceOf(Blob);
+      expect(backup?.size).toBeGreaterThan(0);
+      expect(closed).toContain('host_rec_resumed.mp4');
+      // Ending a take is the caller's to mark: closing the file is all this does.
+      expect(finish).not.toHaveBeenCalled();
+      expect(markFinalized).not.toHaveBeenCalled();
+    } finally {
+      markFinalized.mockRestore();
+    }
+  });
+
+  it('a fresh take is still named from the id it is given', async () => {
+    const opened: string[] = [];
+    // A leftover name from an earlier resumed take must not divert a new one.
+    const dir = trackingDir(opened, [], ['host_rec_resumed.mp4']);
+
+    const handles = await startHostRecording({ recordingId: 'new-id', localStream: fakeStream(), dir: dir as never });
+
+    expect(opened).toEqual(['host_new-id.mp4', 'guest_new-id.mp4']);
+    expect(handles.hostWriter?.fileName).toBe('host_new-id.mp4');
+    expect(opened.some((name) => name.includes('_resumed'))).toBe(false);
+    await endHostRecording(handles);
   });
 });

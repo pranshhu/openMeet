@@ -96,6 +96,18 @@ async function sendChunk(ch: { deliver(d: string | ArrayBuffer): Promise<void> }
 }
 
 /**
+ * A companion's own capture: no tracks, so a resume opens no host file. The
+ * guest files are what these tests are about.
+ */
+function emptyFakeStream(): MediaStream {
+  return {
+    getTracks: () => [],
+    getVideoTracks: () => [],
+    getAudioTracks: () => [],
+  } as unknown as MediaStream;
+}
+
+/**
  * What startHostRecording leaves behind: slot 0's MP4 writer and receiver are
  * opened eagerly, before any guest exists.
  */
@@ -1157,6 +1169,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1178,12 +1191,19 @@ describe('a take resumed from its journal', () => {
 
     await sendChunk(channel, 2, 200, 100);
     await sendChunk(channel, 3, 300, 100);
+    // The take ends normally: the guest's finalize lets endHostRecording close
+    // the file instead of waiting out the tail timeout.
+    await channel.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'rec', totalBytes: 400, sha256: 'a'.repeat(64) })
+    );
+    await endHostRecording(h);
     expect(written.filter((w) => w.file === 'guest_rec.mp4').map((w) => [w.position, w.bytes])).toEqual([
       [0, 100],
       [100, 100],
       [200, 100],
       [300, 100],
     ]);
+    expect(opened).toEqual(['guest_rec.mp4']);
   });
 
   it('withholds the written digest of a resumed file, so its verdict is not a false mismatch', async () => {
@@ -1191,6 +1211,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1223,6 +1244,7 @@ describe('a take resumed from its journal', () => {
     const c2 = fakeChannel('recording#R2');
     const c1 = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       // A caller that still holds the folder handle passes it instead of a picker.
       dir: fakeDir([], written),
@@ -1254,6 +1276,7 @@ describe('a take resumed from its journal', () => {
     const c1 = fakeChannel('recording#R1');
     const c2 = fakeChannel('recording#R2');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [
@@ -1284,6 +1307,7 @@ describe('a take resumed from its journal', () => {
     const backup = fakeChannel('backup#R1');
     const other = fakeChannel('other#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, written),
       channels: [
@@ -1313,6 +1337,7 @@ describe('a take resumed from its journal', () => {
       { file: 'host_screen_rec.mp4', kind: 'screen' },
     ]);
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, []),
       channels: [],
@@ -1336,6 +1361,7 @@ describe('a take resumed from its journal', () => {
       { channel: fakeChannel('recording#R1'), peerId: '\n"\'/../bad' },
     ];
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], []),
       channels: hostileChannels,
@@ -1352,6 +1378,7 @@ describe('a take resumed from its journal', () => {
     );
     const channel = fakeChannel('recording-audio#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1388,6 +1415,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       dir: failingDir,
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1406,6 +1434,7 @@ describe('a take resumed from its journal', () => {
     const warns: string[] = [];
     const j = resumeJournal([r1Note], r1Position, r1Parts, true);
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], []),
       channels: [],
@@ -1428,6 +1457,7 @@ describe('a take resumed from its journal', () => {
     const c1 = fakeChannel('recording#R1');
     const c2 = fakeChannel('recording#R2');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, [], closed),
       channels: [
@@ -1460,6 +1490,7 @@ describe('a take resumed from its journal', () => {
     );
     const channel = fakeChannel('recording#R1');
     await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1484,6 +1515,7 @@ describe('a take resumed from its journal', () => {
     );
     const channel = fakeChannel('recording#R1');
     await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1502,6 +1534,7 @@ describe('a take resumed from its journal', () => {
     j.journal.notes.recordingId = '';
     await expect(
       resumeHostRecording({
+        localStream: emptyFakeStream(),
         journal: j.journal,
         directoryPicker: async () => {
           picked = true;
@@ -1521,6 +1554,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([{ file: 'guest_rec.mp4', kind: 'camera', slot: 0 }], r1Position, r1Parts);
     const channel = fakeChannel('recording#guest_rec.mp4');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, written),
       channels: [{ channel, peerId: 'peer-x' }],
@@ -1545,6 +1579,7 @@ describe('a take resumed from its journal', () => {
       { 'guest_rec.mp4': [{ offset: 0, size: 10 }], 'guest3_rec.mp4': [{ offset: 0, size: 10 }] }
     );
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, []),
       channels: [],
@@ -1580,6 +1615,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       dir,
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1608,6 +1644,7 @@ describe('a take resumed from its journal', () => {
     };
     const good = fakeChannel('recording#R2');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], []),
       channels: [
@@ -1628,6 +1665,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1651,6 +1689,7 @@ describe('a take resumed from its journal', () => {
     const j = resumeJournal([r1Note], r1Position, r1Parts);
     const channel = fakeChannel('recording#R1');
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir([], written),
       channels: [{ channel, peerId: 'peer-a' }],
@@ -1671,6 +1710,7 @@ describe('a take resumed from its journal', () => {
       );
       const c1 = fakeChannel('recording#R1');
       const h = await resumeHostRecording({
+        localStream: emptyFakeStream(),
         journal: j.journal,
         directoryPicker: async () => fakeDir([], []),
         channels: [{ channel: c1, peerId: 'peer-a' }],
@@ -1697,6 +1737,7 @@ describe('a take resumed from its journal', () => {
     const opened: string[] = [];
     const j = resumeJournal([{ file: 'guest_screen_rec_2.mp4', kind: 'screen', segment: 2 }]);
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       directoryPicker: async () => fakeDir(opened, []),
       channels: [],
@@ -1716,6 +1757,7 @@ describe('a take resumed from its journal', () => {
       r1Parts
     );
     const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
       journal: j.journal,
       // Segment 3 was handed out before the crash but left no note: only the
       // folder itself knows its name is taken.

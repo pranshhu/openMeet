@@ -67,6 +67,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Coming back to a room where the guests are still connected, the host is offered
   **Resume recording** to continue the interrupted take under the same id, or
   **Save what was recorded** to rebuild it in the folder instead.
+- After a resume the host's own camera and WAV master are recorded to a second
+  file (`host_<id>_resumed.mp4`/`.wav`), with the part before the crash copied
+  into the folder from the take's backup beside it.
 
 ### Changed
 
