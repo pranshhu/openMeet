@@ -4,6 +4,7 @@ import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck } from '@/lib/preflight';
 import { presetById } from '@/lib/quality';
+import { formatBytes } from '@/lib/sync-report';
 import type { TakeJournal } from '@/lib/take-journal';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
 
@@ -158,6 +159,25 @@ describe('Lobby', () => {
     confirm.mockRestore();
   });
 
+  it('shows a backup’s size the way the in-call notices do', async () => {
+    const bytes = 754_146;
+    const fakeFile = new File([new Uint8Array(bytes)], 'openmeet-backup.mp4', {
+      lastModified: 1700000000000,
+    });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue([fakeFile]);
+
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText(/Recording backup \(MP4\) from/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(`· ${formatBytes(bytes)}`)).toBeInTheDocument();
+    expect(screen.queryByText('· 1 MB')).not.toBeInTheDocument();
+
+    findBackupsSpy.mockRestore();
+  });
+
   it('lists screen backups as a screen backup with download and delete controls', async () => {
     const fakeFile = new File(['content'], 'openmeet-backup-screen-1700000000000-xyz-abcd-pqr.mp4', {
       lastModified: 1700000000000,
@@ -211,7 +231,7 @@ describe('Lobby', () => {
       const title = await screen.findByText(`Recording backup (MP4) from ${when}`);
       // Under a heading that says what these are.
       expect(screen.getByRole('heading', { name: 'Backups on this device' })).toBeInTheDocument();
-      expect(title.parentElement?.textContent).toMatch(/· 1 MB$/);
+      expect(title.parentElement?.textContent).toMatch(new RegExp(`· ${formatBytes(fakeFile.size)}$`));
 
       fireEvent.click(screen.getByRole('button', { name: /delete/i }));
       expect(confirm).toHaveBeenCalled();

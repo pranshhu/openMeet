@@ -41,8 +41,8 @@ function Row({ tone, children }: { tone: 'status' | 'saved' | 'alert'; children:
 }
 
 /**
- * What a returned backup is doing, inside the call. Its own component so a
- * percent change re-renders this row, not the stage.
+ * What a returned backup is doing, inside the call. Its own component so the
+ * rows stay out of the stage's body.
  */
 export function BackupNotice(props: {
   role: Role | null;
@@ -53,6 +53,8 @@ export function BackupNotice(props: {
   onDecline?: (() => void) | undefined;
   /** The host gave up on a dead transfer: drop it so its name can come back. */
   onDismiss?: ((id: string) => void) | undefined;
+  /** The host ends a running transfer, keeping the part that arrived. */
+  onStop?: ((id: string) => void) | undefined;
 }): ReactNode {
   // The settled items the user sent away, kept as the objects themselves: a
   // backup that is sent again is a new object and shows again.
@@ -87,7 +89,7 @@ export function BackupNotice(props: {
       <Row key="failed" tone="alert">
         <span>
           {props.role !== 'host'
-            ? 'The host didn’t get your backup. It’s still on this device — rejoin to send it again.'
+            ? 'Your backup wasn’t saved on the host’s computer. It’s still on this device — rejoin to send it again.'
             : failed.some((t) => t.diskFull)
               ? `Your disk is full, so a backup wasn’t saved. Free up space, then ask ${who} to send it again.`
               : `${files(failed.length)} from ${who} didn’t arrive intact. Ask them to send it again.`}
@@ -118,24 +120,39 @@ export function BackupNotice(props: {
       rows.push(
         <Row key="moving" tone="status">
           <span>
-            Receiving {files(moving.length)} — <span className="tabular-nums">{pctOf(moving)}%</span>. Keep
-            this tab open.
+            Receiving {files(active.length)} —{' '}
+            <span className="tabular-nums" aria-hidden="true">
+              {pctOf(active)}%
+            </span>
+            . Keep this tab open.
           </span>
+          <button
+            type="button"
+            onClick={() => active.forEach((t) => props.onStop?.(t.id))}
+            className={quietBtn}
+          >
+            Stop
+          </button>
         </Row>
       );
-    } else if (stalled.length > 0) {
+    }
+
+    if (stalled.length > 0) {
       rows.push(
         <Row key="stalled" tone="status">
           <span>
-            A backup stopped at <span className="tabular-nums">{pctOf(stalled)}%</span>. It continues when{' '}
-            {whoOf(stalled)} reconnects.
+            A backup stopped at{' '}
+            <span className="tabular-nums" aria-hidden="true">
+              {pctOf(stalled)}%
+            </span>
+            . It continues when {whoOf(stalled)} reconnects.
           </span>
           {dismissBtn(stalled, true)}
         </Row>
       );
     }
 
-    if (saved.length > 0 && offered.length === 0 && moving.length === 0) {
+    if (saved.length > 0) {
       rows.push(
         <Row key="saved" tone="saved">
           <span>{files(saved.length)} saved to your recording folder and verified.</span>
@@ -154,8 +171,11 @@ export function BackupNotice(props: {
       rows.push(
         <Row key="sending" tone="status">
           <span>
-            Sending your backup to the host — <span className="tabular-nums">{pctOf(active)}%</span>. Keep
-            this tab open.
+            Sending your backup to the host —{' '}
+            <span className="tabular-nums" aria-hidden="true">
+              {pctOf(active)}%
+            </span>
+            . Keep this tab open.
           </span>
         </Row>
       );
@@ -163,8 +183,11 @@ export function BackupNotice(props: {
       rows.push(
         <Row key="lost" tone="status">
           <span>
-            Lost the connection to the host at <span className="tabular-nums">{pctOf(stalled)}%</span>.
-            Sending continues when it’s back.
+            Lost the connection to the host at{' '}
+            <span className="tabular-nums" aria-hidden="true">
+              {pctOf(stalled)}%
+            </span>
+            . Sending continues when it’s back.
           </span>
           {dismissBtn(stalled)}
         </Row>

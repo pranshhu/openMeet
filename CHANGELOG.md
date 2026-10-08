@@ -118,6 +118,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   it first.
 - When one person's connection to the service drops and returns, the call comes
   back at once instead of after half a minute.
+- A returned backup that stalled is dismissed, and one still running stopped,
+  while other transfers keep arriving, and a backup the host saved is announced
+  at once instead of waiting for the rest.
 
 ### Security
 

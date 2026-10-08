@@ -468,6 +468,19 @@ describe('returned backups', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(dismissBackup).toHaveBeenCalledWith(stalled[0]!.id);
   });
+
+  it('stops a running backup through the hook', () => {
+    const stopBackup = vi.fn();
+    hook.stopBackup = stopBackup;
+    hook.acceptBackups = vi.fn();
+    hook.declineBackups = vi.fn();
+    const active = offered.map((t) => ({ ...t, status: 'active', percent: 30 }));
+    Object.assign(state, inCall, { role: 'host', backupTransfers: active });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(stopBackup).toHaveBeenCalledWith(active[0]!.id);
+  });
 });
 
 describe('interrupted take', () => {

@@ -33,6 +33,7 @@ import { getScreenStream, isScreenShareSupported } from '@/lib/screen';
 import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
+import { formatBytes } from '@/lib/sync-report';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -703,7 +704,7 @@ export function Lobby({
                     >
                       <p className="min-w-0">
                         <span>{title}</span>
-                        <span className="whitespace-nowrap text-[#5f6368]"> · {formatSize(b.file.size)}</span>
+                        <span className="whitespace-nowrap text-[#5f6368]"> · {formatBytes(b.file.size)}</span>
                       </p>
                       <div className="-ml-4 flex shrink-0 flex-wrap items-center gap-1">
                         <a

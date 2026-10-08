@@ -4,8 +4,11 @@ import { BackupNotice } from '@/components/BackupNotice';
 import { formatBytes } from '@/lib/sync-report';
 import type { BackupTransfer } from '@/hooks/backup-return';
 
+const BACKUP = 'backup_asha_camera_20231114T221320000Z.mp4';
+const BACKUP_2 = 'backup_bo_camera_20231114T221421000Z.mp4';
+
 const item = (over: Partial<BackupTransfer> = {}): BackupTransfer => ({
-  id: 'backup_asha_camera_20231114T221320000Z.mp4',
+  id: BACKUP,
   kind: 'camera',
   size: 1_500_000_000,
   status: 'offered',
@@ -27,6 +30,7 @@ function show(props: {
   onAccept?: () => void;
   onDecline?: () => void;
   onDismiss?: (id: string) => void;
+  onStop?: (id: string) => void;
 }) {
   return render(
     <BackupNotice
@@ -36,6 +40,7 @@ function show(props: {
       onAccept={props.onAccept}
       onDecline={props.onDecline}
       onDismiss={props.onDismiss}
+      onStop={props.onStop}
     />
   );
 }
@@ -86,38 +91,109 @@ describe('BackupNotice', () => {
     expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
   });
 
-  it('weights the percent of a mixed row by size', () => {
+  it('weights the percent of the active row by size', () => {
     show({
       transfers: [
         item({ id: 'a', status: 'active', percent: 40 }),
-        item({ id: 'b', status: 'stalled', percent: 0 }),
+        item({ id: 'b', status: 'active', percent: 0 }),
       ],
     });
     expect(screen.getByRole('status').textContent).toBe(
-      'Receiving 2 backup files — 20%. Keep this tab open.'
+      'Receiving 2 backup files — 20%. Keep this tab open.Stop'
     );
   });
 
-  it('weighs a bigger file more than a smaller one', () => {
+  it('weighs a bigger active file more than a smaller one', () => {
     show({
       transfers: [
         item({ id: 'a', status: 'active', percent: 50, size: 3_000_000_000 }),
-        item({ id: 'b', status: 'stalled', percent: 0, size: 1_000_000_000 }),
+        item({ id: 'b', status: 'active', percent: 0, size: 1_000_000_000 }),
       ],
     });
     expect(screen.getByRole('status').textContent).toBe(
-      'Receiving 2 backup files — 37%. Keep this tab open.'
+      'Receiving 2 backup files — 37%. Keep this tab open.Stop'
     );
   });
 
-  it('holds the saved line back while an offer is on screen', () => {
+  it('counts only what is arriving, and tells a stalled transfer apart from it', () => {
+    show({
+      transfers: [
+        item({ id: BACKUP, status: 'stalled', percent: 40, from: 'Asha' }),
+        item({ id: BACKUP_2, status: 'active', percent: 50, from: 'Bo' }),
+      ],
+    });
+    const rows = screen.getAllByRole('status').map((row) => row.textContent);
+    expect(rows).toContain('Receiving 1 backup file — 50%. Keep this tab open.Stop');
+    expect(rows).toContain('A backup stopped at 40%. It continues when Asha reconnects.Dismiss');
+  });
+
+  it('a stalled transfer keeps its line and its Dismiss while another transfer is moving', () => {
+    const onDismiss = vi.fn();
+    show({
+      transfers: [
+        item({ id: BACKUP, status: 'stalled', percent: 40, from: 'Asha' }),
+        item({ id: BACKUP_2, status: 'active', from: 'Bo' }),
+      ],
+      onDismiss,
+    });
+    expect(screen.getByText(/It continues when Asha reconnects/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismiss).toHaveBeenCalledWith(BACKUP);
+  });
+
+  it('lets the host stop every running transfer, and only tells the engine', () => {
+    const onStop = vi.fn();
+    show({
+      transfers: [
+        item({ id: BACKUP, status: 'active', percent: 40, from: 'Asha' }),
+        item({ id: BACKUP_2, status: 'active', percent: 10, from: 'Bo' }),
+      ],
+      onStop,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(onStop).toHaveBeenCalledTimes(2);
+    expect(onStop).toHaveBeenCalledWith(BACKUP);
+    expect(onStop).toHaveBeenCalledWith(BACKUP_2);
+    // The row waits for the engine's verdict: stopping here would take the
+    // failed row and its own way out with it.
+    expect(screen.getByRole('status').textContent).toBe(
+      'Receiving 2 backup files — 25%. Keep this tab open.Stop'
+    );
+  });
+
+  it('keeps the Stop button safe to press with no handler', () => {
+    show({ transfers: [item({ status: 'active', percent: 40 })] });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(screen.getByRole('status').textContent).toBe(
+      'Receiving 1 backup file — 40%. Keep this tab open.Stop'
+    );
+  });
+
+  it('keeps the moving percent out of the spoken row', () => {
+    const cases = [
+      { role: 'host' as const, status: 'active' as const, percent: 40 },
+      { role: 'host' as const, status: 'stalled' as const, percent: 30 },
+      { role: 'guest' as const, status: 'active' as const, percent: 60 },
+      { role: 'guest' as const, status: 'stalled' as const, percent: 15 },
+    ];
+    for (const c of cases) {
+      const view = show({ role: c.role, transfers: [item({ status: c.status, percent: c.percent })] });
+      const pct = view.container.querySelector('.tabular-nums');
+      expect(pct?.textContent).toBe(`${c.percent}%`);
+      expect(pct?.getAttribute('aria-hidden')).toBe('true');
+      view.unmount();
+    }
+  });
+
+  it('shows the saved row even while an offer waits', () => {
     show({
       transfers: [
         item({ id: 'offered' }),
         item({ id: 'saved', status: 'saved', percent: 100 }),
       ],
     });
-    expect(screen.queryByText(/saved to your recording folder and verified/)).toBeNull();
+    expect(screen.getByText(/1 backup file saved to your recording folder and verified\./)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Save to folder' })).toBeTruthy();
   });
 
@@ -265,7 +341,7 @@ describe('BackupNotice', () => {
       <BackupNotice role="guest" transfers={[item({ status: 'failed', percent: 15 })]} takeActive={false} />
     );
     expect(screen.getByRole('alert').textContent).toContain(
-      'The host didn’t get your backup. It’s still on this device — rejoin to send it again.'
+      'Your backup wasn’t saved on the host’s computer. It’s still on this device — rejoin to send it again.'
     );
   });
 
@@ -352,14 +428,22 @@ describe('BackupNotice', () => {
     );
   });
 
-  it('tells a tab with no role yet that the host did not get the backup', () => {
+  it('tells a guest the host said no, in words that stay true', () => {
+    show({ role: 'guest', transfers: [item({ status: 'failed', percent: 10 })] });
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Your backup wasn’t saved on the host’s computer. It’s still on this device — rejoin to send it again.'
+    );
+    expect(screen.queryByText(/The host didn’t get your backup/)).toBeNull();
+  });
+
+  it('tells a tab with no role yet that the backup was not saved', () => {
     show({ role: null, transfers: [item({ status: 'failed', percent: 10 })] });
     expect(screen.getByRole('alert').textContent).toContain(
-      'The host didn’t get your backup. It’s still on this device — rejoin to send it again.'
+      'Your backup wasn’t saved on the host’s computer. It’s still on this device — rejoin to send it again.'
     );
   });
 
-  it('holds the saved line back while bytes are arriving', () => {
+  it('announces a saved backup while another is still arriving', () => {
     show({
       transfers: [
         item({ id: 'a', status: 'active', percent: 40 }),
@@ -367,7 +451,8 @@ describe('BackupNotice', () => {
       ],
     });
     expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual([
-      'Receiving 1 backup file — 40%. Keep this tab open.',
+      'Receiving 1 backup file — 40%. Keep this tab open.Stop',
+      '1 backup file saved to your recording folder and verified.Dismiss',
     ]);
   });
 

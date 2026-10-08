@@ -127,6 +127,7 @@ export function CallStage({
   onAcceptBackups,
   onDeclineBackups,
   onDismissBackup,
+  onStopBackup,
   resumeOffer,
   onResumeRecording,
   onSaveRecording,
@@ -208,6 +209,8 @@ export function CallStage({
   onDeclineBackups?: () => void;
   /** The host gave up on a dead returned backup. */
   onDismissBackup?: (id: string) => void;
+  /** The host ended a returned backup that was still running. */
+  onStopBackup?: (id: string) => void;
   /** A take in this room ended without its files and its crash copy is here. */
   resumeOffer?: { take: number; canResume: boolean } | null;
   onResumeRecording?: () => void;
@@ -730,6 +733,7 @@ export function CallStage({
         onAccept={onAcceptBackups}
         onDecline={onDeclineBackups}
         onDismiss={onDismissBackup}
+        onStop={onStopBackup}
       />
 
       {/* Recording failures render HERE, inside the call, rather than switching
