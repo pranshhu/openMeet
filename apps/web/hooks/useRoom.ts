@@ -2288,6 +2288,7 @@ export function useRoom(slug: string) {
         take: takeRef.current,
         journal,
         room: slug,
+        hostName: localNameRef.current,
         ...(dirRef.current ? { dir: dirRef.current } : {}),
         // Deliberately NOT phase:'error'. That unmounts CallStage, removing the
         // only button that closes the file handle — so a transient disk error

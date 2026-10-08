@@ -445,6 +445,9 @@ unfinished send to each new connection to the host.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
   `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
+  `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
+  digits of any script, lowercased, hyphens for the rest, 32 characters at most).
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take
   records as before. `useRoom` mirrors that into `unprotectedRecording`, and sets the same flag
@@ -758,3 +761,6 @@ unfinished send to each new connection to the host.
   (1 : 1.5 : 2). The lobby names the figure as "up to", and its size figures use it, so they
   overstate there. Not measured on macOS, Windows or a hardware encoder; asking for more to make
   up for it would double the files wherever the encoder does use the real frame rate.
+- **After a reload the host's own files of the resumed part carry no name.** They are
+  `host_<id>_resumed.*`; the part before the reload keeps the name it was written under, and both
+  are listed in `hostParts`.

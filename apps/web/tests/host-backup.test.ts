@@ -562,6 +562,55 @@ describe('host backup recording', () => {
     }
   });
 
+  it("keeps a named host file in the notes when the journal is read back", async () => {
+    const whenOpen = vi.spyOn(BackupRecorder.prototype, 'whenOpen').mockResolvedValue(undefined);
+    const dirName = vi
+      .spyOn(BackupRecorder.prototype, 'dirName', 'get')
+      .mockReturnValue('openmeet-backup-host-1759824000000-abc-defg-hij');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-name',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        hostName: 'María',
+        journalRoot: async () => root as never,
+      });
+      await Promise.resolve();
+
+      const named = handles.hostWriter?.fileName ?? '';
+      expect(named).toBe('host-maría_test-rec-name.mp4');
+      expect(handles.journal?.notes.backups).toContainEqual({
+        dir: 'openmeet-backup-host-1759824000000-abc-defg-hij',
+        file: named,
+        kind: 'camera',
+      });
+
+      // The note reaches storage with the next commit, and a later session reads it back.
+      await handles.receiver!.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
+      await handles.receiver!.handleMessage(new ArrayBuffer(4));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await handles.receiver!.handleMessage(JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }));
+      await handles.receiver!.handleMessage(new ArrayBuffer(4));
+      await vi.waitFor(async () => {
+        const [found] = await findTakeJournals(async () => root as never);
+        expect(found?.notes.backups).toContainEqual({
+          dir: 'openmeet-backup-host-1759824000000-abc-defg-hij',
+          file: named,
+          kind: 'camera',
+        });
+      });
+
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+      whenOpen.mockRestore();
+      dirName.mockRestore();
+    }
+  });
+
   it("records the host's own track into a second file after a resume", async () => {
     const entry = { dir: 'openmeet-backup-host-1-abc-defg-hij', file: 'host_rec.mp4', kind: 'camera' as const };
     const opened: string[] = [];

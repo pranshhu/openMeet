@@ -362,8 +362,9 @@ All in the one folder the host picks, per take:
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
-screen file is. The MP4's audio track is the convenience copy;
-the WAV is the master.
+screen file is. The host's files carry the host's name after the role, cut down to letters, digits
+and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
+the convenience copy; the WAV is the master.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,

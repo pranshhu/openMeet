@@ -111,7 +111,7 @@ const MAX_BACKUPS = 16;
 
 /** A file's name in the recording folder, and so its directory's name in the journal: no separators, no leading dot, one known recording extension. */
 export function isJournalFileName(name: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]*\.(mp4|wav|webm|m4a)$/.test(name);
+  return /^[\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*\.(mp4|wav|webm|m4a)$/u.test(name);
 }
 
 /** More non-contiguous appends than this in one commit are dropped: a sender must not decide how many files the host creates. */
