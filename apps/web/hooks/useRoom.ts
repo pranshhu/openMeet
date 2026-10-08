@@ -1648,7 +1648,7 @@ export function useRoom(slug: string) {
       // nothing here reacts to a message that is not from the host.
       signal.on('recording-started', (m) => {
         if (m.from !== 'host') return;
-        setState((s) => ({ ...s, peerRecording: true }));
+        setState((s) => ({ ...s, peerRecording: true, countdownEndsAt: null }));
         if (roleRef.current !== 'guest' || asProducer) return;
         const id =
           typeof m.recordingId === 'string' && m.recordingId.length <= 64 ? m.recordingId : null;
@@ -1675,6 +1675,17 @@ export function useRoom(slug: string) {
         void endRecordingRef.current({ from: 'recording-stop' }).catch((e: unknown) =>
           setState((s) => ({ ...s, phase: 'done', recordingError: recordingErrorMessage(e) }))
         );
+      });
+      // A cue for the screen and nothing else: the take starts with
+      // recording-started, with or without it. Counted from its arrival on
+      // this tab's own clock, never for longer than this build's own
+      // countdown, never on the host (its Record button follows its own
+      // count) and never over a take that is already running.
+      signal.on('recording-countdown', (m) => {
+        if (roleRef.current === 'host') return;
+        const seconds = Number.isFinite(m.seconds) ? Math.min(m.seconds, RECORD_COUNTDOWN_S) : 0;
+        const endsAt = seconds > 0 ? Date.now() + seconds * 1000 : null;
+        setState((s) => (s.peerRecording ? s : { ...s, countdownEndsAt: endsAt }));
       });
 
       signal.on('marker', (m) => {
@@ -2466,6 +2477,8 @@ export function useRoom(slug: string) {
       const ms = RECORD_COUNTDOWN_S * 1000;
       const endsAt = Date.now() + ms;
       setState((s) => ({ ...s, countdownEndsAt: endsAt }));
+      // A cue for the other screens. The take does not wait to hear it arrived.
+      signalRef.current?.send({ type: 'recording-countdown', seconds: RECORD_COUNTDOWN_S });
       await new Promise<void>((resolve) => {
         countdownTimerRef.current = setTimeout(resolve, ms);
       });

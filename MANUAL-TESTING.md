@@ -88,6 +88,7 @@ EOF
 | 2.11 | Call copy has the guest's voice | Play `call1_*.m4a` from the take above (VLC, or drop it on a browser tab) | The guest is audible from start to end, at call quality | ☐ | |
 | 2.12 | Folder access taken back | After a take, use the browser's site settings (the icon in the address bar) to remove openMeet's access to the recording folder, then press **Record another take**, and after the message press **Record** again | The first press says permission to write to that folder was denied; the second opens the folder picker, and the take records into the folder chosen there | ☐ | |
 | 2.13 | Countdown | On a fresh browser profile, host clicks **Record** and chooses a folder | The folder prompt comes first; then the host's screen reads "Recording starts in 3", 2, 1 with Record greyed out, and only then the Recording pill appears; nothing else is asked when the take starts | ☐ | |
+| 2.14 | Countdown for everyone | With a guest and a producer in the call, host clicks **Record** | All three screens read "Recording starts in 3", 2, 1; then the guest sees the red notice and the REC pill. A guest who joins during the count sees no count and is recorded from the start of the take | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 

@@ -5873,4 +5873,94 @@ describe('the countdown before a take', () => {
     expect(result.current.state.phase).toBe('left');
     expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
   });
+
+  const countdown = (seconds: unknown) => ({ type: 'recording-countdown', seconds });
+
+  it('tells the room when its countdown starts, before the take is announced', async () => {
+    const { result } = await hostInCall();
+    signalSent = [];
+    vi.useFakeTimers();
+    const { done } = await pressRecord(result, 0);
+    expect(signalSent).toEqual([{ type: 'recording-countdown', seconds: 3 }]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+      await done;
+    });
+    expect(signalSent.map((m) => m.type)).toEqual(['recording-countdown', 'recording-started']);
+
+    vi.useRealTimers();
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('sends the room no countdown when the folder prompt is dismissed', async () => {
+    const { result } = await hostInCall();
+    signalSent = [];
+    vi.mocked(pickRecordingDirectory).mockRejectedValueOnce(
+      Object.assign(new Error('dismissed'), { name: 'AbortError' })
+    );
+    await act(async () => {
+      await result.current.recordWithCountdown();
+    });
+    expect(signalSent).toEqual([]);
+  });
+
+  it('shows a guest the host’s countdown on its own clock, and takes it down when the take starts', async () => {
+    const result = await joinGuest();
+    vi.useFakeTimers();
+    act(() => {
+      emitSignal('recording-countdown', countdown(3));
+    });
+    expect(result.current.state.countdownEndsAt).toBe(Date.now() + 3000);
+    vi.useRealTimers();
+
+    await hostStartsTake();
+    expect(result.current.state.peerRecording).toBe(true);
+    expect(result.current.state.countdownEndsAt).toBeNull();
+    await stopTake();
+  });
+
+  it('counts for at most three seconds, and nothing for a value that is not a positive number', async () => {
+    const result = await joinGuest();
+    vi.useFakeTimers();
+    act(() => {
+      emitSignal('recording-countdown', countdown(3600));
+    });
+    expect(result.current.state.countdownEndsAt).toBe(Date.now() + 3000);
+    act(() => {
+      emitSignal('recording-countdown', countdown(1.5));
+    });
+    expect(result.current.state.countdownEndsAt).toBe(Date.now() + 1500);
+
+    for (const seconds of [0, -5, '3', null, undefined, NaN, Infinity, {}]) {
+      act(() => {
+        emitSignal('recording-countdown', countdown(3));
+      });
+      expect(result.current.state.countdownEndsAt).not.toBeNull();
+      act(() => {
+        emitSignal('recording-countdown', countdown(seconds));
+      });
+      expect(result.current.state.countdownEndsAt).toBeNull();
+    }
+  });
+
+  it('shows no countdown over a take that is already running', async () => {
+    const result = await joinGuest();
+    await hostStartsTake();
+    act(() => {
+      emitSignal('recording-countdown', countdown(3));
+    });
+    expect(result.current.state.countdownEndsAt).toBeNull();
+    await stopTake();
+  });
+
+  it('never shows a host someone else’s countdown', async () => {
+    const { result } = await hostInCall();
+    act(() => {
+      emitSignal('recording-countdown', countdown(3));
+    });
+    expect(result.current.state.countdownEndsAt).toBeNull();
+  });
 });

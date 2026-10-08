@@ -107,6 +107,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   click cuts it.
 - The host's screen counts down the three seconds before a take: "Recording
   starts in 3".
+- Everyone in the call sees the countdown before a take, not only the host.
 
 ### Changed
 

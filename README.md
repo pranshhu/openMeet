@@ -59,6 +59,7 @@ retention policy to trust, because there's nothing retained.
   [Headphones](#headphones-really))
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
+- A three-second countdown on everyone's screen before each take
 
 **During the session**
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
@@ -387,8 +388,9 @@ the host saves no file from them, from the next take on, though a backup of an
 earlier take that they send back is still offered to the host. Everyone in the
 call is told who is not recorded. A recorded participant who listens on speakers,
 or who shares a screen with its sound or with the call window on it, can still
-pick up that guest's voice or picture. Participants see a pre-join disclosure
-plus an on-screen notice and REC pill. Files (including in-call chat) land only on the
+pick up that guest's voice or picture. Participants see a pre-join disclosure, a
+three-second countdown before each take, and an on-screen notice and REC pill.
+Files (including in-call chat) land only on the
 host's disk, plus a backup in each participant's own browser storage and a crash copy of
 each take's guest recordings in the host's browser storage, removed when the take ends
 cleanly (see [If the host's browser crashes](#if-the-hosts-browser-crashes)); nothing is

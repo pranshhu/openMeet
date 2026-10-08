@@ -72,6 +72,11 @@ describe('ws-messages type guards', () => {
     expect(isServerMessage({ type: 'peer-recorded', peerId: 'p1', recorded: false })).toBe(true);
   });
 
+  it('identifies recording-countdown on both the client and server unions', () => {
+    expect(isClientMessage({ type: 'recording-countdown', seconds: 3 })).toBe(true);
+    expect(isServerMessage({ type: 'recording-countdown', seconds: 3 })).toBe(true);
+  });
+
   it('defines WS_CLOSE_REPLACED as 4006', () => {
     expect(WS_CLOSE_REPLACED).toBe(4006);
   });

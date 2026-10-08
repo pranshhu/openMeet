@@ -589,6 +589,13 @@ export class Room implements DurableObject {
           from: p.role,
         });
         break;
+      case 'recording-countdown':
+        // A cue for the other screens that the host is about to record. Only
+        // the host's is passed on, and nothing is kept: the take starts with
+        // recording-started, so `recording` stays as it was.
+        if (p.role !== 'host' || !Number.isFinite(parsed.seconds)) break;
+        this.broadcastExcept(ws, { type: 'recording-countdown', seconds: parsed.seconds });
+        break;
       case 'recording-capability':
         // Relay only, like presence — a live UI hint for the host, not room
         // state. Lets the host see before pressing Record which participants
