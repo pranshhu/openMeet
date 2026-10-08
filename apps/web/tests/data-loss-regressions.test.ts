@@ -512,6 +512,85 @@ describe('endGuestRecording — never sends finalized while chunks are still que
   });
 });
 
+describe('endGuestRecording — the backups stop with the recorders, not after the drain', () => {
+  it('stops both backups while a stream that cannot drain is still waiting', async () => {
+    let releaseDrain!: (drained: boolean) => void;
+    const order: string[] = [];
+    const sender = {
+      drain: () =>
+        new Promise<boolean>((resolve) => {
+          releaseDrain = resolve;
+        }),
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: true,
+      lastAckedIdx: 0,
+    };
+    const backupBlob = new Blob(['b']);
+    const wavBlob = new Blob(['w']);
+    const handles = {
+      recordingId: 'r',
+      channel: { readyState: 'open', send: vi.fn() },
+      sender,
+      guestRecorder: {
+        stopAndFlush: async () => {
+          order.push('recorder');
+        },
+      },
+      backup: {
+        stop: async () => {
+          order.push('backup');
+          return backupBlob;
+        },
+      },
+      wavBackup: {
+        stop: async () => {
+          order.push('wavBackup');
+          return wavBlob;
+        },
+      },
+    } as never;
+
+    const ended = endGuestRecording(handles);
+    // Everything that does not wait on the drain has run by the next task.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The stream is still undrained, and the backups are no longer recording.
+    expect(order).toEqual(['recorder', 'backup', 'wavBackup']);
+
+    releaseDrain(false);
+    const result = await ended;
+    expect(result.drained).toBe(false);
+    expect(result.backup).toBe(backupBlob);
+    expect(result.wavBackup).toBe(wavBlob);
+  });
+
+  it('tells the host the file is final before a failed backup stop is reported', async () => {
+    const channel = { readyState: 'open', send: vi.fn() };
+    const sender = {
+      drain: async () => true,
+      digestHex: async () => 'abc',
+      isAbandoned: false,
+      hasQueuedChunks: false,
+      lastAckedIdx: 1,
+    };
+    const handles = {
+      recordingId: 'r',
+      channel,
+      sender,
+      backup: {
+        stop: async () => {
+          throw new Error('backup stop failed');
+        },
+      },
+    } as never;
+
+    await expect(endGuestRecording(handles)).rejects.toThrow('backup stop failed');
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(channel.send.mock.calls[0]![0]).type).toBe('recording-finalized');
+  });
+});
+
 describe('endGuestRecording — sends frame rate on camera channel only when known', () => {
   it('sends frameRate on the camera channel and omits it on the WAV channel or when unset', async () => {
     const channel = { readyState: 'open', send: vi.fn() };
