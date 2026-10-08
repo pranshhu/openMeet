@@ -32,6 +32,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   in-call chat from the take window.
 - Frame-rate choice in the lobby (24, 25, 29.97 or 30 fps), remembered per
   browser.
+- 50 and 60 fps in the lobby's frame-rate picker on cameras that can deliver
+  them, recorded at a higher bitrate (the bitrate picker shows it), with a note
+  about the larger files and the heavier load.
 - `sync.json` gains a `frameRate` section: the frame rate cameras are asked for by
   default and, where known, the rate each one reported, plus two `ffmpeg` commands per
   video file, one that measures how variable its frame rate is and one that

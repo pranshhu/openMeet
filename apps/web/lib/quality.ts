@@ -37,7 +37,7 @@ export function presetById(id: string): QualityPreset {
 }
 
 /** Frame rates a person can ask their camera for. */
-export const FRAME_RATES: readonly number[] = [24, 25, 29.97, 30];
+export const FRAME_RATES: readonly number[] = [24, 25, 29.97, 30, 50, 60];
 
 /** A stored frame rate, or the default when it is not one on offer. */
 export function frameRateFrom(raw: string | null): number {
@@ -84,6 +84,18 @@ export function supportedPresets(track: MediaStreamTrack | undefined): QualityPr
   const usable = QUALITY_PRESETS.filter((p) => p.width <= maxW && p.height <= maxH);
   // Never return nothing: a camera below 720p still has to be recordable.
   return usable.length > 0 ? usable : [QUALITY_PRESETS[0] as QualityPreset];
+}
+
+/**
+ * Frame rates this camera says it can reach. Same rules as supportedPresets:
+ * everything when capabilities are unavailable, never nothing.
+ */
+export function supportedFrameRates(track: MediaStreamTrack | undefined): readonly number[] {
+  const max = track?.getCapabilities?.().frameRate?.max;
+  if (!max) return FRAME_RATES;
+  // Half a frame of slack: a 59.94 camera does 60, a 29.97 one does 30.
+  const usable = FRAME_RATES.filter((r) => r <= max + 0.5);
+  return usable.length > 0 ? usable : FRAME_RATES.slice(0, 1);
 }
 
 /**

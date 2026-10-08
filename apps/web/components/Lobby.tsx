@@ -16,7 +16,6 @@ import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
   DEFAULT_BITRATE_ID,
   DEFAULT_QUALITY_ID,
-  FRAME_RATES,
   atBitrate,
   bitrateLevels,
   chooseBitrate,
@@ -24,8 +23,10 @@ import {
   describeTrack,
   formatPerHour,
   frameRateFrom,
+  isHighFrameRate,
   presetAt,
   presetById,
+  supportedFrameRates,
   supportedPresets,
 } from '@/lib/quality';
 import { PreflightPanel } from './PreflightPanel';
@@ -598,7 +599,11 @@ export function Lobby({
   // What the camera reports, which can fall short of the ask at this resolution.
   // Half a frame of slack: 29.97 asked and 30 reported is the same camera mode.
   const deliveredFps = cleanFps(stream?.getVideoTracks()[0]?.getSettings?.().frameRate);
-  const otherFps = deliveredFps !== null && Math.abs(deliveredFps - frameRate) > 0.5 ? deliveredFps : null;
+  // Same as the quality above: a remembered rate this camera cannot reach stays
+  // remembered, and the picker shows the best it can do.
+  const rates = supportedFrameRates(stream?.getVideoTracks()[0]);
+  const shownFrameRate = rates.includes(frameRate) ? frameRate : rates.at(-1)!;
+  const otherFps = deliveredFps !== null && Math.abs(deliveredFps - shownFrameRate) > 0.5 ? deliveredFps : null;
   // Asked of the microphone that is in the preview, and only offered where it
   // can change the file: a two-channel mic in a browser that keeps the
   // uncompressed master. Without either, the choice would change nothing.
@@ -995,11 +1000,11 @@ export function Lobby({
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Frame rate"
-                  value={frameRate}
+                  value={shownFrameRate}
                   onChange={(e) => void reacquire(micId, camId, qualityId, Number(e.target.value))}
                   className={select}
                 >
-                  {FRAME_RATES.map((r) => (
+                  {rates.map((r) => (
                     <option key={r} value={r}>
                       {`Frame rate: ${r} fps`}
                     </option>
@@ -1019,7 +1024,16 @@ export function Lobby({
           )}
           {otherFps !== null && (
             <p role="status" className="mt-1 text-center text-xs text-[#7a4f01]">
-              This camera gives {otherFps} fps at this quality, not {frameRate}.
+              This camera gives {otherFps} fps at this quality, not {shownFrameRate}.
+            </p>
+          )}
+          {isHighFrameRate(deliveredFps) && (
+            <p
+              role="status"
+              className="mt-2 rounded-2xl bg-[#fef7e0] px-4 py-3 text-left text-sm leading-relaxed text-[#7a4f01]"
+            >
+              50 and 60 fps need a faster computer and make the video files larger. If the picture
+              stutters, pick a lower frame rate.
             </p>
           )}
           {stream && (
