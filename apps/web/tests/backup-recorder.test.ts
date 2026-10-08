@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName } from '@/lib/backup-recorder';
+import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName, type BackupRecorderOpts } from '@/lib/backup-recorder';
 import { openTakeJournal, findTakeJournals, deleteTakeJournal, isJournalFileName } from '@/lib/take-journal';
 import { wavHeader } from '@/lib/wav';
+import { presetById } from '@/lib/quality';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
 
@@ -62,6 +63,55 @@ class FakeMR {
 }
 
 describe('BackupRecorder — RAM fallback', () => {
+  it("encodes at the preset for the camera's real resolution", () => {
+    let opts: MediaRecorderOptions | undefined;
+    const rec = new BackupRecorder({
+      stream: {
+        getVideoTracks: () => [{ getSettings: () => ({ width: 1280, height: 720 }) }],
+      } as unknown as MediaStream,
+      mrFactory: (_s, o) => {
+        opts = o;
+        return new FakeMR() as unknown as MediaRecorder;
+      },
+    });
+    rec.start();
+    expect(opts?.videoBitsPerSecond).toBe(presetById('720p').videoBps);
+  });
+
+  it('sizes a 4K camera backup at the 4K preset, not at the 720p one', () => {
+    let opts: MediaRecorderOptions | undefined;
+    const rec = new BackupRecorder({
+      stream: {
+        getVideoTracks: () => [{ getSettings: () => ({ width: 3840, height: 2160 }) }],
+      } as unknown as MediaStream,
+      mrFactory: (_s, o) => {
+        opts = o;
+        return new FakeMR() as unknown as MediaRecorder;
+      },
+    });
+    rec.start();
+    expect(opts?.videoBitsPerSecond).toBe(presetById('4k').videoBps);
+  });
+
+  it('ignores a caller-supplied video bitrate, so no caller can make a backup differ', () => {
+    let opts: MediaRecorderOptions | undefined;
+    // The option is gone from BackupRecorderOpts; a caller still passing one
+    // (as an older build might) must not be able to pick the backup's bitrate.
+    const withBitrate = {
+      stream: {
+        getVideoTracks: () => [{ getSettings: () => ({ width: 1280, height: 720 }) }],
+      } as unknown as MediaStream,
+      videoBitsPerSecond: 25_000_000,
+      mrFactory: (_s: MediaStream, o: MediaRecorderOptions) => {
+        opts = o;
+        return new FakeMR() as unknown as MediaRecorder;
+      },
+    };
+    const rec = new BackupRecorder(withBitrate as BackupRecorderOpts);
+    rec.start();
+    expect(opts?.videoBitsPerSecond).toBe(presetById('720p').videoBps);
+  });
+
   it('accumulates blobs and resolves a combined blob on stop (RAM fallback)', async () => {
     const br = new BackupRecorder({
       stream: {} as MediaStream,
