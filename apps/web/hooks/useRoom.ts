@@ -116,6 +116,8 @@ export interface RemotePeer {
   presence?: PeerPresence | undefined;
   role?: Role | undefined;
   companion?: boolean | undefined;
+  /** The host set this guest as not recorded. */
+  notRecorded?: boolean | undefined;
 }
 
 export function applyRemotePeerPresence(
@@ -154,6 +156,11 @@ export function applyRemotePeerPresence(
 
 export function removeRemotePeer(remotePeers: RemotePeer[], peerId: string): RemotePeer[] {
   return remotePeers.filter((r) => r.peerId !== peerId);
+}
+
+/** The host set this remote peer as not recorded: nothing it sends is saved. */
+export function isNotRecordedPeer(remotePeers: RemotePeer[], peerId: string | undefined): boolean {
+  return remotePeers.some((r) => r.peerId === peerId && r.notRecorded === true);
 }
 
 export interface RoomState {
@@ -202,6 +209,11 @@ export interface RoomState {
    * capture started.
    */
   peerRecording: boolean;
+  /**
+   * The host set THIS peer as not recorded, so its own capture never starts.
+   * It stays in the call as before, and `peerRecording` still drives the pill.
+   */
+  notRecorded: boolean;
   /**
    * This device sends everyone a smaller live picture, to leave more of its
    * processor for the recording. The files are not affected.
@@ -576,6 +588,7 @@ export function useRoom(slug: string) {
     summary: null,
     takes: [],
     peerRecording: false,
+    notRecorded: false,
     lowPower: false,
     capabilities: {},
     finalizingGuests: [],
@@ -640,6 +653,9 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const companionRef = useRef(false);
+  // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
+  // which read refs.
+  const notRecordedRef = useRef(false);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   // The local screen share gets its OWN MediaStream (distinct id) so the remote
   // peer's ontrack receives it as a separate stream, not appended to the camera.
@@ -740,7 +756,7 @@ export function useRoom(slug: string) {
     syncCallCopies(
       rec,
       state.remotePeers.filter(
-        (p) => p.role !== 'producer' && !p.companion && toldPeers.includes(p.peerId)
+        (p) => p.role !== 'producer' && !p.companion && !p.notRecorded && toldPeers.includes(p.peerId)
       )
     );
   }, [state.phase, state.remotePeers, toldPeers]);
@@ -818,6 +834,9 @@ export function useRoom(slug: string) {
    * are silently discarded.
    */
   const beginGuestRecording = useCallback(async () => {
+    // The host set this guest as not recorded. Every way a guest's capture can
+    // start comes through here, so this is the one place that decides.
+    if (notRecordedRef.current) return;
     if (companionRef.current) {
       if (!peerRef.current || recordingRef.current) return;
       const recordingId = crypto.randomUUID();
@@ -1293,6 +1312,16 @@ export function useRoom(slug: string) {
               // takes by hand, not a guest's camera for the take in progress.
               return;
             }
+            // The host's own check. A guest set as not recorded opens no recording
+            // channel; one that does anyway is closed here, before any file is opened.
+            if (isNotRecordedPeer(remotePeersRef.current, remotePeerId)) {
+              try {
+                channel.close();
+              } catch {
+                /* already gone */
+              }
+              return;
+            }
             // Two recording channels now arrive: video on `recording`, the
             // uncompressed WAV master on `recording-audio`. Route by label.
             const recNow = recordingRef.current;
@@ -1437,6 +1466,7 @@ export function useRoom(slug: string) {
         roleRef.current = m.role;
         myPeerIdRef.current = m.peerId;
         myOrdinalRef.current = m.ordinal;
+        notRecordedRef.current = m.notRecorded === true;
         // A host owns the take and takes no returned backup, so whatever this
         // tab queued before the room named its role is dropped instead of being
         // listed back to it as an incoming offer.
@@ -1493,9 +1523,11 @@ export function useRoom(slug: string) {
             stream: null,
             role: pp.role,
             companion: pp.companion,
+            notRecorded: pp.notRecorded === true,
           })),
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
+          notRecorded: m.notRecorded === true,
         }));
         sendPresence();
         // Joined mid-recording (rejoin after a crash, or just arriving late):
@@ -1548,12 +1580,25 @@ export function useRoom(slug: string) {
           remotePeers: s.remotePeers.some((r) => r.peerId === m.peerId)
             ? s.remotePeers.map((r) =>
                 r.peerId === m.peerId
-                  ? { ...r, name: m.displayName || r.name, role: m.role, companion: m.companion }
+                  ? {
+                      ...r,
+                      name: m.displayName || r.name,
+                      role: m.role,
+                      companion: m.companion,
+                      notRecorded: m.notRecorded === true,
+                    }
                   : r
               )
             : [
                 ...s.remotePeers,
-                { peerId: m.peerId, name: m.displayName, stream: null, role: m.role, companion: m.companion },
+                {
+                  peerId: m.peerId,
+                  name: m.displayName,
+                  stream: null,
+                  role: m.role,
+                  companion: m.companion,
+                  notRecorded: m.notRecorded === true,
+                },
               ],
           // 'peer-left' is recoverable: the peer may have simply reconnected.
           // Without this it was a permanent dead end even after they came back.
@@ -1623,6 +1668,9 @@ export function useRoom(slug: string) {
       });
 
       signal.on('marker', (m) => {
+        // The same setting that closes this peer's recording channels keeps its
+        // markers out of the take.
+        if (isNotRecordedPeer(remotePeersRef.current, m.fromPeerId)) return;
         if (relayedMarkersCountRef.current >= MAX_RELAYED_MARKERS) return;
         const label = typeof m.label === 'string' && m.label.length <= MAX_MARKER_LABEL_LENGTH ? m.label : '';
         if (recordMarker(label, m.from, m.fromName)) {
@@ -1638,6 +1686,24 @@ export function useRoom(slug: string) {
           },
         }))
       );
+      signal.on('peer-recorded', (m) => {
+        if (typeof m.peerId !== 'string' || typeof m.recorded !== 'boolean') return;
+        const notRecorded = !m.recorded;
+        if (m.peerId === myPeerIdRef.current) {
+          notRecordedRef.current = notRecorded;
+          setState((s) => ({ ...s, notRecorded }));
+          return;
+        }
+        // The host's check reads this ref when a channel arrives; the effect that
+        // mirrors state into it runs a render later, and a channel may not wait.
+        remotePeersRef.current = remotePeersRef.current.map((r) =>
+          r.peerId === m.peerId ? { ...r, notRecorded } : r
+        );
+        setState((s) => ({
+          ...s,
+          remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
+        }));
+      });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
         const msg: ChatMessage = {
@@ -1648,6 +1714,9 @@ export function useRoom(slug: string) {
           ts: Date.now(),
           ...(m.fromPeerId ? { fromPeerId: m.fromPeerId } : {}),
           ...(m.fromName ? { fromName: m.fromName } : {}),
+          // Tagged on arrival: a peerId can change on a reconnect and the sender
+          // may be gone by the time the take ends.
+          ...(isNotRecordedPeer(remotePeersRef.current, m.fromPeerId) ? { notRecorded: true } : {}),
         };
         messagesRef.current = [...messagesRef.current, msg];
         setState((s) => ({
@@ -1805,6 +1874,19 @@ export function useRoom(slug: string) {
     setState((s) => ({ ...s, recordingError: null, takeNotice: null, recoveryBusy: true }));
     const onError = (e: unknown) =>
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(e) }));
+    // Set as not recorded since the reload: its waiting channels are closed,
+    // never bound, so the resumed take writes nothing more from that guest.
+    const refused = pendingChannelsRef.current.filter((p) =>
+      isNotRecordedPeer(remotePeersRef.current, p.peerId)
+    );
+    for (const p of refused) {
+      try {
+        p.channel.close();
+      } catch {
+        /* already gone */
+      }
+    }
+    pendingChannelsRef.current = pendingChannelsRef.current.filter((p) => !refused.includes(p));
     // What the controller is given. A channel that arrives while the folder
     // prompt or the replay runs is not in it, and is bound below.
     const handed = pendingChannelsRef.current;
@@ -2065,7 +2147,7 @@ export function useRoom(slug: string) {
         // Only a guest sends the host a camera, and one whose browser said
         // it cannot record is already named in its own warning line.
         expected:
-          p.role === 'guest' && !p.companion && capabilitiesRef.current[p.peerId]?.mp4 !== false,
+          p.role === 'guest' && !p.companion && !p.notRecorded && capabilitiesRef.current[p.peerId]?.mp4 !== false,
       }))
     );
   }, []);

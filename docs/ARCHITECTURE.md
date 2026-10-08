@@ -183,8 +183,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
-- `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture),
-  but **persisted to D1 only by the host** (`insertRecording`, capped at 256 rows per session).
+- `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
+  except one the host set as not recorded), but **persisted to D1 only by the host**
+  (`insertRecording`, capped at 256 rows per session).
   A take announced again under its own id — a host resuming after a reload — keeps the row it
   already has, file name and start time from the first announcement, and spends no second slot.
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
@@ -296,8 +297,9 @@ State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→
 (+ `not-found|peer-left|left|full|replaced|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
-`localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role),
-`capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
+`localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
+`notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
+starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
 backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts).
@@ -528,7 +530,8 @@ unfinished send to each new connection to the host.
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
    Host click → `startHostRecording` (one folder prompt, opens `host_*.mp4` + `host_*.wav` +
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
-   auto-runs `beginGuestRecording`, opening `recording` + `recording-audio` (+ `recording-screen-N`
+   auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
+   nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
    FileWriter at offset; acks every 5 fragments/10s (with a journal attached, after each journal
    commit instead); backpressure via watermarks.
@@ -587,10 +590,15 @@ unfinished send to each new connection to the host.
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
+  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
-  present-only companion publishes no camera or mic, so neither can claim a guest slot.
+  present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
+  channel arriving from a peer the host set as not recorded is closed before any file is opened
+  (`isNotRecordedPeer`, in `useRoom`'s `onDataChannel`), so the host does not depend on that guest's
+  browser staying quiet. The same check tags that peer's chat lines as they arrive, and drops its
+  markers, so `buildChatLog` leaves them out of `chat_<id>.txt` while everyone in the call still sees
+  them.
 - **The slot key is the channel-label key, not the raw peerId, when one is present.** The DO mints a
   fresh `peerId` per socket, so a full WS reconnect changes it; if `bindHostGuestChannel`/
   `bindHostAudioChannel` keyed slots on `peerId` directly, a reconnected guest would land on a brand
