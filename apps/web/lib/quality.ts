@@ -145,6 +145,24 @@ export function atBitrate(p: QualityPreset, levelId: string): QualityPreset {
   return level ? { ...p, videoBps: p.videoBps * level.factor } : p;
 }
 
+/**
+ * Whether a camera is running at 50 or 60 fps rather than 30 or less. Cameras
+ * report 30 as 30.00003 and nothing real sits between 30 and 50, so the line is
+ * drawn well clear of both.
+ */
+export function isHighFrameRate(fps: number | null | undefined): boolean {
+  return typeof fps === 'number' && fps > 40;
+}
+
+/**
+ * The preset as it is encoded at `fps`. Twice the frames need about half as many
+ * bits again to hold the same picture, not twice as many: neighbouring frames are
+ * more alike. Never past MAX_VIDEO_BPS, whatever else has raised the bitrate.
+ */
+export function presetAt(p: QualityPreset, fps: number | null | undefined): QualityPreset {
+  return isHighFrameRate(fps) ? { ...p, videoBps: Math.min(p.videoBps * 1.5, MAX_VIDEO_BPS) } : p;
+}
+
 // The level this tab joined with. Held here rather than read back from
 // storage, so the recorder uses what the lobby showed even where storage is
 // blocked or another tab picked differently.
@@ -156,10 +174,12 @@ export function chooseBitrate(levelId: string): void {
 
 /**
  * Encode bitrate for a camera recording and its backup: the preset for the
- * track's real resolution, at the level joined with.
+ * track's real resolution, at the level joined with and the frame rate the
+ * track delivers.
  */
 export function cameraVideoBps(track: MediaStreamTrack | undefined): number {
-  return atBitrate(presetForTrack(track), joinedBitrateId).videoBps;
+  const atLevel = atBitrate(presetForTrack(track), joinedBitrateId);
+  return presetAt(atLevel, track?.getSettings?.().frameRate).videoBps;
 }
 
 /** Human-readable actual capture format, for the lobby and the summary screen. */

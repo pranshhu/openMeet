@@ -1013,6 +1013,25 @@ describe('camera bitrate level', () => {
     await endHostRecording(handles);
   });
 
+  it('records a 60 fps camera and its backup at 1.5 times the bitrate', async () => {
+    const track = { getSettings: () => ({ width: 1920, height: 1080, frameRate: 60 }) };
+    const localStream = {
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+
+    const handles = await startHostRecording({
+      recordingId: 'test-rec-60fps',
+      localStream,
+      dir: fakeDir() as never,
+    });
+
+    const x = presetById('1080p').videoBps * 1.5;
+    expect(bitrates()).toEqual([x, x]);
+    await endHostRecording(handles);
+  });
+
   it('records a guest camera and its backup at the level joined with', () => {
     chooseBitrate('max');
     const channel = { readyState: 'open', addEventListener: vi.fn(), send: vi.fn() } as unknown as RTCDataChannel;
