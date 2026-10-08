@@ -1977,6 +1977,8 @@ describe('Room DO — only a joined socket is in the room', () => {
     producer.ws.close();
   });
 
+  // 260 messages, each a database write: seconds on a small CI runner, so the
+  // default five-second limit is not this test's.
   it('bounds the recordings rows per session', async () => {
     const slug = 'rec-boun-daa';
     await seedRoom(slug, 'tok-rec-bound');
@@ -2014,7 +2016,7 @@ describe('Room DO — only a joined socket is in the room', () => {
     await until(async () => (await count(newSession!.id)) >= 1);
     expect(await count(newSession!.id)).toBe(1);
     host3.ws.close();
-  });
+  }, 30_000);
 
   // A host that reloads mid-take resumes the file it was already writing and
   // announces the SAME id again, because the guests follow one take. The row
