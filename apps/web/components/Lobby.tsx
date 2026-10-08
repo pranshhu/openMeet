@@ -15,6 +15,7 @@ import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
   DEFAULT_QUALITY_ID,
   FRAME_RATES,
+  cleanFps,
   describeTrack,
   formatPerHour,
   frameRateFrom,
@@ -558,6 +559,10 @@ export function Lobby({
   const shownQuality = presets.some((q) => q.id === qualityId) ? qualityId : presets.at(-1)!.id;
   // A self-view reads naturally mirrored; a rear camera shows the world, not you.
   const rearCamera = stream?.getVideoTracks()[0]?.getSettings?.().facingMode === 'environment';
+  // What the camera reports, which can fall short of the ask at this resolution.
+  // Half a frame of slack: 29.97 asked and 30 reported is the same camera mode.
+  const deliveredFps = cleanFps(stream?.getVideoTracks()[0]?.getSettings?.().frameRate);
+  const otherFps = deliveredFps !== null && Math.abs(deliveredFps - frameRate) > 0.5 ? deliveredFps : null;
   const recordingNotice = !isRecordingSupported()
     ? isHost
       ? 'Recording needs a Chromium browser (Chrome, Edge; Brave works as host only after enabling brave://flags/#file-system-access-api). The live call still works — switch browser to record.'
@@ -936,6 +941,11 @@ export function Lobby({
               Capturing {actual} · audio{' '}
               {/* Only the WAV master is uncompressed; without it audio is the MP4's. */}
               {isPcmCaptureSupported() ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit uncompressed` : '(compressed)'}
+            </p>
+          )}
+          {otherFps !== null && (
+            <p role="status" className="mt-1 text-center text-xs text-[#7a4f01]">
+              This camera gives {otherFps} fps at this quality, not {frameRate}.
             </p>
           )}
           {stream && (

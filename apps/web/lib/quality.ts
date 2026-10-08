@@ -108,8 +108,8 @@ export function presetForTrack(track: MediaStreamTrack | undefined): QualityPres
 export function describeTrack(track: MediaStreamTrack | undefined): string | null {
   const s = track?.getSettings?.();
   if (!s?.width || !s.height) return null;
-  const fps = s.frameRate ? ` @ ${Math.round(s.frameRate)}fps` : '';
-  return `${s.width}x${s.height}${fps}`;
+  const fps = cleanFps(s.frameRate);
+  return `${s.width}x${s.height}${fps === null ? '' : ` @ ${fps}fps`}`;
 }
 
 /**

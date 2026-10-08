@@ -70,6 +70,21 @@ describe('describeTrack', () => {
   it('reports what was actually negotiated', () => {
     expect(describeTrack(track(undefined, { width: 1920, height: 1080, frameRate: 30 }))).toBe('1920x1080 @ 30fps');
   });
+  // The line exists to show what the camera really delivers, so a 29.97 mode
+  // must not read as a rounded 30.
+  it('prints the reported rate without rounding it away', () => {
+    expect(describeTrack(track(undefined, { width: 1920, height: 1080, frameRate: 29.970029830932617 }))).toBe(
+      '1920x1080 @ 29.97fps'
+    );
+    expect(describeTrack(track(undefined, { width: 1920, height: 1080, frameRate: 30.000030517578125 }))).toBe(
+      '1920x1080 @ 30fps'
+    );
+  });
+
+  it('prints no rate when the track reports one that is not usable', () => {
+    expect(describeTrack(track(undefined, { width: 1920, height: 1080, frameRate: 0 }))).toBe('1920x1080');
+  });
+
   it('returns null when there is nothing to report', () => {
     expect(describeTrack(track(undefined, {}))).toBeNull();
   });

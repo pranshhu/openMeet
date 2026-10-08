@@ -80,6 +80,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   known hole reads "Incomplete".
 - A camera switched to during the call keeps the frame rate picked in the
   lobby.
+- The lobby shows the frame rate the camera delivers exactly (29.97 rather than a
+  rounded 30) and says when it is not the rate picked.
 
 ### Changed
 
