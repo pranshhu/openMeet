@@ -2355,6 +2355,105 @@ describe('CallStage: who is recorded', () => {
   });
 });
 
+describe('countdown before a take', () => {
+  it('keeps Record from being pressed again while it counts', () => {
+    const onRecord = vi.fn();
+    const { rerender } = render(
+      <CallStage {...baseProps} onRecord={onRecord} countdownEndsAt={Date.now() + 3000} />
+    );
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    expect(record).toBeDisabled();
+    fireEvent.click(record);
+    expect(onRecord).not.toHaveBeenCalled();
+
+    rerender(<CallStage {...baseProps} onRecord={onRecord} countdownEndsAt={null} />);
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
+  });
+
+  // Who is recorded is still a decision until the take starts, so the countdown
+  // greys out Record alone; the arrow beside it stays usable.
+  it('leaves the who-is-recorded arrow usable while it counts', () => {
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={{} as MediaStream}
+        remotePeers={[{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }]}
+        onSetPeerRecorded={vi.fn()}
+        countdownEndsAt={Date.now() + 3000}
+      />
+    );
+    const arrow = screen.getByRole('button', { name: 'Choose who is recorded' });
+    expect(arrow).toBeEnabled();
+    fireEvent.click(arrow);
+    expect(screen.getByRole('menu', { name: 'Who is recorded' })).toBeInTheDocument();
+  });
+
+  it('counts the seconds down over the stage, and takes itself down when they run out', () => {
+    vi.useFakeTimers();
+    try {
+      render(<CallStage {...baseProps} countdownEndsAt={Date.now() + 3000} />);
+      const pill = screen.getByText('Recording starts in 3');
+      expect(pill).toHaveAttribute('role', 'status');
+      expect(screen.getByTestId('stage-main').contains(pill)).toBe(true);
+      // Not yet: the pill that says a recording is running comes with the take.
+      expect(screen.queryByText('Recording')).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByText('Recording starts in 2')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1750);
+      });
+      expect(screen.getByText('Recording starts in 1')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByText(/Recording starts in/)).toBeNull();
+      // And its timer went with it: nothing is left ticking through the take.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sits where the recording notice sits when the teleprompter is open', () => {
+    render(<CallStage {...baseProps} countdownEndsAt={Date.now() + 3000} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show teleprompter' }));
+    expect(screen.getByText('Recording starts in 3').parentElement!.className).toContain('sm:bottom-3');
+  });
+
+  it('leaves no timer behind when the call screen goes while it counts', () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<CallStage {...baseProps} countdownEndsAt={Date.now() + 3000} />);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows it whoever is looking, and nothing when no countdown runs', () => {
+    const { rerender } = render(
+      <CallStage {...baseProps} role="guest" canRecord={false} countdownEndsAt={Date.now() + 3000} />
+    );
+    expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
+    rerender(<CallStage {...baseProps} role="guest" canRecord={false} />);
+    expect(screen.queryByText(/Recording starts in/)).toBeNull();
+  });
+
+  // Grey like the saving toast, and floating, so the count is never read as the
+  // red alert a running take shows and the stage does not move for it.
+  it('draws a grey floating pill, not the red alert that a take shows', () => {
+    render(<CallStage {...baseProps} countdownEndsAt={Date.now() + 3000} />);
+    const pill = screen.getByText('Recording starts in 3');
+    expect(pill.className).toContain('bg-[#3c4043]');
+    expect(pill.parentElement!.className).toContain('absolute');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('CallStage: stop incoming video', () => {
   it('offers it in the camera menu, ticked while it is on, and asks for the other state', () => {
     const spy = vi.fn();

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 
 /** How long the consent toast stays up before it collapses to the REC pill. */
 export const NOTICE_MS = 7000;
@@ -58,6 +58,47 @@ export function RecordingNotice({
           : notRecorded
             ? 'This call is now being recorded. Your camera, microphone, screen and chat are left out.'
             : 'This call and chat are now being recorded'}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The seconds before a take, counted down on screen. Display only: the take
+ * starts on the host's own timer whether or not this was ever shown, and the
+ * figure is read from this tab's clock.
+ */
+export function RecordingCountdown({
+  endsAt,
+  className = 'top-3',
+}: {
+  /** When the take is due, in this tab's own time; null while nothing is counted. */
+  endsAt: number | null;
+  /** Where it sits in its positioned parent. */
+  className?: string;
+}) {
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+
+  // Four times a second, so the figure changes within a quarter of a second
+  // of its moment, and not at all once the count is over.
+  useEffect(() => {
+    if (endsAt === null) return;
+    const id = setInterval(() => {
+      redraw();
+      if (Date.now() >= endsAt) clearInterval(id);
+    }, 250);
+    return () => clearInterval(id);
+  }, [endsAt]);
+
+  const left = endsAt === null ? 0 : Math.ceil((endsAt - Date.now()) / 1000);
+  if (left <= 0) return null;
+  return (
+    <div className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 ${className}`}>
+      <div
+        role="status"
+        className="rounded-3xl bg-[#3c4043] px-5 py-2.5 text-sm font-medium tabular-nums text-white shadow-2xl"
+      >
+        {`Recording starts in ${left}`}
       </div>
     </div>
   );

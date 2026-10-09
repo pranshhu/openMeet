@@ -36,6 +36,10 @@ export const ROOM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // ever become a cost problem.
 export const TURN_CRED_TTL_S = 12 * 60 * 60;
 
+// Counted down on screen before a take starts, so nobody is caught
+// mid-sentence. In seconds, like TURN_CRED_TTL_S: it is the figure shown.
+export const RECORD_COUNTDOWN_S = 3;
+
 // Codec support is NOT uniform across platforms, even within Chrome. Measured on
 // Chrome 151:
 //   Linux (both the official .deb and the Chromium snap): AAC-LC is ABSENT.

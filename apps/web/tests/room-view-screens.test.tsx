@@ -723,3 +723,37 @@ describe('interrupted take', () => {
     expect(screen.getByText('Saved 1 file to your folder.')).toBeInTheDocument();
   });
 });
+
+describe('countdown', () => {
+  it('counts down from Record through the hook, and hands the call the countdown it reports', () => {
+    Object.assign(state, inCall, {
+      role: 'host',
+      remoteStream: {} as MediaStream,
+      remotePeers: [{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }],
+      countdownEndsAt: null,
+    });
+    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true });
+    vi.stubGlobal('showDirectoryPicker', () => {});
+    hook.recordWithCountdown = vi.fn();
+    hook.startRecording = vi.fn();
+    try {
+      const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+      expect(hook.recordWithCountdown).toHaveBeenCalledTimes(1);
+      expect(hook.startRecording).not.toHaveBeenCalled();
+
+      state = { ...state, countdownEndsAt: Date.now() + 3000 };
+      rerender(<RoomView slug="abc-defg-hij" />);
+      expect(screen.getByRole('button', { name: 'Start recording' })).toBeDisabled();
+    } finally {
+      Reflect.deleteProperty(globalThis, 'MediaRecorder');
+      Reflect.deleteProperty(globalThis, 'showDirectoryPicker');
+    }
+  });
+
+  it('shows the call the count the hook reports', () => {
+    Object.assign(state, inCall, { role: 'guest', countdownEndsAt: Date.now() + 3000 });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
+  });
+});

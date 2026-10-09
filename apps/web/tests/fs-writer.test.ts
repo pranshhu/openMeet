@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { FileWriter, isFsAccessSupported } from '@/lib/fs-writer';
+import { FileWriter, isFsAccessSupported, pickRecordingDirectory } from '@/lib/fs-writer';
 import { writeTakeSidecars } from '@/hooks/recording-controller';
 
 function fakeWritable() {
@@ -200,5 +200,16 @@ describe('writeTakeSidecars', () => {
     expect(ok).toBe(false);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+describe('pickRecordingDirectory', () => {
+  // The first file of a take can be created long after the click that chose
+  // the folder, when the browser would refuse a second question.
+  it('asks for write access together with the folder', async () => {
+    const dir = { getFileHandle: vi.fn() };
+    const picker = vi.fn().mockResolvedValue(dir);
+    await expect(pickRecordingDirectory(picker)).resolves.toBe(dir);
+    expect(picker).toHaveBeenCalledWith({ mode: 'readwrite' });
   });
 });

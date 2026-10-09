@@ -64,12 +64,14 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (14 variants) ↔ `ServerMessage` (17).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
-  no `from`. SDP/ICE take an optional `to` (peerId) so
+  no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
+  the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -97,7 +99,7 @@ integers and a `ts` that is negative or non-finite; returns a field-whitelisted 
 after which a guest stops streaming it), `ACK_EVERY_N_CHUNKS=5` (counted in 64 KiB fragments),
 `ACK_EVERY_N_MS=10000`, `WS_HEARTBEAT_INTERVAL_MS=30000`, `DRAIN_HARD_CAP_MS=30000`,
 `ROOM_TTL_MS=30d` (extended on every join), `TURN_CRED_TTL_S=43200` (12 h, **seconds**, unlike every `*_MS`; must outlast a session — the client never refreshes TURN credentials and Cloudflare drops a relayed call soon after its credential expires),
-`RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
+`RECORD_COUNTDOWN_S=3` (seconds counted down on screen before a take starts), `RECORDING_MIME='video/mp4;codecs=avc3.42E01F,mp4a.40.2'` (H.264 baseline 3.1 + AAC-LC, in-band params).
 Recording quality: `RECORDING_VIDEO_WIDTH=1920`/`HEIGHT=1080`/`FRAME_RATE=30` (capture, `ideal`),
 `RECORDING_VIDEO_BPS=5_000_000`, `RECORDING_AUDIO_BPS=160_000` (encode; the 1080p entry of
 `lib/quality.ts` `QUALITY_PRESETS` (720p–4K), from which a screen segment's `ChunkRecorder` gets the
@@ -191,6 +193,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `recording-stop` is **relay-only** (host → guests, "wind down now"). `recording-completed` is
   **ignored** (kept in protocol for older tabs; the DO does not consume it). The DO tracks
   `recording: boolean` and reports it in `role-assigned` so a peer joining mid-recording catches up.
+- `recording-countdown` is **passed on only from the host**, and only with a finite
+  `seconds`, to every other joined peer. Nothing is kept and `recording` does not change:
+  the take starts with `recording-started`.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -309,14 +314,21 @@ guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `Room
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
 backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
-null; `CallStage` shows it as a note that can be dismissed until the next take starts).
+null; `CallStage` shows it as a note that can be dismissed until the next take starts),
+`countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
 stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
-unfinished send to each new connection to the host.
+unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
+asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
+draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.
+A take that took the room while it counted (a resume) keeps it, and `resumeRecording` never counts
+down. The host sends `recording-countdown` as its count starts; every other tab counts from the
+cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the count down on
+`recording-started`. A lost cue costs the count, never the take.
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
@@ -374,9 +386,10 @@ unfinished send to each new connection to the host.
   `resume_offset{lastByte,lastIdx}` and runs on every channel bind, so an attached guest learns
   where the file ends without having to ask.
 - `fs-writer.ts` `FileWriter`: `openIn(dir, name)` inside the one folder from
-  `pickRecordingDirectory` (`showDirectoryPicker`) → all writes **chained through `writeTail`**
-  (host own-track writes are fire-and-forget; serialization prevents interleaved corruption).
-  `QuotaExceededError`→`DiskFullError`.
+  `pickRecordingDirectory` (`showDirectoryPicker` with `mode: 'readwrite'`: write access is
+  granted when the folder is chosen, so creating a file later needs no click) → all writes
+  **chained through `writeTail`** (host own-track writes are fire-and-forget; serialization
+  prevents interleaved corruption). `QuotaExceededError`→`DiskFullError`.
 - `retransmit-buffer.ts`: FIFO keeping every chunk that was not acked; it stores a `cap` and never
   reads it, so no byte cap applies; always keeps ≥1 item; `truncate(idx)`, `since(idx)`.
 - `sha256.ts` `StreamingSha256`: **true incremental FIPS 180-4 SHA-256** (O(1) memory — keeps only
@@ -454,7 +467,7 @@ unfinished send to each new connection to the host.
   "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
-  `startRecording` in one click (same folder, no second prompt). With nobody left to record, that
+  `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
   button copies the invite link instead and the summary stays. The summary's file list leaves out a
   guest WAV that was never opened, host files a host companion never opened, empty guest screen
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
@@ -463,8 +476,9 @@ unfinished send to each new connection to the host.
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
-- `recording-controller.ts`: HOST `startHostRecording` asks for **one folder**
-  (`pickRecordingDirectory`, reused by later takes, which get a `_take<n>` suffix) and opens
+- `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
+  (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
+  only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
   `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
   A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
   WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
@@ -550,7 +564,9 @@ unfinished send to each new connection to the host.
 2. **WebRTC signaling** — perfect negotiation over WS relay; guest creates DataChannel, host
    `ondatachannel`; ICE trickled in parallel; DO never inspects SDP.
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
-   Host click → `startHostRecording` (one folder prompt, opens `host_*.mp4` + `host_*.wav` +
+   Host click → the one folder prompt, then a three-second countdown (`recordWithCountdown`), shown
+   to the others by WS `recording-countdown` →
+   `startHostRecording` (opens `host_*.mp4` + `host_*.wav` +
    `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
    auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
    nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`
