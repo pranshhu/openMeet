@@ -441,4 +441,57 @@ describe('PeerConnection.setIncomingVideoOff', () => {
     await pc.onnegotiationneeded?.();
     expect(seen).toEqual([['sendrecv', 'sendonly']]);
   });
+
+  it('offers with video taken again once it is turned back', async () => {
+    const { peer, pc } = setup(false);
+    peer.start();
+    peer.setIncomingVideoOff(true);
+    peer.setIncomingVideoOff(false);
+    pc.transceivers = [t('audio', 'sendrecv'), t('video', 'sendrecv'), t('video', 'recvonly')];
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toEqual([['sendrecv', 'sendrecv', 'recvonly']]);
+  });
+
+  it('answers with video taken while it was never turned off', async () => {
+    const { peer, pc } = setup(true);
+    peer.start();
+    const apply = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (desc) => {
+      pc.transceivers = [t('audio', 'recvonly'), t('video', 'recvonly')];
+      await apply(desc);
+    };
+    const seen = described(pc);
+    await peer.handleSignal({ type: 'webrtc-offer', sdp: 'remote-offer', from: 'guest', fromPeerId: 'p-guest' });
+    expect(seen).toEqual([['recvonly', 'recvonly']]);
+  });
+
+  it('leaves a video nobody takes or sends as it is when it offers or answers with the mode off', async () => {
+    const offering = setup(false);
+    offering.peer.start();
+    offering.pc.transceivers = [t('audio', 'sendrecv'), t('video', 'inactive')];
+    const offered = described(offering.pc);
+    await offering.pc.onnegotiationneeded?.();
+    expect(offered).toEqual([['sendrecv', 'inactive']]);
+
+    const answering = setup(true);
+    answering.peer.start();
+    const apply = answering.pc.setRemoteDescription.bind(answering.pc);
+    answering.pc.setRemoteDescription = async (desc) => {
+      answering.pc.transceivers = [t('audio', 'recvonly'), t('video', 'inactive')];
+      await apply(desc);
+    };
+    const answered = described(answering.pc);
+    await answering.peer.handleSignal({ type: 'webrtc-offer', sdp: 'remote-offer', from: 'guest', fromPeerId: 'p-guest' });
+    expect(answered).toEqual([['recvonly', 'inactive']]);
+  });
+
+  it('a transceiver that refuses a new direction does not stop the others', () => {
+    const { peer, pc, directions } = inCall();
+    const refusing = { receiver: { track: { kind: 'video' } } } as { direction: string; receiver: { track: { kind: string } } };
+    Object.defineProperty(refusing, 'direction', { get: () => 'sendrecv', set: () => { throw new Error('InvalidStateError'); } });
+    pc.transceivers[1] = refusing;
+    expect(() => peer.setIncomingVideoOff(true)).not.toThrow();
+    expect(directions()).toEqual(['sendrecv', 'sendrecv', 'inactive']);
+  });
 });

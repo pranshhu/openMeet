@@ -856,5 +856,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   that person's camera and get no sign that their own picture, or a screen they present, is
   not being watched. The choice is not remembered: a reload or a rejoin starts with video
   on. A producer and a Present-only device have no camera menu and so no such control.
+  When everyone else leaves, the waiting screen says nothing about the mode; it is kept,
+  and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.

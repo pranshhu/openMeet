@@ -408,4 +408,25 @@ describe('useRoom.setIncomingVideoOff, for a connection that opens later', () =>
     expect(peers[1].setIncomingVideoOff).toHaveBeenCalledWith(true);
     expect(result.current.state.incomingVideoOff).toBe(true);
   });
+
+  it('tells a connection rebuilt under the same id', async () => {
+    const { result } = await joinAs('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+    act(() => {
+      result.current.setIncomingVideoOff(true);
+    });
+
+    // The Room did not restart; this tab's socket did, and the host kept its id.
+    act(() => {
+      emit('role-assigned', {
+        role: 'guest',
+        peerId: 'me-2',
+        ordinal: 9,
+        peers: [{ peerId: 'h', ordinal: 1, role: 'host', displayName: 'h' }],
+        recording: false,
+      });
+    });
+
+    expect(peers).toHaveLength(2);
+    expect(peers[1].setIncomingVideoOff).toHaveBeenCalledWith(true);
+  });
 });

@@ -350,8 +350,14 @@ export class PeerConnection {
     for (const t of this.pc?.getTransceivers() ?? []) {
       if (t.receiver.track.kind !== 'video' || t.direction === 'stopped') continue;
       const sends = t.direction === 'sendrecv' || t.direction === 'sendonly';
-      if (this.incomingVideoOff) t.direction = sends ? 'sendonly' : 'inactive';
-      else t.direction = sends ? 'sendrecv' : 'recvonly';
+      // A browser may refuse this for one transceiver. The others, and the
+      // offer or answer being made, must not be lost with it.
+      try {
+        if (this.incomingVideoOff) t.direction = sends ? 'sendonly' : 'inactive';
+        else t.direction = sends ? 'sendrecv' : 'recvonly';
+      } catch {
+        // That transceiver keeps the direction it has.
+      }
     }
   }
 

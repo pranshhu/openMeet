@@ -2535,4 +2535,58 @@ describe('CallStage: stop incoming video', () => {
     fireEvent.click(within(note.parentElement as HTMLElement).getByRole('button', { name: 'Show video' }));
     expect(spy).toHaveBeenLastCalledWith(false);
   });
+
+  it('a person whose camera is off stays an initial when incoming video is on', () => {
+    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    const carol = { id: 'stream-carol' } as unknown as MediaStream;
+    const on = { micOn: true, camOn: true, screenSharing: false };
+    const off = { micOn: true, camOn: false, screenSharing: false };
+    const tile = (container: HTMLElement, s: MediaStream) =>
+      Array.from(container.querySelectorAll('video')).find((v) => (v as { srcObject?: unknown }).srcObject === s)!;
+
+    const one = render(
+      <CallStage
+        {...baseProps}
+        remoteStream={bob}
+        remotePeers={[{ peerId: 'p-bob', name: 'Bob', stream: bob, presence: off }]}
+      />
+    );
+    expect(tile(one.container, bob)).toHaveClass('opacity-0');
+    one.unmount();
+
+    const two = render(
+      <CallStage
+        {...baseProps}
+        remoteStream={bob}
+        remotePeers={[
+          { peerId: 'p-bob', name: 'Bob', stream: bob, presence: on },
+          { peerId: 'p-carol', name: 'Carol', stream: carol, presence: off },
+        ]}
+      />
+    );
+    expect(tile(two.container, bob)).toHaveClass('opacity-100');
+    expect(tile(two.container, carol)).toHaveClass('opacity-0');
+  });
+
+  it('the menu item shows its tick only while it is on', () => {
+    const spy = vi.fn();
+    const { rerender } = render(<CallStage {...baseProps} onSetIncomingVideoOff={spy} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' }).querySelector('svg')).toBeNull();
+
+    rerender(<CallStage {...baseProps} incomingVideoOff onSetIncomingVideoOff={spy} />);
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' }).querySelector('svg')).not.toBeNull();
+  });
+
+  it('offers no such item without a way to change it', () => {
+    render(<CallStage {...baseProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    expect(screen.queryByRole('menuitemcheckbox', { name: 'Stop incoming video' })).toBeNull();
+  });
+
+  it('the Show video button of the line is tall enough for a thumb', () => {
+    render(<CallStage {...baseProps} incomingVideoOff onSetIncomingVideoOff={vi.fn()} />);
+    const line = screen.getByText(/Incoming video is off\./).closest('[role="status"]') as HTMLElement;
+    expect(within(line).getByRole('button', { name: 'Show video' })).toHaveClass('min-h-11');
+  });
 });

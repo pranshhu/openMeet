@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { Stage, type StageFeed } from '@/components/Stage';
 
 const local: StageFeed = { stream: null, name: 'Alice', muted: true, camOff: true };
@@ -328,6 +328,28 @@ describe('Stage', () => {
     );
     expect(screenVideo).toBeDefined();
     expect(screenVideo?.muted).toBe(false);
+  });
+
+  it('presenting (remote screen, incoming video off): the note lies over the tile and a long name wraps inside it', () => {
+    const label = `${'Bartholomew'.repeat(6)}'s screen`;
+    render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel={label}
+        onShowVideo={() => {}}
+      />
+    );
+    const note = screen.getByText('Incoming video is off, so you can’t see it.').parentElement as HTMLElement;
+    expect(note.className).toContain('absolute');
+    expect(note.className).toContain('inset-0');
+    const name = within(note).getByText(label);
+    expect(name).toHaveClass('wrap-anywhere');
+    expect(name).toHaveClass('max-w-full');
   });
 
   it('presenting (your own screen, incoming video off): nothing covers what you are sharing', () => {
