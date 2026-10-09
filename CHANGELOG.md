@@ -105,6 +105,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad can fade: press **Fade** under it and it comes in over a
   second and a half when fired and goes out the same way when stopped. A second
   click cuts it.
+- The host's screen counts down the three seconds before a take: "Recording
+  starts in 3".
+- Everyone in the call sees the countdown before a take, not only the host.
 - A person who presents a video from a computer hears it too. A phone and a
   Present-only device stay silent, so the sound is not picked up again by a
   microphone.
@@ -129,6 +132,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   stereo; the voice is the same on both channels and the WAV master stays mono.
 - The host's recording files carry the host's name after the role:
   `host-ana_<id>.mp4` instead of `host_<id>.mp4`.
+- The recording folder is asked for with write access when it is chosen, so the
+  browser does not ask again when the first file is saved; and if the browser
+  later refuses to write to that folder, the next Record asks for a folder again.
+- After **Record** is pressed the take starts three seconds later, and Record
+  cannot be pressed again meanwhile. The recording folder is asked for first.
 
 ### Fixed
 

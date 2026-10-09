@@ -2810,4 +2810,53 @@ describe('Room DO — only a joined socket is in the room', () => {
       [h.ws, a.ws].forEach((w) => w.close());
     }, 15_000);
   });
+
+  describe('recording countdown', () => {
+    it("passes on only the host's countdown, to everyone else in the room", async () => {
+      const slug = 'rcd-host-aaa';
+      await seedRoom(slug, 'tok-rcd-host');
+      const h = await enter(slug, 'H', { hostToken: 'tok-rcd-host' });
+      const a = await enter(slug, 'A');
+      const p = await enter(slug, 'P', { producer: true });
+
+      a.ws.send(JSON.stringify({ type: 'recording-countdown', seconds: 3 }));
+      p.ws.send(JSON.stringify({ type: 'recording-countdown', seconds: 3 }));
+      await settle();
+      for (const w of [h, a, p]) expect(ofType(w.heard, 'recording-countdown')).toEqual([]);
+
+      h.ws.send(JSON.stringify({ type: 'recording-countdown', seconds: 3 }));
+      await until(() => [a, p].every((w) => ofType(w.heard, 'recording-countdown').length > 0));
+      await settle();
+      for (const w of [a, p]) {
+        expect(ofType(w.heard, 'recording-countdown')).toEqual([{ type: 'recording-countdown', seconds: 3 }]);
+      }
+      expect(ofType(h.heard, 'recording-countdown')).toEqual([]);
+
+      [h.ws, a.ws, p.ws].forEach((w) => w.close());
+    });
+
+    it('drops a countdown that carries no number, and leaves the room not recording', async () => {
+      const slug = 'rcd-ignr-aaa';
+      await seedRoom(slug, 'tok-rcd-ignore');
+      const h = await enter(slug, 'H', { hostToken: 'tok-rcd-ignore' });
+      const a = await enter(slug, 'A');
+
+      for (const seconds of ['3', null, undefined, {}]) {
+        h.ws.send(JSON.stringify({ type: 'recording-countdown', seconds }));
+      }
+      // Too large for a number: it parses to Infinity.
+      h.ws.send('{"type":"recording-countdown","seconds":1e999}');
+      h.ws.send(JSON.stringify({ type: 'recording-countdown', seconds: 2 }));
+      await until(() => ofType(a.heard, 'recording-countdown').length > 0);
+      await settle();
+      expect(ofType(a.heard, 'recording-countdown')).toEqual([{ type: 'recording-countdown', seconds: 2 }]);
+      for (const w of [h, a]) expect(ofType(w.heard, 'error')).toEqual([]);
+
+      // A cue starts nothing: someone who joins after it is not told the room is recording.
+      const late = await enter(slug, 'L');
+      expect(late.me.recording).toBe(false);
+
+      [h.ws, a.ws, late.ws].forEach((w) => w.close());
+    });
+  });
 });

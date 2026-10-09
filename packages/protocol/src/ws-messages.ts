@@ -56,6 +56,12 @@ export type ClientRecordingCompleted = {
  * this signal and the host then waits for their tails over the DataChannel.
  */
 export type ClientRecordingStop = { type: 'recording-stop'; recordingId: string };
+/**
+ * The host is about to start a take: a cue for the other screens, in
+ * seconds. It starts nothing. The take begins with `recording-started`,
+ * whether or not this arrived.
+ */
+export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: number };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 export type ClientPresence = {
   type: 'presence';
@@ -108,6 +114,7 @@ export type ClientMessage =
   | ClientRecordingStarted
   | ClientRecordingCompleted
   | ClientRecordingStop
+  | ClientRecordingCountdown
   | ClientChat
   | ClientPresence
   | ClientMarker
@@ -230,6 +237,11 @@ export type ServerRecordingStarted = {
   from: Role;
 };
 export type ServerRecordingStop = { type: 'recording-stop'; recordingId: string; from: Role };
+/**
+ * The host's ClientRecordingCountdown, passed on to everyone else in the
+ * room. Only the host's is passed on, so it carries no `from`.
+ */
+export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: number };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -267,6 +279,7 @@ export type ServerMessage =
   | ServerMarker
   | ServerRecordingStarted
   | ServerRecordingStop
+  | ServerRecordingCountdown
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
@@ -282,6 +295,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-started',
   'recording-completed',
   'recording-stop',
+  'recording-countdown',
   'chat',
   'presence',
   'marker',
@@ -303,6 +317,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'marker',
   'recording-started',
   'recording-stop',
+  'recording-countdown',
   'recording-ack',
   'room-closed',
   'pong',

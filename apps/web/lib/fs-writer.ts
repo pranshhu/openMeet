@@ -14,7 +14,7 @@ export interface FsDirectoryHandle {
   getFileHandle(name: string, opts?: { create?: boolean }): Promise<FsFileHandle>;
   removeEntry?(name: string): Promise<void>;
 }
-export type DirectoryPicker = () => Promise<FsDirectoryHandle>;
+export type DirectoryPicker = (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FsDirectoryHandle>;
 
 /**
  * One folder prompt for the whole recording.
@@ -29,7 +29,9 @@ export async function pickRecordingDirectory(picker?: DirectoryPicker): Promise<
   const p =
     picker ?? (globalThis as unknown as { showDirectoryPicker: DirectoryPicker }).showDirectoryPicker;
   if (typeof p !== 'function') throw new Error('showDirectoryPicker is unavailable in this browser');
-  return p();
+  // Write access is asked for with the folder. The first file can be created
+  // long after this click, and by then the browser will not let the page ask.
+  return p({ mode: 'readwrite' });
 }
 
 export class DiskFullError extends Error {
