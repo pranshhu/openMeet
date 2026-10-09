@@ -736,6 +736,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with
     a "Switch after this take" prompt because iOS Safari cannot hot-swap tracks in MediaRecorder without breaking.
+- **A `<video>` given a stream that lists a video track plays nothing, sound included, until that
+  track's first frame.** When a connection is made while incoming video is stopped the track is
+  taken out of the stream a few milliseconds after the tile was given it, and the frame never
+  comes. `VideoTile` therefore listens for the stream's `removetrack` and gives the element the
+  stream again while its `readyState` is still 0; an element that already plays is left alone,
+  because loading it again would cut the sound.
 
 ---
 

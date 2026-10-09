@@ -4,7 +4,7 @@ import { Stage, type StageFeed } from '@/components/Stage';
 
 const local: StageFeed = { stream: null, name: 'Alice', muted: true, camOff: true };
 const remote: StageFeed = { stream: null, name: 'Bob', muted: false, camOff: true };
-const fakeStream = { id: 'scr' } as unknown as MediaStream;
+const fakeStream = Object.assign(new EventTarget(), { id: 'scr' }) as unknown as MediaStream;
 
 describe('Stage', () => {
   it('solo: shows only the local feed, no swap PiP', () => {

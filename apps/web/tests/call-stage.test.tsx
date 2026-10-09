@@ -234,7 +234,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: false, wav: true } }}
       />
@@ -247,7 +247,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: false, wav: true } }}
       />
@@ -260,7 +260,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: true, wav: false } }}
       />
@@ -273,7 +273,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: true, wav: true } }}
       />
@@ -286,7 +286,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: true, wav: false, note: 'safari' } }}
       />
@@ -299,7 +299,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: true, wav: false, note: 'ios' } }}
       />
@@ -314,7 +314,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="guest"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null }]}
         capabilities={{ p1: { mp4: false, wav: true } }}
       />
@@ -324,8 +324,8 @@ describe('CallStage recording-capability labels', () => {
   });
 
   it('with two remote peers, each tile gets its own name and presence', () => {
-    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
-    const s2 = { id: 'stream-carol' } as unknown as MediaStream;
+    const s1 = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    const s2 = Object.assign(new EventTarget(), { id: 'stream-carol' }) as unknown as MediaStream;
     render(
       <CallStage
         {...baseProps}
@@ -462,7 +462,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p1', name: 'Bob', stream: null, notRecorded: true }]}
         capabilities={{ p1: { mp4: false, wav: true } }}
       />
@@ -478,7 +478,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         role="host"
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[
           { peerId: 'p1', name: 'Bob', stream: null },
           { peerId: 'p2', name: 'Carol', stream: null, notRecorded: true },
@@ -686,7 +686,7 @@ describe('CallStage recording-capability labels', () => {
         {...baseProps}
         screenSharing
         presentingRearCamera
-        localScreenStream={{ id: 'rear' } as unknown as MediaStream}
+        localScreenStream={Object.assign(new EventTarget(), { id: 'rear' }) as unknown as MediaStream}
       />
     );
     expect(screen.getByText('Your rear camera')).toBeInTheDocument();
@@ -698,7 +698,7 @@ describe('CallStage recording-capability labels', () => {
       <CallStage
         {...baseProps}
         screenSharing={false}
-        remoteScreenStream={{} as MediaStream}
+        remoteScreenStream={new EventTarget() as MediaStream}
         peerName="Bob"
       />
     );
@@ -709,7 +709,7 @@ describe('CallStage recording-capability labels', () => {
     render(
       <CallStage
         {...baseProps}
-        remoteScreenStream={{} as MediaStream}
+        remoteScreenStream={new EventTarget() as MediaStream}
         remotePeers={[
           { peerId: 'p1', name: 'Bob', stream: null, presence: { micOn: true, camOn: true, screenSharing: false } },
           { peerId: 'p2', name: 'Cara', stream: null, presence: { micOn: true, camOn: true, screenSharing: true } },
@@ -892,10 +892,10 @@ describe('CallStage recording-capability labels', () => {
         configurable: true,
       });
       const dummyTrack = { kind: 'video', readyState: 'ended', enabled: true } as any;
-      const dummyStream = {
+      const dummyStream = Object.assign(new EventTarget(), {
         getVideoTracks: () => [dummyTrack],
         getAudioTracks: () => [],
-      } as any;
+      }) as any;
 
       const { container } = render(
         <CallStage
@@ -921,13 +921,13 @@ describe('CallStage self-view', () => {
   // Mirrored like the lobby preview; the recording and the remote tiles never are.
   it('mirrors your own camera tile and no one else’s', () => {
     const video = { kind: 'video', enabled: true, getSettings: () => ({ facingMode: 'user' }) };
-    const local = {
+    const local = Object.assign(new EventTarget(), {
       id: 'local',
       getTracks: () => [video],
       getAudioTracks: () => [],
       getVideoTracks: () => [video],
-    } as unknown as MediaStream;
-    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    }) as unknown as MediaStream;
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
     render(
       <CallStage
         {...baseProps}
@@ -946,10 +946,10 @@ describe('CallStage self-view', () => {
 describe('CallStage initial device state from stream', () => {
   it('initializes mic control as off when local stream audio track is disabled', () => {
     const disabledAudioTrack = { kind: 'audio', enabled: false } as MediaStreamTrack;
-    const stream = {
+    const stream = Object.assign(new EventTarget(), {
       getAudioTracks: () => [disabledAudioTrack],
       getVideoTracks: () => [],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
 
     render(<CallStage {...baseProps} localStream={stream} />);
 
@@ -965,10 +965,10 @@ describe('CallStage initial device state from stream', () => {
 
   it('initializes cam control as off when local stream video track is disabled', () => {
     const disabledVideoTrack = { kind: 'video', enabled: false } as MediaStreamTrack;
-    const stream = {
+    const stream = Object.assign(new EventTarget(), {
       getAudioTracks: () => [],
       getVideoTracks: () => [disabledVideoTrack],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
 
     render(<CallStage {...baseProps} localStream={stream} />);
 
@@ -983,7 +983,7 @@ describe('CallStage initial device state from stream', () => {
   });
 
   it('does not render peers with role=producer as stage tiles', () => {
-    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
+    const s1 = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
     render(
       <CallStage
         {...baseProps}
@@ -1073,7 +1073,7 @@ describe('CallStage initial device state from stream', () => {
   });
 
   it('companion peer has no camera tile on the stage', () => {
-    const s1 = { id: 'stream-bob' } as unknown as MediaStream;
+    const s1 = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
     render(
       <CallStage
         {...baseProps}
@@ -1105,7 +1105,7 @@ describe('CallStage initial device state from stream', () => {
   });
 
   it('companion peer sharing screen labels the screen as Name (Presenting)', () => {
-    const fakeScreen = { id: 'scr-companion' } as unknown as MediaStream;
+    const fakeScreen = Object.assign(new EventTarget(), { id: 'scr-companion' }) as unknown as MediaStream;
     render(
       <CallStage
         {...baseProps}
@@ -1375,7 +1375,7 @@ describe('CallStage after a take', () => {
     markers: [],
     commands: [],
   };
-  const bob = { id: 'stream-bob' } as unknown as MediaStream;
+  const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
   const doneProps = {
     ...baseProps,
     role: 'host' as const,
@@ -1879,10 +1879,10 @@ describe('CallStage mic warning', () => {
     unmountGuest();
 
     const disabledTrack = { kind: 'audio', enabled: false } as any;
-    const stream = {
+    const stream = Object.assign(new EventTarget(), {
       getAudioTracks: () => [disabledTrack],
       getVideoTracks: () => [],
-    } as any;
+    }) as any;
     const { unmount: unmountMuted } = render(
       <CallStage {...baseProps} localStream={stream} phase="in-call" micWarning="silent" />
     );
@@ -2228,7 +2228,7 @@ describe('interrupted take notice', () => {
 describe('CallStage: who is recorded', () => {
   const carol = { peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' as const };
   const dan = { peerId: 'p-dan', name: 'Dan', stream: null, role: 'guest' as const, notRecorded: true };
-  const withGuests = { ...baseProps, remoteStream: {} as MediaStream, remotePeers: [carol, dan] };
+  const withGuests = { ...baseProps, remoteStream: new EventTarget() as MediaStream, remotePeers: [carol, dan] };
 
   it('lists the guests and asks the Room to record or drop each one', () => {
     const onSetPeerRecorded = vi.fn();
@@ -2265,7 +2265,7 @@ describe('CallStage: who is recorded', () => {
     render(
       <CallStage
         {...baseProps}
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[
           { peerId: 'p-prod', name: 'Pia', stream: null, role: 'producer' },
           { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true },
@@ -2287,7 +2287,7 @@ describe('CallStage: who is recorded', () => {
     render(
       <CallStage
         {...baseProps}
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[
           { peerId: 'p-view', name: 'Vic', stream: null, role: 'guest', companion: true, notRecorded: true },
         ]}
@@ -2376,7 +2376,7 @@ describe('countdown before a take', () => {
     render(
       <CallStage
         {...baseProps}
-        remoteStream={{} as MediaStream}
+        remoteStream={new EventTarget() as MediaStream}
         remotePeers={[{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }]}
         onSetPeerRecorded={vi.fn()}
         countdownEndsAt={Date.now() + 3000}
@@ -2477,8 +2477,8 @@ describe('CallStage: stop incoming video', () => {
   });
 
   it('shows every other person as their initial while it is on, with the name tag kept', () => {
-    const bob = { id: 'stream-bob' } as unknown as MediaStream;
-    const carol = { id: 'stream-carol' } as unknown as MediaStream;
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    const carol = Object.assign(new EventTarget(), { id: 'stream-carol' }) as unknown as MediaStream;
     const props = {
       ...baseProps,
       remoteStream: bob,
@@ -2517,11 +2517,11 @@ describe('CallStage: stop incoming video', () => {
 
   it('covers a screen someone presents while it is on, with its own way back', () => {
     const spy = vi.fn();
-    const bob = { id: 'stream-bob' } as unknown as MediaStream;
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
     const props = {
       ...baseProps,
       remoteStream: bob,
-      remoteScreenStream: { id: 'screen-bob' } as unknown as MediaStream,
+      remoteScreenStream: Object.assign(new EventTarget(), { id: 'screen-bob' }) as unknown as MediaStream,
       remotePeers: [
         { peerId: 'p-bob', name: 'Bob', stream: bob, presence: { micOn: true, camOn: true, screenSharing: true } },
       ],
@@ -2537,8 +2537,8 @@ describe('CallStage: stop incoming video', () => {
   });
 
   it('a person whose camera is off stays an initial when incoming video is on', () => {
-    const bob = { id: 'stream-bob' } as unknown as MediaStream;
-    const carol = { id: 'stream-carol' } as unknown as MediaStream;
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    const carol = Object.assign(new EventTarget(), { id: 'stream-carol' }) as unknown as MediaStream;
     const on = { micOn: true, camOn: true, screenSharing: false };
     const off = { micOn: true, camOn: false, screenSharing: false };
     const tile = (container: HTMLElement, s: MediaStream) =>
