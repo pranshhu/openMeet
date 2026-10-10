@@ -119,6 +119,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   processed audio, not raw. The answer is remembered in that browser.
 - The host sees on each person's name tag whether they said headphones or
   speakers in the lobby, and whether their echo cancellation is on.
+- The session summary and `sync.json` say which files were recorded with echo
+  cancellation on, and a microphone switched during the call keeps that choice.
 
 ### Changed
 

@@ -345,6 +345,10 @@ it, leave the call and join again.
 The host sees each person's answer on their name tag in the call: "headphones", "on
 speakers" or "on speakers, echo cancelled". Nobody else's screen shows it.
 
+After a take, the session summary marks that person's camera and audio files with "echo
+cancellation on", and `sync.json` lists them under `echoCancellation`. A microphone
+switched during the call is opened the same way as the one chosen in the lobby.
+
 ### Producers and Present only
 
 A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are

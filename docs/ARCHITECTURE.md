@@ -466,7 +466,11 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as
   "Download sync.json" (downloaded as
-  `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
+  `openmeet-<slug>-take<n>-sync.json`). When someone's microphone ran with the browser's echo
+  cancellation on, the report has an `echoCancellation` section naming that person's camera and
+  WAV files, and the summary's rows for them read "echo cancellation on": the host's own from its
+  microphone's settings at End & save, a guest's from the `listening` it announced, kept by peer id
+  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
   button copies the invite link instead and the summary stays. The summary's file list leaves out a
@@ -725,6 +729,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    A switched-to microphone is asked for the echo cancellation the lobby microphone was asked
+    for (read once from that track's `getConstraints()`, or from its settings when the browser
+    gives no constraints back), so the lobby's answer holds for the whole call.
     When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and
     one `AnalyserNode` per channel, beside the path to the destination node and never in it; `watchMic`
     (`lib/mic-watch.ts`) polls them every 300 ms and reports `'silent'` once no channel has carried a
@@ -864,3 +871,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   name tag; the Room relays `recording-capability` to everyone, as it does the browser notes.
 - **The answer on a name tag can be cut off.** A name tag truncates in a small tile; the whole
   text is in its tooltip. A guest on speakers gets no line of their own.
+- **A take saved from its crash copy does not say whose audio was echo-cancelled.** The lobby's
+  Save to folder and the call's Save what was recorded rebuild the report from the crash copy,
+  which holds no such note. The files are the same; only the mark is missing.
+- **After a resume, files from before the reload can miss the echo-cancellation mark.** The
+  reloaded page knows only what was announced to it since: the host's own first file is never
+  marked, and neither are the files of a guest who left before the reload.
+- **The echo-cancellation mark does not reach a guest's own backup or the call-audio copy.**
+  Both hold the same processed audio; the note in `sync.json` says so in words, and a returned
+  backup's own `.json` does not mention it.
