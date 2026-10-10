@@ -342,6 +342,14 @@ out. Every other tab keeps the newest one the Room passes on in `incomingScript`
 non-blank string of at most `MAX_SCRIPT_LENGTH` units, until `dismissIncomingScript` (the
 person took it or turned it down); nothing else in the state changes.
 
+`CallStage` hands the three to `components/Teleprompter.tsx`, each person's own script overlay
+(not on a present-only device; its text is kept in `localStorage` per room and is in no file).
+A host's editor has **Send to everyone**, with a line saying whether it went out. Everyone
+else is offered what arrives: a dot on the teleprompter button while the panel is closed, and
+**Use it** / **Ignore** inside it; their own text changes only on **Use it**, and either
+answer clears the offer. The editor shows a script's reading time at 150 words a minute
+(`readingMinutes`).
+
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
   It returns whether the message went out.
@@ -914,3 +922,11 @@ person took it or turned it down); nothing else in the state changes.
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **A script is sent once, to the people in the room at that moment.** Someone who joins
+  afterwards is not sent it, and an offer nobody answered does not survive a reload of that
+  person's page. The host sends it again, and everyone else is offered it again, also those
+  who already used or ignored it. The host is not told who used it.
+- **Using the host's script replaces the person's own for that room, with no way back.** The
+  offer says so before the click, and shows the reading time but not the text. The reading
+  time counts words by spaces, so a script in a language written without them reads as about
+  a minute.

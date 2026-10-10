@@ -111,6 +111,9 @@ export function CallStage({
   onNewTake,
   onDiscardTake,
   onOpenMediaBoard,
+  incomingScript = null,
+  onSendScript,
+  onDismissScript,
   onToggleScreen,
   capabilities,
   finalizingGuests,
@@ -193,6 +196,12 @@ export function CallStage({
   onNewTake: () => void;
   onDiscardTake: (take: number) => void;
   onOpenMediaBoard: () => MediaBoard | null;
+  /** A script the host sent that this person has not answered; null when none. */
+  incomingScript?: string | null;
+  /** Host: offer the teleprompter script to everyone else. False when it did not go out. */
+  onSendScript?: (text: string) => boolean;
+  /** The person took the offered script or turned it down. */
+  onDismissScript?: () => void;
   onToggleScreen: (source?: File | 'rear-camera') => void;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
@@ -445,6 +454,9 @@ export function CallStage({
   }, [unread, isTakeActive]);
 
   const [prompterOpen, setPrompterOpen] = useState(false);
+  // The host's script is offered inside the teleprompter. While that is
+  // closed its button carries the dot, as Chat's does for an unread message.
+  const scriptWaiting = incomingScript !== null && !prompterOpen;
   const [board, setBoard] = useState<MediaBoard | null>(null);
   const [boardOpen, setBoardOpen] = useState(false);
   // First opened mid-take: that take's recorder keeps the raw mic (a running
@@ -593,6 +605,10 @@ export function CallStage({
         {/* Announced from here, a live region that is always mounted: many
             screen readers skip one inserted along with its text, like the toast. */}
         {phase === 'finalizing' && <span className="sr-only">{finalizingCopy}</span>}
+        {/* A present-only device has no teleprompter to take it into. */}
+        {incomingScript !== null && !companion && (
+          <span className="sr-only">The host sent a script. Use it or ignore it in the teleprompter.</span>
+        )}
         {phase === 'recording' && markerCount > 0 && (
           <span className="text-white/70">
             {markerCount} marker{markerCount === 1 ? '' : 's'}
@@ -892,7 +908,15 @@ export function CallStage({
               onStopPresenting={() => onToggleScreen()}
               onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
-            {prompterOpen && <Teleprompter slug={slug} onClose={() => setPrompterOpen(false)} />}
+            {prompterOpen && (
+              <Teleprompter
+                slug={slug}
+                onClose={() => setPrompterOpen(false)}
+                incoming={incomingScript}
+                onIncomingDone={onDismissScript}
+                onSend={isHost ? onSendScript : undefined}
+              />
+            )}
             {boardOpen && (
               <MediaBoardPanel
                 board={board}
@@ -1204,6 +1228,7 @@ export function CallStage({
                     label={prompterOpen ? 'Hide teleprompter' : 'Show teleprompter'}
                     variant={prompterOpen ? 'active' : 'default'}
                     onClick={() => setPrompterOpen((o) => !o)}
+                    badge={scriptWaiting}
                   />
                   {/* The board mixes into your mic, and a producer has none. */}
                   {role !== 'producer' && (

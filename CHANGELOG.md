@@ -132,6 +132,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
 - The teleprompter's editor shows how long the script takes to read aloud.
+- The host can send their teleprompter script to everyone else in the call, from
+  the teleprompter's editor. Each person uses it in their own teleprompter or
+  ignores it, and nobody's own script is replaced without their click.
 
 ### Changed
 
