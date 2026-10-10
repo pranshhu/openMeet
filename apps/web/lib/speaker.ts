@@ -114,3 +114,22 @@ export function followSpeaker(el: HTMLMediaElement): () => void {
     unsubscribe();
   };
 }
+
+/**
+ * Plays `stream` on this device, through the chosen speaker, until the returned
+ * function is called. An element and not the audio graph's own output: the
+ * browser suspends a graph whose output device goes away, and the graphs that
+ * use this also feed the call and the recording.
+ */
+export function playLocally(stream: MediaStream): () => void {
+  const el = document.createElement('audio');
+  el.autoplay = true;
+  el.srcObject = stream;
+  document.body.append(el);
+  const unfollow = followSpeaker(el);
+  return () => {
+    unfollow();
+    el.srcObject = null;
+    el.remove();
+  };
+}
