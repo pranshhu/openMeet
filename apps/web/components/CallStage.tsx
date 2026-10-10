@@ -17,6 +17,7 @@ import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
 import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
+import { MarkerNote, useMarkerNote } from './MarkerNote';
 import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
 import type { BackupTransfer } from '@/hooks/backup-return';
@@ -188,7 +189,8 @@ export function CallStage({
   onLeave: () => void;
   onSendChat: (text: string) => void;
   slug: string;
-  onMark: (label: string) => void;
+  /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
+  onMark: (label: string, at?: number) => void;
   markerCount: number;
   chaptersUrl: string | null;
   summary: SyncReportData | null;
@@ -471,6 +473,13 @@ export function CallStage({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, onMark]);
+  // N opens a field for a marker with a typed note; it closes with the take.
+  const [noteOpen, setNoteOpen] = useMarkerNote(phase === 'recording');
+  // Hand focus back to the note button, as closing chat does for its own.
+  function closeNote() {
+    setNoteOpen(false);
+    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="Mark with a note (N)"]')?.focus());
+  }
 
   useProblemAlert({
     active: phase === 'recording' || phase === 'finalizing',
@@ -845,6 +854,16 @@ export function CallStage({
       <div className="relative flex min-h-0 flex-1">
         <div data-testid="stage-column" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <main data-testid="stage-main" className="relative min-h-0 flex-1">
+            {/* Before the notices in the page, so the recording notice is drawn
+                over the field and never hidden by it. On a phone it leaves the
+                screen with the control bar, whose button opened it. */}
+            {noteOpen && (
+              <MarkerNote
+                onMark={onMark}
+                onClose={closeNote}
+                className={`${toastPlace} ${chatOpen ? 'hidden sm:flex' : 'flex'}`}
+              />
+            )}
             {/* The consent toast floats over the top of the stage: in the flow it
                 pushed the stage down when a take started and back up 7 s later.
                 With the teleprompter open (Record is its main moment) the top
@@ -936,7 +955,11 @@ export function CallStage({
                 onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
               />
             )}
-            <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-[32px] bg-[#2a2b2e]/80 px-3 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur sm:gap-3">
+            {/* Below 384 px the gaps and the side padding give up a few pixels: with
+                a take running the second row holds five buttons and Leave, 334 px
+                at this spacing, which fits a 360 px phone. At the wider spacing it
+                needs 344 px and Leave drops to a third row. */}
+            <div className="flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-[32px] bg-[#2a2b2e]/80 px-1 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur min-[384px]:gap-2 min-[384px]:px-3 sm:gap-3">
               {/* A producer joins with no camera or mic, so these would only
                   show red and do nothing. */}
               {!companion && role !== 'producer' && (
@@ -1327,6 +1350,12 @@ export function CallStage({
                     icon="bookmark"
                     label={`Mark this moment (M)${markerCount ? ` — ${markerCount} so far` : ''}`}
                     onClick={() => onMark('')}
+                  />
+                  <ControlButton
+                    icon="edit"
+                    label="Mark with a note (N)"
+                    variant={noteOpen ? 'active' : 'default'}
+                    onClick={() => setNoteOpen(!noteOpen)}
                   />
                   {isHost ? (
                     <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={onEnd} />

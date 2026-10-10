@@ -67,6 +67,8 @@ retention policy to trust, because there's nothing retained.
   see [Producers and Present only](#producers-and-present-only)
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
+- A typed note on a chapter marker: press **N** during a take, type a few words and
+  press Enter, and the note is that marker's line in `chapters.txt`
 - Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
   **M** marker, and for the host **Alt+R** to record and **Alt+S** to end and save;
   the **?** button in the call lists them
