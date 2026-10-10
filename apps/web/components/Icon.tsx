@@ -18,6 +18,7 @@ export type IconName =
   | 'edit'
   | 'settings'
   | 'board'
+  | 'levels'
   | 'folder'
   | 'arrow_drop_up'
   | 'arrow_drop_down';
@@ -61,6 +62,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   board: (
     <path d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z" />
   ),
+  levels: <path d="M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z" />,
   bookmark: <path d="M6 2h12a1 1 0 0 1 1 1v18l-7-4-7 4V3a1 1 0 0 1 1-1z" />,
   edit: (
     <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />

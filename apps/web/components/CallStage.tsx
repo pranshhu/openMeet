@@ -6,6 +6,7 @@ import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
+import { LevelsPanel } from './LevelsPanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -28,6 +29,7 @@ import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
+import { SpeakerRow } from './SpeakerRow';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -511,11 +513,21 @@ export function CallStage({
     mirror: currentFacingMode !== 'environment',
   };
   const stagePeers = remotePeers.filter((p) => p.role !== 'producer' && !p.companion);
+  // Levels: how loud this tab plays each other person, 0 to 1 by peerId. The
+  // value goes to that person's <video> elements only, so nobody else hears
+  // it and no recorder, backup or call-audio copy reads it.
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [volumes, setVolumes] = useState<Map<string, number>>(() => new Map());
+  const volumeOf = (peerId: string | undefined) => volumes.get(peerId ?? '') ?? 1;
+  // Said on the button, because the panel is usually hidden: a person turned
+  // down and forgotten looks like a dead microphone.
+  const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
   const remote: StageFeed | null = stagePeers.length > 0 && remoteStream
     ? {
         stream: remoteStream,
+        volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
@@ -884,6 +896,7 @@ export function CallStage({
                 const presence = r.presence;
                 return {
                   stream: r.stream,
+                  volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
@@ -930,6 +943,15 @@ export function CallStage({
           <div
             className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
+            {/* In the flow above the bar, so it covers no face and no other
+                panel, and it hides with the bar while chat covers a phone. */}
+            {levelsOpen && (
+              <LevelsPanel
+                peers={stagePeers}
+                volumes={volumes}
+                onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
+              />
+            )}
             {/* Below 384 px the gaps and the side padding give up a few pixels: with
                 a take running the second row holds five buttons and Leave, 334 px
                 at this spacing, which fits a 360 px phone. At the wider spacing it
@@ -972,6 +994,7 @@ export function CallStage({
                         role="menu"
                         className="absolute bottom-full mb-2 left-0 z-30 min-w-64 max-w-[calc(100vw-2rem)] max-h-60 overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
                       >
+                        <SpeakerRow devices={devices} />
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Microphone
                         </div>
@@ -1222,6 +1245,14 @@ export function CallStage({
               )}
               {!companion && (
                 <>
+                  {/* Not on a present-only device: it plays nobody. */}
+                  <ControlButton
+                    icon="levels"
+                    label={levelsOpen ? 'Hide levels' : turnedDown ? 'Levels (someone is turned down)' : 'Levels'}
+                    badge={turnedDown}
+                    variant={levelsOpen ? 'active' : 'default'}
+                    onClick={() => setLevelsOpen((o) => !o)}
+                  />
                   <ControlButton
                     icon="script"
                     label={prompterOpen ? 'Hide teleprompter' : 'Show teleprompter'}

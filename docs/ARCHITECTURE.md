@@ -307,6 +307,34 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+- **Speaker** (`lib/speaker.ts`, `hooks/use-speaker.ts`): one output device per browser plays
+  the call, kept in `localStorage` as `om_speaker`; `''` is the system default. The call's
+  microphone menu starts with a **Speaker** `<select>` (`components/SpeakerRow.tsx`) of the
+  outputs the browser names (`speakersIn`: none where `setSinkId` is missing, which hides the
+  row), and `setSpeaker` stores the choice. The lobby has the same choice as a row under its
+  microphone picker, filled once when the preview starts (`listSpeakers`). Every `VideoTile`
+  that is not muted follows it (`followSpeaker` calls `setSinkId` on its `<video>`), so the
+  other people's cameras and a presented screen move together, and a tile mounted later starts
+  on it. A chosen device that the browser refuses, or that is not listed any more after a
+  `devicechange` (`dropIfGone`, listening while a tile follows the choice or a picker shows
+  it), puts the choice back on the system default: the browser plays nothing through an
+  output that has gone away and does not move the sound by itself. An empty list changes
+  nothing, because without microphone permission the browser names no output.
+  `playLocally(stream)` plays a stream on this device through an `<audio>` element that
+  follows the choice: the media board's pads and a presented video's monitor use it and
+  connect nothing to their graph's own output, because the browser suspends a graph whose
+  output device goes away, and those graphs also feed the call and the recordings. Nothing in
+  `hooks/` or `lib/` that records reads a media element, so no file depends on the choice.
+- **`components/LevelsPanel.tsx`** — **Levels** in the control bar (not on a present-only device,
+  which plays nobody) opens a strip between the stage and the bar with a fader for each person
+  who has a tile. `CallStage` keeps the values (`volumes`, 0 to 1 by `peerId`) and gives each to
+  that person's `StageFeed.volume`; `VideoTile` sets it as the `volume` of its `<video>`. It is
+  this tab's playback only: nothing is sent, and no recorder, backup or call-audio copy reads a
+  tile's element. While someone is below full volume the button carries a dot.
+  Each row also has a meter of what arrives from that person, read before the fader: while the
+  panel is on screen one `AudioContext` of its own holds a `MediaStreamAudioSourceNode` and an
+  `AnalyserNode` per stream, connected to nothing else, and a 100 ms timer writes each bar
+  straight to the DOM. Hiding the panel closes the context.
 - **`components/MarkerNote.tsx`** — a chapter marker with a typed note. `useMarkerNote` holds
   whether the field is open for the take that is running and listens for **N** (ignored while
   typing, as **M** is); the pencil button beside the marker button opens it too. `MarkerNote` is
@@ -493,7 +521,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
-- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
+- `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
@@ -546,7 +574,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   destination keeps the browser's default of two channels, so the MP4 (and backup) of a take with
   the board open has a two-channel audio track even when the microphone is recorded in mono: a
   stereo pad keeps its stereo and the voice is the same on both channels. The WAV master follows
-  `recordedChannels` either way.
+  `recordedChannels` either way. The person who fires a pad hears it from a second
+  destination node that only the pads feed, played by an element (`playLocally`) on the
+  chosen speaker.
 - `board-sounds.ts` `BOARD_SOUNDS`: the ready sounds the media board panel offers under "Ready
   sounds" (Chime, Rimshot, Soft bed). One is computed in the page when its button is clicked
   (`render`: sine tones and noise at `WAV_SAMPLE_RATE`), wrapped as a 24-bit mono WAV
@@ -842,6 +872,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
   the tab shows "Everyone else left", there is no media board on screen; the pad plays on
   until someone joins and the call is back, or until Leave.
+- **A level set in Levels is forgotten when its person reconnects, and on a reload.** It is
+  kept by `peerId` in the call screen, and the Room gives a returning connection a new id, so
+  that person plays at full volume again. A fader only turns a person down from full volume,
+  and the sound of a shared screen or a presented video has no fader.
+- **M does not mark a moment while a fader has the keyboard.** The marker key skips every
+  `<input>`, as it does for the teleprompter's sliders; the bookmark button still marks.
+- **A level meter is drawn only while Levels is open.** It shows what arrives, so it does not
+  move with the fader, and it has one colour: nothing marks a person who is clipping.
 - **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
   and Rimshot peak at about 0.4 of full scale and Soft bed at about 0.13, mixed over the
   voice. Like every pad, a ready sound is gone from the board after a reload and is added
@@ -919,6 +957,24 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
+  back to the system default at once, and plugging the device in again does not bring the
+  choice back. A producer joins without microphone permission; a browser that refuses a
+  remembered speaker for that reason forgets it for the next call as well.
+- **The two warning beeps of a recording problem play on the system default output,**
+  whatever speaker is chosen.
+- **A pad, and a video heard by the person who presents it, reach that person through one
+  more buffer than they reach the call.** An element fed from the audio graph plays them,
+  so they follow the chosen speaker and the graph never depends on an output device. The
+  delay on that one device was not measured.
+- **A producer has no speaker picker.** It has no microphone menu, and without microphone
+  permission the browser names no outputs. It hears the call on the system default, or on a
+  speaker chosen earlier in the same browser. A Present-only device plays no call sound.
+- **The lobby has no test sound for the speaker, and reads its list once.** The choice is
+  first heard when someone speaks in the call, where the microphone menu can change it; an
+  output plugged in while the lobby is open is listed after a reload.
+- **Two tabs do not share a change of speaker while both are open.** Each reads the stored
+  choice when it loads.
 - **A marker or a note from a guest is lost while the host is not recording.** The host places
   every marker when it arrives and has no take to place it on after a reload and before
   **Resume recording**, or once it has dropped. One sent while that guest's own connection to

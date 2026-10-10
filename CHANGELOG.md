@@ -52,6 +52,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be
   dismissed.
+- **Levels**, in the call's control bar: a fader for each other person sets how
+  loud your browser plays them. Only you hear the difference; what the others
+  hear and every recording are unchanged.
+- **Levels** shows a meter beside each fader: how loud that person arrives,
+  whatever their fader is set to.
 - A live track panel during a take: beside the Recording pill, the host sees every
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much
@@ -137,6 +142,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   or recovered after a reload keeps it. The host's own note is placed at the moment the
   note field opened. A note with no space in it, such as a pasted link, wraps in the
   summary's chapter list.
+- A speaker picker, in the lobby and in the call (the arrow beside the mic button):
+  everyone's voice, a presented screen, the media board's pads and a video you
+  present play through the output chosen. The choice is remembered per browser,
+  and a chosen speaker that is unplugged falls back to the system default.
 
 ### Changed
 

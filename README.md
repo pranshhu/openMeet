@@ -78,10 +78,14 @@ retention policy to trust, because there's nothing retained.
   the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
+- Choose the speaker or headphones the call plays through, in the lobby or from the arrow
+  beside the mic button; remembered per browser
 - A sound when a recording problem appears during a take, and a system
   notification when the tab is in the background
 - A note in the call when your own microphone has sent no sound for 10 seconds
   (unplugged, muted on the device, wrong input) or keeps clipping
+- **Levels**: see how loud each person arrives and turn one down for your own ears;
+  what the others hear and what is recorded do not change
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up, with a low-power
