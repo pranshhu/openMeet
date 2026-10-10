@@ -114,6 +114,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
+  on the board as pads with one click. They are made in the browser, so no
+  audio file is downloaded, and the bed arrives set to loop and fade.
 
 ### Changed
 

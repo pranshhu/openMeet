@@ -2,6 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { MediaBoard, Pad } from '@/lib/media-board';
+import { BOARD_SOUNDS, soundFile, type BoardSound } from '@/lib/board-sounds';
 import { Icon } from './Icon';
 
 /**
@@ -22,6 +23,8 @@ export function MediaBoardPanel({
 }) {
   const [pads, setPads] = useState<Pad[]>(board?.pads ?? []);
   const [error, setError] = useState<string | null>(null);
+  // A second click before the first pad is on the board would add it twice.
+  const [adding, setAdding] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // What is playing lives on the board, not here: the panel unmounts on close
   // while a pad plays on, and a local copy came back wrong on reopen.
@@ -39,6 +42,23 @@ export function MediaBoardPanel({
       }
     }
     setPads([...board.pads]);
+  }
+
+  async function addSound(sound: BoardSound) {
+    if (!board) return;
+    setError(null);
+    setAdding(true);
+    try {
+      const pad = await board.load(soundFile(sound));
+      if (sound.bed) {
+        board.setLoop(pad.id, true);
+        board.setFade(pad.id, true);
+      }
+    } catch {
+      setError(`Could not add ${sound.name}.`);
+    }
+    setPads([...board.pads]);
+    setAdding(false);
   }
 
   function toggle(pad: Pad) {
@@ -63,6 +83,31 @@ export function MediaBoardPanel({
     board.setFade(pad.id, !pad.fade);
     setPads([...board.pads]);
   }
+
+  // A sound already on the board is not offered again.
+  const ready = BOARD_SOUNDS.filter((s) => !pads.some((p) => p.name === s.name));
+  // Drawn above an empty board's text, and first in the scrolling list once
+  // there are pads: there it takes its room from the list, so the panel is
+  // no taller for it and does not reach the status bar on a phone.
+  const readyRow = board && ready.length > 0 && (
+    <div role="group" aria-label="Ready sounds" className="flex flex-wrap items-center gap-2">
+      <span aria-hidden="true" className="w-full text-[11px] text-white/70 sm:w-auto">
+        Ready sounds
+      </span>
+      {ready.map((s) => (
+        <button
+          key={s.name}
+          type="button"
+          disabled={adding}
+          onClick={() => void addSound(s)}
+          aria-label={`Add ${s.name}`}
+          className="min-h-11 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:opacity-50 sm:min-h-0"
+        >
+          + {s.name}
+        </button>
+      ))}
+    </div>
+  );
 
   // The control bar sits below the stage, so the bottom offset only has to
   // clear the self view / peer PiP in the stage's bottom-right corner:
@@ -91,8 +136,9 @@ export function MediaBoardPanel({
         onChange={(e) => void addFiles(e.target.files)}
       />
 
-      {error && <p className="mb-2 text-xs text-[#f6aea9]">{error}</p>}
+      {error && <p role="alert" className="mb-2 text-xs text-[#f6aea9]">{error}</p>}
 
+      {pads.length === 0 && readyRow && <div className="mb-2">{readyRow}</div>}
       {pads.length === 0 ? (
         <p className="text-xs text-white/70">
           Load intros, stingers or ad reads. They play into the call and drop a chapter marker; the
@@ -100,6 +146,7 @@ export function MediaBoardPanel({
         </p>
       ) : (
         <ul className="-m-1 grid max-h-[40dvh] grid-cols-2 gap-2 overflow-y-auto p-1">
+          {readyRow && <li className="col-span-2">{readyRow}</li>}
           {pads.map((pad) => {
             const playing = board?.isPlaying(pad.id) ?? false;
             return (
