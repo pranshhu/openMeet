@@ -136,6 +136,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- Record alone: a host with nobody else in the room presses **Continue alone** in the
+  waiting room and records from the call screen. Anyone who joins during the take is
+  recorded from then on.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed
@@ -169,6 +172,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   later refuses to write to that folder, the next Record asks for a folder again.
 - After **Record** is pressed the take starts three seconds later, and Record
   cannot be pressed again meanwhile. The recording folder is asked for first.
+- **Record another take** is offered when everyone else has left too, and records the
+  host alone, in place of the Copy invite link the summary showed then. A host with
+  nobody else in the room can present, and the screen is recorded to its own file.
 
 ### Fixed
 
@@ -277,6 +283,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take in which no guest was recorded no longer leaves an empty
   `guest_<id>.mp4` in the recording folder, or warnings about it in the
   summary.
+- A guest who joined after the host's connection to the room had dropped and come back
+  during a take was not recorded, and was not told the call was being recorded. The
+  host's page says the take is still running as soon as it is back.
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.

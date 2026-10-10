@@ -18,6 +18,7 @@ export function WaitingRoom({
   title,
   note,
   busy = false,
+  onContinueAlone,
 }: {
   role: Role | null;
   localStream: MediaStream | null;
@@ -30,6 +31,8 @@ export function WaitingRoom({
   note?: string;
   /** Show a spinner above the heading while the call connects. */
   busy?: boolean;
+  /** A host who can record: go on to the call screen without waiting for anyone. */
+  onContinueAlone?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   // Seeded from the tracks, so a camera turned off in the lobby stays off here
@@ -146,6 +149,15 @@ export function WaitingRoom({
               </button>
             )}
             {isHost && <RoleLinks className="-ml-2" menuClassName="bottom-full left-1/2 mb-2 -translate-x-1/2" />}
+            {onContinueAlone && (
+              <button
+                type="button"
+                onClick={onContinueAlone}
+                className={`inline-flex min-h-11 items-center rounded-full px-5 py-2.5 text-sm font-medium text-white/80 ring-1 ring-inset ring-white/20 transition-colors hover:bg-white/10 hover:text-white ${focus}`}
+              >
+                Continue alone
+              </button>
+            )}
             <button
               type="button"
               onClick={onLeave}

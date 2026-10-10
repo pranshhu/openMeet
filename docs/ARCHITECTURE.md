@@ -258,7 +258,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
   WaitingRoom ("Everyone else left"): the tab stays in the room, camera on, and resumes when someone
-  joins. `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
+  joins. A host whose browser can record gets **Continue alone** in the waiting room, alone or
+  after everyone left (never while connecting, never on a present-only device). `RoomView`
+  keeps that choice while the tab stays in the room (`alone`) and from then on renders
+  `CallStage` for `waiting`, `connecting` and `peer-left` too, drawn as `in-call`, so
+  Record, the countdown, the teleprompter and the media board are there with nobody else in
+  the room. The hook's phase is not changed by it.
+  `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
   (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
@@ -365,7 +371,9 @@ null; `CallStage` shows it as a note that can be dismissed until the next take s
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
-stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
+stream); stop = `removeTrack` + renegotiate, idempotent. A host can present with nobody connected:
+its screen file is written to the folder, so only a guest needs the connection to the host.
+`onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
 unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
@@ -513,8 +521,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
-  `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
-  button copies the invite link instead and the summary stays. The summary's file list leaves out a
+  `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
+  in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
+  through the count. The summary's file list leaves out a
   guest WAV that was never opened, host files a host companion never opened, empty guest screen
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
@@ -643,6 +652,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A take needs no guest: with nobody connected `startRecording` records the host's own
+   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
    until they pass `STREAM_BACKLOG_CAP_BYTES` (256 MiB), after which the stream is abandoned and the
@@ -660,10 +672,13 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
    sends `peer-left` for the sockets it lost — and every connection it lists is rebuilt, because the
    far end closed its side when this tab's socket dropped and waits for a fresh offer; only the
-   connections that message opened are negotiated on it. When sharing screen, a reconnect finishes
-   the old screen segment and starts a new numbered segment on the rebuilt connection, with each
-   segment backed up locally in OPFS. Host rebinds new channel to existing receiver, found by a
-   stable key (see below), not by the DO's fresh-per-socket peerId.
+   connections that message opened are negotiated on it. The Room drops its `recording` flag with
+   the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
+   runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
+   the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
+   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
+   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
+   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -990,3 +1005,24 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** The crash
+  copy holds guests' bytes and writes its notes only with them, so with no guest its
+  directory stays empty and the next lobby removes it. The host's own camera file and WAV
+  master are listed there under Backups on this device. After a reload the folder's own
+  `host…wav` keeps the placeholder header a closing page leaves, and nothing repairs it.
+- **A guest who joins a take that is already running sees no countdown,** only the notice
+  and the REC pill, and is recorded from that moment. The host cannot set that guest as
+  not recorded until the take ends.
+- **A host recording alone whose connection to the room drops is, for the Room, a room
+  that emptied.** The session ends there, so the guests the host had set as not recorded
+  are forgotten, as when everyone leaves.
+- **Continue alone is not remembered.** After a reload the host is in the waiting room
+  again, and the call screen is one press away.
+- **The done screen has no Copy invite link.** The summary's main button records the next
+  take whether or not anyone else is in the room; the address in the address bar is the
+  invite link.
+- **A guest who joined a running take a moment before the host's connection came back can
+  get two files.** It learns the take's id from the host's first acknowledgement; announced
+  again before that, the take looks new to it, so it ends its file and starts another.
+- **While the host's connection to the room is down, a guest who joins is not recorded.**
+  The Room has no host to ask; the guest is started when the host is back.

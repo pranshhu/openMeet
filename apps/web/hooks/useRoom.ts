@@ -1551,6 +1551,21 @@ export function useRoom(slug: string) {
           notRecorded: m.notRecorded === true,
         }));
         sendPresence();
+        // The Room drops its recording flag with the host's socket, and tells a
+        // host that comes back `recording: false` while the files are still
+        // open. A guest who joined from then on would never be started.
+        // Announced again under its own id the take is the Room's again: a
+        // guest already in it ignores the repeat, and the Room keeps the row
+        // it has. Not while the take is being saved: the stop has gone out.
+        const mine = recordingRef.current;
+        if (m.role === 'host' && mine && !m.recording && phaseRef.current === 'recording') {
+          signal.send({
+            type: 'recording-started',
+            recordingId: mine.recordingId,
+            kind: 'camera',
+            filename: `host_${mine.recordingId}.mp4`,
+          });
+        }
         // Joined mid-recording (rejoin after a crash, or just arriving late):
         // the recording-started broadcast went out before this socket existed,
         // so catch up from the room state instead of sitting there unrecorded.
@@ -2282,7 +2297,10 @@ export function useRoom(slug: string) {
   const toggleScreenShare = useCallback(
     async (source?: File | 'rear-camera') => {
       const peer = peerRef.current;
-      if (!peer) return;
+      // A guest's screen recording travels over its connection to the host.
+      // The host writes its own to the folder, so it can present with nobody
+      // connected.
+      if (!peer && roleRef.current !== 'host') return;
       if (!screenSharingRef.current) {
         let screen: MediaStream;
         let isRearCamera = false;
@@ -2377,9 +2395,11 @@ export function useRoom(slug: string) {
     // A resume or a save of the interrupted take is still running on its crash
     // copy and its guests: a fresh take beside it would be a second one.
     if (recoveryBusyRef.current) return;
-    const peer = peerRef.current;
+    // A host records its own camera with nobody connected. What a take
+    // cannot do without is the stream, and a tab that has let go of the
+    // room holds none.
     const localStream = localStreamRef.current;
-    if (!peer || !localStream) return;
+    if (!localStream) return;
     const recordingId = crypto.randomUUID();
     takeTroubleRef.current = false;
     setState((s) => ({ ...s, recordingError: null, resumeOffer: null, takeNotice: null }));
@@ -2459,7 +2479,7 @@ export function useRoom(slug: string) {
     // or everything shared before the first toggle is lost.
     const activeScreen = screenStreamRef.current;
     const recNow = recordingRef.current;
-    if (activeScreen && recNow && peerRef.current) {
+    if (activeScreen && recNow) {
       await startScreenRecording(
         recNow,
         activeScreen,
@@ -2760,6 +2780,9 @@ export function useRoom(slug: string) {
     peersRef.current.clear();
     peerRef.current?.close();
     peerRef.current = null;
+    // The tracks are stopped below. startRecording reads this ref, so a
+    // countdown that is still running when the host leaves starts nothing.
+    localStreamRef.current = null;
     if (customStopRef.current) {
       try {
         customStopRef.current();

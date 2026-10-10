@@ -549,7 +549,7 @@ export function CallStage({
   // "Record another take" has to record. newTake only resets the refs, and
   // startRecording reads refs and reuses the folder, so both run inside the one
   // click: no second folder prompt, and the user activation still holds.
-  const canRecordNext = isHost && canRecord && !!remote;
+  const canRecordNext = isHost && canRecord;
   const handleRecord = () => {
     setRecordMenuOpen(false);
     requestProblemNotifications();
@@ -1415,19 +1415,7 @@ export function CallStage({
                 downloadNames={downloadNames}
                 takes={takes}
                 sidecarsSaved={sidecarsSaved ?? false}
-                // Nobody left to record: invite someone and keep the summary.
-                // newTake would drop to the waiting room and lose it, sync.json
-                // with it. Once a guest is back, the button records again.
-                onNewTake={canRecordNext ? recordNextTake : copyInvite}
-                nextTakeLabel={
-                  canRecordNext
-                    ? 'Record another take'
-                    : copied === 'copied'
-                      ? 'Link copied'
-                      : copied === 'failed'
-                        ? 'Couldn’t copy — use the address bar'
-                        : 'Copy invite link'
-                }
+                onNewTake={recordNextTake}
                 onDiscardTake={onDiscardTake}
                 onClose={closeSummary}
               />

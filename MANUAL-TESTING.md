@@ -89,6 +89,8 @@ EOF
 | 2.12 | Folder access taken back | After a take, use the browser's site settings (the icon in the address bar) to remove openMeet's access to the recording folder, then press **Record another take**, and after the message press **Record** again | The first press says permission to write to that folder was denied; the second opens the folder picker, and the take records into the folder chosen there | ☐ | |
 | 2.13 | Countdown | On a fresh browser profile, host clicks **Record** and chooses a folder | The folder prompt comes first; then the host's screen reads "Recording starts in 3", 2, 1 with Record greyed out, and only then the Recording pill appears; nothing else is asked when the take starts | ☐ | |
 | 2.14 | Countdown for everyone | With a guest and a producer in the call, host clicks **Record** | All three screens read "Recording starts in 3", 2, 1; then the guest sees the red notice and the REC pill. A guest who joins during the count sees no count and is recorded from the start of the take | ☐ | |
+| 2.15 | Record alone | Host joins a new room alone, presses **Continue alone**, then **Record**, chooses a folder, records ~20 s, **End & save** | The waiting room gives way to the call screen with **Record** and **Copy invite link**; the count reads 3, 2, 1; the summary says Take 1 saved and lists `host-<your name>_*.mp4` and `host-<your name>_*.wav`, both complete; the folder holds no `guest_*` file | ☐ | |
+| 2.16 | A guest joins a take recorded alone | While the host records alone, a guest opens the invite link and joins | The guest sees the red notice and the REC pill at once, and no countdown; the host's take keeps running and its track panel lists the guest as Receiving; after **End & save** the folder holds `guest_*.mp4`, `guest_*.wav` and `call1_*.m4a` | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -112,6 +114,9 @@ kept saying "Recording".
 | 3.13 | Save to a folder that is too small | After a host crash (as in the row *Save from the lobby after a host crash*), press **Save to folder** and pick a folder on a drive with less free space than the row's size | The lobby names the files that were not saved and the **Unsaved recording** row stays; a second **Save to folder** into a folder with room puts every file there and the row goes | ☐ | |
 | 3.14 | Save instead of resuming | With a guest still connected, reload the host tab mid-take, join again and press **Save what was recorded** | The files land in the folder and the notice goes; the guest's page leaves **Recording** by itself. Pressing **Resume recording** or **Save what was recorded** twice does nothing the second time | ☐ | |
 | 3.15 | Screen share across a resume | A guest is sharing a screen when the host tab is reloaded; the host joins again and presses **Resume recording** | The host is told that person's screen is not recorded until they stop and share again; after they do, and after **End & save**, the screen file from before the reload and the new one are both in the folder and in the summary | ☐ | |
+| 3.16 | Reload during a take recorded alone | Record alone for 30 s, then reload the host tab | The lobby lists **Backups on this device** with a recording backup (MP4) and one (WAV) for this room, and no **Unsaved recording**; both downloads play; the folder's own `host-…` files are not empty | ☐ | |
+| 3.17 | Leave while the count runs, alone | Alone on the call screen press **Record**, choose a folder, and press **Leave call** before the count ends | "You left the call"; no take starts and no file appears in the folder | ☐ | |
+| 3.18 | Interrupted take, host back alone | Record with a guest for 30 s, close the host tab, let the guest leave; reopen the room, join without pressing **Save to folder**, press **Continue alone** | The call screen reads "Recording was interrupted. This browser still has the take." with **Save what was recorded** and no **Resume recording**; **Save what was recorded** puts the files in the chosen folder and the notice gives way to a line that starts "Saved" | ☐ | |
 
 ## 4 — Multiple takes
 
@@ -122,7 +127,7 @@ kept saying "Recording".
 | 4.3 | Guest is in take 2 | Check `guest_*_take2.mp4` | Exists and plays. *(This silently failed once — the guest sat out every take after the first)* | ☐ | |
 | 4.4 | Summary survives | After ending take 2 | Summary still lists both takes with durations | ☐ | |
 | 4.5 | Summary beside the stage | After **End & save**, look at the host's screen | The summary opens as a column beside the call (a sheet on a phone); the call stays visible; closing it and reopening from the Summary button works; **Download sync.json** and **Download chapters** save files | ☐ | |
-| 4.6 | Nobody left to record | Guest leaves, then look at the summary | Its main button reads **Copy invite link** instead of Record another take, and the summary stays open | ☐ | |
+| 4.6 | Another take with nobody left | Guest leaves, then press **Record another take** in the summary | The call screen stays; the count reads 3, 2, 1 and take 2 records the host alone, with no folder prompt; `host-<your name>_*_take2.mp4` and `.wav` are in the folder and there is no `guest_*_take2` file | ☐ | |
 
 ## 5 — Screen share
 
@@ -140,6 +145,7 @@ Not covered by the automated test at all.
 | 5.8 | Present only, laptop + phone | Phone joins as a guest. A laptop in another profile opens the invite link, chooses **Present only** and picks a screen. Host records ~30 s | The laptop has no camera tile; its screen shows as "*name* (Presenting)". The folder has the phone's files plus a `guest_screen_*.mp4` from the laptop, and no camera or WAV file from the laptop | ☐ | |
 | 5.9 | Computer presents a photo or video | On a computer, click the arrow beside **Present**, pick **A photo or video** and choose a video with sound; then do the same with a photo during a recording | Everyone else sees it in the spotlight and hears the video; the presenter sees it labelled "What you're presenting"; **Stop presenting** ends it. The photo shown during the recording lands as a `*_screen_*.mp4` | ☐ | |
 | 5.10 | Presenter hears a presented video | With headphones on, present a video with sound from a computer; then from a phone; then from a laptop joined with **Present only** | The computer hears the video; the phone and the Present-only laptop show it in silence. Everyone else hears it each time | ☐ | |
+| 5.11 | Present alone | Recording alone, host clicks **Present**, picks a tab for ~15 s, stops presenting, **End & save** | The stage reads "You’re presenting" while it lasts; `host-<your name>_screen_*.mp4` is in the folder, plays and is listed in the summary as complete | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 
@@ -173,6 +179,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
 | 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
 | 7.11 | One side reconnects | With a call running, move the guest's computer from Wi-Fi to a phone hotspot (or back) | The call is back within a few seconds on both sides, one tile per person, and no "Negotiation failed" message | ☐ | |
+| 7.12 | A guest joins after the host's connection dropped mid-take | In the host's lobby, before joining, run in the DevTools console: `const W = WebSocket; window.WebSocket = class extends W { constructor(...a) { super(...a); if (String(a[0]).includes('/ws/r/')) window.__ws = this; } };` Join, start a take, then run `__ws.close()` in the console. A few seconds later a guest opens the invite link and joins | The host's take never stops. The guest gets the red notice and the REC pill and is recorded: after **End & save** the guest's files are in the folder and read complete | ☐ | |
 
 ## 8 — Extras
 
@@ -274,6 +281,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** Its
+  copies are in the lobby under **Backups on this device**.
 
 ## When something fails
 
