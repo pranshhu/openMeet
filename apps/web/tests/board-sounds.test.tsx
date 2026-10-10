@@ -35,6 +35,13 @@ describe('ready sounds', () => {
     expect(peak(s)).toBeLessThan(0.5);
   });
 
+  // A note that starts at full level is heard as a click, and a take records it.
+  it('brings the chime in over a few milliseconds', () => {
+    const s = sound('Chime').render(RATE);
+    // The first half millisecond, where only the first note sounds.
+    expect(peak(s.subarray(0, RATE / 2000))).toBeLessThan(0.05);
+  });
+
   it('makes a bed that is quiet and runs into its own start without a step', () => {
     const s = sound('Soft bed').render(RATE);
     expect(s.length).toBe(RATE * 4);
