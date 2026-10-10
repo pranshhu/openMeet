@@ -263,6 +263,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
+  (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
+  microphone for five seconds, played back from an object URL that is revoked when the clip
+  ends. Leaving the lobby aborts it, so that recorder never runs into the call.
   Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
   room can choose it with **Send to host**; the choice is handed to the hook on join.
   A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save

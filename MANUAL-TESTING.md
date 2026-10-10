@@ -70,6 +70,7 @@ EOF
 | 1.7 | Chat pop-up | Close the chat panel on one side, send from the other | A pop-up with the sender and message for a few seconds; the Chat button shows an unread dot (its tooltip reads 'Chat, N unread'); opening chat clears both | ☐ | |
 | 1.8 | Blocked camera in the lobby | Block camera and mic for the site, reload the room | The preview says "Camera and mic are blocked", with **Try again**. Allow both again, click **Try again**: the preview comes back without a reload | ☐ | |
 | 1.9 | 404 page | Open `/no-such-page` | "Page not found" with a link home — not a blank page | ☐ | |
+| 1.10 | Mic test | In the lobby, press **Test your mic** and say a few words. Then turn the mic off in the preview and press it again. Repeat on a phone | The line under the button reads "Recording 5 seconds. Say a few words.", then a player appears and you hear yourself; when it ends the player is gone and the line reads "Test deleted. It never left this browser." With the mic off it reads "Your microphone is off. Turn it on, then test again." and nothing is played. On the phone the button and the player stay inside the panel | ☐ | |
 
 ## 2 — Recording, the happy path
 

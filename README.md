@@ -69,6 +69,8 @@ retention policy to trust, because there's nothing retained.
   music beds
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- **Test your mic** in the green room: five seconds of your own microphone, played
+  back to you and then deleted
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
