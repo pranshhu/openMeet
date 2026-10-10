@@ -192,6 +192,8 @@ export interface RoomState {
   connectionWarning: string | null;
   // This participant's own mic, judged where it enters the recording; a note in the call.
   micWarning: MicWarning | null;
+  /** The host turned this participant's microphone off, and it has not been turned back on. */
+  hostMuted: boolean;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -586,6 +588,7 @@ export function useRoom(slug: string) {
     recordingError: null,
     connectionWarning: null,
     micWarning: null,
+    hostMuted: false,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -1743,6 +1746,19 @@ export function useRoom(slug: string) {
           remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
         }));
       });
+      // The host asked for this microphone to be off. This page does it, with
+      // the steps of its own mic switch, so the person sees it and can turn it
+      // back on. A host is never muted this way, and a microphone that is off
+      // already (or absent: a producer, a present-only device) is left as it
+      // is, so no note appears for a mute that changed nothing.
+      signal.on('peer-mute', () => {
+        if (roleRef.current === 'host' || !micOnRef.current) return;
+        switchableMediaRef.current?.setAudioEnabled(false);
+        mediaRef.current?.setAudioEnabled(false);
+        micOnRef.current = false;
+        sendPresence();
+        setState((s) => ({ ...s, hostMuted: true }));
+      });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
         const msg: ChatMessage = {
@@ -1846,6 +1862,8 @@ export function useRoom(slug: string) {
       mediaRef.current?.setAudioEnabled(on);
       micOnRef.current = on;
       sendPresence();
+      // Their own switch ends a mute the host asked for.
+      if (on) setState((s) => (s.hostMuted ? { ...s, hostMuted: false } : s));
     },
     [sendPresence]
   );
@@ -2267,6 +2285,11 @@ export function useRoom(slug: string) {
   /** Host: choose whether one guest is recorded in the takes that follow. The Room's answer updates the state. */
   const setPeerRecorded = useCallback((peerId: string, recorded: boolean) => {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
+  }, []);
+
+  /** Host: ask for one person's microphone to be turned off. Their page does it, and their presence shows it. */
+  const mutePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-mute', peerId });
   }, []);
 
   const toggleScreenShare = useCallback(
@@ -2859,6 +2882,7 @@ export function useRoom(slug: string) {
     switchMic,
     sendChat,
     setPeerRecorded,
+    mutePeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,

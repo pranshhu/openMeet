@@ -287,6 +287,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.
+  `components/PeoplePanel.tsx` is the host's list of everyone else in the call, opened by
+  **People** in the control bar and laid out like the media board (on a phone the two share a
+  place, so opening one closes the other): a row per person with **Mute**, which a producer
+  and a present-only device do not get. A person the host muted sees their own mic button off
+  and a `role="status"` line that says so, and during their own capture that their recording
+  has no sound until they turn it back on.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
@@ -329,6 +335,11 @@ backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
+`hostMuted` is true from the moment a host's `peer-mute` turned this participant's microphone
+off until they turn it back on: the handler does what `setMic(false)` does (track off,
+`presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
+already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
+sends `peer-mute`, and the panel follows that person's `presence`.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -888,3 +899,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A mute is a request.** The Room passes it on and the muted person's own page carries it out;
   a page that does not know the message, or was changed to ignore it, stays unmuted. Removal is
   what the Room enforces.
+- **A host's mute turns off a microphone and nothing else.** That person's media board pads and
+  the sound of a video they present keep playing, in the call and in their files; the host can
+  ask, or remove them. A mute is not remembered either: after the muted person reloads, their
+  microphone is as their lobby left it.
+- **A person muted while their page still reads "Connecting…" sees the mic button there as
+  on.** The waiting view keeps its own switch. The call screen shows it off, with the note, as
+  soon as it appears, and one press there turns it back on.

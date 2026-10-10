@@ -6,6 +6,7 @@ import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
+import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -138,6 +139,8 @@ export function CallStage({
   recoveryBusy = false,
   notRecorded,
   onSetPeerRecorded,
+  hostMuted = false,
+  onMutePeer,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -233,6 +236,10 @@ export function CallStage({
   notRecorded?: boolean;
   /** Host: choose whether one guest is recorded in the takes that follow. */
   onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
+  /** The host turned this viewer's microphone off, and it is still off. */
+  hostMuted?: boolean;
+  /** Host: ask for one person's microphone to be turned off. */
+  onMutePeer?: (peerId: string) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -242,6 +249,11 @@ export function CallStage({
   const [camOn, setCamOn] = useState(
     () => (localStream ? localStream.getVideoTracks().some((t) => t.enabled) : true)
   );
+  // The host turned this microphone off. The button has to show it: it is how
+  // the person sees what happened, and the switch they turn it back on with.
+  useEffect(() => {
+    if (hostMuted) setMicOn(false);
+  }, [hostMuted]);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [micMenuOpen, setMicMenuOpen] = useState(false);
   const [camMenuOpen, setCamMenuOpen] = useState(false);
@@ -446,6 +458,12 @@ export function CallStage({
   const [prompterOpen, setPrompterOpen] = useState(false);
   const [board, setBoard] = useState<MediaBoard | null>(null);
   const [boardOpen, setBoardOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  // Hand focus back to the People button, as closing chat does for its own.
+  function closePeople() {
+    setPeopleOpen(false);
+    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="People"]')?.focus());
+  }
   // First opened mid-take: that take's recorder keeps the raw mic (a running
   // MediaRecorder can't swap tracks), so its pads aren't in the file. Only
   // that take: the next one starts with the board already in the mix.
@@ -675,6 +693,16 @@ export function CallStage({
             `${notRecordedNames.join(', ')} ${notRecordedNames.length === 1 ? 'is' : 'are'} not being recorded.`}
         </p>
       )}
+      {hostMuted && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          {phase === 'recording'
+            ? 'The host muted your microphone. Your recording has no sound until you turn it back on.'
+            : 'The host muted your microphone. Turn it back on when you want to speak.'}
+        </p>
+      )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {recordUnavailableReason}
@@ -896,6 +924,9 @@ export function CallStage({
                 onFire={(name) => onMark(name)}
                 onClose={() => setBoardOpen(false)}
               />
+            )}
+            {peopleOpen && isHost && onMutePeer && remotePeers.length > 0 && (
+              <PeoplePanel people={remotePeers} onMute={onMutePeer} onClose={closePeople} />
             )}
             {popupEl}
           </main>
@@ -1181,6 +1212,17 @@ export function CallStage({
                 variant={chatOpen ? 'active' : 'default'}
                 onClick={() => openChat(!chatOpen)}
               />
+              {isHost && onMutePeer && remotePeers.length > 0 && (
+                <ControlButton
+                  icon="people"
+                  label={peopleOpen ? 'Hide people' : 'People'}
+                  variant={peopleOpen ? 'active' : 'default'}
+                  onClick={() => {
+                    setPeopleOpen((o) => !o);
+                    setBoardOpen(false);
+                  }}
+                />
+              )}
               {phase === 'done' && summary && (
                 <ControlButton
                   icon="folder"
@@ -1213,6 +1255,7 @@ export function CallStage({
                           setBoardMidTake(phase === 'recording');
                         }
                         setBoardOpen((o) => !o);
+                        setPeopleOpen(false);
                       }}
                     />
                   )}

@@ -65,6 +65,8 @@ retention policy to trust, because there's nothing retained.
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
+- Host controls in **People**: turn a participant's microphone off for the call (they
+  are told, and turn it back on themselves)
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - Multiple takes in one session, without a second folder prompt
@@ -400,6 +402,11 @@ uploaded. During a take the host also records each recorded guest's live call au
 into the host's folder, a copy that starts only after that guest's browser has begun
 its own recording. **The host is responsible for getting consent where the law requires
 it** (all-party-consent jurisdictions, GDPR).
+
+The host can turn a participant's microphone off from **People** in the call. That
+person is told at once and turns it back on with their own microphone button. While
+it is off their recording has no sound from the microphone, exactly as when they turn
+it off themselves; nobody can turn another person's microphone on.
 
 ---
 

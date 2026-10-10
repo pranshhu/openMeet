@@ -203,6 +203,8 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.25 | Stop incoming video during a take | Host and one guest record. The guest ticks **Stop incoming video** for about 20 s and unticks it; then the host does the same; End & save | The take never stops and no banner appears; every file reads complete in the summary; the folder holds one `call1_*` file for the guest, not two | ☐ | |
 | 8.26 | Incoming video stays stopped | Three profiles. One ticks **Stop incoming video**; then a third person joins; then one of the others reloads and joins again; then restart `wrangler dev` and wait for the call to come back; then one of the others presents a browser tab that plays sound | Each newcomer is an initial from the first moment and is heard; after the restart every tile is an initial again without touching the menu. When the tab is presented the stage changes to the presenting layout, the presented picture is not shown and the tab's sound is heard. In `chrome://webrtc-internals` on that person's side no inbound video stream receives bytes. Unticking brings every picture back | ☐ | |
 | 8.27 | Stop incoming video, with a presentation | Two people. One ticks **Stop incoming video**; only then the other presents a browser tab that plays sound. Then press **Show video** in the spotlight. Repeat on a phone about 360 px wide and press the **Show video** in the line above the stage instead | A line above the stage reads "Incoming video is off. You still hear everyone, and the recording is not affected." The spotlight shows the screen's name, "Incoming video is off, so you can’t see it." and **Show video**, and the tab's sound is heard. Either **Show video** brings the screen and the cameras back and removes the line. On the phone the line wraps inside the screen and nothing scrolls sideways | ☐ | |
+| 8.28 | Host mutes a guest | Host and one guest in a call. The host opens **People** in the control bar and presses **Mute** beside the guest; the guest then presses their own microphone button. Repeat with the host's window about 390 px wide | Guest: the microphone button turns red and a line reads "The host muted your microphone. Turn it back on when you want to speak." The host no longer hears them, the row reads **Muted** and the guest's tile shows the muted mark. After the guest's own press the line is gone and they are heard again. At 390 px the panel is inside the screen, above the control bar. The guest has no **People** button | ☐ | |
+| 8.29 | Host mutes during a take | Host and one guest record. The host mutes the guest for about 10 s, the guest turns the microphone back on, End & save | The guest's line read "The host muted your microphone. Your recording has no sound until you turn it back on." The take never stopped and every file reads complete; the folder holds one `guest_*.mp4` and one `guest_*.wav`, each silent for those 10 s and neither split | ☐ | |
 
 ## 9 — Deploy
 
@@ -258,6 +260,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **A host's mute turns off the microphone only.** That person's media board pads
+  and the sound of a video they present keep playing.
 
 ## When something fails
 

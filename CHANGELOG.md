@@ -120,6 +120,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- The host can turn a participant's microphone off, from **People** in the call's
+  control bar. That person is told at once and turns it back on with their own
+  microphone button; during a take their recording has no sound until they do.
 
 ### Changed
 

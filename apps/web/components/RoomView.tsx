@@ -86,6 +86,7 @@ function isPresentLink(): boolean {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
+    mutePeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
@@ -329,6 +330,8 @@ export function RoomView({ slug }: { slug: string }) {
       onLeave={leave}
       onSendChat={sendChat}
       onSetPeerRecorded={setPeerRecorded}
+      hostMuted={state.hostMuted}
+      onMutePeer={mutePeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}
