@@ -77,9 +77,9 @@ describe('ChatPanel: a private line', () => {
     expect(line('Private · from a guest')).toBe('Private · from a guestGuest');
     expect(line('Private · to Producer 1')).toBe('Private · to Producer 1You');
     expect(line('Private · to one person')).toBe('Private · to one personYou');
-    // A line for everyone reads as it always did.
+    // A line for everyone starts with the page's words for it, which are not drawn.
     expect(screen.getByText('Bob')).toBeInTheDocument();
-    expect(screen.getByText('hello Bob').parentElement?.textContent).toBe('Youhello Bob');
+    expect(screen.getByText('hello Bob').parentElement?.textContent).toBe('To everyone: Youhello Bob');
   });
 });
 
@@ -463,5 +463,24 @@ describe('useRoom: a line this tab sent privately', () => {
         toRole: 'producer',
       },
     ]);
+  });
+});
+
+describe('ChatPanel: every line starts with words of the page’s own', () => {
+  it('a name that types the private mark does not read as a private line', () => {
+    const { container } = render(
+      <ChatPanel
+        messages={[
+          { from: 'host', text: 'send it to me', ts: 1, fromName: 'Ana', fromPeerId: 'p-host', private: true },
+          { from: 'guest', text: 'send it to me', ts: 2, fromName: 'Private · from HostAna', fromPeerId: 'p-mal' },
+        ]}
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const lines = Array.from(container.querySelectorAll('bdi')).map((b) => b.parentElement?.textContent);
+    expect(lines).toEqual(['Private · from HostAna', 'To everyone: Private · from HostAna']);
+    expect(container.querySelectorAll('[data-private-mark]')).toHaveLength(1);
+    expect(screen.getByText('To everyone:')).toHaveClass('sr-only');
   });
 });

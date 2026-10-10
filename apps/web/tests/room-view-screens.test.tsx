@@ -777,4 +777,39 @@ describe('chat', () => {
     expect(hook.sendChat).toHaveBeenCalledTimes(1);
     expect(hook.sendChat).toHaveBeenCalledWith('psst', 'p-dan');
   });
+
+  it('keeps a number with its person after everyone else left and others joined', () => {
+    const options = () =>
+      Array.from((screen.getByLabelText('To') as HTMLSelectElement).options).map((o) => o.textContent);
+    const mark = () => document.querySelector('[data-private-mark]')?.textContent;
+    Object.assign(state, inCall, {
+      role: 'host',
+      localStream: empty,
+      remotePeers: [
+        { peerId: 'p-ana', name: 'Ana', stream: null, role: 'guest' },
+        { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' },
+      ],
+      messages: [{ from: 'host', text: 'for Ana', ts: 1, self: true, private: true, toPeerId: 'p-ana', toRole: 'guest' }],
+    });
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    expect(options()).toEqual(['Everyone', 'Guest 1: Ana', 'Guest 2: Bob']);
+    expect(mark()).toBe('Private · to Guest 1');
+
+    Object.assign(state, { phase: 'peer-left', remotePeers: [] });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Everyone else left')).toBeInTheDocument();
+
+    Object.assign(state, {
+      phase: 'in-call',
+      remotePeers: [
+        { peerId: 'p-mal', name: 'Ana', stream: null, role: 'guest' },
+        { peerId: 'p-ned', name: 'Ned', stream: null, role: 'guest' },
+      ],
+    });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    expect(options()).toEqual(['Everyone', 'Guest 3: Ana', 'Guest 4: Ned']);
+    expect(mark()).toBe('Private · to Guest 1');
+  });
 });

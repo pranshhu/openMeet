@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRoom } from '@/hooks/useRoom';
 import { detectBrowserDevice } from '@/lib/browser-guidance';
 import { isFsAccessSupported } from '@/lib/fs-writer';
@@ -90,6 +90,10 @@ export function RoomView({ slug }: { slug: string }) {
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
   } = useRoom(slug);
+  // The numbers this page gave people under To. Held here because the call
+  // screen is unmounted while everyone else is away and the chat lines are
+  // not: a line kept from before must still show the number it showed.
+  const [chatNumbers] = useState(() => new Map<string, number>());
   const producer = isProducerLink();
   const present = isPresentLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
@@ -292,6 +296,7 @@ export function RoomView({ slug }: { slug: string }) {
       recordBlocked={record.blocked}
       recordUnavailableReason={record.reason}
       messages={state.messages}
+      chatNumbers={chatNumbers}
       peerPresence={state.remotePeers.find((p) => p.role !== 'producer')?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}

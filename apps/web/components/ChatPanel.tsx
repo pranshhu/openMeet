@@ -39,6 +39,16 @@ export function PrivateMark({ detail }: { detail: string }) {
   );
 }
 
+/**
+ * What a line for everyone starts with for someone who hears the page. The
+ * private mark is told from a name by its box, which is not read out, so a
+ * name could say the mark's words; with this the first words of every line
+ * are this page's own. It is not drawn.
+ */
+export function PublicMark() {
+  return <span className="sr-only">To everyone: </span>;
+}
+
 // A display name is its owner's text, up to 64 characters; an option has to fit a phone.
 const optionName = (name: string) => {
   const chars = Array.from(name);
@@ -50,7 +60,7 @@ const optionName = (name: string) => {
  * them and, for anyone but the host, a number this page gave them when it
  * first met them. Nothing in it is the person's own text, so no name can
  * draw it, imitate it or share it. `numbers` is the caller's memory for as
- * long as the call screen is up: a number stays with its id and is never
+ * long as the page is in the room: a number stays with its id and is never
  * given to anyone else, also after that person has left.
  */
 export function personTag(peerId: string, role: string, numbers: Map<string, number>): string {
@@ -173,7 +183,7 @@ export function ChatPanel({
             // message never reads as a second text field.
             <div key={i} className={`text-sm ${m.self ? 'flex flex-col items-end' : ''}`}>
               <div className="mb-0.5 text-xs font-medium text-white/70">
-                {m.private && <PrivateMark detail={privateDetail(m, known)} />}
+                {m.private ? <PrivateMark detail={privateDetail(m, known)} /> : <PublicMark />}
                 <bdi>{sender}</bdi>
               </div>
               <p

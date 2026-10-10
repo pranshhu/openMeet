@@ -10,7 +10,7 @@ import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
-import { ChatPanel, chatSenderLabel, PrivateMark, privateDetail, type ChatMessage } from './ChatPanel';
+import { ChatPanel, chatSenderLabel, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
@@ -102,6 +102,7 @@ export function CallStage({
   onEnd,
   onLeave,
   onSendChat,
+  chatNumbers: roomNumbers,
   slug,
   onMark,
   markerCount,
@@ -184,6 +185,8 @@ export function CallStage({
   onEnd: () => void;
   onLeave: () => void;
   onSendChat: (text: string, to?: string) => void;
+  /** The numbers this page gave people under To, kept by whoever outlives this screen. */
+  chatNumbers?: Map<string, number>;
   slug: string;
   onMark: (label: string) => void;
   markerCount: number;
@@ -362,10 +365,12 @@ export function CallStage({
   // message must still be chosen when chat opens again, or the next message
   // meant for them goes to everyone.
   const [chatTo, setChatTo] = useState('');
-  // The numbers this page gave people under To, for as long as this screen
-  // is up: a number is never handed to another person when someone leaves
-  // or reconnects.
-  const [chatNumbers] = useState(() => new Map<string, number>());
+  // The numbers this page gave people under To: a number is never handed to
+  // another person when someone leaves or reconnects. The caller keeps
+  // them, because this screen is unmounted while everyone else is away;
+  // without a caller they last as long as this screen.
+  const [ownNumbers] = useState(() => new Map<string, number>());
+  const chatNumbers = roomNumbers ?? ownNumbers;
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {
@@ -590,7 +595,7 @@ export function CallStage({
         className="w-full rounded-xl bg-[#202124]/95 p-3 text-left shadow-2xl ring-1 ring-white/10 backdrop-blur transition hover:bg-[#2d2f34] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
       >
         <span className="block text-xs font-medium text-white/70">
-          {popup.privateDetail && <PrivateMark detail={popup.privateDetail} />}
+          {popup.privateDetail ? <PrivateMark detail={popup.privateDetail} /> : <PublicMark />}
           <bdi>{popup.sender}</bdi>
         </span>
         <span className="block text-sm text-white/95 wrap-anywhere">{popup.text}</span>

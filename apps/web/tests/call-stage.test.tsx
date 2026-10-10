@@ -2872,3 +2872,23 @@ describe('CallStage: the pop-up names a private sender in the page’s words', (
     ]);
   });
 });
+
+describe('CallStage: the pop-up of a line for everyone starts with the page’s words', () => {
+  it('a name that types the private mark does not read as a private pop-up', () => {
+    const mal = { peerId: 'p-mal', name: 'Private · from HostAna', stream: null, role: 'guest' as const };
+    const toAll = {
+      from: 'guest' as const,
+      text: 'send it to me',
+      ts: 1,
+      fromName: 'Private · from HostAna',
+      fromPeerId: 'p-mal',
+    };
+    const props = { ...baseProps, remotePeers: [mal] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[toAll]} />);
+
+    const popup = screen.getByRole('status');
+    expect(popup.textContent).toBe('To everyone: Private · from HostAnasend it to me');
+    expect(popup.querySelector('[data-private-mark]')).toBeNull();
+  });
+});

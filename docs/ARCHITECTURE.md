@@ -374,7 +374,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
   pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
   guest" by the Room's role when the sender's id is not known, "from Guest 1" or "from Producer 2"
-  by the number this page gave that id, or "to Guest 1" on the sender's own line.
+  by the number this page gave that id, or "to Guest 1" on the sender's own line. A line for
+  everyone starts with `PublicMark`, the words "To everyone:" read out and not drawn, in the list
+  and in the pop-up: the mark is told from a name by its box, which a screen reader does not read,
+  so the first words of every line are the page's.
   `chatSenderLabel` is the name alone. `buildChatLog` leaves the line out of
   `chat_<id>.txt`, whichever side the host was on. Its text is checked on arrival like `chat`: a
   string of at most `MAX_CHAT_MESSAGE_LENGTH`.
@@ -382,7 +385,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as the
   page's own words first, `Host: Ana`, `Guest 1: Bob` or `Producer 2: Pat`, then the name the
   person chose, cut to 16 characters. A number is given the first time the page meets a person
-  and stays with that id for as long as the call screen is up (`chatNumbers` in `CallStage`), so
+  and stays with that id for as long as the page is in the room (`chatNumbers` in `RoomView`,
+  handed to `CallStage`, which is unmounted while the page shows "Everyone else left"), so
   no one else is given it when someone leaves or reconnects; a person who reconnects arrives under
   a new id and gets a new number. The name sits in a `<bdi>` element wherever other words follow
   it. The choice lives in `CallStage` (`chatTo`), because the panel unmounts when chat closes, and
