@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRoom } from '@/hooks/useRoom';
 import { detectBrowserDevice } from '@/lib/browser-guidance';
 import { isFsAccessSupported } from '@/lib/fs-writer';
@@ -93,6 +93,10 @@ export function RoomView({ slug }: { slug: string }) {
   const producer = isProducerLink();
   const present = isPresentLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
+  // A host who went on without anyone else. Kept while this tab stays in the
+  // room: the call screen then stays up while they are alone, while someone
+  // connects and after everyone has left.
+  const [alone, setAlone] = useState(false);
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
   // the next lobby. Rejoin reloads, so ask before any way out of the page.
@@ -176,7 +180,11 @@ export function RoomView({ slug }: { slug: string }) {
     state.role !== 'host' && (state.backupTransfers ?? []).some((t) => t.status === 'offered')
       ? 'Your backup is offered to the host as soon as they join. Keep this tab open.'
       : undefined;
-  if (state.phase === 'waiting') {
+  // A host in a browser that can record, and not on a present-only device, may
+  // go on to the call screen without waiting for anyone: Record is there.
+  const goAlone =
+    record.canRecord && !state.companion ? { onContinueAlone: () => setAlone(true) } : {};
+  if (state.phase === 'waiting' && !alone) {
     const note = companionNote ?? offeredNote;
     return (
       <WaitingRoom
@@ -187,10 +195,11 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleMic={setMic}
         onToggleCam={setCam}
         {...(note ? { note } : {})}
+        {...goAlone}
       />
     );
   }
-  if (state.phase === 'connecting') {
+  if (state.phase === 'connecting' && !alone) {
     // The same dark room as waiting, so a guest arriving doesn't flash a white
     // page; trouble connecting is said here, with Leave still in reach.
     return (
@@ -207,7 +216,7 @@ export function RoomView({ slug }: { slug: string }) {
       />
     );
   }
-  if (state.phase === 'peer-left') {
+  if (state.phase === 'peer-left' && !alone) {
     // Still in the room: the camera stays on (and on screen), and the call
     // picks up again by itself when someone joins. Only an empty mesh lands
     // here, so it is everyone, in a group call too.
@@ -221,6 +230,7 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleCam={setCam}
         title="Everyone else left"
         note="You’re still in the room. The call picks up again when someone joins."
+        {...goAlone}
       />
     );
   }
@@ -270,12 +280,18 @@ export function RoomView({ slug }: { slug: string }) {
     );
   }
 
+  // Only a host who went on alone gets here without a call. The call screen
+  // then shows as it does before a take.
+  const callPhase =
+    state.phase === 'waiting' || state.phase === 'connecting' || state.phase === 'peer-left'
+      ? 'in-call'
+      : (state.phase as 'in-call' | 'recording' | 'finalizing' | 'done');
   return (
     <CallStage
       slug={slug}
       role={state.role}
       companion={state.companion}
-      phase={state.phase as 'in-call' | 'recording' | 'finalizing' | 'done'}
+      phase={callPhase}
       localStream={state.localStream}
       remoteStream={state.remoteStream}
       remotePeers={state.remotePeers}

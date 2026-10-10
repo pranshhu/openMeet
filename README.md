@@ -60,6 +60,8 @@ retention policy to trust, because there's nothing retained.
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- Record alone: a host with nobody else in the room presses **Continue alone** and
+  records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
@@ -404,7 +406,10 @@ earlier take that they send back is still offered to the host. Everyone in the
 call is told who is not recorded. A recorded participant who listens on speakers,
 or who shares a screen with its sound or with the call window on it, can still
 pick up that guest's voice or picture. Participants see a pre-join disclosure, a
-three-second countdown before each take, and an on-screen notice and REC pill.
+three-second countdown before each take, and an on-screen notice and REC pill. Someone
+who joins while a take is already running, for example after the host started recording
+alone, gets the notice and the REC pill as they join and no countdown, and is recorded
+from that moment.
 Files (including in-call chat) land only on the
 host's disk, plus a backup in each participant's own browser storage and a crash copy of
 each take's guest recordings in the host's browser storage, removed when the take ends
@@ -485,6 +490,10 @@ An unsaved recording holds the guests' camera, microphone and screen recordings,
 names and the chapter markers, in this browser on the host's computer and nowhere else. It
 stays there until it is saved or deleted in the lobby of the room it was recorded in, or
 until the site's data is cleared in the browser.
+
+A take recorded with nobody else in the room has no guest files to rebuild, so after a
+crash it is not listed as **Unsaved recording**. The host's own camera file and WAV master
+are in the lobby under **Backups on this device**, with **Download**.
 
 ---
 

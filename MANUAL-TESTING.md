@@ -89,6 +89,8 @@ EOF
 | 2.12 | Folder access taken back | After a take, use the browser's site settings (the icon in the address bar) to remove openMeet's access to the recording folder, then press **Record another take**, and after the message press **Record** again | The first press says permission to write to that folder was denied; the second opens the folder picker, and the take records into the folder chosen there | ☐ | |
 | 2.13 | Countdown | On a fresh browser profile, host clicks **Record** and chooses a folder | The folder prompt comes first; then the host's screen reads "Recording starts in 3", 2, 1 with Record greyed out, and only then the Recording pill appears; nothing else is asked when the take starts | ☐ | |
 | 2.14 | Countdown for everyone | With a guest and a producer in the call, host clicks **Record** | All three screens read "Recording starts in 3", 2, 1; then the guest sees the red notice and the REC pill. A guest who joins during the count sees no count and is recorded from the start of the take | ☐ | |
+| 2.15 | Record alone | Host joins a new room alone, presses **Continue alone**, then **Record**, chooses a folder, records ~20 s, **End & save** | The waiting room gives way to the call screen with **Record** and **Copy invite link**; the count reads 3, 2, 1; the summary says Take 1 saved and lists `host-<your name>_*.mp4` and `host-<your name>_*.wav`, both complete; the folder holds no `guest_*` file | ☐ | |
+| 2.16 | A guest joins a take recorded alone | While the host records alone, a guest opens the invite link and joins | The guest sees the red notice and the REC pill at once, and no countdown; the host's take keeps running and its track panel lists the guest as Receiving; after **End & save** the folder holds `guest_*.mp4`, `guest_*.wav` and `call1_*.m4a` | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -112,6 +114,9 @@ kept saying "Recording".
 | 3.13 | Save to a folder that is too small | After a host crash (as in the row *Save from the lobby after a host crash*), press **Save to folder** and pick a folder on a drive with less free space than the row's size | The lobby names the files that were not saved and the **Unsaved recording** row stays; a second **Save to folder** into a folder with room puts every file there and the row goes | ☐ | |
 | 3.14 | Save instead of resuming | With a guest still connected, reload the host tab mid-take, join again and press **Save what was recorded** | The files land in the folder and the notice goes; the guest's page leaves **Recording** by itself. Pressing **Resume recording** or **Save what was recorded** twice does nothing the second time | ☐ | |
 | 3.15 | Screen share across a resume | A guest is sharing a screen when the host tab is reloaded; the host joins again and presses **Resume recording** | The host is told that person's screen is not recorded until they stop and share again; after they do, and after **End & save**, the screen file from before the reload and the new one are both in the folder and in the summary | ☐ | |
+| 3.16 | Reload during a take recorded alone | Record alone for 30 s, then reload the host tab | The lobby lists **Backups on this device** with a recording backup (MP4) and one (WAV) for this room, and no **Unsaved recording**; both downloads play; the folder's own `host-…` files are not empty | ☐ | |
+| 3.17 | Leave while the count runs, alone | Alone on the call screen press **Record**, choose a folder, and press **Leave call** before the count ends | "You left the call"; no take starts and no file appears in the folder | ☐ | |
+| 3.18 | Interrupted take, host back alone | Record with a guest for 30 s, close the host tab, let the guest leave; reopen the room, join without pressing **Save to folder**, press **Continue alone** | The call screen reads "Recording was interrupted. This browser still has the take." with **Save what was recorded** and no **Resume recording**; **Save what was recorded** puts the files in the chosen folder and the notice gives way to a line that starts "Saved" | ☐ | |
 
 ## 4 — Multiple takes
 
@@ -262,6 +267,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** Its
+  copies are in the lobby under **Backups on this device**.
 
 ## When something fails
 

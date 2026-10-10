@@ -258,7 +258,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
   WaitingRoom ("Everyone else left"): the tab stays in the room, camera on, and resumes when someone
-  joins. `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
+  joins. A host whose browser can record gets **Continue alone** in the waiting room, alone or
+  after everyone left (never while connecting, never on a present-only device). `RoomView`
+  keeps that choice while the tab stays in the room (`alone`) and from then on renders
+  `CallStage` for `waiting`, `connecting` and `peer-left` too, drawn as `in-call`, so
+  Record, the countdown, the teleprompter and the media board are there with nobody else in
+  the room. The hook's phase is not changed by it.
+  `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
   (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
@@ -599,6 +605,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A take needs no guest: with nobody connected `startRecording` records the host's own
+   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
    until they pass `STREAM_BACKLOG_CAP_BYTES` (256 MiB), after which the stream is abandoned and the
@@ -905,3 +914,16 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** The crash
+  copy holds guests' bytes and writes its notes only with them, so with no guest its
+  directory stays empty and the next lobby removes it. The host's own camera file and WAV
+  master are listed there under Backups on this device. After a reload the folder's own
+  `host…wav` keeps the placeholder header a closing page leaves, and nothing repairs it.
+- **A guest who joins a take that is already running sees no countdown,** only the notice
+  and the REC pill, and is recorded from that moment. The host cannot set that guest as
+  not recorded until the take ends.
+- **A host recording alone whose connection to the room drops is, for the Room, a room
+  that emptied.** The session ends there, so the guests the host had set as not recorded
+  are forgotten, as when everyone leaves.
+- **Continue alone is not remembered.** After a reload the host is in the waiting room
+  again, and the call screen is one press away.

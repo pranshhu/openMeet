@@ -5860,7 +5860,7 @@ describe('the countdown before a take', () => {
     expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
   });
 
-  // Pins what already holds: release() clears the peer, and a take needs one.
+  // release() lets go of the stream, and a take needs one.
   it('starts no take when the host leaves while it counts', async () => {
     const { result } = await hostInCall();
     vi.useFakeTimers();

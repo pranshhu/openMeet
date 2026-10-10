@@ -2367,9 +2367,11 @@ export function useRoom(slug: string) {
     // A resume or a save of the interrupted take is still running on its crash
     // copy and its guests: a fresh take beside it would be a second one.
     if (recoveryBusyRef.current) return;
-    const peer = peerRef.current;
+    // A host records its own camera with nobody connected. What a take
+    // cannot do without is the stream, and a tab that has let go of the
+    // room holds none.
     const localStream = localStreamRef.current;
-    if (!peer || !localStream) return;
+    if (!localStream) return;
     const recordingId = crypto.randomUUID();
     takeTroubleRef.current = false;
     setState((s) => ({ ...s, recordingError: null, resumeOffer: null, takeNotice: null }));
@@ -2750,6 +2752,9 @@ export function useRoom(slug: string) {
     peersRef.current.clear();
     peerRef.current?.close();
     peerRef.current = null;
+    // The tracks are stopped below. startRecording reads this ref, so a
+    // countdown that is still running when the host leaves starts nothing.
+    localStreamRef.current = null;
     if (customStopRef.current) {
       try {
         customStopRef.current();
