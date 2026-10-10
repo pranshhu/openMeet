@@ -12,6 +12,8 @@ import {
 import { atBitrate, presetAt, presetById } from '@/lib/quality';
 import { getHostToken } from '@/lib/host-token';
 import { guestRecordingGuidance } from '@/lib/browser-guidance';
+import { MicTest } from './MicTest';
+import { CopyCheckResult } from './CopyCheckResult';
 
 const DOT: Record<Check['level'], string> = {
   ok: 'bg-[#1e8e3e]',
@@ -158,6 +160,7 @@ export function PreflightPanel({
         </div>
       </div>
 
+      <MicTest stream={stream} />
       <ul className="space-y-1 text-[#5f6368]">
         {checks.map((c) => (
           <li key={c.id} className="flex items-start gap-2">
@@ -172,6 +175,7 @@ export function PreflightPanel({
           </span>
         </li>
       </ul>
+      <CopyCheckResult checks={checks} stream={stream} />
     </div>
   );
 }

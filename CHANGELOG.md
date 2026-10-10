@@ -119,6 +119,15 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- **Test your mic** in the lobby's readiness panel: five seconds of your own
+  microphone are recorded, played back to you and deleted. The clip never leaves
+  the browser.
+- A **check link** for a room (**Copy check link** in the host's lobby, or `?check=1`
+  on the invite link): a guest tests camera, microphone and connection ahead of the
+  call, on the lobby's own checks, without joining the room.
+- **Copy result** under the lobby's readiness checks: the checks as plain text, with
+  the names of your camera and microphone, to paste into a message to the host. It
+  goes to the clipboard and nowhere else.
 - Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
   on the board as pads with one click. They are made in the browser, so no
   audio file is downloaded, and the bed arrives set to loop and fade.

@@ -212,3 +212,17 @@ export function overallLevel(checks: Check[]): CheckLevel {
   if (checks.some((c) => c.level === 'warn')) return 'warn';
   return 'ok';
 }
+
+const RESULT_LABEL: Record<CheckLevel, string> = { ok: 'OK', warn: 'Warning', fail: 'Problem' };
+
+/**
+ * The checks as plain text a guest can paste into a message to the host: a
+ * title, one labelled line per check, then the lines the caller adds (the
+ * devices in use). Non-breaking spaces become ordinary ones, so the text reads
+ * the same wherever it is pasted.
+ */
+export function resultText(checks: Check[], extra: string[] = []): string {
+  return ['openMeet setup check', ...checks.map((c) => `${RESULT_LABEL[c.level]}: ${c.message}`), ...extra]
+    .join('\n')
+    .replace(/\u00a0/g, ' ');
+}
