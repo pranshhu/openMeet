@@ -123,6 +123,17 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Copy result** under the lobby's readiness checks: the checks as plain text, with
   the names of your camera and microphone, to paste into a message to the host. It
   goes to the clipboard and nowhere else.
+- Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
+  on the board as pads with one click. They are made in the browser, so no
+  audio file is downloaded, and the bed arrives set to loop and fade.
+- A site can ship recordings of its own as ready sounds for the media board:
+  put the file in `apps/web/public/sounds/` and list it, with its license, in
+  `apps/web/lib/sound-files.ts`. A file is downloaded only when someone adds
+  its sound to their board. This repository ships none.
+- The host can copy the **producer link** and the **Present-only link** from an
+  arrow beside **Copy invite link**, in the waiting room and in the call, each
+  with a line saying what it is, instead of adding `?producer=1` or `?present=1`
+  by hand.
 - **Stop incoming video**, in the call's camera menu, for a weak connection: the
   other participants stop sending you their camera and shared screen. You still
   hear everyone, they still see you, and no recording is affected. It stays off

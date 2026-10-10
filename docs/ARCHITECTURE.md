@@ -279,7 +279,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `producer=1` or `present=1` is that link, and `check` is ignored.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
-  CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
+  CallStage's status bar keeps the host's Copy invite link during `in-call`.
+  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
+  and the Present-only link (the plain link plus `?producer=1` or `?present=1`, the flags
+  `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.
@@ -538,6 +542,24 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   the board open has a two-channel audio track even when the microphone is recorded in mono: a
   stereo pad keeps its stereo and the voice is the same on both channels. The WAV master follows
   `recordedChannels` either way.
+- `board-sounds.ts` `BOARD_SOUNDS`: the ready sounds the media board panel offers under "Ready
+  sounds" (Chime, Rimshot, Soft bed). One is computed in the page when its button is clicked
+  (`render`: sine tones and noise at `WAV_SAMPLE_RATE`), wrapped as a 24-bit mono WAV
+  (`soundFile`, with `wavHeader` and `f32ToS24LE`) and handed to `MediaBoard.load` like a file
+  the person picked, so it is a pad like any other. No audio ships for them and nothing is made
+  before the click. Every partial of the bed is a whole number of cycles long, so it loops
+  without a click, and its pad starts set to loop and fade. A sound already on the board is not
+  offered again. The panel draws the row above an empty board's text and, once the board holds
+  a pad, as the first item of the scrolling list, where it scrolls with the pads. On an empty
+  board a row of many shipped recordings makes the panel taller (see Known gaps).
+- `sound-files.ts` `SOUND_FILES`: recordings a deploy ships as further ready sounds, offered
+  after the computed ones. An entry names a file in `apps/web/public/sounds/` (served at
+  `/sounds/<file>`), the license it is handed out under and its source. `fetchSoundFile`
+  fetches it when its button is clicked and never before, and `MediaBoard.load` makes the pad
+  as for any file; a fetch or a decode that fails shows "Could not add …" and leaves the
+  button. The list is empty in this repository. `tests/sound-files-manifest.test.ts` fails on
+  a file in the folder that is not listed, a listed file that is missing, an entry with no
+  license or source, a file over 1 MiB, and a name used twice or longer than 20 characters.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can
@@ -815,6 +837,19 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
   the tab shows "Everyone else left", there is no media board on screen; the pad plays on
   until someone joins and the call is back, or until Leave.
+- **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
+  and Rimshot peak at about 0.4 of full scale and Soft bed at about 0.13, mixed over the
+  voice. Like every pad, a ready sound is gone from the board after a reload and is added
+  again with one click.
+- **Nothing bounds the number of ready sounds a site lists.** Each shipped recording is one
+  more button in `SOUND_FILES`. Once the board holds a pad the row scrolls with the pads. On
+  an empty board on a phone about three buttons fit on a line and every further line makes
+  the open board about 52 px taller; from the fourth line on it is taller than a full board
+  of pads and can reach the top status bar.
+- **A ready sound added twice.** A shipped recording is downloaded when its button is
+  clicked. If the media board is closed and opened again before the download ends, the
+  board offers that button again and does not show the new pad until it is opened once
+  more or something else is added; a click in between adds the sound a second time.
 - **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
   timeout); otherwise the offset is null and `sync.json` says to align by waveform.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
@@ -875,6 +910,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
+- **The producer and Present-only links are offered only to the host, in the waiting
+  room and in the call's top bar before a take.** The lobby and the take summary offer
+  the plain invite link alone, and during a take and after one the top bar has neither.
+  Each is still the invite link plus `?producer=1` or `?present=1`.
 - **A check link works only while its room does, and it is the invite link.** The checks
   run against the room, so an expired room shows "Room not found or expired"; opening a
   check link joins nothing and so does not extend the room's 30 days. Without `?check=1`
