@@ -377,10 +377,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   `ChatPanel` offers the choice under **To** when there are two or more other people
   (`recipients`, from `CallStage`: everyone else but present-only devices). The choice lives in
   `CallStage` (`chatTo`), because the panel unmounts when chat closes, and stays until it is
-  changed; `openChat` moves it to the sender of a private message that arrived while chat was
-  closed, once per message. When the chosen id is gone from the list (they left, or reconnected
-  under a new id) the panel sends nothing until the sender chooses again; it never falls back
-  to everyone.
+  changed; `openChat` moves it to the sender of the newest private message among those that
+  arrived while chat was closed, whatever arrived after it, once per message. When the chosen id
+  is gone from the list (they left, or reconnected under a new id) the panel sends nothing until
+  the sender chooses again; it never falls back to everyone.
 
 ### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
@@ -943,4 +943,6 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   not listed.
 - **A private message that arrives while chat is open does not move To.** An answer goes where
   **To** says, to everyone if nobody is chosen. And chat opened on a private message from one
-  person is addressed to them even when another person had been chosen before.
+  person is addressed to them even when another person had been chosen before. That also holds
+  when a message for everyone arrived after the private one: an answer to either goes to that
+  person alone until **To** is changed.

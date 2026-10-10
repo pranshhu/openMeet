@@ -124,4 +124,31 @@ describe('ChatPanel: choosing who a message is for', () => {
     expect(to().className).toMatch(/(^|\s)text-base(\s|$)/);
     expect(to().className).toMatch(/(^|\s)min-w-0(\s|$)/);
   });
+
+  it('reads the note out with the control it belongs to', () => {
+    const props = { messages: [], onSend: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<ChatPanel {...props} recipients={[bob, pat]} />);
+    expect(to()).not.toHaveAttribute('aria-describedby');
+
+    rerender(<ChatPanel {...props} recipients={[bob, pat]} to="p-bob" />);
+    expect(to()).toHaveAccessibleDescription('Only Bob gets it. It is left out of the recorded chat.');
+
+    rerender(<ChatPanel {...props} recipients={[pat]} to="p-bob" />);
+    expect(to()).toHaveAccessibleDescription('That person left the call or reconnected. Choose who to send to.');
+  });
+
+  it('cuts a long name between characters, never inside one', () => {
+    render(
+      <ChatPanel
+        messages={[]}
+        recipients={[bob, { peerId: 'p-faces', name: '😀'.repeat(17) }]}
+        to="p-faces"
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const cut = `${'😀'.repeat(16)}…`;
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob', cut]);
+    expect(screen.getByText(`Only ${cut} gets it. It is left out of the recorded chat.`)).toBeInTheDocument();
+  });
 });

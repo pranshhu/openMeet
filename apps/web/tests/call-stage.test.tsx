@@ -2684,4 +2684,111 @@ describe('CallStage: a chat message for one person', () => {
     fireEvent.click(screen.getByLabelText('Chat'));
     expect(to().value).toBe('');
   });
+
+  const goneNote = 'That person left the call or reconnected. Choose who to send to.';
+
+  it('keeps the person chosen after a message is sent to them', () => {
+    const onSendChat = vi.fn();
+    render(<CallStage {...baseProps} remotePeers={[bob, pat]} onSendChat={onSendChat} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    say('one');
+    expect(to().value).toBe('p-pat');
+    say('two');
+    expect(onSendChat.mock.calls).toEqual([
+      ['one', 'p-pat'],
+      ['two', 'p-pat'],
+    ]);
+  });
+
+  it('keeps the person chosen when chat is closed from the panel, by its button or by Escape', () => {
+    render(<CallStage {...baseProps} remotePeers={[bob, pat]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close chat' }));
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Escape' });
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+  });
+
+  it('sends nothing once the person chosen has left, and never turns the choice into everyone', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, onSendChat };
+    const { rerender } = render(<CallStage {...props} remotePeers={[bob, pat, nameless]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+
+    // Pat leaves, or comes back under a new id.
+    rerender(<CallStage {...props} remotePeers={[bob, nameless]} />);
+    expect(to().value).toBe('p-pat');
+    expect(screen.getByText(goneNote)).toBeInTheDocument();
+    say('for Pat only');
+    expect(onSendChat).not.toHaveBeenCalled();
+
+    // Closed and opened again, it is still held back.
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+    say('for Pat only');
+    expect(onSendChat).not.toHaveBeenCalled();
+  });
+
+  it('addresses the sender of an unread private message even when someone else was chosen', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Pat, privately to you/ }));
+    expect(to().value).toBe('p-pat');
+    say('on it');
+    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-pat');
+  });
+
+  it('holds the answer back when the sender of an unread private message cannot be written to', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat, secondScreen], onSendChat };
+    const fromSomeoneGone = { ...fromPat, fromPeerId: 'p-left' };
+    const fromSecondScreen = { ...fromPat, fromPeerId: 'p-screen' };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} messages={[fromSomeoneGone]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-left');
+    expect(screen.getByText(goneNote)).toBeInTheDocument();
+    say('answer');
+    expect(onSendChat).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    // A present-only device is in the call and is not offered under To.
+    rerender(<CallStage {...props} messages={[fromSomeoneGone, fromSecondScreen]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-screen');
+    say('answer');
+    expect(onSendChat).not.toHaveBeenCalled();
+  });
+
+  it('addresses the sender of an unread private message when a message for everyone arrived after it', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    rerender(<CallStage {...props} messages={[fromPat, toAll]} />);
+
+    fireEvent.click(screen.getByLabelText('Chat, 2 unread'));
+    expect(to().value).toBe('p-pat');
+    say('on it');
+    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-pat');
+  });
 });

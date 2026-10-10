@@ -383,11 +383,16 @@ export function CallStage({
   function openChat(open: boolean) {
     setChatOpen(open);
     if (open) setSummaryOpen(false);
-    // Opened on a private message that arrived while chat was closed: address
-    // its sender, so the answer does not go to everyone. Once it has been on
-    // screen it is no longer unread, and the choice is left as it was.
-    const newest = messages[messages.length - 1];
-    if (open && unread > 0 && newest?.private && newest.fromPeerId) setChatTo(newest.fromPeerId);
+    // Opened with a private message among those that arrived while chat was
+    // closed: address the sender of the newest one, so the answer does not go
+    // to everyone. A message for everyone that arrived after it changes
+    // nothing. A message that has been on screen is not unread, and the choice
+    // is left as it was.
+    const unreadPrivate = messages
+      .slice(messages.length - unread)
+      .filter((m) => m.private && m.fromPeerId)
+      .pop();
+    if (open && unreadPrivate?.fromPeerId) setChatTo(unreadPrivate.fromPeerId);
   }
   function closeSummary() {
     setSummaryOpen(false);

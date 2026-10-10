@@ -757,3 +757,24 @@ describe('countdown', () => {
     expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
   });
 });
+
+describe('chat', () => {
+  it('hands the hook the person a message was written to, with its text', () => {
+    Object.assign(state, inCall, {
+      remotePeers: [
+        { peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' },
+        { peerId: 'p-dan', name: 'Dan', stream: null, role: 'guest' },
+      ],
+    });
+    hook.sendChat = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'p-dan' } });
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'psst' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+
+    expect(hook.sendChat).toHaveBeenCalledTimes(1);
+    expect(hook.sendChat).toHaveBeenCalledWith('psst', 'p-dan');
+  });
+});

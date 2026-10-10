@@ -6044,6 +6044,13 @@ describe('private messages in useRoom', () => {
     ]);
   });
 
+  it('takes a private message as long as the message box allows', async () => {
+    const result = await hostWithBob();
+    const longest = 'x'.repeat(4000);
+    act(() => emitSignal('private-message', fromBob(longest)));
+    expect(result.current.state.messages.map((m) => m.text)).toEqual([longest]);
+  });
+
   it('keeps a private message out of the take’s chat file, whichever side the host was on', async () => {
     const { dir: fakeDir, writtenFiles } = fakeDirectory();
     vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
