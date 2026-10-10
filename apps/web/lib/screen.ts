@@ -1,3 +1,5 @@
+import { playLocally } from './speaker';
+
 export function isScreenShareSupported(): boolean {
   return (
     typeof navigator !== 'undefined' &&
@@ -107,10 +109,11 @@ export async function presentFile(file: File, monitor = false): Promise<Presente
 
   // Extract sound via Web Audio API: createMediaElementSource -> createMediaStreamDestination.
   // The element's own output is taken over by the graph, so the video is silent on this device
-  // unless `monitor` also connects it to audioCtx.destination; its audio track is sent to the
-  // presented stream either way.
+  // unless `monitor` plays the graph's stream here (playLocally, on the chosen speaker); its
+  // audio track is sent to the presented stream either way.
   let audioCtx: AudioContext | null = null;
   let audioTrack: MediaStreamTrack | null = null;
+  let stopMonitor: (() => void) | null = null;
   try {
     const AudioCtxClass =
       window.AudioContext ||
@@ -120,10 +123,10 @@ export async function presentFile(file: File, monitor = false): Promise<Presente
       const source = audioCtx.createMediaElementSource(video);
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
-      if (monitor) source.connect(audioCtx.destination);
       const track = dest.stream.getAudioTracks()[0];
       if (track) {
         audioTrack = track;
+        if (monitor) stopMonitor = playLocally(dest.stream);
       }
     }
   } catch {
@@ -216,6 +219,7 @@ export async function presentFile(file: File, monitor = false): Promise<Presente
       video.load();
     } catch {}
     URL.revokeObjectURL(url);
+    stopMonitor?.();
     if (audioCtx && audioCtx.state !== 'closed') {
       void audioCtx.close().catch(() => {});
     }

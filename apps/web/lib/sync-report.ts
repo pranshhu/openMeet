@@ -215,6 +215,13 @@ export function buildChapters(markers: ChapterMarker[]): string {
 
 export const MAX_CHAT_MESSAGE_LENGTH = 4000;
 
+/**
+ * The longest label a chapter marker carries: a typed note, or a media board
+ * pad's name. The host drops a longer label that another participant sends, and
+ * the crash copy's reader drops the whole marker, so nothing longer may enter.
+ */
+export const MAX_MARKER_LABEL_LENGTH = 200;
+
 /** Plain chat log of the take: [m:ss] role Name: text. */
 export function buildChatLog(
   messages: ChatMessage[],
