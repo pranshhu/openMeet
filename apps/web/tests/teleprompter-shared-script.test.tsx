@@ -75,6 +75,16 @@ describe('Teleprompter: sending the script', () => {
     fireEvent.click(send());
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it('will not send a script that is only spaces and line breaks', () => {
+    const onSend = vi.fn(() => true);
+    render(<Teleprompter slug="send-blank" onClose={() => {}} onSend={onSend} />);
+    fireEvent.change(editor(), { target: { value: ' \n\t ' } });
+    expect(send()).toBeDisabled();
+    fireEvent.click(send());
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
 });
 
 describe('Teleprompter: a script from the host', () => {
@@ -148,5 +158,12 @@ describe('Teleprompter: a script from the host', () => {
     fireEvent.click(within(offer()).getByRole('button', { name: 'Use it' }));
     expect(screen.getByText('Play')).toBeInTheDocument();
     expect(box.scrollTop).toBe(0);
+  });
+
+  it('makes Send, Use it and Ignore tall enough for a thumb on a phone', () => {
+    render(<Teleprompter slug="thumb" onClose={() => {}} incoming="Welcome to the show" onSend={() => true} />);
+    for (const name of ['Send to everyone', 'Use it', 'Ignore']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11');
+    }
   });
 });

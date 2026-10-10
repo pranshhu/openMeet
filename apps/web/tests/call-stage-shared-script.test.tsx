@@ -102,4 +102,19 @@ describe('CallStage: a script from the host', () => {
     expect(screen.getByTestId('status-bar')).not.toHaveTextContent('The host sent a script');
     expect(screen.queryByRole('button', { name: /teleprompter/ })).toBeNull();
   });
+
+  it('offers a producer the script and gives them no way to send one', () => {
+    const onSendScript = vi.fn(() => true);
+    render(
+      <CallStage {...guest} role="producer" incomingScript="Welcome to the show" onSendScript={onSendScript} />
+    );
+    const button = screen.getByRole('button', { name: 'Show teleprompter' });
+    expect(within(button).getByTestId('badge')).toBeInTheDocument();
+    expect(screen.getByTestId('status-bar')).toHaveTextContent(announced);
+
+    fireEvent.click(button);
+    expect(offer()).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste your script/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send to everyone' })).toBeNull();
+  });
 });

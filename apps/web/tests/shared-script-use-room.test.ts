@@ -170,4 +170,11 @@ describe('useRoom.sendScript', () => {
     expect(result.current.sendScript('Second draft')).toBe(false);
     expect(scripts()).toHaveLength(1);
   });
+
+  it('says not sent before this tab has joined the room', async () => {
+    const { result } = renderHook(() => useRoom('abc-defg-hij'));
+    await act(async () => {});
+    expect(result.current.sendScript('Welcome to the show')).toBe(false);
+    expect(scripts()).toEqual([]);
+  });
 });
