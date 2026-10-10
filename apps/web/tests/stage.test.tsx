@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { Stage, type StageFeed } from '@/components/Stage';
 
 const local: StageFeed = { stream: null, name: 'Alice', muted: true, camOff: true };
 const remote: StageFeed = { stream: null, name: 'Bob', muted: false, camOff: true };
-const fakeStream = { id: 'scr' } as unknown as MediaStream;
+const fakeStream = Object.assign(new EventTarget(), { id: 'scr' }) as unknown as MediaStream;
 
 describe('Stage', () => {
   it('solo: shows only the local feed, no swap PiP', () => {
@@ -275,5 +275,97 @@ describe('Stage', () => {
     expect(screenVideo).toBeDefined();
     expect(screenVideo?.muted).toBe(true);
   });
-});
 
+  it('presenting (remote screen, incoming video off): a note covers the screen and offers the way back', () => {
+    const onShow = vi.fn();
+    const { rerender } = render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel="Bob's screen"
+        onShowVideo={onShow}
+      />
+    );
+    expect(screen.getByText('Incoming video is off, so you can’t see it.')).toBeTruthy();
+    // The note names the screen; the tile's own tag is under the note.
+    expect(screen.getAllByText("Bob's screen")).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Show video' }));
+    expect(onShow).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel="Bob's screen"
+      />
+    );
+    expect(screen.queryByText('Incoming video is off, so you can’t see it.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show video' })).toBeNull();
+  });
+
+  it('presenting (remote screen, incoming video off): the screen tile stays under the note, unmuted, so its sound plays', () => {
+    const { container } = render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        onShowVideo={() => {}}
+      />
+    );
+    const screenVideo = Array.from(container.querySelectorAll('video')).find(
+      (v) => (v as any).srcObject === fakeStream
+    );
+    expect(screenVideo).toBeDefined();
+    expect(screenVideo?.muted).toBe(false);
+  });
+
+  it('presenting (remote screen, incoming video off): the note lies over the tile and a long name wraps inside it', () => {
+    const label = `${'Bartholomew'.repeat(6)}'s screen`;
+    render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={fakeStream}
+        localPresenting={false}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        screenLabel={label}
+        onShowVideo={() => {}}
+      />
+    );
+    const note = screen.getByText('Incoming video is off, so you can’t see it.').parentElement as HTMLElement;
+    expect(note.className).toContain('absolute');
+    expect(note.className).toContain('inset-0');
+    const name = within(note).getByText(label);
+    expect(name).toHaveClass('wrap-anywhere');
+    expect(name).toHaveClass('max-w-full');
+  });
+
+  it('presenting (your own screen, incoming video off): nothing covers what you are sharing', () => {
+    render(
+      <Stage
+        local={local}
+        remote={remote}
+        remoteScreen={null}
+        localScreen={fakeStream}
+        localPresenting={true}
+        spotlight="remote"
+        onSwapSpotlight={() => {}}
+        onShowVideo={() => {}}
+      />
+    );
+    expect(screen.queryByText('Incoming video is off, so you can’t see it.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show video' })).toBeNull();
+  });
+});

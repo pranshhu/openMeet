@@ -22,11 +22,11 @@ const JOURNAL_C = 'openmeet-take-1759752000000-klm-nopq-rst';
 
 function fakeStream(): MediaStream {
   const tracks = [{ kind: 'audio', enabled: true, stop: vi.fn() }, { kind: 'video', enabled: true, stop: vi.fn() }];
-  return {
+  return Object.assign(new EventTarget(), {
     getTracks: () => tracks,
     getAudioTracks: () => tracks.filter((t) => t.kind === 'audio'),
     getVideoTracks: () => tracks.filter((t) => t.kind === 'video'),
-  } as unknown as MediaStream;
+  }) as unknown as MediaStream;
 }
 
 /** A real-looking 720p webcam: settings AND capabilities, so presets get filtered. */
@@ -53,11 +53,11 @@ function cam720Stream(
       ...(maxFrameRate === undefined ? {} : { frameRate: { max: maxFrameRate } }),
     }),
   };
-  return {
+  return Object.assign(new EventTarget(), {
     getTracks: () => [audio, video],
     getAudioTracks: () => [audio],
     getVideoTracks: () => [video],
-  } as unknown as MediaStream;
+  }) as unknown as MediaStream;
 }
 
 const DEVICES = [
@@ -183,11 +183,11 @@ describe('Lobby', () => {
       getSettings: () => ({ width: 3840, height: 2160, frameRate: 30 }),
       getCapabilities: () => ({ width: { max: 3840 }, height: { max: 2160 } }),
     };
-    const cam4k = {
+    const cam4k = Object.assign(new EventTarget(), {
       getTracks: () => [audio, video],
       getAudioTracks: () => [audio],
       getVideoTracks: () => [video],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
     localStorage.setItem('om_quality', '4k');
     localStorage.setItem('om_bitrate', 'max');
     try {
@@ -1459,11 +1459,11 @@ describe('Lobby', () => {
   });
 
   it("the lobby's Present-only click calls getDisplayMedia before join and joins with companion=true and no camera/mic tracks", async () => {
-    const fakeScreen = {
+    const fakeScreen = Object.assign(new EventTarget(), {
       getTracks: () => [{ kind: 'video', stop: vi.fn() }],
       getVideoTracks: () => [{ kind: 'video', stop: vi.fn() }],
       getAudioTracks: () => [],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
     const getDisplayMedia = vi.fn().mockResolvedValue(fakeScreen);
     navigator.mediaDevices.getDisplayMedia = getDisplayMedia;
 
@@ -1751,11 +1751,13 @@ describe('Lobby', () => {
     unmount();
 
     const rear = { kind: 'video', enabled: true, stop: vi.fn(), getSettings: () => ({ facingMode: 'environment' }) };
-    (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue({
-      getTracks: () => [rear],
-      getAudioTracks: () => [],
-      getVideoTracks: () => [rear],
-    });
+    (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValue(
+      Object.assign(new EventTarget(), {
+        getTracks: () => [rear],
+        getAudioTracks: () => [],
+        getVideoTracks: () => [rear],
+      }),
+    );
     const { container: c2 } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     await screen.findByRole('button', { name: /turn off camera/i });
     expect(c2.querySelector('video')?.className).not.toMatch(/-scale-x-100/);
@@ -2297,11 +2299,11 @@ describe('Lobby', () => {
           getSettings: () => ({ width, height, frameRate }),
           getCapabilities: () => ({ width: { max: width }, height: { max: height } }),
         };
-        return {
+        return Object.assign(new EventTarget(), {
           getTracks: () => [audio, video],
           getAudioTracks: () => [audio],
           getVideoTracks: () => [video],
-        } as unknown as MediaStream;
+        }) as unknown as MediaStream;
       };
       const lobbyWith = (stream: MediaStream) => {
         const estimate = vi.fn().mockResolvedValue({ quota: 20e9, usage: 0 });

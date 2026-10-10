@@ -292,6 +292,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   makes `sendEncoding` send a quarter-size camera picture at the floor bitrate and a shared screen
   at 4 fps on every connection, leaves every recorder alone, and stays on until turned off.
   Switching the mode starts the readings over, and while it is on only lost audio counts.
+  The camera menu's **Stop incoming video** (`useRoom().setIncomingVideoOff`,
+  `state.incomingVideoOff`) is the other mode a tab keeps for itself: every connection stops
+  taking the other side's video, and `CallStage` shows the other people as initials (`camOff`)
+  while it is on. The call's sound, what this tab sends and every recorder are left alone.
+  While it is on a row above the stage says so with **Show video**, and `Stage` (`onShowVideo`)
+  lays a note with the same button over a screen someone else presents: over the tile, not in
+  its place, because that tile plays the shared sound.
   `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
@@ -337,6 +344,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
   `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
+  `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
+  `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is
+  negotiated like any other, and the far browser then stops encoding and sending that video
+  to this connection, so no message of ours has to ask it.
+  While it is off the same is applied just before every offer and every answer this side
+  makes, so a camera that is added, a person who joins or a screen that starts being shared
+  is turned down in that very description; `syncSendQuality` (`useRoom`) tells each new or
+  rebuilt connection, from a ref the switch writes itself.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
 
@@ -721,6 +736,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with
     a "Switch after this take" prompt because iOS Safari cannot hot-swap tracks in MediaRecorder without breaking.
+- **A `<video>` given a stream that lists a video track plays nothing, sound included, until that
+  track's first frame.** When a connection is made while incoming video is stopped the track is
+  taken out of the stream a few milliseconds after the tile was given it, and the frame never
+  comes. `VideoTile` therefore listens for the stream's `removetrack` and gives the element the
+  stream again while its `readyState` is still 0; an element that already plays is left alone,
+  because loading it again would cut the sound.
 
 ---
 
@@ -837,3 +858,11 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   else leaves and the tab shows "Everyone else left", there is no Stop presenting on
   screen; on a computer the clip is heard until someone joins and the call is back, or
   until Leave.
+- **Nobody is told that a participant has stopped incoming video.** The others still see
+  that person's camera and get no sign that their own picture, or a screen they present, is
+  not being watched. The choice is not remembered: a reload or a rejoin starts with video
+  on. A producer and a Present-only device have no camera menu and so no such control.
+  When everyone else leaves, the waiting screen says nothing about the mode; it is kept,
+  and the line returns with the call.
+- **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
+  live budget by everyone in the room, including a person who has stopped incoming video.
