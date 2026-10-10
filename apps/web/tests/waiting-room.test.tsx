@@ -33,11 +33,11 @@ describe('WaitingRoom', () => {
   it('a camera turned off in the lobby shows the initial, and the mic can be muted while waiting', () => {
     const audio = { kind: 'audio', enabled: true };
     const video = { kind: 'video', enabled: false };
-    const stream = {
+    const stream = Object.assign(new EventTarget(), {
       getTracks: () => [audio, video],
       getAudioTracks: () => [audio],
       getVideoTracks: () => [video],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
     const onToggleMic = vi.fn();
 
     const { container } = render(
@@ -60,7 +60,7 @@ describe('WaitingRoom', () => {
   });
 
   it('shows no device toggles for a stream without tracks (present-only)', () => {
-    const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream;
+    const empty = Object.assign(new EventTarget(), { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] }) as unknown as MediaStream;
     render(
       <WaitingRoom
         role="guest"
@@ -81,11 +81,11 @@ describe('WaitingRoom', () => {
     ['environment', false],
   ])('mirrors the self-view only for a front camera (%s)', (facingMode, mirrored) => {
     const video = { kind: 'video', enabled: true, getSettings: () => ({ facingMode }) };
-    const stream = {
+    const stream = Object.assign(new EventTarget(), {
       getTracks: () => [video],
       getAudioTracks: () => [],
       getVideoTracks: () => [video],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
     const { container } = render(<WaitingRoom role="host" localStream={stream} localName="Host" onLeave={vi.fn()} />);
     expect(container.querySelector('video')!.classList.contains('-scale-x-100')).toBe(mirrored);
   });

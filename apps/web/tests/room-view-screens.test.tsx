@@ -15,7 +15,7 @@ vi.mock('@/hooks/useRoom', () => ({
   useRoom: () => ({ state, join: vi.fn(), leave: vi.fn(), setMic: vi.fn(), setCam: vi.fn(), ...hook }),
 }));
 
-const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream;
+const empty = Object.assign(new EventTarget(), { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] }) as unknown as MediaStream;
 
 beforeEach(() => {
   hook = {};
@@ -245,11 +245,11 @@ describe('lobby', () => {
     vi.stubGlobal('MediaStreamTrackProcessor', class {});
     const mic = { kind: 'audio', stop: vi.fn(), getSettings: () => ({ channelCount: 2 }) };
     const cam = { kind: 'video', stop: vi.fn(), getSettings: () => ({ width: 1280, height: 720 }) };
-    const theStream = {
+    const theStream = Object.assign(new EventTarget(), {
       getTracks: () => [mic, cam],
       getAudioTracks: () => [mic],
       getVideoTracks: () => [cam],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
     vi.stubGlobal('navigator', {
       userAgent: 'test',
       mediaDevices: {
@@ -337,7 +337,7 @@ describe('recording', () => {
       role: 'host',
       peerRecording: false,
       notRecorded: false,
-      remoteStream: {} as MediaStream,
+      remoteStream: new EventTarget() as MediaStream,
       remotePeers: [{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }],
       remoteScreenStream: null,
       localScreenStream: null,
@@ -483,6 +483,36 @@ describe('recording', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('passes the incoming-video switch and its state to the call', () => {
+    Object.assign(state, {
+      phase: 'in-call',
+      role: 'guest',
+      peerRecording: false,
+      incomingVideoOff: true,
+      remoteStream: null,
+      remotePeers: [],
+      remoteScreenStream: null,
+      localScreenStream: null,
+      screenSharing: false,
+      capabilities: {},
+      finalizingGuests: [],
+      messages: [],
+      markers: [],
+      takes: [],
+      summary: null,
+      recordingError: null,
+      drained: true,
+      sidecarsSaved: false,
+    });
+    hook.setIncomingVideoOff = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    const item = screen.getByRole('menuitemcheckbox', { name: 'Stop incoming video' });
+    expect(item).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(item);
+    expect(hook.setIncomingVideoOff).toHaveBeenCalledWith(false);
   });
 
   // The room moved this viewer out of the take. The status bar says so, and it
@@ -698,7 +728,7 @@ describe('countdown', () => {
   it('counts down from Record through the hook, and hands the call the countdown it reports', () => {
     Object.assign(state, inCall, {
       role: 'host',
-      remoteStream: {} as MediaStream,
+      remoteStream: new EventTarget() as MediaStream,
       remotePeers: [{ peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' }],
       countdownEndsAt: null,
     });

@@ -44,6 +44,17 @@ export function VideoTile({
     // rendering the last frame of a dead stream — e.g. after the peer left or
     // the call was torn down — so the UI showed video that no longer existed.
     el.srcObject = stream ?? null;
+    if (!stream) return;
+    // An element given a stream that lists a video track waits for that
+    // track's first frame before it plays anything, sound included. When the
+    // track is taken out first (the other side was told not to send it), the
+    // wait never ends, so the element is given the stream as it then stands.
+    // One that already plays is left alone: loading it again would cut the sound.
+    const reload = () => {
+      if (el.readyState === 0) el.srcObject = stream;
+    };
+    stream.addEventListener('removetrack', reload);
+    return () => stream.removeEventListener('removetrack', reload);
   }, [stream]);
 
   const showVideo = !!stream && !camOff;
