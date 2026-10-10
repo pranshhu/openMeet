@@ -69,6 +69,8 @@ retention policy to trust, because there's nothing retained.
   are told, and turn it back on themselves), or remove someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
+- Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
+  made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - Chat with a pop-up for each new message while the panel is closed, presence, and
@@ -326,6 +328,16 @@ The wall stays off until all three values are set. After that:
 straight from the URL the sponsor gave (with no referrer), so that host sees the
 visitor's IP address. Look at a sponsor's logo URL before you approve them.
 
+### Ready sounds of your own (optional)
+
+The media board offers three ready sounds that are made in the browser. To offer
+recordings of your own beside them (a jingle, applause), put each audio file in
+`apps/web/public/sounds/`, list it in `apps/web/lib/sound-files.ts` with the license
+that lets you hand it out and where it came from, then build and deploy the site as
+usual. A file is downloaded only when someone adds its sound to their board. Keep
+each file at 1 MiB or less: `pnpm -r test` fails on a larger file, on a file in the
+folder that is not listed, and on an entry with no license or source.
+
 ---
 
 ## Recording notes
@@ -346,7 +358,8 @@ shared by these two:
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
-  **Copy invite link** always copies the plain link, so build this one by hand.
+  **Copy invite link** always copies the plain link; the arrow beside it, in the
+  waiting room and in the call, copies this link and the Present-only link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
