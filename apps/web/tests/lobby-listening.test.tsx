@@ -332,6 +332,51 @@ describe('Lobby: headphones or speakers', () => {
     expect(await screen.findByText('Camera or mic is busy')).toBeInTheDocument();
     for (const p of pickers) expect(p).toBeDisabled();
   });
+
+  // Two captures asked for at once leave one open with nothing to stop it, and
+  // the one that lands last decides the microphone and the answer.
+  it('takes no second capture change while one is on its way', async () => {
+    const { getUserMedia, opened } = stubMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    const select = await ready();
+    const microphone = screen.getByLabelText('Microphone');
+
+    let open!: (s: MediaStream) => void;
+    getUserMedia.mockImplementationOnce(() => new Promise<MediaStream>((resolve) => (open = resolve)));
+    fireEvent.change(microphone, { target: { value: 'mic2' } });
+    // The preview is still up, so the question can be answered meanwhile.
+    expect(select).not.toBeDisabled();
+    fireEvent.change(select, { target: { value: 'speakers-ec' } });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    // The microphone in the preview is not let go for a change that is not taken.
+    expect(opened[0]!.audio.stop).not.toHaveBeenCalled();
+
+    open(streamWith(false).stream);
+    await waitFor(() => expect(microphone).toHaveValue('mic2'));
+    expect(select).toHaveValue('');
+    expect(capturing()).not.toMatch(/echo cancellation/);
+
+    // Once that capture is open, a change is taken again.
+    fireEvent.change(select, { target: { value: 'speakers-ec' } });
+    await waitFor(() => expect(select).toHaveValue('speakers-ec'));
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
+    expect(askedAudio(getUserMedia, 2)).toMatchObject({ echoCancellation: true, deviceId: { exact: 'mic2' } });
+  });
+
+  it('takes a capture change again after one that could not be opened', async () => {
+    const { getUserMedia } = stubMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    const select = await ready();
+
+    getUserMedia.mockRejectedValueOnce(busy());
+    fireEvent.change(select, { target: { value: 'speakers-ec' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    await ready();
+
+    fireEvent.change(select, { target: { value: 'speakers-ec' } });
+    await waitFor(() => expect(select).toHaveValue('speakers-ec'));
+  });
 });
 
 describe('Lobby: the answer goes with the join', () => {

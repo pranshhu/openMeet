@@ -197,6 +197,10 @@ export function Lobby({
   // Same shape as joiningRef: opening the folder prompt is awaited, so a second
   // press could otherwise start a second save over the same journal.
   const savingRef = useRef(false);
+  // A capture that has been asked for and not yet answered. A second one asked
+  // for beside it is never stopped by anyone, and whichever lands last decides
+  // the device and the headphones answer, so a change made meanwhile is not taken.
+  const reopeningRef = useRef(false);
   // From the chosen folder to the end of the rebuild, which can take minutes:
   // Save and Delete wait, so neither runs under it.
   const [saving, setSaving] = useState(false);
@@ -376,7 +380,8 @@ export function Lobby({
     nextListening: Listening | '' = listening
   ) {
     const mm = mmRef.current;
-    if (!mm) return;
+    if (!mm || reopeningRef.current) return;
+    reopeningRef.current = true;
     const old = stream;
     const echo = nextListening === 'speakers-ec';
     // Echo cancellation belongs to the open microphone, and a browser can give
@@ -425,6 +430,8 @@ export function Lobby({
         return;
       }
       setError(e instanceof Error ? e.message : 'Could not switch device.');
+    } finally {
+      reopeningRef.current = false;
     }
   }
 
