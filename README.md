@@ -55,8 +55,9 @@ retention policy to trust, because there's nothing retained.
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K, at 24, 25, 29.97 or
   30 fps, and 50 or 60 where the camera offers them
-- Raw audio — echo cancellation, noise suppression and AGC are all **off** (see
-  [Headphones](#headphones-really))
+- Raw audio — echo cancellation, noise suppression and AGC are all **off**, unless
+  someone on speakers turns echo cancellation on for their own microphone in the lobby
+  (see [Headphones](#headphones-really))
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
@@ -333,6 +334,13 @@ control are all **off**. That processing is baked irreversibly into the master a
 exactly what a studio recorder exists to avoid. The trade is that anyone listening on
 speakers is echoed into the other person's file. Every serious remote-recording tool
 makes the same trade.
+
+The lobby asks each person whether they are on headphones or speakers. Someone on
+speakers can pick **Speakers, echo cancellation on**: the browser then takes the other
+voices out of that one person's microphone, for the call and for every recording of
+it, so their files hold processed audio, not raw. Noise suppression and gain control
+stay off. The answer is given before joining and remembered in that browser; to change
+it, leave the call and join again.
 
 ### Producers and Present only
 

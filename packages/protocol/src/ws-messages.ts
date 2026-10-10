@@ -93,6 +93,19 @@ export type ClientPing = { type: 'ping' };
 export const BROWSER_NOTES = ['safari', 'ios', 'android', 'mobile'] as const;
 export type BrowserNote = (typeof BROWSER_NOTES)[number];
 
+/**
+ * How a person said, in the lobby, that they hear the call. A code, not copy.
+ * `speakers-ec` is speakers with the browser's echo cancellation on for that
+ * person's own microphone, so their recorded audio is processed. Someone who
+ * did not say has no code at all.
+ */
+export const LISTENING_CHOICES = ['headphones', 'speakers', 'speakers-ec'] as const;
+export type Listening = (typeof LISTENING_CHOICES)[number];
+
+export function isListening(v: unknown): v is Listening {
+  return (LISTENING_CHOICES as readonly unknown[]).includes(v);
+}
+
 export type ClientRecordingCapability = {
   type: 'recording-capability';
   mp4: boolean;

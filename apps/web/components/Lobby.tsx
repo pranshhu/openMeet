@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { RECORDING_FRAME_RATE, WAV_SAMPLE_RATE } from '@openmeet/protocol';
+import {
+  LISTENING_CHOICES,
+  RECORDING_FRAME_RATE,
+  WAV_SAMPLE_RATE,
+  isListening,
+  type Listening,
+} from '@openmeet/protocol';
 import {
   MediaDeviceMissingError,
   MediaManager,
@@ -44,6 +50,7 @@ import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
+import { LISTENING_HINT, LISTENING_LABEL } from '@/lib/listening';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -75,6 +82,7 @@ const QUALITY_KEY = 'om_quality';
 const FRAME_RATE_KEY = 'om_fps';
 const BITRATE_KEY = 'om_bitrate';
 const STEREO_KEY = 'om_stereo';
+const LISTENING_KEY = 'om_listening';
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -163,6 +171,9 @@ export function Lobby({
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
   const [stereo, setStereo] = useState(false);
+  // The answer to "headphones or speakers", '' until one is given. 'speakers-ec'
+  // is also how the microphone is opened, so it is set only once that worked.
+  const [listening, setListening] = useState<Listening | ''>('');
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
@@ -311,9 +322,9 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, quality: string, fps: number) {
+  function startPreview(mm: MediaManager, quality: string, fps: number, echo: boolean) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', '', quality, fps))
+    mm.acquire(deviceConstraints('', '', quality, fps, echo))
       .then(async (s) => {
         setStream(s);
         // Device labels are only populated after permission is granted.
@@ -335,32 +346,54 @@ export function Lobby({
     mmRef.current = mm;
     let saved = DEFAULT_QUALITY_ID;
     let savedFps = RECORDING_FRAME_RATE;
+    let savedListening: Listening | '' = '';
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
       setBitrateId(localStorage.getItem(BITRATE_KEY) ?? DEFAULT_BITRATE_ID);
       // Strictly '1': anything else, including a stored '0', is mono.
       setStereo(localStorage.getItem(STEREO_KEY) === '1');
+      const heard = localStorage.getItem(LISTENING_KEY);
+      // Anything but one of the three answers is "not said".
+      if (isListening(heard)) savedListening = heard;
     } catch {
       /* private mode — fall back to the default */
     }
     setQualityId(saved);
     setFrameRate(savedFps);
-    startPreview(mm, saved, savedFps);
+    setListening(savedListening);
+    startPreview(mm, saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
     };
   }, []);
 
-  async function reacquire(nextMic: string, nextCam: string, nextQuality: string, nextFrameRate: number) {
+  async function reacquire(
+    nextMic: string,
+    nextCam: string,
+    nextQuality: string,
+    nextFrameRate: number,
+    nextListening: Listening | '' = listening
+  ) {
     const mm = mmRef.current;
     if (!mm) return;
     const old = stream;
+    const echo = nextListening === 'speakers-ec';
+    // Echo cancellation belongs to the open microphone, and a browser can give
+    // a second capture of it the processing of the first. So for this one
+    // change the microphone is let go before it is asked for; the camera stays.
+    const released = echo !== (listening === 'speakers-ec');
+    if (released) {
+      old?.getAudioTracks().forEach((t) => t.stop());
+      // A preview whose microphone is stopped must not be joined. Taking it
+      // down turns Join and the question off until the new one is open.
+      setStream(null);
+    }
     try {
       // Acquire FIRST; only stop the old stream once it succeeds, so a failed
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
-      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate));
+      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
       old?.getTracks().forEach((t) => t.stop());
       mm.setAudioEnabled(micOn);
       mm.setVideoEnabled(camOn);
@@ -371,14 +404,26 @@ export function Lobby({
       setCamId(nextCam);
       setQualityId(nextQuality);
       setFrameRate(nextFrameRate);
+      setListening(nextListening);
       setActual(describeTrack(s.getVideoTracks()[0]));
       try {
         localStorage.setItem(QUALITY_KEY, nextQuality);
         localStorage.setItem(FRAME_RATE_KEY, String(nextFrameRate));
+        localStorage.setItem(LISTENING_KEY, nextListening);
       } catch {
         /* private mode — the choice just doesn't persist */
       }
     } catch (e) {
+      if (released) {
+        // Its microphone is gone, so there is no preview to go back to. Try
+        // again opens both with their tracks on, so the two buttons are set
+        // to say so.
+        old?.getTracks().forEach((t) => t.stop());
+        setMicOn(true);
+        setCamOn(true);
+        setPreviewError(previewProblem(e));
+        return;
+      }
       setError(e instanceof Error ? e.message : 'Could not switch device.');
     }
   }
@@ -405,6 +450,22 @@ export function Lobby({
     setStereo(on);
     try {
       localStorage.setItem(STEREO_KEY, on ? '1' : '0');
+    } catch {
+      /* private mode — the choice just doesn't persist */
+    }
+  }
+
+  function changeListening(value: string) {
+    const next: Listening | '' = isListening(value) ? value : '';
+    // Echo cancellation is a capture setting, so only that change opens the
+    // microphone again; the other answers change nothing that is captured.
+    if ((next === 'speakers-ec') !== (listening === 'speakers-ec')) {
+      void reacquire(micId, camId, qualityId, frameRate, next);
+      return;
+    }
+    setListening(next);
+    try {
+      localStorage.setItem(LISTENING_KEY, next);
     } catch {
       /* private mode — the choice just doesn't persist */
     }
@@ -610,6 +671,12 @@ export function Lobby({
   const mic = stream?.getAudioTracks()[0];
   const canStereo = isPcmCaptureSupported() && recordedChannels(mic, true) === 2;
   const channels = recordedChannels(mic, stereo);
+  // What the microphone reports, not what was asked for: it is what the
+  // recording holds. Read as on unless it is false or missing, so a value
+  // this code does not know is never taken for raw audio.
+  const echoOn = Boolean(mic?.getSettings?.().echoCancellation);
+  const shownListening: Listening | '' =
+    listening === 'speakers-ec' && stream && !echoOn ? 'speakers' : listening;
   const recordingNotice = !isRecordingSupported()
     ? isHost
       ? 'Recording needs a Chromium browser (Chrome, Edge; Brave works as host only after enabling brave://flags/#file-system-access-api). The live call still works — switch browser to record.'
@@ -670,7 +737,7 @@ export function Lobby({
                     <button
                       type="button"
                       onClick={() => {
-                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate);
+                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -715,6 +782,31 @@ export function Lobby({
             }}
           >
             {nameField}
+            {/* Asked above Join, where a phone still shows it. Off until the
+                preview is up: echo cancellation is a property of the open
+                microphone, and before that there is none to open again. */}
+            <div className="flex w-full flex-col gap-1.5 text-left">
+              <label className={`${picker} min-h-11`}>
+                <select
+                  aria-label="Headphones or speakers"
+                  aria-describedby="listening-hint"
+                  value={shownListening}
+                  disabled={!stream}
+                  onChange={(e) => changeListening(e.target.value)}
+                  className={`${select} disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {(['', ...LISTENING_CHOICES] as const).map((v) => (
+                    <option key={v} value={v}>
+                      {LISTENING_LABEL[v]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/* A host is not told the host sees it: nobody is shown the host's own answer. */}
+              <p id="listening-hint" className="px-1 text-xs leading-relaxed text-[#5f6368]">
+                {[!isHost && 'The host sees your answer.', LISTENING_HINT[shownListening]].filter(Boolean).join(' ')}
+              </p>
+            </div>
             <div className="flex w-full flex-col gap-3">
               <button type="submit" disabled={!stream || !name.trim()} className={`w-full ${primaryBtn}`}>
                 Join now
@@ -1020,6 +1112,7 @@ export function Lobby({
               {isPcmCaptureSupported()
                 ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit ${channels === 2 ? 'stereo' : 'mono'} uncompressed`
                 : '(compressed)'}
+              {echoOn && ' · echo cancellation on'}
             </p>
           )}
           {otherFps !== null && (

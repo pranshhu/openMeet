@@ -261,7 +261,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   joins. `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
   (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
-  `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
+  `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
+  (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
+  `om_listening`). **Speakers, echo cancellation on** opens the microphone again with
+  `echoCancellation: true` (`micConstraints`); noise suppression and gain control stay off. For that one
+  change the microphone is stopped before it is asked for, because a browser can give a second capture of
+  an open microphone the processing of the first; the preview is taken down with it, so Join is off until
+  the new one is open, and stays down with Try again when it cannot be opened. The select shows what the
+  microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
+  asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
+  host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
   Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
   room can choose it with **Send to host**; the choice is handed to the hook on join.
@@ -837,3 +846,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   else leaves and the tab shows "Everyone else left", there is no Stop presenting on
   screen; on a computer the clip is heard until someone joins and the call is back, or
   until Leave.
+- **Echo cancellation can only be chosen in the lobby.** The call has no control for it, and
+  the host cannot switch it for a guest. A person who wants it on or off leaves and joins
+  again, which ends their part of a running take.
+- **Echo cancellation was checked with test microphones only.** No take from a person on real
+  speakers has been listened to (`MANUAL-TESTING.md`, the echo cancellation row in section 8).
+  Whether the browser still delivers two channels with it on is read from the microphone, not
+  assumed: Stereo is offered only when the microphone reports two.

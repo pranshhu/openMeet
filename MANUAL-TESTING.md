@@ -199,6 +199,8 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.21 | Do not record, after a host reload | Record with two guests, reload the host tab mid-take, join again | While "Recording was interrupted" is shown there is **no** arrow beside Record; it returns after **Resume recording** and End & save (or after **Save what was recorded**) | ☐ | |
 | 8.22 | Media board loop | Load a clip a few seconds long, press **Loop** under it, fire it, wait three times its length, then click the pad. Fire it again and press **Loop** off while it plays | It repeats and stays lit until the click, and the guest hears it repeat; with Loop off it runs to its end and stops. During a recording, one marker per fire | ☐ | |
 | 8.23 | Media board fade | Press **Fade** under a pad, fire it, click it to stop; then fire it again and click it twice | It comes in and goes out over about a second and a half and stays lit until it is silent; the second click cuts it at once. The guest hears the same | ☐ | |
+| 8.24 | Headphones or speakers | In the lobby, under the name, open **Headphones or speakers?** and pick **Listening on: speakers**; reload. Repeat on a phone about 390 px wide | The preview does not restart when it is picked; the answer is still chosen after the reload; on the phone the control is above **Join now** with its text on one line | ☐ | |
+| 8.25 | Echo cancellation | On a computer with speakers and no headphones, pick **Speakers, echo cancellation on**, join, and have a second person talk; record 30 s, End & save. Then join again with **Listening on: speakers** and repeat | With it on: the lobby line ends "· echo cancellation on", the second person does not hear themselves back, the first person's MP4 and WAV hold their own voice with little of the other, and no "microphone is silent" note appears while they only listen. Without it: the second person hears an echo and the first person's files hold both voices | ☐ | |
 
 ## 9 — Deploy
 
@@ -254,6 +256,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **Echo cancellation is chosen in the lobby.** To turn it on or off, leave the call
+  and join again.
 
 ## When something fails
 

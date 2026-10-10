@@ -114,6 +114,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- The lobby asks whether you are on headphones or speakers. On speakers you can
+  turn echo cancellation on for your own microphone; your recording is then
+  processed audio, not raw. The answer is remembered in that browser.
 
 ### Changed
 
