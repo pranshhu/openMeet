@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
+import { setSpeaker } from '@/lib/speaker';
 
 const baseProps = {
   role: 'host' as const,
@@ -341,5 +342,100 @@ describe('CallStage device menus from the keyboard', () => {
     expect(screen.queryByRole('menu')).toBeNull();
     expect(micArrow).toHaveAttribute('aria-expanded', 'false');
     expect(document.activeElement).toBe(micArrow);
+  });
+});
+
+describe('CallStage speaker picker', () => {
+  const WITH_OUTPUTS: MediaDeviceInfo[] = [
+    ...MOCK_DEVICES,
+    { deviceId: 'default', kind: 'audiooutput', label: 'Default - Speakers', groupId: 'g5', toJSON: () => ({}) },
+    { deviceId: 'out-speakers', kind: 'audiooutput', label: 'Speakers', groupId: 'g5', toJSON: () => ({}) },
+    { deviceId: 'out-headphones', kind: 'audiooutput', label: 'Headphones', groupId: 'g6', toJSON: () => ({}) },
+  ];
+  // A tile listens to its stream, so a stream handed to one is an EventTarget.
+  const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+  const shared = Object.assign(new EventTarget(), { id: 'stream-screen' }) as unknown as MediaStream;
+  const inCall = {
+    ...baseProps,
+    remoteStream: bob,
+    remotePeers: [
+      { peerId: 'p-bob', name: 'Bob', stream: bob, presence: { micOn: true, camOn: true, screenSharing: false } },
+    ],
+  };
+
+  beforeEach(() => {
+    setSpeaker('');
+    localStorage.removeItem('om_speaker');
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        enumerateDevices: vi.fn().mockResolvedValue(WITH_OUTPUTS),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    // jsdom has no setSinkId; this one records the sink on the element, as a browser does.
+    Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(function (this: HTMLMediaElement, id: string) {
+        Object.defineProperty(this, 'sinkId', { value: id, configurable: true });
+        return Promise.resolve();
+      }),
+    });
+  });
+
+  afterEach(() => {
+    delete (HTMLMediaElement.prototype as { setSinkId?: unknown }).setSinkId;
+    localStorage.removeItem('om_speaker');
+  });
+
+  async function openSpeakerSelect(): Promise<HTMLSelectElement> {
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/select microphone/i));
+    });
+    return (await screen.findByRole('combobox', { name: 'Speaker' })) as HTMLSelectElement;
+  }
+
+  it('puts the speaker choice first in the microphone menu, on the system default', async () => {
+    render(<CallStage {...inCall} />);
+    const select = await openSpeakerSelect();
+
+    expect(Array.from(select.options).map((o) => [o.value, o.text])).toEqual([
+      ['', 'System default'],
+      ['out-speakers', 'Speakers'],
+      ['out-headphones', 'Headphones'],
+    ]);
+    expect(select).toHaveValue('');
+    const menu = screen.getByRole('menu');
+    // First, so it is in sight however many microphones are listed under it.
+    expect(menu.firstElementChild).toContainElement(select);
+    // Nobody chose anything: no element was moved.
+    expect(HTMLMediaElement.prototype.setSinkId).not.toHaveBeenCalled();
+  });
+
+  it('plays everyone else, and a screen they present, through the chosen output, and remembers it', async () => {
+    const { container } = render(<CallStage {...inCall} remoteScreenStream={shared} />);
+    const select = await openSpeakerSelect();
+    fireEvent.change(select, { target: { value: 'out-headphones' } });
+
+    const videos = Array.from(container.querySelectorAll('video'));
+    const sounding = videos.filter((v) => !v.muted);
+    expect(sounding.map((v) => (v as { srcObject?: unknown }).srcObject)).toEqual(
+      expect.arrayContaining([bob, shared])
+    );
+    expect(sounding.map((v) => v.sinkId)).toEqual(sounding.map(() => 'out-headphones'));
+    // Your own tile is muted and plays nothing, so it stays where it is.
+    const silent = videos.filter((v) => v.muted);
+    expect(silent.length).toBeGreaterThan(0);
+    expect(silent.map((v) => v.sinkId)).toEqual(silent.map(() => undefined));
+    expect(select).toHaveValue('out-headphones');
+    expect(localStorage.getItem('om_speaker')).toBe('out-headphones');
+  });
+
+  it('shows the speaker chosen earlier', async () => {
+    setSpeaker('out-speakers');
+    render(<CallStage {...inCall} />);
+    expect(await openSpeakerSelect()).toHaveValue('out-speakers');
   });
 });

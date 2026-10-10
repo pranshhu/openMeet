@@ -131,6 +131,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- A speaker picker in the call: the arrow beside the mic button lists the output
+  devices, and everyone's voice and a presented screen play through the one chosen.
+  The choice is remembered per browser.
 
 ### Changed
 
