@@ -5,6 +5,7 @@ import type { Role } from '@openmeet/protocol';
 import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
 import { Logo } from './Logo';
+import { RoleLinks } from './RoleLinks';
 
 
 export function WaitingRoom({
@@ -133,7 +134,7 @@ export function WaitingRoom({
             </p>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
+          <div className="relative mt-2 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
             {isHost && (
               <button
                 type="button"
@@ -144,6 +145,7 @@ export function WaitingRoom({
                 {copied ? 'Link copied' : 'Copy invite link'}
               </button>
             )}
+            {isHost && <RoleLinks className="-ml-2" menuClassName="bottom-full left-1/2 mb-2 -translate-x-1/2" />}
             <button
               type="button"
               onClick={onLeave}
