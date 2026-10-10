@@ -12,6 +12,7 @@ export function ControlButton({
   icon,
   label,
   text,
+  shortcut,
   onClick,
   variant = 'default',
   wide = false,
@@ -21,6 +22,8 @@ export function ControlButton({
   icon: IconName;
   label: string;
   text?: string;
+  /** The key that presses this button; `Shortcuts` looks it up and the tooltip names it. */
+  shortcut?: string;
   onClick?: () => void;
   variant?: Variant;
   wide?: boolean;
@@ -45,7 +48,8 @@ export function ControlButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      title={label}
+      aria-keyshortcuts={shortcut}
+      title={shortcut ? `${label} (${shortcut})` : label}
       className={`${base} ${shape} ${skin}`}
     >
       {/* A grey button with a red dot, so Record never reads as a twin of the red Leave button. */}

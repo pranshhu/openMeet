@@ -136,6 +136,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- Keyboard shortcuts in the call: **A** switches the microphone, **V** the camera,
+  **C** opens chat and **T** the teleprompter. The **?** button in the top bar, or
+  the **?** key, lists them. No key does anything while you type in a field.
+- **Alt+R** presses Record for the host and **Alt+S** presses End & save while a take
+  runs (Option on a Mac). Neither does anything while its button is greyed out or
+  not on screen.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed

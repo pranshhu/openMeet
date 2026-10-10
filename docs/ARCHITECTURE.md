@@ -349,6 +349,18 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   board pad's file name can be longer) and places the host's own note at `at`, the moment its
   field opened, because typing takes seconds; nothing of `at` is sent, so a guest's note is
   placed when it reaches the host, like every relayed marker.
+- **`components/Shortcuts.tsx`** is the call's keyboard and the list of its keys, mounted last in
+  `CallStage`'s status bar. A key is not wired to an action: a bare letter typed outside a field
+  presses the button that carries it in `aria-keyshortcuts` (`ControlButton`'s `shortcut`: **A**
+  microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not on
+  screen has no key; one that is in the document but not displayed is skipped (`checkVisibility`). A
+  held key, and a letter pressed with Shift, Ctrl or Cmd, is left alone. The **?** button (from `sm`
+  up) and the **?** key open the list. **M** (marker) keeps its own handler in `CallStage` and is
+  only listed. **Alt+R** is carried by Record and **Alt+S** by the host's End & save: two chords, so
+  the key that starts a take can never end one, each under whatever keeps its button off or away.
+  With Alt held the letter is read from `keyCode`, because Option+R types ® on a Mac: `keyCode` is
+  the letter the layout has on that key, or the key's place on a layout without Latin letters.
+  `code` is the place alone, and Colemak has R where QWERTY has S.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -990,3 +1002,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **The shortcut keys are fixed, cannot be switched off, and exist only on the call screen.**
+  A bare letter is read as the keyboard layout types it, so a layout without Latin letters has
+  no A, V, C, T or M. A letter typed while no field has focus is a key press: text typed
+  after clicking outside the chat field switches the microphone and the camera. No key works
+  while any input has focus, a teleprompter slider included. The waiting room has no keys.
+  Below 640 px the **?** button and its list are not shown, and a key that presses a button
+  does nothing while chat or the summary covers the control bar.
+- **On a keyboard without Latin letters, Alt+R and Alt+S are the keys where QWERTY has R and
+  S.** A desktop or a browser that takes one of the chords for itself never passes it to the
+  page. A guest's "Stop and save" has no key.
+- **Alt+R and Alt+S have not been run on a Mac.** They rely on Option+R and Option+S reaching
+  the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.32 and 8.33).

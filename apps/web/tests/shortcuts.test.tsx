@@ -1,0 +1,437 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { CallStage } from '@/components/CallStage';
+import { ControlButton } from '@/components/ControlButton';
+import { Shortcuts } from '@/components/Shortcuts';
+
+const callProps = {
+  role: 'host' as const,
+  phase: 'in-call' as const,
+  localStream: null,
+  remoteStream: null,
+  remotePeers: [],
+  remoteScreenStream: null,
+  localScreenStream: null,
+  localName: 'Alice',
+  peerName: 'Bob',
+  screenSharing: false,
+  canRecord: true,
+  roomRecording: false,
+  recordBlocked: false,
+  messages: [],
+  peerPresence: null,
+  screenShareSupported: true,
+  backupUrl: null,
+  wavBackupUrl: null,
+  syncReportUrl: null,
+  recordingError: null,
+  recordUnavailableReason: null,
+  onToggleMic: vi.fn(),
+  onToggleCam: vi.fn(),
+  onRecord: vi.fn(),
+  onEnd: vi.fn(),
+  onLeave: vi.fn(),
+  onSendChat: vi.fn(),
+  slug: 'abc-defg-hij',
+  onMark: vi.fn(),
+  markerCount: 0,
+  chaptersUrl: null,
+  summary: null,
+  takes: [],
+  onNewTake: vi.fn(),
+  onDiscardTake: vi.fn(),
+  onOpenMediaBoard: vi.fn(() => null),
+  onToggleScreen: vi.fn(),
+  capabilities: {},
+};
+
+/** One key press, on the page itself unless a field is given. False when the press was taken. */
+const press = (key: string, init: KeyboardEventInit = {}, target: Element = document.body) =>
+  fireEvent.keyDown(target, { key, ...init });
+
+describe('Shortcuts', () => {
+  it('presses the button that carries the letter, for the bare letter only', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="mic" label="Turn off microphone" shortcut="A" onClick={onClick} />
+      </>
+    );
+    // Taken, so the letter is not typed into whatever the button opens.
+    expect(press('a')).toBe(false);
+    press('A'); // Caps Lock
+    expect(onClick).toHaveBeenCalledTimes(2);
+
+    press('a', { repeat: true });
+    press('a', { ctrlKey: true });
+    press('a', { metaKey: true });
+    press('a', { altKey: true, keyCode: 65 });
+    press('A', { shiftKey: true });
+    // A letter no button carries is left to the browser.
+    expect(press('x')).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes letters only, so no key can break the lookup', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="mic" label="One" shortcut="1" onClick={onClick} />
+      </>
+    );
+    press('1');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('does nothing while the person types in a field', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="mic" label="Turn off microphone" shortcut="A" onClick={onClick} />
+        <input aria-label="Message" />
+        <textarea aria-label="Script" />
+        <select aria-label="Device">
+          <option>Built-in</option>
+        </select>
+        <div aria-label="Note" contentEditable suppressContentEditableWarning>
+          note
+        </div>
+      </>
+    );
+    for (const field of ['Message', 'Script', 'Device', 'Note']) {
+      press('a', {}, screen.getByLabelText(field));
+      press('?', { shiftKey: true }, screen.getByLabelText(field));
+    }
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+  });
+
+  it('cannot press a button that is disabled', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="record" label="Start recording" shortcut="A" disabled onClick={onClick} />
+      </>
+    );
+    press('a');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('cannot press a button that is not shown', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="mic" label="Turn off microphone" shortcut="A" onClick={onClick} />
+      </>
+    );
+    // jsdom has no layout, so the browser's answer is given here: a narrow
+    // window hides the control bar while chat or the summary covers the stage.
+    screen.getByRole('button', { name: 'Turn off microphone' }).checkVisibility = () => false;
+    // Not taken either: nothing was pressed, so the key is left to the browser.
+    expect(press('a')).toBe(true);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('lists the keys behind its button and the ? key, and Escape puts the list away', () => {
+    render(<Shortcuts />);
+    const button = screen.getByRole('button', { name: 'Keyboard shortcuts' });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    for (const [keys, does] of [
+      ['A', 'Microphone on or off'],
+      ['V', 'Camera on or off'],
+      ['C', 'Chat'],
+      ['T', 'Teleprompter'],
+      ['M', 'Marker, while recording'],
+      ['?', 'This list'],
+    ] as const) {
+      expect(screen.getByText(does).previousElementSibling).toHaveTextContent(keys);
+    }
+    expect(screen.getByText(/Keys do nothing while you type in a field/)).toBeInTheDocument();
+
+    press('Escape');
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
+    press('?', { shiftKey: true });
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+  });
+
+  it('does not open the list for a held ?, or for ? with Ctrl or Cmd', () => {
+    render(<Shortcuts />);
+    press('?', { shiftKey: true, repeat: true });
+    press('?', { shiftKey: true, ctrlKey: true });
+    press('?', { shiftKey: true, metaKey: true });
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
+  });
+
+  it('keeps the list out of what the status bar announces', () => {
+    render(<Shortcuts />);
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(screen.getByText('Keyboard shortcuts').parentElement).toHaveAttribute('aria-live', 'off');
+  });
+});
+
+describe('CallStage: shortcut keys', () => {
+  it('A and V press the microphone and camera buttons', () => {
+    const onToggleMic = vi.fn();
+    const onToggleCam = vi.fn();
+    render(<CallStage {...callProps} onToggleMic={onToggleMic} onToggleCam={onToggleCam} />);
+
+    press('a');
+    expect(onToggleMic).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole('button', { name: 'Turn on microphone' })).toBeInTheDocument();
+    press('a');
+    expect(onToggleMic).toHaveBeenLastCalledWith(true);
+
+    press('v');
+    expect(onToggleCam).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole('button', { name: 'Turn on camera' })).toBeInTheDocument();
+  });
+
+  it('C opens and closes chat, and T shows and hides the teleprompter', () => {
+    render(<CallStage {...callProps} />);
+    press('c');
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+    press('c');
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+
+    press('t');
+    expect(screen.getByRole('button', { name: 'Hide teleprompter' })).toBeInTheDocument();
+    press('t');
+    expect(screen.getByRole('button', { name: 'Show teleprompter' })).toBeInTheDocument();
+  });
+
+  it('leaves the chat field and the teleprompter script alone', () => {
+    const onToggleMic = vi.fn();
+    render(<CallStage {...callProps} onToggleMic={onToggleMic} />);
+    press('c');
+    press('t');
+    for (const field of ['Message', 'Teleprompter script']) {
+      for (const key of ['a', 'c', 't']) press(key, {}, screen.getByLabelText(field));
+    }
+    expect(onToggleMic).not.toHaveBeenCalled();
+    expect(screen.getByTestId('chat-column')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hide teleprompter' })).toBeInTheDocument();
+  });
+
+  it('names each key in its button’s tooltip and leaves the accessible name as it was', () => {
+    render(<CallStage {...callProps} />);
+    for (const [name, key] of [
+      ['Turn off microphone', 'A'],
+      ['Turn off camera', 'V'],
+      ['Chat', 'C'],
+      ['Show teleprompter', 'T'],
+    ] as const) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toHaveAttribute('aria-keyshortcuts', key);
+      expect(button).toHaveAttribute('title', `${name} (${key})`);
+    }
+    const leave = screen.getByRole('button', { name: 'Leave call' });
+    expect(leave).toHaveAttribute('title', 'Leave call');
+    expect(leave).not.toHaveAttribute('aria-keyshortcuts');
+  });
+
+  it('gives no microphone or camera key to a producer or a present-only device', () => {
+    const onToggleMic = vi.fn();
+    const onToggleCam = vi.fn();
+    const { unmount } = render(
+      <CallStage {...callProps} role="producer" canRecord={false} onToggleMic={onToggleMic} onToggleCam={onToggleCam} />
+    );
+    expect(press('a')).toBe(true);
+    press('v');
+    unmount();
+    render(<CallStage {...callProps} companion onToggleMic={onToggleMic} onToggleCam={onToggleCam} />);
+    press('a');
+    press('v');
+    press('t');
+    expect(onToggleMic).not.toHaveBeenCalled();
+    expect(onToggleCam).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Hide teleprompter' })).toBeNull();
+  });
+
+  it('offers the list from the status bar', () => {
+    render(<CallStage {...callProps} />);
+    const button = screen.getByRole('button', { name: 'Keyboard shortcuts' });
+    expect(screen.getByTestId('status-bar').contains(button)).toBe(true);
+    // A phone's top bar has no room for it.
+    expect(button.parentElement).toHaveClass('hidden', 'sm:block');
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Camera on or off')).toBeInTheDocument();
+  });
+
+  it('still drops one marker for M, not two', () => {
+    const onMark = vi.fn();
+    render(<CallStage {...callProps} phase="recording" onMark={onMark} />);
+    press('m');
+    expect(onMark).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
+  /** Alt with one letter, as a keyboard that types the letter itself sends it. */
+  const alt = (letter: 'r' | 's', init: KeyboardEventInit = {}, target: Element = document.body) =>
+    press(
+      letter,
+      { code: `Key${letter.toUpperCase()}`, keyCode: letter.toUpperCase().charCodeAt(0), altKey: true, ...init },
+      target
+    );
+
+  it('Alt+R presses Record for the host, and Alt+S presses End & save once the take runs', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    expect(screen.getByRole('button', { name: 'Start recording' })).toHaveAttribute(
+      'title',
+      'Start recording (Alt+R)'
+    );
+    // No take runs: nothing carries Alt+S, so it is left to the browser.
+    expect(alt('s')).toBe(true);
+    // Taken, so the browser does nothing else with the chord.
+    expect(alt('r')).toBe(false);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    // The key that starts a take can never end it.
+    alt('r');
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'End & save recording' })).toHaveAttribute(
+      'title',
+      'End & save recording (Alt+S)'
+    );
+    expect(alt('s')).toBe(false);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the letter from the key code when Option has turned it into a symbol', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    press('®', { code: 'KeyR', keyCode: 82, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    press('ß', { code: 'KeyS', keyCode: 83, altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('is those chords alone: a bare letter, Shift, Ctrl, Cmd and a held chord press nothing', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const others = (letter: 'r' | 's') => {
+      const code = `Key${letter.toUpperCase()}`;
+      press(letter, { code });
+      press(letter.toUpperCase(), { code, shiftKey: true });
+      alt(letter, { shiftKey: true });
+      alt(letter, { ctrlKey: true });
+      alt(letter, { metaKey: true });
+      alt(letter, { repeat: true });
+    };
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    others('r');
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    others('s');
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('cannot start a take while Record is greyed out, or from a field', () => {
+    const onRecord = vi.fn();
+    const { rerender } = render(
+      <CallStage {...callProps} onRecord={onRecord} countdownEndsAt={Date.now() + 3000} />
+    );
+    alt('r');
+    rerender(<CallStage {...callProps} onRecord={onRecord} recoveryBusy />);
+    alt('r');
+    rerender(<CallStage {...callProps} onRecord={onRecord} />);
+    press('c');
+    alt('r', {}, screen.getByLabelText('Message'));
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a guest, and nothing while the take is being saved', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(
+      <CallStage {...callProps} role="guest" canRecord={false} onRecord={onRecord} onEnd={onEnd} />
+    );
+    // Not taken: with no button to press, the chord is left to the browser.
+    expect(alt('r')).toBe(true);
+    rerender(
+      <CallStage
+        {...callProps}
+        role="guest"
+        canRecord={false}
+        phase="recording"
+        roomRecording
+        onRecord={onRecord}
+        onEnd={onEnd}
+      />
+    );
+    alt('r');
+    alt('s');
+    rerender(<CallStage {...callProps} phase="finalizing" onRecord={onRecord} onEnd={onEnd} />);
+    alt('r');
+    alt('s');
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('finds a chord by the letter the keyboard has on the key, not by the key’s place', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    // Colemak has R on the key QWERTY calls S; on a Mac, Option types a symbol there.
+    press('r', { code: 'KeyS', keyCode: 82, altKey: true });
+    press('®', { code: 'KeyS', keyCode: 82, altKey: true });
+    // A keyboard without Latin letters: the browser reports the letter of the key's place.
+    press('к', { code: 'KeyR', keyCode: 82, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(3);
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    // The key that starts a take never ends one, wherever the layout puts it.
+    press('r', { code: 'KeyS', keyCode: 82, altKey: true });
+    press('®', { code: 'KeyS', keyCode: 82, altKey: true });
+    expect(onEnd).not.toHaveBeenCalled();
+    // Colemak's S, on the key QWERTY calls D.
+    press('ß', { code: 'KeyD', keyCode: 83, altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not take a function key for a letter', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    // F3 has key code 114, a lower-case r, and F4 has 115, a lower-case s.
+    press('F3', { code: 'F3', keyCode: 114, altKey: true });
+    press('r', { code: 'KeyR', keyCode: 82, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    press('F4', { code: 'F4', keyCode: 115, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('lists both chords, and Alt with ? is not the key that opens the list', () => {
+    render(<Shortcuts />);
+    press('?', { shiftKey: true, altKey: true });
+    expect(screen.queryByText('Keyboard shortcuts')).toBeNull();
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Record (host)').previousElementSibling).toHaveTextContent('Alt+R');
+    expect(screen.getByText('End & save (host)').previousElementSibling).toHaveTextContent('Alt+S');
+    expect(screen.getByText(/On a Mac, Alt is the Option key/)).toBeInTheDocument();
+  });
+});
