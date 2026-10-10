@@ -485,6 +485,22 @@ export class Room implements DurableObject {
           ...(p.displayName ? { fromName: p.displayName } : {}),
         });
         break;
+      case 'private-message': {
+        // One person's message for one other person in the room. Unlike the
+        // relays around it, it goes to that socket alone and never falls
+        // back to the room: a `to` that is not another joined peer's id
+        // matches nobody, and the message is dropped.
+        const target = this.joinedPeers().find(({ ws: tws, p: pp }) => tws !== ws && pp.peerId === parsed.to);
+        if (!target) break;
+        this.send(target.ws, {
+          type: 'private-message',
+          text: parsed.text,
+          from: p.role,
+          fromPeerId: p.peerId,
+          ...(p.displayName ? { fromName: p.displayName } : {}),
+        });
+        break;
+      }
       case 'presence':
         this.broadcastExcept(ws, {
           type: 'presence',

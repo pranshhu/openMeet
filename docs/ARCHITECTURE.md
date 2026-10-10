@@ -54,8 +54,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ```
 
 - Worker = stateless REST. `Room` DO = per-slug WS hub; **dumb relay** (never inspects SDP/ICE;
-  relays each msg to every other peer — SDP/ICE carrying `to` go to that one peer only — stamped
-  with `from: Role`, `fromPeerId`, and `fromName` on chat/presence/marker).
+  relays each msg to every other peer — SDP/ICE carrying `to`, and every `private-message`, go to
+  that one peer only — stamped with `from: Role`, `fromPeerId`, and `fromName` on
+  chat/presence/marker/private-message).
 - D1 holds **metadata only** (rooms, sessions, participants, recordings) — never bytes.
 - TURN bytes (symmetric NAT) are SRTP/SCTP-encrypted, opaque to operators.
 
@@ -64,13 +65,17 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (16 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
+  the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
+  `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
+  that does not know it drops it instead of sending it to everyone.
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
@@ -185,6 +190,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
+- `private-message` goes to **one socket**: the joined peer whose id is `to`, never the sender and
+  never the room. A `to` that names nobody else in the room (someone who left, the sender itself,
+  a socket that has not joined, a value that is not an id) matches no peer and the message is
+  dropped; it never falls back to `broadcastExcept`. Any joined peer may write to any other. The
+  text is passed on as sent, like `chat`; nothing is stored and the sender is not answered.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
   except one the host set as not recorded), but **persisted to D1 only by the host**
   (`insertRecording`, capped at 256 rows per session).
