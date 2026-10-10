@@ -115,8 +115,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
 - The host can copy the **producer link** and the **Present-only link** from an
-  arrow beside **Copy invite link** in the waiting room, each with a line saying
-  what it is, instead of adding `?producer=1` or `?present=1` by hand.
+  arrow beside **Copy invite link**, in the waiting room and in the call, each
+  with a line saying what it is, instead of adding `?producer=1` or `?present=1`
+  by hand.
 
 ### Changed
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { RoleLinks } from '@/components/RoleLinks';
 import { WaitingRoom } from '@/components/WaitingRoom';
+import { CallStage } from '@/components/CallStage';
 
 const ARROW = 'Other links';
 
@@ -131,6 +132,77 @@ describe('WaitingRoom: role links', () => {
 
     unmount();
     render(<WaitingRoom role="guest" localStream={null} localName="Guest" onLeave={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+  });
+});
+
+// What tests/call-stage.test.tsx renders a call with.
+const callProps = {
+  role: 'host' as const,
+  phase: 'in-call' as const,
+  localStream: null,
+  remoteStream: null,
+  remotePeers: [],
+  remoteScreenStream: null,
+  localScreenStream: null,
+  localName: 'Alice',
+  peerName: 'Bob',
+  screenSharing: false,
+  canRecord: true,
+  roomRecording: false,
+  recordBlocked: false,
+  messages: [],
+  peerPresence: null,
+  screenShareSupported: true,
+  backupUrl: null,
+  wavBackupUrl: null,
+  syncReportUrl: null,
+  recordingError: null,
+  recordUnavailableReason: null,
+  onToggleMic: vi.fn(),
+  onToggleCam: vi.fn(),
+  onRecord: vi.fn(),
+  onEnd: vi.fn(),
+  onLeave: vi.fn(),
+  onSendChat: vi.fn(),
+  slug: 'abc-defg-hij',
+  onMark: vi.fn(),
+  markerCount: 0,
+  chaptersUrl: null,
+  summary: null,
+  takes: [],
+  onNewTake: vi.fn(),
+  onDiscardTake: vi.fn(),
+  onOpenMediaBoard: vi.fn(() => null),
+  onToggleScreen: vi.fn(),
+  capabilities: {},
+};
+
+describe('CallStage: role links', () => {
+  it('gives the host the two other links in the status bar, beside Copy invite link, while no take runs', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    withClipboard(writeText);
+    window.history.pushState({}, '', '/r/abc-defg-hij/');
+    const { rerender } = render(<CallStage {...callProps} />);
+    const arrow = screen.getByRole('button', { name: ARROW });
+    expect(screen.getByTestId('status-bar').contains(arrow)).toBe(true);
+    expect(screen.getByRole('button', { name: 'Copy invite link' }).nextElementSibling).toBe(
+      arrow.parentElement
+    );
+
+    fireEvent.click(arrow);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Copy Present-only link/ }));
+    });
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/r/abc-defg-hij/?present=1`);
+
+    // A take hides Copy invite link, and the arrow with it.
+    rerender(<CallStage {...callProps} phase="recording" />);
+    expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+  });
+
+  it('offers them to nobody but the host', () => {
+    render(<CallStage {...callProps} role="guest" canRecord={false} />);
     expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
   });
 });
