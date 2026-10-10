@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
+import { startHostRecording } from '@/hooks/recording-controller';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 
@@ -74,6 +75,7 @@ vi.mock('@/hooks/recording-controller', async () => {
 const GUEST = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Asha' };
 const HOST_FILE = 'host_rec-host-1.mp4';
 const GUEST_FILE = 'guest_rec-host-1.mp4';
+const SECOND_GUEST_FILE = 'guest2_rec-host-1.mp4';
 
 function emit(type: string, payload: any) {
   for (const handler of signalHandlers[type] ?? []) handler(payload);
@@ -184,5 +186,62 @@ describe('useRoom: echo cancellation in the take’s notes', () => {
     const details = await takeDetails(result);
     expect(Object.keys(details)).toContain(GUEST_FILE);
     expect(details[GUEST_FILE]).toBeUndefined();
+  });
+
+  it('still marks a guest after 63 others have said it', async () => {
+    const result = await hosting();
+    says('p-guest', 'speakers-ec');
+    for (let i = 0; i < 63; i++) says(`other-${i}`, 'speakers-ec');
+    const details = await takeDetails(result);
+    expect(details[GUEST_FILE]).toBe('echo cancellation on');
+  });
+
+  it('does not count a message whose peer id is not text', async () => {
+    const result = await hosting();
+    says('p-guest', 'speakers-ec');
+    for (let i = 0; i < 64; i++) says(i as unknown as string, 'speakers-ec');
+    const details = await takeDetails(result);
+    expect(details[GUEST_FILE]).toBe('echo cancellation on');
+  });
+
+  // A browser may name the kind of cancellation instead of saying true.
+  it("marks the host's own file when its microphone reports echo cancellation as a word", async () => {
+    const result = await hosting('all' as unknown as boolean);
+    const details = await takeDetails(result);
+    expect(details[HOST_FILE]).toBe('echo cancellation on');
+  });
+
+  it('marks only the guest who said it when two are recorded', async () => {
+    const received = { senderSha256: 'abc', receivedFinalized: true, isAbandoned: false, bytesWritten: 1 };
+    vi.mocked(startHostRecording).mockImplementationOnce(
+      async () =>
+        ({
+          recordingId: 'rec-host-1',
+          hostStartMs: 1_000_000,
+          hostWriter: { fileName: HOST_FILE, size: 1 },
+          receiver: { ...received, fileName: GUEST_FILE, digestHex: async () => 'abc' },
+          guestSlots: new Map([['key-2', 1]]),
+          guestReceivers: new Map([
+            [
+              'key-2:mp4',
+              {
+                receiver: { ...received, digestHex: async () => 'abc' },
+                writer: { fileName: SECOND_GUEST_FILE, size: 1 },
+              },
+            ],
+          ]),
+          slotPeerIds: new Map([
+            [0, 'p-guest'],
+            [1, 'p-second'],
+          ]),
+        }) as never
+    );
+    const result = await hosting();
+    says('p-guest', 'speakers-ec');
+    says('p-second', 'headphones');
+    const details = await takeDetails(result);
+    expect(details[GUEST_FILE]).toBe('echo cancellation on');
+    expect(Object.keys(details)).toContain(SECOND_GUEST_FILE);
+    expect(details[SECOND_GUEST_FILE]).toBeUndefined();
   });
 });

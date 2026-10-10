@@ -101,4 +101,11 @@ describe('SwitchableMedia: echo cancellation follows the lobby microphone', () =
     vi.unstubAllGlobals();
     expect(await switchedTo(mic('mic-1'), true)).toMatchObject({ echoCancellation: false });
   });
+
+  // A browser may name the kind of cancellation instead of saying true.
+  it('goes by a lobby microphone that reports echo cancellation as a word', async () => {
+    expect(await switchedTo(mic('mic-1', undefined, 'all' as unknown as boolean), true)).toMatchObject({
+      echoCancellation: true,
+    });
+  });
 });

@@ -532,7 +532,8 @@ export function Lobby({
   // The selects drop their native outline, so the box around each shows focus.
   const picker =
     'flex min-w-0 items-center gap-2 rounded-lg border border-[#dadce0] px-3 py-2 text-base text-[#5f6368] focus-within:border-[#0b57d0] focus-within:ring-1 focus-within:ring-[#0b57d0] sm:text-sm';
-  const select = 'w-full min-w-0 bg-transparent text-[#202124] outline-none';
+  const select =
+    'w-full min-w-0 bg-transparent text-[#202124] outline-none disabled:cursor-not-allowed disabled:opacity-50';
 
   const nameField = (
     <>
@@ -794,7 +795,7 @@ export function Lobby({
                   value={shownListening}
                   disabled={!stream}
                   onChange={(e) => changeListening(e.target.value)}
-                  className={`${select} disabled:cursor-not-allowed disabled:opacity-50`}
+                  className={select}
                 >
                   {(['', ...LISTENING_CHOICES] as const).map((v) => (
                     <option key={v} value={v}>
@@ -1016,6 +1017,7 @@ export function Lobby({
                     aria-label="Camera"
                     title={devices.videoInputs.find((d) => d.deviceId === camId)?.label}
                     value={camId}
+                    disabled={!stream}
                     onChange={(e) => void changeDevice('cam', e.target.value)}
                     className={select}
                   >
@@ -1034,6 +1036,7 @@ export function Lobby({
                     aria-label="Microphone"
                     title={devices.audioInputs.find((d) => d.deviceId === micId)?.label}
                     value={micId}
+                    disabled={!stream}
                     onChange={(e) => void changeDevice('mic', e.target.value)}
                     className={select}
                   >
@@ -1064,6 +1067,7 @@ export function Lobby({
                 <select
                   aria-label="Recording quality"
                   value={shownQuality}
+                  disabled={!stream}
                   onChange={(e) => void reacquire(micId, camId, e.target.value, frameRate)}
                   className={select}
                 >
@@ -1094,6 +1098,7 @@ export function Lobby({
                 <select
                   aria-label="Frame rate"
                   value={shownFrameRate}
+                  disabled={!stream}
                   onChange={(e) => void reacquire(micId, camId, qualityId, Number(e.target.value))}
                   className={select}
                 >
