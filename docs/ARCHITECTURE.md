@@ -272,6 +272,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save
   to folder and Delete; both are disabled while a save runs, and a save that left something out
   says so in an alert and keeps the row.
+  `?check=1` on the room link (`isCheckLink` in `RoomView`; the host's **Copy check link** in the
+  lobby builds it) renders the same `Lobby` with `checkOnly`: preview, pickers and readiness
+  panel, with the join form hidden and the backup and unsaved-recording lists left out, so a
+  guest can test a device ahead of the call. It never calls `join`. A link that also carries
+  `producer=1` or `present=1` is that link, and `check` is ignored.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
@@ -841,3 +846,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   else leaves and the tab shows "Everyone else left", there is no Stop presenting on
   screen; on a computer the clip is heard until someone joins and the call is back, or
   until Leave.
+- **A check link works only while its room does, and it is the invite link.** The checks
+  run against the room, so an expired room shows "Room not found or expired"; opening a
+  check link joins nothing and so does not extend the room's 30 days. Without `?check=1`
+  it is the invite link, so it is exactly as private. The page starts on the browser's
+  default camera and microphone, like the lobby, and no device choice is remembered for
+  the day of the call.

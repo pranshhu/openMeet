@@ -68,6 +68,9 @@ retention policy to trust, because there's nothing retained.
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - Multiple takes in one session, without a second folder prompt
+- A **check link** for each room (**Copy check link** in the host's lobby): a guest
+  tests camera, microphone and connection days ahead, on the green room's own checks,
+  without joining
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - **Test your mic** in the green room: five seconds of your own microphone, played
   back to you and then deleted

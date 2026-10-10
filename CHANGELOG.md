@@ -117,6 +117,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Test your mic** in the lobby's readiness panel: five seconds of your own
   microphone are recorded, played back to you and deleted. The clip never leaves
   the browser.
+- A **check link** for a room (**Copy check link** in the host's lobby, or `?check=1`
+  on the invite link): a guest tests camera, microphone and connection ahead of the
+  call, on the lobby's own checks, without joining the room.
 
 ### Changed
 
