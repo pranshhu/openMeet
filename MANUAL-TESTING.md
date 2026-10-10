@@ -179,6 +179,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
 | 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
 | 7.11 | One side reconnects | With a call running, move the guest's computer from Wi-Fi to a phone hotspot (or back) | The call is back within a few seconds on both sides, one tile per person, and no "Negotiation failed" message | ☐ | |
+| 7.12 | A guest joins after the host's connection dropped mid-take | In the host's lobby, before joining, run in the DevTools console: `const W = WebSocket; window.WebSocket = class extends W { constructor(...a) { super(...a); if (String(a[0]).includes('/ws/r/')) window.__ws = this; } };` Join, start a take, then run `__ws.close()` in the console. A few seconds later a guest opens the invite link and joins | The host's take never stops. The guest gets the red notice and the REC pill and is recorded: after **End & save** the guest's files are in the folder and read complete | ☐ | |
 
 ## 8 — Extras
 

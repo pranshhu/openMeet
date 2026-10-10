@@ -268,6 +268,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take in which no guest was recorded no longer leaves an empty
   `guest_<id>.mp4` in the recording folder, or warnings about it in the
   summary.
+- A guest who joined after the host's connection to the room had dropped and come back
+  during a take was not recorded, and was not told the call was being recorded. The
+  host's page says the take is still running as soon as it is back.
 
 ### Security
 

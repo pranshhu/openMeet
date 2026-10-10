@@ -628,10 +628,13 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
    sends `peer-left` for the sockets it lost — and every connection it lists is rebuilt, because the
    far end closed its side when this tab's socket dropped and waits for a fresh offer; only the
-   connections that message opened are negotiated on it. When sharing screen, a reconnect finishes
-   the old screen segment and starts a new numbered segment on the rebuilt connection, with each
-   segment backed up locally in OPFS. Host rebinds new channel to existing receiver, found by a
-   stable key (see below), not by the DO's fresh-per-socket peerId.
+   connections that message opened are negotiated on it. The Room drops its `recording` flag with
+   the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
+   runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
+   the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
+   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
+   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
+   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -933,3 +936,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **The done screen has no Copy invite link.** The summary's main button records the next
   take whether or not anyone else is in the room; the address in the address bar is the
   invite link.
+- **A guest who joined a running take a moment before the host's connection came back can
+  get two files.** It learns the take's id from the host's first acknowledgement; announced
+  again before that, the take looks new to it, so it ends its file and starts another.
+- **While the host's connection to the room is down, a guest who joins is not recorded.**
+  The Room has no host to ask; the guest is started when the host is back.

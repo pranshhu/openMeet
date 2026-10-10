@@ -1549,6 +1549,21 @@ export function useRoom(slug: string) {
           notRecorded: m.notRecorded === true,
         }));
         sendPresence();
+        // The Room drops its recording flag with the host's socket, and tells a
+        // host that comes back `recording: false` while the files are still
+        // open. A guest who joined from then on would never be started.
+        // Announced again under its own id the take is the Room's again: a
+        // guest already in it ignores the repeat, and the Room keeps the row
+        // it has. Not while the take is being saved: the stop has gone out.
+        const mine = recordingRef.current;
+        if (m.role === 'host' && mine && !m.recording && phaseRef.current === 'recording') {
+          signal.send({
+            type: 'recording-started',
+            recordingId: mine.recordingId,
+            kind: 'camera',
+            filename: `host_${mine.recordingId}.mp4`,
+          });
+        }
         // Joined mid-recording (rejoin after a crash, or just arriving late):
         // the recording-started broadcast went out before this socket existed,
         // so catch up from the room state instead of sitting there unrecorded.
