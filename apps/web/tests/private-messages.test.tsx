@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ChatPanel } from '@/components/ChatPanel';
+import { ChatPanel, chatSenderLabel } from '@/components/ChatPanel';
 
 describe('ChatPanel: a private line', () => {
   it('says who it is between, on the recipient’s screen and on the sender’s', () => {
@@ -18,19 +18,22 @@ describe('ChatPanel: a private line', () => {
         onClose={vi.fn()}
       />
     );
-    expect(screen.getByText('Pat, privately to you')).toBeInTheDocument();
-    expect(screen.getByText('Guest, privately to you')).toBeInTheDocument();
-    expect(screen.getByText('You, privately to Pat')).toBeInTheDocument();
-    expect(screen.getByText('You, privately to one person')).toBeInTheDocument();
+    // The mark is an element of its own; the line is the mark, then the bare name.
+    const line = (mark: string) => screen.getByText(mark).parentElement?.textContent;
+    expect(screen.getByText('Private · from a producer')).toHaveAttribute('data-private-mark');
+    expect(line('Private · from a producer')).toBe('Private · from a producerPat');
+    expect(line('Private · from a guest')).toBe('Private · from a guestGuest');
+    expect(line('Private · to Pat')).toBe('Private · to PatYou');
+    expect(line('Private · to one person')).toBe('Private · to one personYou');
     // A line for everyone reads as it always did.
     expect(screen.getByText('Bob')).toBeInTheDocument();
-    expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.getByText('hello Bob').parentElement?.textContent).toBe('Youhello Bob');
   });
 });
 
 describe('ChatPanel: choosing who a message is for', () => {
-  const bob = { peerId: 'p-bob', name: 'Bob' };
-  const pat = { peerId: 'p-pat', name: 'Pat' };
+  const bob = { peerId: 'p-bob', name: 'Bob', role: 'guest' };
+  const pat = { peerId: 'p-pat', name: 'Pat', role: 'guest' };
   const to = () => screen.getByLabelText('To') as HTMLSelectElement;
   const type = (text: string) =>
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
@@ -41,7 +44,7 @@ describe('ChatPanel: choosing who a message is for', () => {
     render(
       <ChatPanel
         messages={[]}
-        recipients={[bob, pat, { peerId: 'p-long', name: 'x'.repeat(40) }]}
+        recipients={[bob, pat, { peerId: 'p-long', name: 'x'.repeat(40), role: 'guest' }]}
         onTo={onTo}
         onSend={vi.fn()}
         onClose={vi.fn()}
@@ -49,9 +52,9 @@ describe('ChatPanel: choosing who a message is for', () => {
     );
     expect(Array.from(to().options).map((o) => o.textContent)).toEqual([
       'Everyone',
-      'Bob',
-      'Pat',
-      `${'x'.repeat(16)}…`,
+      'Bob (guest)',
+      'Pat (guest)',
+      `${'x'.repeat(16)}… (guest)`,
     ]);
     expect(to().value).toBe('');
 
@@ -70,7 +73,7 @@ describe('ChatPanel: choosing who a message is for', () => {
 
     rerender(<ChatPanel {...props} to="p-bob" />);
     expect(to().value).toBe('p-bob');
-    expect(screen.getByText('Only Bob gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+    expect(screen.getByText('Only Bob (guest) gets it. It is left out of the recorded chat.')).toBeInTheDocument();
     type('psst');
     submit();
     expect(onSend).toHaveBeenLastCalledWith('psst', 'p-bob');
@@ -100,7 +103,7 @@ describe('ChatPanel: choosing who a message is for', () => {
     expect(Array.from(to().options).map((o) => [o.value, o.textContent])).toEqual([
       ['', 'Everyone'],
       ['p-bob', 'Not available'],
-      ['p-pat', 'Pat'],
+      ['p-pat', 'Pat (guest)'],
     ]);
     expect(to().value).toBe('p-bob');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
@@ -131,7 +134,7 @@ describe('ChatPanel: choosing who a message is for', () => {
     expect(to()).not.toHaveAttribute('aria-describedby');
 
     rerender(<ChatPanel {...props} recipients={[bob, pat]} to="p-bob" />);
-    expect(to()).toHaveAccessibleDescription('Only Bob gets it. It is left out of the recorded chat.');
+    expect(to()).toHaveAccessibleDescription('Only Bob (guest) gets it. It is left out of the recorded chat.');
 
     rerender(<ChatPanel {...props} recipients={[pat]} to="p-bob" />);
     expect(to()).toHaveAccessibleDescription('That person left the call or reconnected. Choose who to send to.');
@@ -141,14 +144,89 @@ describe('ChatPanel: choosing who a message is for', () => {
     render(
       <ChatPanel
         messages={[]}
-        recipients={[bob, { peerId: 'p-faces', name: '😀'.repeat(17) }]}
+        recipients={[bob, { peerId: 'p-faces', name: '😀'.repeat(17), role: 'guest' }]}
         to="p-faces"
         onSend={vi.fn()}
         onClose={vi.fn()}
       />
     );
     const cut = `${'😀'.repeat(16)}…`;
-    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob', cut]);
-    expect(screen.getByText(`Only ${cut} gets it. It is left out of the recorded chat.`)).toBeInTheDocument();
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob (guest)', `${cut} (guest)`]);
+    expect(screen.getByText(`Only ${cut} (guest) gets it. It is left out of the recorded chat.`)).toBeInTheDocument();
+  });
+});
+
+describe('ChatPanel: a private mark no name can draw, and a recipient that stays', () => {
+  const toSelect = () => screen.getByLabelText('To') as HTMLSelectElement;
+
+  it('a name cannot draw the private mark', () => {
+    render(
+      <ChatPanel
+        messages={[{ from: 'guest', text: 'hi all', ts: 1, fromName: 'Hana, privately to you' }]}
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Hana, privately to you').querySelector('[data-private-mark]')).toBeNull();
+  });
+
+  it('a private line carries the mark and who it is from', () => {
+    render(
+      <ChatPanel
+        messages={[
+          { from: 'guest', text: 'psst', ts: 1, fromName: 'Hana', private: true },
+          { from: 'host', text: 'hi', ts: 2, private: true },
+          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toName: 'Pat' },
+        ]}
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const line = (mark: string) => screen.getByText(mark).parentElement?.textContent;
+    expect(screen.getByText('Private · from a guest')).toHaveAttribute('data-private-mark');
+    expect(line('Private · from a guest')).toBe('Private · from a guestHana');
+    expect(line('Private · from the host')).toBe('Private · from the hostHost');
+    expect(line('Private · to Pat')).toBe('Private · to PatYou');
+  });
+
+  it('the label is the name alone', () => {
+    expect(chatSenderLabel({ from: 'guest', fromName: 'Hana', private: true })).toBe('Hana');
+  });
+
+  it('tells apart two people who read the same under To', () => {
+    render(
+      <ChatPanel
+        messages={[]}
+        recipients={[
+          { peerId: 'p-1', name: 'Ana', role: 'host' },
+          { peerId: 'p-2', name: 'Ana', role: 'guest' },
+          { peerId: 'p-3', name: 'Ana', role: 'guest' },
+          { peerId: 'p-4', name: 'Everyone', role: 'guest' },
+        ]}
+        to="p-3"
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(Array.from(toSelect().options).map((o) => o.textContent)).toEqual([
+      'Everyone',
+      'Ana (host)',
+      'Ana (guest)',
+      'Ana (guest) 2',
+      'Everyone (guest)',
+    ]);
+    expect(screen.getByText('Only Ana (guest) 2 gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+  });
+
+  it('says messages go to everyone only while they do', () => {
+    const recipients = [
+      { peerId: 'p-bob', name: 'Bob', role: 'guest' },
+      { peerId: 'p-pat', name: 'Pat', role: 'guest' },
+    ];
+    const props = { messages: [], recipients, onSend: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<ChatPanel {...props} to="" />);
+    expect(screen.getByText('Messages are visible to everyone in the call.')).toBeInTheDocument();
+    rerender(<ChatPanel {...props} to="p-bob" />);
+    expect(screen.queryByText('Messages are visible to everyone in the call.')).toBeNull();
   });
 });

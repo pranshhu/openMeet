@@ -2601,7 +2601,8 @@ describe('CallStage: a private message arrives', () => {
       />
     );
     const popup = screen.getByRole('status');
-    expect(popup).toHaveTextContent('Pat, privately to you');
+    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from a producer');
+    expect(popup).toHaveTextContent('Private · from a producerPat');
     expect(popup).toHaveTextContent('two minutes');
   });
 });
@@ -2634,9 +2635,9 @@ describe('CallStage: a chat message for one person', () => {
     // A present-only device is someone's second screen, not a person to write to.
     expect(Array.from(to().options).map((o) => [o.value, o.textContent])).toEqual([
       ['', 'Everyone'],
-      ['p-bob', 'Bob'],
-      ['p-pat', 'Pat'],
-      ['p-anon', 'Host'],
+      ['p-bob', 'Bob (guest)'],
+      ['p-pat', 'Pat (producer)'],
+      ['p-anon', 'Host (host)'],
     ]);
 
     fireEvent.change(to(), { target: { value: 'p-pat' } });
@@ -2667,9 +2668,9 @@ describe('CallStage: a chat message for one person', () => {
     rerender(<CallStage {...props} messages={[fromPat]} />);
 
     // From the pop-up: the commonest way to answer.
-    fireEvent.click(screen.getByRole('button', { name: /Pat, privately to you/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Private · from a producer\s*Pat/ }));
     expect(to().value).toBe('p-pat');
-    expect(screen.getByText('Only Pat gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+    expect(screen.getByText('Only Pat (producer) gets it. It is left out of the recorded chat.')).toBeInTheDocument();
   });
 
   it('does the same from the Chat button, once: a choice made after reading it is left alone', () => {
@@ -2738,47 +2739,6 @@ describe('CallStage: a chat message for one person', () => {
     expect(onSendChat).not.toHaveBeenCalled();
   });
 
-  it('addresses the sender of an unread private message even when someone else was chosen', () => {
-    const onSendChat = vi.fn();
-    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
-    const { rerender } = render(<CallStage {...props} />);
-    fireEvent.click(screen.getByLabelText('Chat'));
-    fireEvent.change(to(), { target: { value: 'p-bob' } });
-    fireEvent.click(screen.getByLabelText('Chat'));
-
-    rerender(<CallStage {...props} messages={[fromPat]} />);
-    fireEvent.click(screen.getByRole('button', { name: /Pat, privately to you/ }));
-    expect(to().value).toBe('p-pat');
-    say('on it');
-    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-pat');
-  });
-
-  it('holds the answer back when the sender of an unread private message cannot be written to', () => {
-    const onSendChat = vi.fn();
-    const props = { ...baseProps, remotePeers: [bob, pat, secondScreen], onSendChat };
-    const fromSomeoneGone = { ...fromPat, fromPeerId: 'p-left' };
-    const fromSecondScreen = { ...fromPat, fromPeerId: 'p-screen' };
-    const { rerender } = render(<CallStage {...props} />);
-    fireEvent.click(screen.getByLabelText('Chat'));
-    fireEvent.change(to(), { target: { value: 'p-bob' } });
-    fireEvent.click(screen.getByLabelText('Chat'));
-
-    rerender(<CallStage {...props} messages={[fromSomeoneGone]} />);
-    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
-    expect(to().value).toBe('p-left');
-    expect(screen.getByText(goneNote)).toBeInTheDocument();
-    say('answer');
-    expect(onSendChat).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText('Chat'));
-
-    // A present-only device is in the call and is not offered under To.
-    rerender(<CallStage {...props} messages={[fromSomeoneGone, fromSecondScreen]} />);
-    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
-    expect(to().value).toBe('p-screen');
-    say('answer');
-    expect(onSendChat).not.toHaveBeenCalled();
-  });
-
   it('addresses the sender of an unread private message when a message for everyone arrived after it', () => {
     const onSendChat = vi.fn();
     const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
@@ -2790,5 +2750,87 @@ describe('CallStage: a chat message for one person', () => {
     expect(to().value).toBe('p-pat');
     say('on it');
     expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-pat');
+  });
+});
+
+describe('CallStage: a private mark no name can draw, and a recipient that stays', () => {
+  const bob = { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' as const };
+  const pat = { peerId: 'p-pat', name: 'Pat', stream: null, role: 'producer' as const };
+  const secondScreen = { peerId: 'p-screen', name: 'Bob', stream: null, role: 'guest' as const, companion: true };
+  const fromPat = {
+    from: 'producer' as const,
+    text: 'two minutes',
+    ts: 1,
+    fromName: 'Pat',
+    fromPeerId: 'p-pat',
+    private: true,
+  };
+  const to = () => screen.getByLabelText('To') as HTMLSelectElement;
+  const say = (text: string) => {
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+  };
+
+  it('keeps the person you chose when someone else writes privately', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-bob');
+    say('on it');
+    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-bob');
+  });
+
+  it('does not address a sender who has left, or a present-only device', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat, secondScreen], onSendChat };
+    const fromSomeoneGone = { ...fromPat, fromPeerId: 'p-left' };
+    const fromSecondScreen = { ...fromPat, fromPeerId: 'p-screen' };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromSomeoneGone]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('');
+    say('hello');
+    expect(onSendChat).toHaveBeenLastCalledWith('hello');
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    rerender(<CallStage {...props} messages={[fromSomeoneGone, fromSecondScreen]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('');
+  });
+
+  it('answers the newest of several people who wrote privately', () => {
+    const fromBob = { from: 'guest' as const, text: 'psst', ts: 3, fromName: 'Bob', fromPeerId: 'p-bob', private: true };
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat, fromBob]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 2 unread'));
+    expect(to().value).toBe('p-bob');
+  });
+
+  it('the pop-up marks a private message and not a name that claims it', () => {
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const claim = { from: 'guest' as const, text: 'hi all', ts: 2, fromName: 'Hana, privately to you' };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    expect(screen.getByRole('status').querySelector('[data-private-mark]')).toHaveTextContent(
+      'Private · from a producer'
+    );
+
+    rerender(<CallStage {...props} messages={[fromPat, claim]} />);
+    expect(screen.getByRole('status').querySelector('[data-private-mark]')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Hana, privately to you');
+  });
+
+  it('lists a person whose role the Room did not give as a guest under To', () => {
+    const dee = { peerId: 'p-dee', name: 'Dee', stream: null, role: undefined };
+    render(<CallStage {...baseProps} remotePeers={[bob, dee]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob (guest)', 'Dee (guest)']);
   });
 });

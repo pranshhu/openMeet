@@ -10,9 +10,30 @@ export function chatSenderLabel(
   m: Pick<ChatMessage, 'from' | 'fromName' | 'self' | 'private' | 'toName'>
 ): string {
   const who = m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
-  if (!m.private) return who;
-  // Said in words, in the list and in the pop-up alike: nothing else marks the line.
-  return m.self ? `${who}, privately to ${m.toName || 'one person'}` : `${who}, privately to you`;
+  return who;
+}
+
+/** Who else is on a private line, in this page's own words: never the sender's text alone. */
+export function privateDetail(m: Pick<ChatMessage, 'from' | 'self' | 'toName'>): string {
+  if (m.self) return `to ${m.toName || 'one person'}`;
+  return m.from === 'host' ? 'from the host' : m.from === 'producer' ? 'from a producer' : 'from a guest';
+}
+
+/**
+ * The mark of a message the Room delivered to one person. It is an element of
+ * its own, drawn from the flag this page set when the message arrived or was
+ * sent, never from the label's text: a display name is its owner's to choose,
+ * and no name can draw this.
+ */
+export function PrivateMark({ detail }: { detail: string }) {
+  return (
+    <span
+      data-private-mark=""
+      className="mr-1.5 inline-block rounded bg-[#8ab4f8] px-1.5 text-[11px] font-semibold leading-4 text-[#062e6f]"
+    >
+      {`Private · ${detail}`}
+    </span>
+  );
 }
 
 // A display name is its owner's text, up to 64 characters; an option has to fit a phone.
@@ -20,6 +41,21 @@ const optionName = (name: string) => {
   const chars = Array.from(name);
   return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : name;
 };
+
+// What a person is called under To: the name they chose, cut to fit a phone,
+// and the role the Room gave them, which they did not choose. Two who would
+// read the same get a number, in the order they are listed.
+export function recipientLabels<T extends { name: string; role: string }>(
+  recipients: T[]
+): (T & { label: string })[] {
+  const seen = new Map<string, number>();
+  return recipients.map((r) => {
+    const base = `${optionName(r.name)} (${r.role})`;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return { ...r, label: n === 1 ? base : `${base} ${n}` };
+  });
+}
 
 export function ChatPanel({
   messages,
@@ -31,7 +67,7 @@ export function ChatPanel({
 }: {
   messages: ChatMessage[];
   /** The people a message can be sent to on its own. */
-  recipients?: { peerId: string; name: string }[];
+  recipients?: { peerId: string; name: string; role: string }[];
   /**
    * Who the next message is for: '' is everyone, otherwise a peerId. The
    * caller keeps it, because this panel is gone whenever chat is closed.
@@ -46,7 +82,8 @@ export function ChatPanel({
   // have left, or come back under a new id, nothing is sent until the sender
   // chooses again: falling back to everyone would publish a message written
   // for one person.
-  const person = recipients.find((r) => r.peerId === to);
+  const labelled = recipientLabels(recipients);
+  const person = labelled.find((r) => r.peerId === to);
   const gone = to !== '' && !person;
   const listRef = useRef<HTMLDivElement>(null);
   // Follow new messages only while the reader is at the bottom; scrolling up to
@@ -97,7 +134,7 @@ export function ChatPanel({
         }}
         className="flex-1 space-y-3 overflow-y-auto px-4 py-2 [scrollbar-color:rgb(255_255_255/0.25)_transparent] [scrollbar-width:thin]"
       >
-        {messages.length === 0 && (
+        {messages.length === 0 && to === '' && (
           <p className="mt-4 text-center text-sm text-white/70">
             Messages are visible to everyone in the call.
           </p>
@@ -108,7 +145,10 @@ export function ChatPanel({
             // Each bubble hugs its text, and your own sit on the right, so a
             // message never reads as a second text field.
             <div key={i} className={`text-sm ${m.self ? 'flex flex-col items-end' : ''}`}>
-              <div className="mb-0.5 text-xs font-medium text-white/70">{sender}</div>
+              <div className="mb-0.5 text-xs font-medium text-white/70">
+                {m.private && <PrivateMark detail={privateDetail(m)} />}
+                {sender}
+              </div>
               <p
                 className={`w-fit max-w-full rounded-2xl bg-[#3c4043] px-3 py-2 text-white/95 wrap-anywhere ${m.self ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}
               >
@@ -146,9 +186,9 @@ export function ChatPanel({
             >
               <option value="">Everyone</option>
               {gone && <option value={to}>Not available</option>}
-              {recipients.map((r) => (
+              {labelled.map((r) => (
                 <option key={r.peerId} value={r.peerId}>
-                  {optionName(r.name)}
+                  {r.label}
                 </option>
               ))}
             </select>
@@ -160,7 +200,7 @@ export function ChatPanel({
           </p>
         ) : person ? (
           <p key="note" id="chat-to-note" className="mb-2 px-1 text-xs text-white/70">
-            {`Only ${optionName(person.name)} gets it. It is left out of the recorded chat.`}
+            {`Only ${person.label} gets it. It is left out of the recorded chat.`}
           </p>
         ) : null}
         {/* The input drops its own outline; the pill shows focus instead. */}

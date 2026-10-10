@@ -10,7 +10,7 @@ import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
-import { ChatPanel, chatSenderLabel, type ChatMessage } from './ChatPanel';
+import { ChatPanel, chatSenderLabel, PrivateMark, privateDetail, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
@@ -383,16 +383,16 @@ export function CallStage({
   function openChat(open: boolean) {
     setChatOpen(open);
     if (open) setSummaryOpen(false);
-    // Opened with a private message among those that arrived while chat was
-    // closed: address the sender of the newest one, so the answer does not go
-    // to everyone. A message for everyone that arrived after it changes
-    // nothing. A message that has been on screen is not unread, and the choice
-    // is left as it was.
-    const unreadPrivate = messages
+    // Opened on "Everyone" with a private message among those that arrived
+    // while chat was closed: address the sender of the newest one, so the
+    // answer does not go to everyone. A person the reader chose is never
+    // replaced, or whoever writes privately would decide where the reader's
+    // next message goes; and a sender who has left is not addressed.
+    const sender = messages
       .slice(messages.length - unread)
       .filter((m) => m.private && m.fromPeerId)
-      .pop();
-    if (open && unreadPrivate?.fromPeerId) setChatTo(unreadPrivate.fromPeerId);
+      .pop()?.fromPeerId;
+    if (open && sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -405,7 +405,7 @@ export function CallStage({
   }, [chatOpen, messages.length]);
   const unread = chatOpen ? 0 : messages.length - seenCount;
 
-  const [popup, setPopup] = useState<{ sender: string; text: string } | null>(null);
+  const [popup, setPopup] = useState<{ sender: string; text: string; privateDetail?: string } | null>(null);
   const prevMessagesLengthRef = useRef(messages.length);
 
   useEffect(() => {
@@ -415,6 +415,7 @@ export function CallStage({
         const text = newest.text.length > 120 ? `${newest.text.slice(0, 120)}…` : newest.text;
         setPopup({
           sender: chatSenderLabel(newest),
+          ...(newest.private ? { privateDetail: privateDetail(newest) } : {}),
           text,
         });
       }
@@ -511,6 +512,7 @@ export function CallStage({
     .map((p) => ({
       peerId: p.peerId,
       name: p.name || (p.role === 'host' ? 'Host' : p.role === 'producer' ? 'Producer' : 'Guest'),
+      role: p.role ?? 'guest',
     }));
   const phone = isPhone();
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
@@ -583,7 +585,10 @@ export function CallStage({
         }}
         className="w-full rounded-xl bg-[#202124]/95 p-3 text-left shadow-2xl ring-1 ring-white/10 backdrop-blur transition hover:bg-[#2d2f34] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
       >
-        <span className="block text-xs font-medium text-white/70">{popup.sender}</span>
+        <span className="block text-xs font-medium text-white/70">
+          {popup.privateDetail && <PrivateMark detail={popup.privateDetail} />}
+          {popup.sender}
+        </span>
         <span className="block text-sm text-white/95 wrap-anywhere">{popup.text}</span>
       </button>
     </div>
