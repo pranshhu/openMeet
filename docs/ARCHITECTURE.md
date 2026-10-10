@@ -307,6 +307,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+- **`components/MarkerNote.tsx`** — a chapter marker with a typed note. `useMarkerNote` holds
+  whether the field is open for the take that is running and listens for **N** (ignored while
+  typing, as **M** is); the pencil button beside the marker button opens it too. `MarkerNote` is
+  the field: it sits where the stage's notices go (`toastPlace`) and before them in the page, so
+  the recording notice is drawn over it, and on a phone it hides with the control bar while chat
+  is open. Enter hands the trimmed note to `onMark`, the entry the marker button and the media
+  board use, so a note has no path of its own: it is the marker's label in `chapters_<id>.txt`,
+  `sync_<id>.json`, the summary and the crash copy's `take.json`. The field takes at most
+  `MAX_MARKER_LABEL_LENGTH` characters (`lib/sync-report.ts`): the length the host accepts from
+  another participant, and the length the crash copy reads back.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -905,3 +915,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **A marker or a note from a guest is lost while the host is not recording.** The host places
+  every marker when it arrives and has no take to place it on after a reload and before
+  **Resume recording**, or once it has dropped. One sent while that guest's own connection to
+  the Room is down is lost too (`SignalClient.send` drops it). The guest's own count still rises.
+- **A guest's note reaches every browser in the call.** It is a marker's `label`, and the Room
+  passes a `marker` on to everyone else, as it does chat, and keeps nothing. Only the host's
+  page keeps the note and no page shows it during the call. The host's own notes never leave
+  its browser.
+- **A note that is still being typed when the take ends is dropped.** The field closes with the
+  take and nothing is marked before Enter. A reload of the page loses it the same way.
+- **A producer, and a guest whose browser cannot record, have no marker controls.** The marker
+  button, the note button and both keys are there only while this tab's own capture runs.

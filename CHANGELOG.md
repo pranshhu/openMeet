@@ -131,6 +131,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- A chapter marker can carry a typed note: during a take press **N**, or the pencil
+  button beside the marker button, type and press Enter. The note is that marker's
+  line in the chapters file and its label in `sync.json`, and a take that is resumed
+  or recovered after a reload keeps it.
 
 ### Changed
 

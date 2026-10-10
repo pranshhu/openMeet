@@ -1,0 +1,180 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { CallStage } from '@/components/CallStage';
+import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
+
+const onMark = vi.fn();
+
+// A take is running on this tab: the only time the marker controls are shown.
+const props = {
+  role: 'host' as const,
+  phase: 'recording' as const,
+  localStream: null,
+  remoteStream: null,
+  remotePeers: [],
+  remoteScreenStream: null,
+  localScreenStream: null,
+  localName: 'Alice',
+  peerName: 'Bob',
+  screenSharing: false,
+  canRecord: true,
+  roomRecording: false,
+  recordBlocked: false,
+  messages: [],
+  peerPresence: null,
+  screenShareSupported: true,
+  backupUrl: null,
+  wavBackupUrl: null,
+  syncReportUrl: null,
+  recordingError: null,
+  recordUnavailableReason: null,
+  onToggleMic: vi.fn(),
+  onToggleCam: vi.fn(),
+  onRecord: vi.fn(),
+  onEnd: vi.fn(),
+  onLeave: vi.fn(),
+  onSendChat: vi.fn(),
+  slug: 'abc-defg-hij',
+  onMark,
+  markerCount: 0,
+  chaptersUrl: null,
+  summary: null,
+  takes: [],
+  onNewTake: vi.fn(),
+  onDiscardTake: vi.fn(),
+  onOpenMediaBoard: vi.fn(() => null),
+  onToggleScreen: vi.fn(),
+  capabilities: {},
+};
+
+const noteButton = () => screen.getByRole('button', { name: 'Mark with a note (N)' });
+const field = () => screen.queryByLabelText('Note for this marker');
+
+beforeEach(() => {
+  onMark.mockClear();
+});
+
+describe('CallStage: a marker with a typed note', () => {
+  it('adds a marker with the note, closes the field and hands focus back to its button', async () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    const input = field()!;
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('maxlength', String(MAX_MARKER_LABEL_LENGTH));
+
+    fireEvent.change(input, { target: { value: '  great answer  ' } });
+    fireEvent.submit(input.closest('form')!);
+
+    expect(onMark).toHaveBeenCalledTimes(1);
+    expect(onMark.mock.calls[0]![0]).toBe('great answer');
+    expect(field()).toBeNull();
+    await waitFor(() => expect(noteButton()).toHaveFocus());
+  });
+
+  it('adds nothing for an empty note, on Escape or from the close button, and opens empty again', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled();
+    fireEvent.change(field()!, { target: { value: '   ' } });
+    fireEvent.submit(field()!.closest('form')!);
+    expect(field()).not.toBeNull();
+
+    fireEvent.change(field()!, { target: { value: 'half a thought' } });
+    fireEvent.keyDown(field()!, { key: 'Escape' });
+    expect(field()).toBeNull();
+
+    fireEvent.click(noteButton());
+    expect(field()).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Close note' }));
+    expect(field()).toBeNull();
+    expect(onMark).not.toHaveBeenCalled();
+  });
+
+  it('opens on N without typing the letter, and not with a modifier or while typing in chat', () => {
+    render(<CallStage {...props} />);
+    // false: the key was cancelled, so it is not typed into the field it opens.
+    expect(fireEvent.keyDown(document.body, { key: 'n' })).toBe(false);
+    expect(field()).toHaveFocus();
+    fireEvent.keyDown(field()!, { key: 'Escape' });
+
+    fireEvent.keyDown(document.body, { key: 'n', ctrlKey: true });
+    expect(field()).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'n' });
+    expect(field()).toBeNull();
+  });
+
+  it('lets m and n be typed into the note without a marker or a cancelled key', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    fireEvent.keyDown(field()!, { key: 'm' });
+    expect(onMark).not.toHaveBeenCalled();
+    // true: not cancelled, so the letter reaches the field.
+    expect(fireEvent.keyDown(field()!, { key: 'n' })).toBe(true);
+  });
+
+  it('closes with the take and starts the next take closed', () => {
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    rerender(<CallStage {...props} phase="finalizing" />);
+    expect(field()).toBeNull();
+    rerender(<CallStage {...props} phase="recording" />);
+    expect(field()).toBeNull();
+    expect(onMark).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing outside a take', () => {
+    render(<CallStage {...props} phase="in-call" />);
+    expect(screen.queryByRole('button', { name: 'Mark with a note (N)' })).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'n' });
+    expect(field()).toBeNull();
+  });
+
+  it('is drawn under the recording notice, and leaves a phone screen with the control bar', () => {
+    render(<CallStage {...props} role="guest" roomRecording />);
+    fireEvent.click(noteButton());
+    const band = field()!.closest('form')!.parentElement!;
+    const notice = screen.getByRole('alert');
+    expect(band.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(band).toHaveClass('top-3', 'flex');
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(band).toHaveClass('hidden', 'sm:flex');
+    expect(band).not.toHaveClass('flex');
+  });
+
+  it('lights the note button while the field is open, and a second press closes the field', () => {
+    render(<CallStage {...props} />);
+    expect(noteButton()).toHaveClass('bg-[#3c4043]');
+    fireEvent.click(noteButton());
+    expect(noteButton()).toHaveClass('bg-white');
+    fireEvent.click(noteButton());
+    expect(field()).toBeNull();
+    expect(noteButton()).toHaveClass('bg-[#3c4043]');
+  });
+
+  it('gives the field and its close button the copy the design sets', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    expect(screen.getByPlaceholderText('Note for this marker')).toBe(field());
+    expect(screen.getByRole('button', { name: 'Close note' })).toHaveAttribute('title', 'Close note');
+  });
+
+  it('adds the note when its Add button is clicked', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    fireEvent.change(field()!, { target: { value: 'cut this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(onMark).toHaveBeenCalledWith('cut this');
+    expect(field()).toBeNull();
+  });
+
+  it('lets clicks through the band except on the field itself', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(noteButton());
+    const form = field()!.closest('form')!;
+    expect(form.parentElement).toHaveClass('pointer-events-none');
+    expect(form).toHaveClass('pointer-events-auto');
+  });
+});

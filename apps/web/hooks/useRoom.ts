@@ -36,6 +36,7 @@ import {
   buildSyncReport,
   buildChatLog,
   MAX_CHAT_MESSAGE_LENGTH,
+  MAX_MARKER_LABEL_LENGTH,
   type ChapterMarker,
   type SyncReport,
   type SyncReportData,
@@ -553,7 +554,6 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
-export const MAX_MARKER_LABEL_LENGTH = 200;
 
 /**
  * Whether a take's warning says its crash copy is gone. The text is matched as
