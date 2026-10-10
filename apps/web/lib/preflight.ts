@@ -224,5 +224,5 @@ const RESULT_LABEL: Record<CheckLevel, string> = { ok: 'OK', warn: 'Warning', fa
 export function resultText(checks: Check[], extra: string[] = []): string {
   return ['openMeet setup check', ...checks.map((c) => `${RESULT_LABEL[c.level]}: ${c.message}`), ...extra]
     .join('\n')
-    .replace(/ /g, ' ');
+    .replace(/\u00a0/g, ' ');
 }

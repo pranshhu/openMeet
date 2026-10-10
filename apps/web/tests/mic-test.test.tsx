@@ -145,6 +145,48 @@ describe('MicTest', () => {
     const { container } = render(<MicTest stream={null} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('makes no clip of a test that was cut short by leaving', async () => {
+    const { unmount } = render(<MicTest stream={streamOf(mic())} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Test your mic' }));
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('drops the clip that is playing when a new test starts', async () => {
+    const { container } = render(<MicTest stream={streamOf(mic())} />);
+    const button = screen.getByRole('button', { name: 'Test your mic' });
+    fireEvent.click(button);
+    await fiveSeconds();
+    expect(container.querySelector('audio')).not.toBeNull();
+
+    fireEvent.click(button);
+    expect(container.querySelector('audio')).toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:clip');
+    expect(screen.getByRole('status')).toHaveTextContent('Recording 5 seconds. Say a few words.');
+  });
+
+  it('says so when the recorder fails part-way', async () => {
+    render(<MicTest stream={streamOf(mic())} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Test your mic' }));
+    await act(async () => {
+      FakeRecorder.made[0]!.onerror?.();
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('This browser could not record a test.');
+    expect(screen.getByRole('button', { name: 'Test your mic' })).not.toBeDisabled();
+  });
+
+  it('does not render again while the panel around it does', () => {
+    const stream = streamOf(mic());
+    const getAudioTracks = vi.spyOn(stream, 'getAudioTracks');
+    const { rerender } = render(<MicTest stream={stream} />);
+    const renders = getAudioTracks.mock.calls.length;
+    rerender(<MicTest stream={stream} />);
+    expect(getAudioTracks.mock.calls.length).toBe(renders);
+  });
 });
 
 describe('PreflightPanel', () => {

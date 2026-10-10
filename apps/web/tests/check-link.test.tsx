@@ -184,4 +184,66 @@ describe('check link', () => {
       view.unmount();
     }
   });
+
+  it('copies the same check link from an address that already carries a word', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    localStorage.setItem(`om_host_${SLUG}`, 'host-tok');
+    for (const word of ['check', 'producer']) {
+      window.history.replaceState({}, '', `/r/${SLUG}/?${word}=1`);
+      const view = render(
+        <Lobby slug={SLUG} onJoin={vi.fn()} checkOnly={word === 'check'} producer={word === 'producer'} />
+      );
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy check link' }));
+      expect(writeText).toHaveBeenLastCalledWith(`${location.origin}/r/${SLUG}/?check=1`);
+      view.unmount();
+    }
+  });
+
+  it('reads Copy check link again a second and a half after a press', async () => {
+    localStorage.setItem(`om_host_${SLUG}`, 'host-tok');
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    await settle();
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy check link' }));
+      expect(screen.getByRole('button', { name: 'Link copied' })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1499);
+      });
+      expect(screen.getByRole('button', { name: 'Link copied' })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByRole('button', { name: 'Copy check link' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the way to the room one path segment, whatever the address held', async () => {
+    render(<Lobby slug="abc-defg-hij?x=1#/y" onJoin={vi.fn()} checkOnly />);
+    expect(screen.getByRole('link', { name: 'Go to the room' })).toHaveAttribute(
+      'href',
+      '/r/abc-defg-hij%3Fx%3D1%23%2Fy/'
+    );
+    await settle();
+  });
+
+  it('is the producer or the Present-only link when the address carries that word too', async () => {
+    window.history.replaceState({}, '', `/r/${SLUG}/?check=1&producer=1`);
+    const first = render(<RoomView slug={SLUG} />);
+    await settle();
+    expect(screen.getByRole('heading', { name: 'Join as a producer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Join now' })).toBeInTheDocument();
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+    first.unmount();
+
+    window.history.replaceState({}, '', `/r/${SLUG}/?check=1&present=1`);
+    render(<RoomView slug={SLUG} />);
+    await settle();
+    expect(screen.getByRole('heading', { name: 'Ready to present?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Share screen & join' })).toBeInTheDocument();
+  });
 });

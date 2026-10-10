@@ -92,6 +92,18 @@ describe('CopyCheckResult', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy result' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t copy.');
   });
+
+  it('says a later copy worked after one that did not', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { userAgent: 'test', clipboard: { writeText } });
+    render(<CopyCheckResult checks={CHECKS} stream={null} />);
+    const button = screen.getByRole('button', { name: 'Copy result' });
+    fireEvent.click(button);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t copy.');
+    fireEvent.click(button);
+    expect(await screen.findByRole('status')).toHaveTextContent('Result copied:');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
 
 describe('PreflightPanel', () => {
