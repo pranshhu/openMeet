@@ -537,8 +537,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   before the click. Every partial of the bed is a whole number of cycles long, so it loops
   without a click, and its pad starts set to loop and fade. A sound already on the board is not
   offered again. The panel draws the row above an empty board's text and, once the board holds
-  a pad, as the first item of the scrolling list, so the row never makes the panel taller than
-  a full list does.
+  a pad, as the first item of the scrolling list, where it scrolls with the pads. On an empty
+  board a row of many shipped recordings makes the panel taller (see Known gaps).
 - `sound-files.ts` `SOUND_FILES`: recordings a deploy ships as further ready sounds, offered
   after the computed ones. An entry names a file in `apps/web/public/sounds/` (served at
   `/sounds/<file>`), the license it is handed out under and its source. `fetchSoundFile`
