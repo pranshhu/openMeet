@@ -5,6 +5,7 @@ import {
   DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
+  MAX_SCRIPT_LENGTH,
   RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_REPLACED,
@@ -245,6 +246,11 @@ export interface RoomState {
   takeNotice: string | null;
   /** A Resume or a Save of the interrupted take is running: its buttons wait, and this tab holds the take lock. */
   recoveryBusy: boolean;
+  /**
+   * The teleprompter script the host last sent, held until this person takes
+   * it or turns it down; null when none is waiting.
+   */
+  incomingScript: string | null;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt: number | null;
 }
@@ -607,6 +613,7 @@ export function useRoom(slug: string) {
     resumeOffer: null,
     takeNotice: null,
     recoveryBusy: false,
+    incomingScript: null,
     countdownEndsAt: null,
   });
   // Peer ids whose camera recording channel has arrived for the take in
@@ -1697,6 +1704,15 @@ export function useRoom(slug: string) {
         setState((s) => (s.peerRecording ? s : { ...s, countdownEndsAt: endsAt }));
       });
 
+      // The host's teleprompter script, offered to this person. Only the
+      // newest is held, so a host that sends many costs this tab one string.
+      // The Room passes on only the host's; what this page keeps is checked
+      // here again, and a blank one is no offer.
+      signal.on('script', (m) => {
+        if (typeof m.text !== 'string' || m.text.length > MAX_SCRIPT_LENGTH || !m.text.trim()) return;
+        setState((s) => ({ ...s, incomingScript: m.text }));
+      });
+
       signal.on('marker', (m) => {
         // The same setting that closes this peer's recording channels keeps its
         // markers out of the take.
@@ -2262,6 +2278,21 @@ export function useRoom(slug: string) {
       ...s,
       messages: messagesRef.current,
     }));
+  }, []);
+
+  /**
+   * Host: offer this teleprompter script to everyone else in the room. False
+   * when it did not go out because the socket is not open. The Room
+   * passes on only a host's, and only a text within MAX_SCRIPT_LENGTH.
+   */
+  const sendScript = useCallback(
+    (text: string): boolean => signalRef.current?.send({ type: 'script', text }) ?? false,
+    []
+  );
+
+  /** The person took the offered script or turned it down. */
+  const dismissIncomingScript = useCallback(() => {
+    setState((s) => ({ ...s, incomingScript: null }));
   }, []);
 
   /** Host: choose whether one guest is recorded in the takes that follow. The Room's answer updates the state. */
@@ -2858,6 +2889,8 @@ export function useRoom(slug: string) {
     switchCamera,
     switchMic,
     sendChat,
+    sendScript,
+    dismissIncomingScript,
     setPeerRecorded,
     toggleScreenShare,
     startRecording,
