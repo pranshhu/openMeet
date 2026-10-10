@@ -44,6 +44,16 @@ describe('SessionSummary', () => {
     expect(name.className).toMatch(/\bbreak-words\b/);
   });
 
+  // A typed note can be a pasted link: one unbreakable run, which made the whole
+  // summary scroll sideways.
+  it('lets a long chapter note wrap instead of widening the summary', () => {
+    const note = `https://example.com/${'a'.repeat(160)}`;
+    render(<SessionSummary {...baseProps} markers={[{ at: '0:05', label: note, from: 'host' }]} />);
+    const line = screen.getByText('0:05').closest('li')!;
+    expect(line).toHaveTextContent(note);
+    expect(line.className).toMatch(/\bbreak-words\b/);
+  });
+
   it('renders files for 2 guests', () => {
     const files: SummaryFile[] = [
       { name: 'host_r.mp4', kind: 'video' },
