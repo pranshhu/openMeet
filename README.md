@@ -67,6 +67,8 @@ retention policy to trust, because there's nothing retained.
   see [Producers and Present only](#producers-and-present-only)
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
+- Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
+  **M** marker; the **?** button in the call lists them
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt

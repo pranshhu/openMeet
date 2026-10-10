@@ -17,6 +17,7 @@ import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
 import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { BackupNotice } from './BackupNotice';
+import { Shortcuts } from './Shortcuts';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -658,6 +659,8 @@ export function CallStage({
         {!canRecord && recordUnavailableReason && phase === 'in-call' && !recordBlocked && (
           <span className="min-w-0 text-xs leading-snug text-white/70 sm:text-sm">{recordUnavailableReason}</span>
         )}
+        {/* Last in the bar and there in every phase, so nothing moves when a take starts. */}
+        <Shortcuts />
       </div>
 
       {/* Real capture problems live up here, in the flow, so they never cover
@@ -921,6 +924,7 @@ export function CallStage({
                     <ControlButton
                       icon={micOn ? 'mic' : 'mic_off'}
                       label={micOn ? 'Turn off microphone' : 'Turn on microphone'}
+                      shortcut="A"
                       variant={micOn ? 'default' : 'danger'}
                       onClick={() => {
                         const next = !micOn;
@@ -985,6 +989,7 @@ export function CallStage({
                     <ControlButton
                       icon={camOn ? 'videocam' : 'videocam_off'}
                       label={camOn ? 'Turn off camera' : 'Turn on camera'}
+                      shortcut="V"
                       variant={camOn ? 'default' : 'danger'}
                       onClick={() => {
                         const next = !camOn;
@@ -1181,6 +1186,7 @@ export function CallStage({
               <ControlButton
                 icon="chat"
                 label={unread ? `Chat, ${unread} unread` : 'Chat'}
+                shortcut="C"
                 badge={unread > 0}
                 variant={chatOpen ? 'active' : 'default'}
                 onClick={() => openChat(!chatOpen)}
@@ -1202,6 +1208,7 @@ export function CallStage({
                   <ControlButton
                     icon="script"
                     label={prompterOpen ? 'Hide teleprompter' : 'Show teleprompter'}
+                    shortcut="T"
                     variant={prompterOpen ? 'active' : 'default'}
                     onClick={() => setPrompterOpen((o) => !o)}
                   />

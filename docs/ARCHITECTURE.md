@@ -307,6 +307,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+- **`components/Shortcuts.tsx`** is the call's keyboard and the list of its keys, mounted last in
+  `CallStage`'s status bar. A key is not wired to an action: a bare letter typed outside a field
+  presses the button that carries it in `aria-keyshortcuts` (`ControlButton`'s `shortcut`: **A**
+  microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not
+  on screen has no key; one that is in the document but not displayed is skipped
+  (`checkVisibility`). A held key, and a letter pressed with Shift, Ctrl, Alt or Cmd, is left
+  alone. The **?** button (from `sm` up) and the **?** key open the list. **M** (marker) keeps
+  its own handler in `CallStage` and is only listed.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -905,3 +913,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **The shortcut keys are fixed, cannot be switched off, and exist only on the call screen.**
+  A bare letter is read as the keyboard layout types it, so a layout without Latin letters has
+  no A, V, C, T or M. A letter typed while no field has focus is a key press: text typed
+  after clicking outside the chat field switches the microphone and the camera. No key works
+  while any input has focus, a teleprompter slider included. The waiting room has no keys.
+  Below 640 px the **?** button and its list are not shown, and a key that presses a button
+  does nothing while chat or the summary covers the control bar.
