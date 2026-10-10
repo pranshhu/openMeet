@@ -930,7 +930,11 @@ export function CallStage({
           <div
             className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
-            <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-[32px] bg-[#2a2b2e]/80 px-3 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur sm:gap-3">
+            {/* Below 384 px the gaps and the side padding give up a few pixels: with
+                a take running the second row holds five buttons and Leave, 334 px
+                at this spacing, which fits a 360 px phone. At the wider spacing it
+                needs 344 px and Leave drops to a third row. */}
+            <div className="flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-[32px] bg-[#2a2b2e]/80 px-1 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur min-[384px]:gap-2 min-[384px]:px-3 sm:gap-3">
               {/* A producer joins with no camera or mic, so these would only
                   show red and do nothing. */}
               {!companion && role !== 'producer' && (
