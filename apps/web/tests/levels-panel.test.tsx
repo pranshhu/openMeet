@@ -3,8 +3,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { LevelsPanel } from '@/components/LevelsPanel';
 
 const peers = [
-  { peerId: 'p-bob', name: 'Bob' },
-  { peerId: 'p-carol', name: null },
+  { peerId: 'p-bob', name: 'Bob', stream: null },
+  { peerId: 'p-carol', name: null, stream: null },
 ];
 
 describe('LevelsPanel', () => {

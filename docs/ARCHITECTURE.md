@@ -313,6 +313,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   that person's `StageFeed.volume`; `VideoTile` sets it as the `volume` of its `<video>`. It is
   this tab's playback only: nothing is sent, and no recorder, backup or call-audio copy reads a
   tile's element. While someone is below full volume the button carries a dot.
+  Each row also has a meter of what arrives from that person, read before the fader: while the
+  panel is on screen one `AudioContext` of its own holds a `MediaStreamAudioSourceNode` and an
+  `AnalyserNode` per stream, connected to nothing else, and a 100 ms timer writes each bar
+  straight to the DOM. Hiding the panel closes the context.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -840,6 +844,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and the sound of a shared screen or a presented video has no fader.
 - **M does not mark a moment while a fader has the keyboard.** The marker key skips every
   `<input>`, as it does for the teleprompter's sliders; the bookmark button still marks.
+- **A level meter is drawn only while Levels is open.** It shows what arrives, so it does not
+  move with the fader, and it has one colour: nothing marks a person who is clipping.
 - **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
   and Rimshot peak at about 0.4 of full scale and Soft bed at about 0.13, mixed over the
   voice. Like every pad, a ready sound is gone from the board after a reload and is added

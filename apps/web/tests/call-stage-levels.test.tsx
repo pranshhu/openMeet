@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
+import { FakeAudioContext } from './fake-audio-context';
 
 // EventTargets, because a tile listens on the stream it is given.
 const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
@@ -135,5 +136,19 @@ describe('CallStage: levels', () => {
 
     render(<CallStage {...props} companion />);
     expect(screen.queryByRole('button', { name: 'Levels' })).toBeNull();
+  });
+
+  it('meters the people it lists from their own streams', () => {
+    FakeAudioContext.made = [];
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    try {
+      render(<CallStage {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Levels' }));
+      expect(FakeAudioContext.made[0]!.sources.map((s) => s.stream)).toEqual([bob, carol]);
+      expect(screen.getByRole('meter', { name: 'Level for Bob' })).toBeInTheDocument();
+    } finally {
+      cleanup();
+      vi.unstubAllGlobals();
+    }
   });
 });
