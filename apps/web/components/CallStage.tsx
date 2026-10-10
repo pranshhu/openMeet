@@ -6,6 +6,7 @@ import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
+import { LevelsPanel } from './LevelsPanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -502,11 +503,21 @@ export function CallStage({
     mirror: currentFacingMode !== 'environment',
   };
   const stagePeers = remotePeers.filter((p) => p.role !== 'producer' && !p.companion);
+  // Levels: how loud this tab plays each other person, 0 to 1 by peerId. The
+  // value goes to that person's <video> elements only, so nobody else hears
+  // it and no recorder, backup or call-audio copy reads it.
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [volumes, setVolumes] = useState<Map<string, number>>(() => new Map());
+  const volumeOf = (peerId: string | undefined) => volumes.get(peerId ?? '') ?? 1;
+  // Said on the button, because the panel is usually hidden: a person turned
+  // down and forgotten looks like a dead microphone.
+  const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
   const remote: StageFeed | null = stagePeers.length > 0 && remoteStream
     ? {
         stream: remoteStream,
+        volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
@@ -865,6 +876,7 @@ export function CallStage({
                 const presence = r.presence;
                 return {
                   stream: r.stream,
+                  volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
@@ -911,6 +923,15 @@ export function CallStage({
           <div
             className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
+            {/* In the flow above the bar, so it covers no face and no other
+                panel, and it hides with the bar while chat covers a phone. */}
+            {levelsOpen && (
+              <LevelsPanel
+                peers={stagePeers}
+                volumes={volumes}
+                onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
+              />
+            )}
             <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-[32px] bg-[#2a2b2e]/80 px-3 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur sm:gap-3">
               {/* A producer joins with no camera or mic, so these would only
                   show red and do nothing. */}
@@ -1199,6 +1220,14 @@ export function CallStage({
               )}
               {!companion && (
                 <>
+                  {/* Not on a present-only device: it plays nobody. */}
+                  <ControlButton
+                    icon="levels"
+                    label={levelsOpen ? 'Hide levels' : turnedDown ? 'Levels (someone is turned down)' : 'Levels'}
+                    badge={turnedDown}
+                    variant={levelsOpen ? 'active' : 'default'}
+                    onClick={() => setLevelsOpen((o) => !o)}
+                  />
                   <ControlButton
                     icon="script"
                     label={prompterOpen ? 'Hide teleprompter' : 'Show teleprompter'}
