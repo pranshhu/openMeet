@@ -118,6 +118,14 @@ describe('a microphone the host mutes', () => {
     expect(presences()).toEqual([]);
   });
 
+  it('keeps saying so while the microphone is still off', async () => {
+    const { result } = await joinAs('guest');
+    emit('peer-mute', { type: 'peer-mute' });
+    // The waiting view's switch can read "on" for a muted person: its first press turns nothing on.
+    act(() => result.current.setMic(false));
+    expect(result.current.state.hostMuted).toBe(true);
+  });
+
   it('never mutes the host', async () => {
     const { result, audio } = await joinAs('host');
     emit('peer-mute', { type: 'peer-mute' });

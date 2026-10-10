@@ -352,7 +352,10 @@ already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's si
 sends `peer-mute`, and the panel follows that person's `presence`.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
-that is running, as it does for every terminal close, with a banner that names the host.
+that is running, as it does for every terminal close, with a banner that names the host. A guest's
+capture that has started but not reached `recording` (its channel to the host has not opened)
+cannot be held, having no call screen: on any terminal close it is ended first through
+`endRecording({ internal: true })`, its backup kept, and the terminal screen follows.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -959,7 +962,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   this call. Press Stop and save my recording to keep this recording."; until they press it, or
   Leave, their camera and microphone go on into their own backup and nothing more reaches the
   host. On the host their files end at the removal and read incomplete (no finish signal), and
-  End & save does not wait for them.
+  End & save does not wait for them. A capture that had started but not yet reached the host
+  is ended for them instead, and they get the removed screen; its backup is in their browser.
 - **After Stop and save, a removed participant's page stays on the call screen.** Its tiles are
   frozen, and its line may still say to rejoin and send the backup; Leave and then Rejoin end on
   "The host removed you from this call". A backup that tab was sending back stays stalled on

@@ -287,3 +287,32 @@ describe('Room DO — the host removes a participant', () => {
     h.ws.close();
   }, 15_000);
 });
+
+describe('Room DO — host controls during a take', () => {
+  it('passes on a mute and carries out a removal while a take runs, and the take goes on', async () => {
+    const slug = 'hct-take-aaa';
+    await seedRoom(slug, 'tok-hct-take');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hct-take' });
+    const a = await enter(slug, 'A', { clientId: 'tab-a' });
+    const b = await enter(slug, 'B', { clientId: 'tab-b' });
+    h.ws.send(
+      JSON.stringify({ type: 'recording-started', recordingId: 'rec-1', kind: 'camera', filename: 'host_rec-1.mp4' })
+    );
+    await until(() => ofType(a.heard, 'recording-started').length > 0);
+
+    h.ws.send(JSON.stringify({ type: 'peer-mute', peerId: a.me.peerId }));
+    await until(() => ofType(a.heard, 'peer-mute').length > 0);
+    expect(ofType(a.heard, 'peer-mute')).toEqual([{ type: 'peer-mute' }]);
+
+    const gone = closed(a.ws);
+    h.ws.send(JSON.stringify({ type: 'peer-remove', peerId: a.me.peerId }));
+    const left = await Promise.race([gone, new Promise<null>((r) => setTimeout(() => r(null), 2000))]);
+    expect(left).toEqual({ code: 4007, reason: 'removed' });
+
+    // Still the room's take: someone who joins is told it is running.
+    const late = await enter(slug, 'C', { clientId: 'tab-c' });
+    expect(late.me.recording).toBe(true);
+
+    [h.ws, b.ws, late.ws].forEach((w) => w.close());
+  });
+});

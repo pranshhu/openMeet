@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 import { PeoplePanel } from '@/components/PeoplePanel';
 import type { RemotePeer } from '@/hooks/useRoom';
@@ -96,6 +96,17 @@ describe('the host mutes a person', () => {
   });
 });
 
+describe('the People panel in the call', () => {
+  it('is closed by its own close button, which hands focus back to People', async () => {
+    hook.mutePeer = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close people' }));
+    expect(screen.queryByRole('region', { name: 'People' })).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'People' })).toHaveFocus());
+  });
+});
+
 describe('a person the host muted', () => {
   it('sees the microphone off and is told, and their own button turns it back on', () => {
     const audio = { kind: 'audio', enabled: true };
@@ -173,6 +184,21 @@ describe('PeoplePanel', () => {
     expect(close).toHaveFocus();
     fireEvent.click(close);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('acts on the person whose row is pressed, not on the first', () => {
+    const onMute = vi.fn();
+    const onRemove = vi.fn();
+    render(<PeoplePanel people={people} onMute={onMute} onRemove={onRemove} onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mute Guest' }));
+    expect(onMute).toHaveBeenCalledTimes(1);
+    expect(onMute).toHaveBeenCalledWith('p-new');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Di' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Di from the call' }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledWith('p-di');
   });
 });
 

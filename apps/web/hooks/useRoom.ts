@@ -1180,23 +1180,38 @@ export function useRoom(slug: string) {
         // closes the file handles — the same trap peer-left and room-closed
         // both guard against with phaseOnPeerLeft. This path had no guard, so a
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
-        onFatalClose: (code) =>
-          setState((s) => {
-            const next = phaseOnFatalClose(s.phase, code);
-            if (!next) {
-              fatalCloseRef.current = true;
-              return {
-                ...s,
-                recordingError:
-                  code === WS_CLOSE_REMOVED
-                    ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'
-                    : roleRef.current === 'guest'
-                      ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
-                      : 'The connection to the room ended. Press End & save to keep this recording.',
-              };
-            }
-            return { ...s, ...next };
-          }),
+        onFatalClose: (code) => {
+          const settle = () =>
+            setState((s) => {
+              const next = phaseOnFatalClose(s.phase, code);
+              if (!next) {
+                fatalCloseRef.current = true;
+                return {
+                  ...s,
+                  recordingError:
+                    code === WS_CLOSE_REMOVED
+                      ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+                      : roleRef.current === 'guest'
+                        ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
+                        : 'The connection to the room ended. Press End & save to keep this recording.',
+                };
+              }
+              return { ...s, ...next };
+            });
+          // A guest's capture starts with the host's Record, into this browser's
+          // backup, and reaches 'recording' only once its channel to the host has
+          // opened. Until then there is no call screen to hold and no button that
+          // ends it, and with the room gone the host's stop cannot arrive. So it
+          // is ended here, backup kept, before the terminal screen shows: that
+          // screen must never sit over a camera that is still being recorded.
+          const starting =
+            roleRef.current === 'guest' &&
+            recordingRef.current &&
+            phaseRef.current !== 'recording' &&
+            phaseRef.current !== 'finalizing';
+          if (starting) void endRecordingRef.current({ internal: true }).then(settle, settle);
+          else settle();
+        },
       });
       signalRef.current = signal;
 

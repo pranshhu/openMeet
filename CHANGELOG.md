@@ -269,6 +269,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take in which no guest was recorded no longer leaves an empty
   `guest_<id>.mp4` in the recording folder, or warnings about it in the
   summary.
+- A guest whose recording had started in their own browser but had not yet reached
+  the host is no longer left with the camera on behind a screen that says the room
+  is gone, full, or that the host removed them. That recording is ended and its
+  backup kept.
 
 ### Security
 
