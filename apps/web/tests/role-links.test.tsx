@@ -107,6 +107,61 @@ describe('RoleLinks', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Elsewhere' }));
     expect(screen.queryByRole('status')).toBeNull();
   });
+
+  it('gives its arrow a tooltip and 44px, and its named panel follows the arrow with the producer link first', () => {
+    render(<RoleLinks menuClassName="" />);
+    const arrow = screen.getByRole('button', { name: ARROW });
+    expect(arrow).toHaveAttribute('title', ARROW);
+    // 44px to tap on a phone.
+    expect(arrow).toHaveClass('h-11', 'w-11');
+
+    fireEvent.click(arrow);
+    const panel = screen.getByRole('group', { name: ARROW });
+    const producer = screen.getByRole('button', { name: /^Copy producer link/ });
+    expect(panel).toContainElement(producer);
+    // Tab goes from the arrow on to the items only if the panel comes after it.
+    expect(arrow.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      producer.compareDocumentPosition(screen.getByRole('button', { name: /^Copy Present-only link/ })) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('stays open on any key but Escape', () => {
+    render(<RoleLinks menuClassName="" />);
+    fireEvent.click(screen.getByRole('button', { name: ARROW }));
+    // Tab is how a keyboard gets from the arrow to the items.
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
+  it('listens on the window only while it is open', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    try {
+      render(
+        <>
+          <RoleLinks menuClassName="" />
+          <button type="button">Elsewhere</button>
+        </>
+      );
+      const arrow = screen.getByRole('button', { name: ARROW });
+      fireEvent.click(arrow);
+      const mine = add.mock.calls.filter(([type]) => type === 'click' || type === 'keydown');
+      expect(mine).toHaveLength(2);
+      fireEvent.click(arrow);
+      for (const [type, listener] of mine) expect(remove).toHaveBeenCalledWith(type, listener);
+
+      // Closed, it leaves Escape to whatever else is open: focus stays where it is.
+      const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
+      elsewhere.focus();
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(elsewhere).toHaveFocus();
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
 });
 
 describe('WaitingRoom: role links', () => {
@@ -133,6 +188,12 @@ describe('WaitingRoom: role links', () => {
     unmount();
     render(<WaitingRoom role="guest" localStream={null} localName="Guest" onLeave={vi.fn()} />);
     expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+  });
+
+  it('hangs the panel above its row, centred on it', () => {
+    render(<WaitingRoom role="host" localStream={null} localName="Host" onLeave={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: ARROW }));
+    expect(screen.getByRole('group', { name: ARROW })).toHaveClass('bottom-full', 'left-1/2', '-translate-x-1/2');
   });
 });
 
@@ -204,5 +265,20 @@ describe('CallStage: role links', () => {
   it('offers them to nobody but the host', () => {
     render(<CallStage {...callProps} role="guest" canRecord={false} />);
     expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+  });
+
+  it('has no arrow while a take is saved, or after it', () => {
+    const { rerender } = render(<CallStage {...callProps} phase="finalizing" />);
+    expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+    rerender(<CallStage {...callProps} phase="done" />);
+    expect(screen.queryByRole('button', { name: ARROW })).toBeNull();
+  });
+
+  it('hangs the panel under the bar from its left inset, and leaves the bar its height', () => {
+    render(<CallStage {...callProps} />);
+    const arrow = screen.getByRole('button', { name: ARROW });
+    expect(arrow.parentElement).toHaveClass('-my-2');
+    fireEvent.click(arrow);
+    expect(screen.getByRole('group', { name: ARROW })).toHaveClass('left-4', 'top-full', 'min-[861px]:left-14');
   });
 });
