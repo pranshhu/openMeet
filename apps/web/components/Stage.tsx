@@ -52,6 +52,7 @@ export function Stage({
   screenLabel: screenLabelProp,
   companion,
   onStopPresenting,
+  onShowVideo,
 }: {
   local: StageFeed;
   remote: StageFeed | null; // null while alone
@@ -66,6 +67,8 @@ export function Stage({
   screenLabel?: string;
   companion?: boolean | undefined;
   onStopPresenting?: () => void;
+  /** Given while this viewer has incoming video off: a remote screen is covered by a note with this way back. */
+  onShowVideo?: (() => void) | undefined;
 }) {
   const presenting = !!remoteScreen || localPresenting;
   // Spotlight the peer's screen if we're viewing, else our own (self-preview).
@@ -125,6 +128,22 @@ export function Stage({
                   Stop presenting
                 </button>
               )}
+            </div>
+          )}
+          {/* Laid over the tile, not in its place: the tile still plays the
+              shared screen's sound. */}
+          {remoteScreen && onShowVideo && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-[#3c4043] px-4 text-center ring-1 ring-white/5">
+              <Icon name="present" size={40} className="mb-2 text-[#8ab4f8]" />
+              <span className="max-w-full text-lg font-medium text-white wrap-anywhere">{screenLabel}</span>
+              <span className="text-sm text-white/70">Incoming video is off, so you can’t see it.</span>
+              <button
+                type="button"
+                onClick={onShowVideo}
+                className="mt-4 rounded-full bg-[#8ab4f8] px-6 py-3 text-sm font-medium text-[#062e6f] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Show video
+              </button>
             </div>
           )}
           {/* Mobile: floating PiP of the peer over the screen */}

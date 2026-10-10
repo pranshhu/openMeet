@@ -75,12 +75,12 @@ function emit(type: string, m: unknown) {
 function fakeTracks() {
   const audio = { kind: 'audio', enabled: true, stop: vi.fn() };
   const video = { kind: 'video', enabled: true, stop: vi.fn() };
-  joinStream = {
+  joinStream = Object.assign(new EventTarget(), {
     id: 'local',
     getTracks: () => [audio, video],
     getAudioTracks: () => [audio],
     getVideoTracks: () => [video],
-  } as unknown as MediaStream;
+  }) as unknown as MediaStream;
   return [audio, video];
 }
 
