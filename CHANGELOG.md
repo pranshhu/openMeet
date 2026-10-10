@@ -121,6 +121,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   put the file in `apps/web/public/sounds/` and list it, with its license, in
   `apps/web/lib/sound-files.ts`. A file is downloaded only when someone adds
   its sound to their board. This repository ships none.
+- **Stop incoming video**, in the call's camera menu, for a weak connection: the
+  other participants stop sending you their camera and shared screen. You still
+  hear everyone, they still see you, and no recording is affected. It stays off
+  for someone who joins later, after a reconnect, and for a screen share that
+  starts while it is on. A line above the stage says it is on, and a screen
+  someone presents is covered by a note; both offer **Show video**.
 
 ### Changed
 
