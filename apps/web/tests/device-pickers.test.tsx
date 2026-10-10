@@ -242,11 +242,11 @@ describe('CallStage device pickers', () => {
       enabled: true,
       getSettings: () => ({ sampleRate: 48000, channelCount: 2 }),
     } as unknown as MediaStreamTrack;
-    const localStream = {
+    const localStream = Object.assign(new EventTarget(), {
       getTracks: () => [destinationAudioTrack],
       getAudioTracks: () => [destinationAudioTrack],
       getVideoTracks: () => [],
-    } as unknown as MediaStream;
+    }) as unknown as MediaStream;
 
     let activeMicId = 'mic-default';
     const onSwitchMic = vi.fn().mockImplementation(async (id: string) => {

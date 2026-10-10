@@ -8,9 +8,10 @@ if (!('RTCPeerConnection' in globalThis)) {
   (globalThis as { RTCPeerConnection?: unknown }).RTCPeerConnection = class {};
 }
 if (!('MediaStream' in globalThis) || typeof (globalThis as any).MediaStream.prototype?.getTracks !== 'function') {
-  (globalThis as any).MediaStream = class MockMediaStream {
+  (globalThis as any).MediaStream = class MockMediaStream extends EventTarget {
     private _tracks: any[];
     constructor(tracks: any[] = []) {
+      super();
       this._tracks = [...tracks];
     }
     getTracks() {

@@ -121,6 +121,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   speakers in the lobby, and whether their echo cancellation is on.
 - The session summary and `sync.json` say which files were recorded with echo
   cancellation on, and a microphone switched during the call keeps that choice.
+- **Stop incoming video**, in the call's camera menu, for a weak connection: the
+  other participants stop sending you their camera and shared screen. You still
+  hear everyone, they still see you, and no recording is affected. It stays off
+  for someone who joins later, after a reconnect, and for a screen share that
+  starts while it is on. A line above the stage says it is on, and a screen
+  someone presents is covered by a note; both offer **Show video**.
 
 ### Changed
 
