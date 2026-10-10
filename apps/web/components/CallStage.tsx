@@ -141,6 +141,7 @@ export function CallStage({
   onSetPeerRecorded,
   hostMuted = false,
   onMutePeer,
+  onRemovePeer,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -240,6 +241,8 @@ export function CallStage({
   hostMuted?: boolean;
   /** Host: ask for one person's microphone to be turned off. */
   onMutePeer?: (peerId: string) => void;
+  /** Host: remove one person from the room. */
+  onRemovePeer?: (peerId: string) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -926,7 +929,13 @@ export function CallStage({
               />
             )}
             {peopleOpen && isHost && onMutePeer && remotePeers.length > 0 && (
-              <PeoplePanel people={remotePeers} onMute={onMutePeer} onClose={closePeople} />
+              <PeoplePanel
+                people={remotePeers}
+                recording={takeActive || Boolean(resumeOffer)}
+                onMute={onMutePeer}
+                onRemove={onRemovePeer}
+                onClose={closePeople}
+              />
             )}
             {popupEl}
           </main>

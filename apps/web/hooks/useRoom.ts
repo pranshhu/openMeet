@@ -7,6 +7,7 @@ import {
   DATA_CHANNEL_RECORDING_SCREEN,
   RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
   type BrowserNote,
@@ -100,6 +101,9 @@ export type RoomPhase =
   // host seat over (4006). Each gets its own screen and next step.
   | 'full'
   | 'replaced'
+  // The host removed this participant (4007). The Room refuses this tab until
+  // the session ends, so the screen offers the lobby and a way home.
+  | 'removed'
   | 'error';
 
 export type { ChatMessage };
@@ -284,7 +288,7 @@ export function computeRecordingCapability(ua?: string): { mp4: boolean; wav: bo
  * full hook harness; it is the highest-consequence branch in the file.
  */
 /** Phases a live media event must never drag the room out of. */
-const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'error']);
+const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'removed', 'error']);
 
 export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
   return phase === 'recording' || phase === 'finalizing' || phase === 'done' ? phase : 'peer-left';
@@ -302,6 +306,7 @@ export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
 export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: RoomPhase } | null {
   if (phase === 'recording' || phase === 'finalizing') return null;
   if (code === WS_CLOSE_REPLACED) return { phase: 'replaced' };
+  if (code === WS_CLOSE_REMOVED) return { phase: 'removed' };
   return code === WS_CLOSE_CAPACITY_FULL
     ? { phase: 'full' }
     : { phase: 'not-found' }; // invalid (4002) or expired (4003) slug
@@ -1183,9 +1188,11 @@ export function useRoom(slug: string) {
               return {
                 ...s,
                 recordingError:
-                  roleRef.current === 'guest'
-                    ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
-                    : 'The connection to the room ended. Press End & save to keep this recording.',
+                  code === WS_CLOSE_REMOVED
+                    ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+                    : roleRef.current === 'guest'
+                      ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
+                      : 'The connection to the room ended. Press End & save to keep this recording.',
               };
             }
             return { ...s, ...next };
@@ -2292,6 +2299,11 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-mute', peerId });
   }, []);
 
+  /** Host: remove one person from the room. The Room closes their socket, and its `peer-left` updates the state. */
+  const removePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-remove', peerId });
+  }, []);
+
   const toggleScreenShare = useCallback(
     async (source?: File | 'rear-camera') => {
       const peer = peerRef.current;
@@ -2790,7 +2802,7 @@ export function useRoom(slug: string) {
   // 'finalizing', and a take still starting up (handles set, phase not yet
   // 'recording') keeps its tracks too.
   useEffect(() => {
-    const terminal = ['full', 'replaced', 'not-found', 'error'].includes(state.phase);
+    const terminal = ['full', 'replaced', 'removed', 'not-found', 'error'].includes(state.phase);
     if (terminal && !recordingRef.current) release();
   }, [state.phase, release]);
 
@@ -2883,6 +2895,7 @@ export function useRoom(slug: string) {
     sendChat,
     setPeerRecorded,
     mutePeer,
+    removePeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,

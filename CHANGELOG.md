@@ -123,6 +123,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The host can turn a participant's microphone off, from **People** in the call's
   control bar. That person is told at once and turns it back on with their own
   microphone button; during a take their recording has no sound until they do.
+- The host can remove a participant, from **People** in the call's control bar,
+  after a confirmation. The room keeps that tab out until everyone has left; what
+  the person recorded stays in the host's folder up to the removal, and in their
+  own browser's backup beyond it.
 
 ### Changed
 

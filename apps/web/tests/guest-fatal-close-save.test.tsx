@@ -244,3 +244,73 @@ describe('guest fatal close hold and stop-and-save action', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a guest the host removes during a take', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    onFatalCloseCallback = null;
+    endGuestRecordingCalled = false;
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps the call screen, is told the host did it, and can still stop and save', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+
+    const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+    const fakeStream = Object.assign(new EventTarget(), {
+      getTracks: () => [fakeAudio, fakeVideo],
+      getAudioTracks: () => [fakeAudio],
+      getVideoTracks: () => [fakeVideo],
+    }) as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Bob');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-2',
+        kind: 'camera',
+        filename: 'host_rec-host-2.mp4',
+      });
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+
+    // Held: the Stop and save button is the only thing that ends this capture.
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.recordingError).toBe(
+      'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+    );
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    expect(endGuestRecordingCalled).toBe(true);
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
+});

@@ -205,6 +205,8 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.27 | Stop incoming video, with a presentation | Two people. One ticks **Stop incoming video**; only then the other presents a browser tab that plays sound. Then press **Show video** in the spotlight. Repeat on a phone about 360 px wide and press the **Show video** in the line above the stage instead | A line above the stage reads "Incoming video is off. You still hear everyone, and the recording is not affected." The spotlight shows the screen's name, "Incoming video is off, so you can’t see it." and **Show video**, and the tab's sound is heard. Either **Show video** brings the screen and the cameras back and removes the line. On the phone the line wraps inside the screen and nothing scrolls sideways | ☐ | |
 | 8.28 | Host mutes a guest | Host and one guest in a call. The host opens **People** in the control bar and presses **Mute** beside the guest; the guest then presses their own microphone button. Repeat with the host's window about 390 px wide | Guest: the microphone button turns red and a line reads "The host muted your microphone. Turn it back on when you want to speak." The host no longer hears them, the row reads **Muted** and the guest's tile shows the muted mark. After the guest's own press the line is gone and they are heard again. At 390 px the panel is inside the screen, above the control bar. The guest has no **People** button | ☐ | |
 | 8.29 | Host mutes during a take | Host and one guest record. The host mutes the guest for about 10 s, the guest turns the microphone back on, End & save | The guest's line read "The host muted your microphone. Your recording has no sound until you turn it back on." The take never stopped and every file reads complete; the folder holds one `guest_*.mp4` and one `guest_*.wav`, each silent for those 10 s and neither split | ☐ | |
+| 8.30 | Host removes a guest | Host and one guest in a call. The host opens **People**, presses **Remove** beside the guest, reads the question, presses **Remove** again. The guest presses **Back to the lobby** and joins again, then opens the invite link in a new tab and joins. Repeat the host's part with its window about 390 px wide | After the first press nothing has happened: the row asks "Remove <name>? Their tab can’t rejoin this call." with **Remove** and **Cancel**, and **Cancel** changes nothing. After the second, the guest's page reads "The host removed you from this call" and its camera light goes off; the host reads "Everyone else left". Joining again from the same tab ends on the same screen; the new tab gets in. At 390 px the question wraps inside the panel and both buttons are easy to tap | ☐ | |
+| 8.31 | Host removes a guest during a take | Host and two guests record for 30 s. The host removes one guest; that guest presses **Stop and save**; 10 s later the host presses End & save | The question said "Their recording here ends now, and their tab can’t rejoin this call." The removed guest keeps the call screen with a red line "The host removed you from this call. Press Stop and save my recording to keep this recording.", then gets **Download your backup**. The host's save does not wait for that guest; in the summary that guest's files read "Incomplete. No finish signal arrived…" and the other guest's read complete | ☐ | |
 
 ## 9 — Deploy
 
@@ -226,6 +228,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.2 | Malformed slug | `curl -i "$WORKER/ws/r/NOT_A_SLUG" -H "Upgrade: websocket"` | 400, no Durable Object created | ☐ | |
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
+| 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
 
 ---
 
@@ -262,6 +265,9 @@ Also not covered automatically. Needs 3 browser profiles.
 - **No TURN configured** means two people behind strict NATs cannot connect.
 - **A host's mute turns off the microphone only.** That person's media board pads
   and the sound of a video they present keep playing.
+- **A removed participant can come back in a new tab.** The room keeps out the tab
+  the host removed, until everyone has left; the invite link is still the only
+  credential.
 
 ## When something fails
 

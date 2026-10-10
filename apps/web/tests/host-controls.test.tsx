@@ -175,3 +175,69 @@ describe('PeoplePanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the host removes a person', () => {
+  it('asks in the row first, and hands the removal to the room only on the second Remove', () => {
+    hook.mutePeer = vi.fn();
+    hook.removePeer = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo' }));
+    expect(hook.removePeer).not.toHaveBeenCalled();
+    expect(screen.getByText('Remove Bo? Their tab can’t rejoin this call.')).toBeInTheDocument();
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const confirm = screen.getByRole('button', { name: 'Remove Bo from the call' });
+    expect(cancel).toHaveFocus();
+    // Cancel is last, at the row's right end where Remove was: a second click there never confirms.
+    expect(confirm.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(cancel);
+    expect(hook.removePeer).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Remove Bo\?/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo from the call' }));
+    expect(hook.removePeer).toHaveBeenCalledTimes(1);
+    expect(hook.removePeer).toHaveBeenCalledWith('p-bo');
+    expect(screen.queryByText(/^Remove Bo\?/)).toBeNull();
+  });
+
+  // A producer is in no file, and neither is a guest the host set as not recorded.
+  it('says during a take that a recorded person’s recording ends here, and only theirs', () => {
+    hook.mutePeer = vi.fn();
+    hook.removePeer = vi.fn();
+    const cy: RemotePeer = { peerId: 'p-cy', name: 'Cy', stream: null, role: 'producer' };
+    const di: RemotePeer = { peerId: 'p-di', name: 'Di', stream: null, role: 'guest', notRecorded: true };
+    Object.assign(state, { phase: 'recording', peerRecording: true, remotePeers: [bo, cy, di] });
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo' }));
+    expect(
+      screen.getByText('Remove Bo? Their recording here ends now, and their tab can’t rejoin this call.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cy' }));
+    expect(screen.getByText('Remove Cy? Their tab can’t rejoin this call.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Di' }));
+    expect(screen.getByText('Remove Di? Their tab can’t rejoin this call.')).toBeInTheDocument();
+  });
+
+  // After a host reload the guests are still capturing the take the host can resume.
+  it('says so too while an interrupted take can still be resumed', () => {
+    hook.mutePeer = vi.fn();
+    hook.removePeer = vi.fn();
+    Object.assign(state, { resumeOffer: { take: 1, canResume: true } });
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo' }));
+    expect(
+      screen.getByText('Remove Bo? Their recording here ends now, and their tab can’t rejoin this call.')
+    ).toBeInTheDocument();
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useRoom } from '@/hooks/useRoom';
+import { phaseOnConnectionStateChange, phaseOnFatalClose, useRoom } from '@/hooks/useRoom';
 
 /**
  * The host's controls as the hook sees them: the real useRoom, with the
@@ -130,5 +130,31 @@ describe('a microphone the host mutes', () => {
     sent = [];
     act(() => result.current.mutePeer('p-other'));
     expect(sent).toContainEqual({ type: 'peer-mute', peerId: 'p-other' });
+  });
+});
+
+describe('removing a person', () => {
+  it("sends the host's removal of one person to the room", async () => {
+    const { result } = await joinAs('host');
+    sent = [];
+    act(() => result.current.removePeer('p-other'));
+    expect(sent).toContainEqual({ type: 'peer-remove', peerId: 'p-other' });
+  });
+});
+
+describe('removed by the host (close code 4007)', () => {
+  it('ends the room on a screen of its own when no take is running', () => {
+    expect(phaseOnFatalClose('in-call', 4007)).toEqual({ phase: 'removed' });
+    expect(phaseOnFatalClose('connecting', 4007)).toEqual({ phase: 'removed' });
+    expect(phaseOnFatalClose('done', 4007)).toEqual({ phase: 'removed' });
+  });
+
+  it('holds a take that is running, so its files can still be closed', () => {
+    expect(phaseOnFatalClose('recording', 4007)).toBeNull();
+    expect(phaseOnFatalClose('finalizing', 4007)).toBeNull();
+  });
+
+  it('is not pulled back into the call by a connection that comes up late', () => {
+    expect(phaseOnConnectionStateChange('removed', 'connected')).toBe('removed');
   });
 });

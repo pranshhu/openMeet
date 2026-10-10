@@ -1,5 +1,6 @@
 'use client';
 
+import { useId, useState } from 'react';
 import type { RemotePeer } from '@/hooks/useRoom';
 import { Icon } from './Icon';
 
@@ -13,14 +14,24 @@ const rowButton =
  */
 export function PeoplePanel({
   people,
+  recording = false,
   onMute,
+  onRemove,
   onClose,
 }: {
   people: RemotePeer[];
+  /** A take is running or can still be resumed, so removing a recorded person ends their files here. */
+  recording?: boolean;
   /** Ask for this person's microphone to be turned off. */
   onMute: (peerId: string) => void;
+  /** Remove this person from the room. Without it no row offers Remove. */
+  onRemove?: ((peerId: string) => void) | undefined;
   onClose: () => void;
 }) {
+  // The person whose removal is being asked about, by peer id. Asked in the
+  // row: a blocking dialog would stall this tab, which writes the take.
+  const [asking, setAsking] = useState<string | null>(null);
+  const questionId = useId();
   return (
     <section
       aria-label="People"
@@ -48,6 +59,44 @@ export function PeoplePanel({
             p.role === 'producer' ? `${name} (Producer)` : p.companion ? `${name} (Presenting)` : name;
           // Until their first presence arrives a person counts as unmuted.
           const micOn = p.presence?.micOn !== false;
+          if (onRemove && asking === p.peerId) {
+            // A producer is in no file, and neither is a guest set as not recorded.
+            const ends = recording && p.role !== 'producer' && !p.notRecorded;
+            return (
+              <li key={p.peerId} className="py-1.5 text-sm text-white">
+                <p id={questionId} className="text-xs text-[#fdd663] wrap-anywhere">
+                  {ends
+                    ? `Remove ${name}? Their recording here ends now, and their tab can’t rejoin this call.`
+                    : `Remove ${name}? Their tab can’t rejoin this call.`}
+                </p>
+                {/* Cancel is last, at the row's right end where Remove was: a
+                    second click there never confirms. */}
+                <div className="mt-1 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    aria-label={`Remove ${name} from the call`}
+                    aria-describedby={questionId}
+                    onClick={() => {
+                      setAsking(null);
+                      onRemove(p.peerId);
+                    }}
+                    className={`${rowButton} bg-[#ea4335] hover:bg-[#d33426]`}
+                  >
+                    Remove
+                  </button>
+                  <button
+                    type="button"
+                    autoFocus
+                    aria-describedby={questionId}
+                    onClick={() => setAsking(null)}
+                    className={`${rowButton} hover:bg-white/10`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </li>
+            );
+          }
           return (
             <li key={p.peerId} className="flex min-h-11 items-center gap-2 text-sm text-white">
               <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -61,6 +110,16 @@ export function PeoplePanel({
                   className={`${rowButton} ${micOn ? 'hover:bg-white/10' : 'cursor-default opacity-50'}`}
                 >
                   {micOn ? 'Mute' : 'Muted'}
+                </button>
+              )}
+              {onRemove && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  onClick={() => setAsking(p.peerId)}
+                  className={`${rowButton} hover:bg-white/10`}
+                >
+                  Remove
                 </button>
               )}
             </li>

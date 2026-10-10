@@ -266,7 +266,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
-  `replaced` (4006: another tab/device took the host seat), `left` (Rejoin + Back to home, plus
+  `replaced` (4006: another tab/device took the host seat), `removed` (4007: the host removed
+  this participant; Back to the lobby + Back to home), `left` (Rejoin + Back to home, plus
   download links for sync.json/chapters.txt/backups when a take was finalized on the way out; a host
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
@@ -293,6 +294,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   and a present-only device do not get. A person the host muted sees their own mic button off
   and a `role="status"` line that says so, and during their own capture that their recording
   has no sound until they turn it back on.
+  Each row also has **Remove**, which asks in the row itself before it calls
+  `useRoom().removePeer` (a blocking dialog would stall the tab that writes the take), with
+  **Cancel** focused and last, at the row's right end where Remove was; during a take, and
+  while an interrupted take can still be resumed, the question says that a recorded
+  person's recording here ends.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
@@ -325,7 +331,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
-(+ `not-found|peer-left|left|full|replaced|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
+(+ `not-found|peer-left|left|full|replaced|removed|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
@@ -340,6 +346,9 @@ off until they turn it back on: the handler does what `setMic(false)` does (trac
 `presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
 already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
 sends `peer-mute`, and the panel follows that person's `presence`.
+`removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
+On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
+that is running, as it does for every terminal close, with a banner that names the host.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -906,3 +915,18 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A person muted while their page still reads "Connecting…" sees the mic button there as
   on.** The waiting view keeps its own switch. The call screen shows it off, with the note, as
   soon as it appears, and one press there turns it back on.
+- **A participant removed during a take keeps recording in their own browser.** Their page holds
+  the call screen, as for any terminal close during a take, and says "The host removed you from
+  this call. Press Stop and save my recording to keep this recording."; until they press it, or
+  Leave, their camera and microphone go on into their own backup and nothing more reaches the
+  host. On the host their files end at the removal and read incomplete (no finish signal), and
+  End & save does not wait for them.
+- **After Stop and save, a removed participant's page stays on the call screen.** Its tiles are
+  frozen, and its line may still say to rejoin and send the backup; Leave and then Rejoin end on
+  "The host removed you from this call". A backup that tab was sending back stays stalled on
+  the host; the removed person still has it, listed in every lobby.
+- **Nobody else is told why a person left.** A removal reaches the other participants as an
+  ordinary `peer-left`; its `reason` is `removed`, and no page reads it.
+- **The People panel exists on the call screen only.** A host whose page still reads
+  "Connecting…" cannot mute or remove the person it is connecting to, and a removal cannot be
+  undone from the panel: the removed person opens the link in a new tab.
