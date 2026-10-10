@@ -151,4 +151,40 @@ describe('CallStage: levels', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  // A new layout draws new tiles: a level set before it has to reach them.
+  it('gives a level set earlier to the tiles a new layout draws', () => {
+    const { container, rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Levels' }));
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Bob' }), { target: { value: '30' } });
+    rerender(<CallStage {...props} remoteScreenStream={shared} />);
+    expect(volumesOf(container, bob)).toEqual([0.3, 0.3]);
+    expect(volumesOf(container, shared)).toEqual([1]);
+  });
+
+  it('silences a person at 0 and leaves the fader there', () => {
+    const { container } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Levels' }));
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Bob' }), { target: { value: '0' } });
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Carol' }), { target: { value: '0' } });
+    expect(volumesOf(container, bob)).toEqual([0]);
+    expect(volumesOf(container, carol)).toEqual([0]);
+    expect((screen.getByRole('slider', { name: 'Volume for Bob' }) as HTMLInputElement).value).toBe('0');
+  });
+
+  it('drops the dot once the fader is back at full, and for a person who has left', () => {
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Levels' }));
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Bob' }), { target: { value: '30' } });
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Bob' }), { target: { value: '100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hide levels' }));
+    expect(within(screen.getByRole('button', { name: 'Levels' })).queryByTestId('badge')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Levels' }));
+    fireEvent.change(screen.getByRole('slider', { name: 'Volume for Carol' }), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hide levels' }));
+    expect(screen.getByRole('button', { name: 'Levels (someone is turned down)' })).toBeInTheDocument();
+    rerender(<CallStage {...props} remotePeers={props.remotePeers.filter((p) => p.peerId !== 'p-carol')} />);
+    expect(within(screen.getByRole('button', { name: 'Levels' })).queryByTestId('badge')).toBeNull();
+  });
 });

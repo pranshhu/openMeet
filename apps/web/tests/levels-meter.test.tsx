@@ -134,4 +134,11 @@ describe('LevelsPanel meters', () => {
     expect(levelPercent(2)).toBe(100);
     expect(levelPercent(Number.NaN)).toBe(0);
   });
+
+  it('reads the loudest sample whichever way it swings', () => {
+    render(<LevelsPanel peers={peers} volumes={new Map()} onVolume={vi.fn()} />);
+    FakeAudioContext.made[0]!.analysers[0]!.level = -1;
+    tick();
+    expect(screen.getByRole('meter', { name: 'Level for Bob' })).toHaveAttribute('aria-valuenow', '100');
+  });
 });
