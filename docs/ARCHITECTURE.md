@@ -379,13 +379,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   `ChatPanel` offers the choice under **To** when there are two or more other people
   (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as its
   name and the Room's role, `Name (guest)`, with ` 2` and ` 3` for a second and third who read
-  the same. The choice lives in `CallStage` (`chatTo`), because the panel unmounts when chat
-  closes, and stays until it is changed. `openChat` moves it only from Everyone: to the sender of
-  the newest private message among those that arrived while chat was closed, once per message,
-  if that person is still in the call. A person already chosen is never replaced, and a message
-  for everyone that arrived after it changes nothing. When the chosen id is gone from the list
-  (they left, or reconnected under a new id) the panel sends nothing until the sender chooses
-  again; it never falls back to everyone.
+  the same. A label stays with the person it was given to for as long as the call screen is up
+  (`chatLabels` in `CallStage`) and is never given to anyone else, so a number is not dealt again
+  when someone leaves or reconnects; direction marks in a name are left out of it. The choice
+  lives in `CallStage` (`chatTo`), because the panel unmounts when chat closes, and stays until it
+  is changed. `openChat` moves it only from Everyone: to the sender of the newest private message
+  among those that arrived while chat was closed, once per message, if that person is still in the
+  call. A person already chosen is never replaced, and a message for everyone that arrived after it
+  changes nothing. When the chosen id is gone from the list (they left, or reconnected under a new
+  id) the panel sends nothing until the sender chooses again; it never falls back to everyone.
 
 ### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
@@ -944,8 +946,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   chat file never does.
 - **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
   id, so the chat panel says the person left or reconnected and sends nothing until someone is
-  chosen. Under **To** a person reads as name and role, so two with one name are told apart, and
-  a present-only device is not listed.
+  chosen. Under **To** a person reads as name and role, with a number when two read the same;
+  someone who comes back gets a number nobody had, never another person's label, and a
+  present-only device is not listed.
 - **A private message that arrives while chat is open does not move To.** An answer goes where
   **To** says, to everyone if nobody is chosen. And chat opened on Everyone is addressed to the
   sender of the newest private message that arrived while chat was closed, if that person is

@@ -37,23 +37,34 @@ export function PrivateMark({ detail }: { detail: string }) {
 }
 
 // A display name is its owner's text, up to 64 characters; an option has to fit a phone.
+// Direction marks are taken out: one left in a name turns round the words this
+// page writes after it, the role among them.
 const optionName = (name: string) => {
-  const chars = Array.from(name);
-  return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : name;
+  const chars = Array.from(name.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, ''));
+  return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : chars.join('');
 };
 
 // What a person is called under To: the name they chose, cut to fit a phone,
 // and the role the Room gave them, which they did not choose. Two who would
-// read the same get a number, in the order they are listed.
-export function recipientLabels<T extends { name: string; role: string }>(
-  recipients: T[]
+// read the same get a number. `given` is the caller's memory of the labels
+// handed out: a label stays with the person who got it and is never given
+// to anyone else, also after that person has left, because a reader who
+// learned which of two is which must not find the label on the other one.
+export function recipientLabels<T extends { peerId: string; name: string; role: string }>(
+  recipients: T[],
+  given: Map<string, string> = new Map()
 ): (T & { label: string })[] {
-  const seen = new Map<string, number>();
   return recipients.map((r) => {
     const base = `${optionName(r.name)} (${r.role})`;
-    const n = (seen.get(base) ?? 0) + 1;
-    seen.set(base, n);
-    return { ...r, label: n === 1 ? base : `${base} ${n}` };
+    const key = `${r.peerId} ${base}`;
+    let label = given.get(key);
+    if (!label) {
+      const taken = new Set(given.values());
+      label = base;
+      for (let n = 2; taken.has(label); n++) label = `${base} ${n}`;
+      given.set(key, label);
+    }
+    return { ...r, label };
   });
 }
 
@@ -62,6 +73,7 @@ export function ChatPanel({
   recipients = [],
   to = '',
   onTo,
+  labels,
   onSend,
   onClose,
 }: {
@@ -74,6 +86,11 @@ export function ChatPanel({
    */
   to?: string;
   onTo?: (to: string) => void;
+  /**
+   * The labels handed out under To, kept by the caller for the reason it
+   * keeps `to`: this panel is gone whenever chat is closed.
+   */
+  labels?: Map<string, string>;
   onSend: (text: string, to?: string) => void;
   onClose: () => void;
 }) {
@@ -82,7 +99,7 @@ export function ChatPanel({
   // have left, or come back under a new id, nothing is sent until the sender
   // chooses again: falling back to everyone would publish a message written
   // for one person.
-  const labelled = recipientLabels(recipients);
+  const labelled = recipientLabels(recipients, labels);
   const person = labelled.find((r) => r.peerId === to);
   const gone = to !== '' && !person;
   const listRef = useRef<HTMLDivElement>(null);

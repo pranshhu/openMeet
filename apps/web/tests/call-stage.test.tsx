@@ -2833,4 +2833,18 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     fireEvent.click(screen.getByLabelText('Chat'));
     expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob (guest)', 'Dee (guest)']);
   });
+
+  it('keeps a label with its person when someone who reads the same reconnects', () => {
+    const other = { peerId: 'p-other', name: 'Bob', stream: null, role: 'guest' as const };
+    const bobAgain = { ...bob, peerId: 'p-bob-again' };
+    const options = () => Array.from(to().options).map((o) => o.textContent);
+    const { rerender } = render(<CallStage {...baseProps} remotePeers={[bob, other]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(options()).toEqual(['Everyone', 'Bob (guest)', 'Bob (guest) 2']);
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...baseProps} remotePeers={[other, bobAgain]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(options()).toEqual(['Everyone', 'Bob (guest) 2', 'Bob (guest) 3']);
+  });
 });

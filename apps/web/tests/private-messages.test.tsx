@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ChatPanel, chatSenderLabel } from '@/components/ChatPanel';
+import { ChatPanel, chatSenderLabel, recipientLabels } from '@/components/ChatPanel';
 
 describe('ChatPanel: a private line', () => {
   it('says who it is between, on the recipient’s screen and on the sender’s', () => {
@@ -228,5 +228,39 @@ describe('ChatPanel: a private mark no name can draw, and a recipient that stays
     expect(screen.getByText('Messages are visible to everyone in the call.')).toBeInTheDocument();
     rerender(<ChatPanel {...props} to="p-bob" />);
     expect(screen.queryByText('Messages are visible to everyone in the call.')).toBeNull();
+  });
+
+  it('never gives one person’s label to another', () => {
+    const given = new Map<string, string>();
+    const bob = { peerId: 'p-bob', name: 'Bob', role: 'guest' };
+    const other = { peerId: 'p-other', name: 'Bob', role: 'guest' };
+    const labels = (list: { peerId: string; name: string; role: string }[]) =>
+      recipientLabels(list, given).map((r) => [r.peerId, r.label]);
+    expect(labels([bob, other])).toEqual([
+      ['p-bob', 'Bob (guest)'],
+      ['p-other', 'Bob (guest) 2'],
+    ]);
+    expect(labels([bob, other])).toEqual([
+      ['p-bob', 'Bob (guest)'],
+      ['p-other', 'Bob (guest) 2'],
+    ]);
+    expect(labels([other, { ...bob, peerId: 'p-bob-again' }])).toEqual([
+      ['p-other', 'Bob (guest) 2'],
+      ['p-bob-again', 'Bob (guest) 3'],
+    ]);
+  });
+
+  it('drops direction marks from a name, so the role after it reads as written', () => {
+    const marks = '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069';
+    const label = (name: string) => recipientLabels([{ peerId: 'p-x', name, role: 'guest' }])[0]?.label;
+    expect(label('Bob (host)\u202E')).toBe('Bob (host) (guest)');
+    expect(label(`A${marks}na`)).toBe('Ana (guest)');
+  });
+
+  it('gives a person whose name arrives later a label for that name', () => {
+    const given = new Map<string, string>();
+    const label = (name: string) => recipientLabels([{ peerId: 'p-x', name, role: 'guest' }], given)[0]?.label;
+    expect(label('Guest')).toBe('Guest (guest)');
+    expect(label('Ana')).toBe('Ana (guest)');
   });
 });

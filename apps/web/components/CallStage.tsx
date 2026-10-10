@@ -362,6 +362,10 @@ export function CallStage({
   // message must still be chosen when chat opens again, or the next message
   // meant for them goes to everyone.
   const [chatTo, setChatTo] = useState('');
+  // The labels people were given under To, for as long as this screen is up:
+  // one person's label is never handed to another when someone leaves or
+  // reconnects.
+  const [chatLabels] = useState(() => new Map<string, string>());
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {
@@ -392,7 +396,7 @@ export function CallStage({
       .slice(messages.length - unread)
       .filter((m) => m.private && m.fromPeerId)
       .pop()?.fromPeerId;
-    if (open && sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
+    if (sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -1361,6 +1365,7 @@ export function CallStage({
               recipients={chatRecipients}
               to={chatTo}
               onTo={setChatTo}
+              labels={chatLabels}
               onSend={onSendChat}
               onClose={closeChat}
             />
