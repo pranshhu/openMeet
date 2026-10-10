@@ -310,11 +310,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - **`components/Shortcuts.tsx`** is the call's keyboard and the list of its keys, mounted last in
   `CallStage`'s status bar. A key is not wired to an action: a bare letter typed outside a field
   presses the button that carries it in `aria-keyshortcuts` (`ControlButton`'s `shortcut`: **A**
-  microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not
-  on screen has no key; one that is in the document but not displayed is skipped
-  (`checkVisibility`). A held key, and a letter pressed with Shift, Ctrl, Alt or Cmd, is left
-  alone. The **?** button (from `sm` up) and the **?** key open the list. **M** (marker) keeps
-  its own handler in `CallStage` and is only listed.
+  microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not on
+  screen has no key; one that is in the document but not displayed is skipped (`checkVisibility`). A
+  held key, and a letter pressed with Shift, Ctrl or Cmd, is left alone. The **?** button (from `sm`
+  up) and the **?** key open the list. **M** (marker) keeps its own handler in `CallStage` and is
+  only listed. **Alt+R** is carried by Record and **Alt+S** by the host's End & save: two chords, so
+  the key that starts a take can never end one, each under whatever keeps its button off or away.
+  With Alt held, a `key` that is not a Latin letter is read from `code`, because Option+R types ® on
+  a Mac.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -920,3 +923,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   while any input has focus, a teleprompter slider included. The waiting room has no keys.
   Below 640 px the **?** button and its list are not shown, and a key that presses a button
   does nothing while chat or the summary covers the control bar.
+- **Alt+R and Alt+S are found by the key's place when the key does not type a Latin letter.**
+  On a Mac, Option+R types ®, so the letter is taken from the key's position; on a Mac layout
+  that puts R or S elsewhere (Dvorak, Colemak) the chord is on the key where QWERTY has the
+  letter. A desktop or a browser that takes one of the chords for itself never passes it to
+  the page. A guest's "Stop and save" has no key.

@@ -1235,6 +1235,7 @@ export function CallStage({
                     icon="record"
                     text="Record"
                     label="Start recording"
+                    shortcut="Alt+R"
                     variant="record"
                     disabled={recoveryBusy || countdownEndsAt !== null}
                     onClick={phase === 'done' ? recordNextTake : handleRecord}
@@ -1297,7 +1298,7 @@ export function CallStage({
                     onClick={() => onMark('')}
                   />
                   {isHost ? (
-                    <ControlButton icon="stop" text="End & save" label="End & save recording" variant="active" onClick={onEnd} />
+                    <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={onEnd} />
                   ) : (
                     recordingError && recordingError.includes('Stop and save my recording') && (
                       <ControlButton

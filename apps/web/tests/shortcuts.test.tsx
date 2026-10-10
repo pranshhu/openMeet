@@ -261,3 +261,121 @@ describe('CallStage: shortcut keys', () => {
     expect(onMark).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
+  /** Alt with one letter, as a keyboard that types the letter itself sends it. */
+  const alt = (letter: 'r' | 's', init: KeyboardEventInit = {}, target: Element = document.body) =>
+    press(letter, { code: `Key${letter.toUpperCase()}`, altKey: true, ...init }, target);
+
+  it('Alt+R presses Record for the host, and Alt+S presses End & save once the take runs', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    expect(screen.getByRole('button', { name: 'Start recording' })).toHaveAttribute(
+      'title',
+      'Start recording (Alt+R)'
+    );
+    // No take runs: nothing carries Alt+S, so it is left to the browser.
+    expect(alt('s')).toBe(true);
+    // Taken, so the browser does nothing else with the chord.
+    expect(alt('r')).toBe(false);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    // The key that starts a take can never end it.
+    alt('r');
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'End & save recording' })).toHaveAttribute(
+      'title',
+      'End & save recording (Alt+S)'
+    );
+    expect(alt('s')).toBe(false);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the letter from the key’s place when Option has turned it into a symbol', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    press('®', { code: 'KeyR', altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    press('ß', { code: 'KeyS', altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('is those chords alone: a bare letter, Shift, Ctrl, Cmd and a held chord press nothing', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const others = (letter: 'r' | 's') => {
+      const code = `Key${letter.toUpperCase()}`;
+      press(letter, { code });
+      press(letter.toUpperCase(), { code, shiftKey: true });
+      alt(letter, { shiftKey: true });
+      alt(letter, { ctrlKey: true });
+      alt(letter, { metaKey: true });
+      alt(letter, { repeat: true });
+    };
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    others('r');
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    others('s');
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('cannot start a take while Record is greyed out, or from a field', () => {
+    const onRecord = vi.fn();
+    const { rerender } = render(
+      <CallStage {...callProps} onRecord={onRecord} countdownEndsAt={Date.now() + 3000} />
+    );
+    alt('r');
+    rerender(<CallStage {...callProps} onRecord={onRecord} recoveryBusy />);
+    alt('r');
+    rerender(<CallStage {...callProps} onRecord={onRecord} />);
+    press('c');
+    alt('r', {}, screen.getByLabelText('Message'));
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a guest, and nothing while the take is being saved', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(
+      <CallStage {...callProps} role="guest" canRecord={false} onRecord={onRecord} onEnd={onEnd} />
+    );
+    // Not taken: with no button to press, the chord is left to the browser.
+    expect(alt('r')).toBe(true);
+    rerender(
+      <CallStage
+        {...callProps}
+        role="guest"
+        canRecord={false}
+        phase="recording"
+        roomRecording
+        onRecord={onRecord}
+        onEnd={onEnd}
+      />
+    );
+    alt('r');
+    alt('s');
+    rerender(<CallStage {...callProps} phase="finalizing" onRecord={onRecord} onEnd={onEnd} />);
+    alt('r');
+    alt('s');
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('lists both chords, and Alt with ? is not the key that opens the list', () => {
+    render(<Shortcuts />);
+    press('?', { shiftKey: true, altKey: true });
+    expect(screen.queryByText('Keyboard shortcuts')).toBeNull();
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Record (host)').previousElementSibling).toHaveTextContent('Alt+R');
+    expect(screen.getByText('End & save (host)').previousElementSibling).toHaveTextContent('Alt+S');
+    expect(screen.getByText(/On a Mac, Alt is the Option key/)).toBeInTheDocument();
+  });
+});

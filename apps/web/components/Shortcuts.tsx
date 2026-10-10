@@ -9,6 +9,8 @@ const ROWS: [keys: string, does: string][] = [
   ['V', 'Camera on or off'],
   ['C', 'Chat'],
   ['T', 'Teleprompter'],
+  ['Alt+R', 'Record (host)'],
+  ['Alt+S', 'End & save (host)'],
   ['M', 'Marker, while recording'],
   ['?', 'This list'],
 ];
@@ -29,18 +31,25 @@ export function Shortcuts() {
         setOpen(false);
         return;
       }
-      // A held key would switch over and over, and a chord is the browser's.
-      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      // A held key would switch over and over, and a Ctrl or Cmd chord is the browser's.
+      if (e.repeat || e.ctrlKey || e.metaKey) return;
       // Typing is never a shortcut.
       const el = e.target as Element | null;
       if (el?.closest?.('input, textarea, select, [contenteditable]')) return;
-      if (e.key === '?') {
+      if (e.key === '?' && !e.altKey) {
         setOpen((o) => !o);
         return;
       }
-      // Letters only: the key goes into a selector. Shift+letter is left alone.
-      if (e.shiftKey || !/^[a-z]$/i.test(e.key)) return;
-      const button = document.querySelector<HTMLElement>(`button[aria-keyshortcuts="${e.key.toUpperCase()}"]`);
+      if (e.shiftKey) return;
+      let letter = e.key.toUpperCase();
+      // With Alt held a Mac turns the letter into a symbol, so there it is read
+      // from the key's place.
+      if (e.altKey && !/^[A-Z]$/.test(letter)) letter = e.code.replace(/^Key/, '');
+      // One Latin letter: it goes into a selector.
+      if (!/^[A-Z]$/.test(letter)) return;
+      const button = document.querySelector<HTMLElement>(
+        `button[aria-keyshortcuts="${e.altKey ? 'Alt+' : ''}${letter}"]`
+      );
       // A narrow window hides the control bar while chat or the summary covers
       // the stage; a button nobody can see is not pressed.
       if (!button || button.checkVisibility?.() === false) return;
@@ -83,7 +92,7 @@ export function Shortcuts() {
             ))}
           </dl>
           <p className="mt-2 text-xs text-white/70">
-            {'A key presses its button, so it works while that button is shown. Keys do nothing while you type in a field.'}
+            {'A key presses its button, so it works while that button is shown. Keys do nothing while you type in a field. On a Mac, Alt is the Option key.'}
           </p>
         </div>
       )}

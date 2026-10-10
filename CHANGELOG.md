@@ -134,6 +134,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Keyboard shortcuts in the call: **A** switches the microphone, **V** the camera,
   **C** opens chat and **T** the teleprompter. The **?** button in the top bar, or
   the **?** key, lists them. No key does anything while you type in a field.
+- **Alt+R** presses Record for the host and **Alt+S** presses End & save while a take
+  runs (Option on a Mac). Neither does anything while its button is greyed out or
+  not on screen.
 
 ### Changed
 
