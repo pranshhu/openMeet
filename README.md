@@ -74,6 +74,8 @@ retention policy to trust, because there's nothing retained.
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
+- Private messages: with three or more in the call, a chat message can go to one
+  person instead of everyone, and is left out of the take's chat file
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - A sound when a recording problem appears during a take, and a system

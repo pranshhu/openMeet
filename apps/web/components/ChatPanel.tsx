@@ -15,16 +15,39 @@ export function chatSenderLabel(
   return m.self ? `${who}, privately to ${m.toName || 'one person'}` : `${who}, privately to you`;
 }
 
+// A display name is its owner's text, up to 64 characters; an option has to fit a phone.
+const optionName = (name: string) => {
+  const chars = Array.from(name);
+  return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : name;
+};
+
 export function ChatPanel({
   messages,
+  recipients = [],
+  to = '',
+  onTo,
   onSend,
   onClose,
 }: {
   messages: ChatMessage[];
-  onSend: (text: string) => void;
+  /** The people a message can be sent to on its own. */
+  recipients?: { peerId: string; name: string }[];
+  /**
+   * Who the next message is for: '' is everyone, otherwise a peerId. The
+   * caller keeps it, because this panel is gone whenever chat is closed.
+   */
+  to?: string;
+  onTo?: (to: string) => void;
+  onSend: (text: string, to?: string) => void;
   onClose: () => void;
 }) {
   const [text, setText] = useState('');
+  // The person the next message is for, while they are in the call. Once they
+  // have left, or come back under a new id, nothing is sent until the sender
+  // chooses again: falling back to everyone would publish a message written
+  // for one person.
+  const person = recipients.find((r) => r.peerId === to);
+  const gone = to !== '' && !person;
   const listRef = useRef<HTMLDivElement>(null);
   // Follow new messages only while the reader is at the bottom; scrolling up to
   // read history pins the list until they come back down. Your own send always
@@ -101,13 +124,45 @@ export function ChatPanel({
         onSubmit={(e) => {
           e.preventDefault();
           const t = text.trim();
-          if (t) {
-            onSend(t);
+          if (t && !gone) {
+            if (to) onSend(t, to);
+            else onSend(t);
             setText('');
           }
         }}
         className="p-3"
       >
+        {(recipients.length > 1 || to !== '') && (
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <label htmlFor="chat-to" className="shrink-0 text-sm text-white/70">
+              To
+            </label>
+            <select
+              id="chat-to"
+              value={to}
+              onChange={(e) => onTo?.(e.target.value)}
+              aria-describedby={to ? 'chat-to-note' : undefined}
+              className="min-h-11 min-w-0 flex-1 truncate rounded-lg bg-[#3c4043] px-2 text-base text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-9 sm:text-sm"
+            >
+              <option value="">Everyone</option>
+              {gone && <option value={to}>Not available</option>}
+              {recipients.map((r) => (
+                <option key={r.peerId} value={r.peerId}>
+                  {optionName(r.name)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {gone ? (
+          <p key="gone" id="chat-to-note" role="alert" className="mb-2 px-1 text-xs text-[#fdd663]">
+            That person left the call or reconnected. Choose who to send to.
+          </p>
+        ) : person ? (
+          <p key="note" id="chat-to-note" className="mb-2 px-1 text-xs text-white/70">
+            {`Only ${optionName(person.name)} gets it. It is left out of the recorded chat.`}
+          </p>
+        ) : null}
         {/* The input drops its own outline; the pill shows focus instead. */}
         <div className="flex items-center gap-2 rounded-full bg-[#3c4043] pl-4 pr-1.5 focus-within:ring-2 focus-within:ring-[#8ab4f8]">
           <input
@@ -124,7 +179,7 @@ export function ChatPanel({
             aria-label="Send message"
             title="Send"
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#8ab4f8] hover:bg-white/10 disabled:opacity-40 sm:h-8 sm:w-8"
-            disabled={!text.trim()}
+            disabled={!text.trim() || gone}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />

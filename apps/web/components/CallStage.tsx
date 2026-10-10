@@ -183,7 +183,7 @@ export function CallStage({
   onRecord: () => void;
   onEnd: () => void;
   onLeave: () => void;
-  onSendChat: (text: string) => void;
+  onSendChat: (text: string, to?: string) => void;
   slug: string;
   onMark: (label: string) => void;
   markerCount: number;
@@ -357,6 +357,11 @@ export function CallStage({
   }
 
   const [chatOpen, setChatOpen] = useState(false);
+  // Who the next chat message is for: '' is everyone, otherwise a peerId. Kept
+  // here because the panel unmounts when chat closes: a person chosen for one
+  // message must still be chosen when chat opens again, or the next message
+  // meant for them goes to everyone.
+  const [chatTo, setChatTo] = useState('');
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {
@@ -378,6 +383,11 @@ export function CallStage({
   function openChat(open: boolean) {
     setChatOpen(open);
     if (open) setSummaryOpen(false);
+    // Opened on a private message that arrived while chat was closed: address
+    // its sender, so the answer does not go to everyone. Once it has been on
+    // screen it is no longer unread, and the choice is left as it was.
+    const newest = messages[messages.length - 1];
+    if (open && unread > 0 && newest?.private && newest.fromPeerId) setChatTo(newest.fromPeerId);
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -489,6 +499,14 @@ export function CallStage({
   // Guests the host can choose. A present-only device is listed only while it
   // is set, so a guest who was set and came back that way can be ticked again.
   const choosable = remotePeers.filter((p) => p.role === 'guest' && (!p.companion || p.notRecorded));
+  // Who a chat message can be sent to on its own. A present-only device is
+  // someone's second screen, not a person to write to.
+  const chatRecipients = remotePeers
+    .filter((p) => !p.companion)
+    .map((p) => ({
+      peerId: p.peerId,
+      name: p.name || (p.role === 'host' ? 'Host' : p.role === 'producer' ? 'Producer' : 'Guest'),
+    }));
   const phone = isPhone();
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
@@ -1328,7 +1346,14 @@ export function CallStage({
             data-testid="chat-column"
             className="absolute inset-0 z-20 sm:static sm:z-0 sm:w-80 sm:shrink-0 sm:pb-5 sm:pr-2 sm:pt-2"
           >
-            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} />
+            <ChatPanel
+              messages={messages}
+              recipients={chatRecipients}
+              to={chatTo}
+              onTo={setChatTo}
+              onSend={onSendChat}
+              onClose={closeChat}
+            />
           </div>
         )}
 

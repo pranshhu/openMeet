@@ -131,6 +131,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- Private messages: in the chat panel, choose one person under **To** and the
+  message reaches only them. Both screens mark it as private, and it is left out
+  of the take's chat file.
 
 ### Changed
 

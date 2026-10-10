@@ -374,6 +374,13 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   `chatSenderLabel` words it "…, privately to you" / "You, privately to …" in the chat list and
   in the pop-up, and `buildChatLog` leaves it out of `chat_<id>.txt`, whichever side the host was
   on. Its text is checked on arrival like `chat`: a string of at most `MAX_CHAT_MESSAGE_LENGTH`.
+  `ChatPanel` offers the choice under **To** when there are two or more other people
+  (`recipients`, from `CallStage`: everyone else but present-only devices). The choice lives in
+  `CallStage` (`chatTo`), because the panel unmounts when chat closes, and stays until it is
+  changed; `openChat` moves it to the sender of a private message that arrived while chat was
+  closed, once per message. When the chosen id is gone from the list (they left, or reconnected
+  under a new id) the panel sends nothing until the sender chooses again; it never falls back
+  to everyone.
 
 ### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
@@ -921,3 +928,19 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
+- **A private message is not confirmed as delivered.** The sender's line appears the moment it
+  is sent. If the other person left in that instant, if this tab's socket was down, or if the
+  Worker or the other page is older than private messages, nobody receives it and nothing says
+  so.
+- **A private message is kept from the other people in the call, not from the signalling
+  server or from a shared screen.** It passes through the Worker like every chat line, relayed
+  and never stored. Its pop-up shows its text, so someone who shares their whole screen, or the
+  window the call is in, shows it to the call, and a recording of that screen holds it. The
+  chat file never does.
+- **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
+  id, so the chat panel says the person left or reconnected and sends nothing until someone is
+  chosen. Two people with the same name read alike under **To**, and a present-only device is
+  not listed.
+- **A private message that arrives while chat is open does not move To.** An answer goes where
+  **To** says, to everyone if nobody is chosen. And chat opened on a private message from one
+  person is addressed to them even when another person had been chosen before.
