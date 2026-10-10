@@ -52,6 +52,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be
   dismissed.
+- **Levels**, in the call's control bar: a fader for each other person sets how
+  loud your browser plays them. Only you hear the difference; what the others
+  hear and every recording are unchanged.
+- **Levels** shows a meter beside each fader: how loud that person arrives,
+  whatever their fader is set to.
 - A live track panel during a take: beside the Recording pill, the host sees every
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much
@@ -134,6 +139,16 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Record alone: a host with nobody else in the room presses **Continue alone** in the
   waiting room and records from the call screen. Anyone who joins during the take is
   recorded from then on.
+- A chapter marker can carry a typed note: during a take press **N**, or the pencil
+  button beside the marker button, type and press Enter. The note is that marker's
+  line in the chapters file and its label in `sync.json`, and a take that is resumed
+  or recovered after a reload keeps it. The host's own note is placed at the moment the
+  note field opened. A note with no space in it, such as a pasted link, wraps in the
+  summary's chapter list.
+- A speaker picker, in the lobby and in the call (the arrow beside the mic button):
+  everyone's voice, a presented screen, the media board's pads and a video you
+  present play through the output chosen. The choice is remembered per browser,
+  and a chosen speaker that is unplugged falls back to the system default.
 
 ### Changed
 
@@ -271,6 +286,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A guest who joined after the host's connection to the room had dropped and come back
   during a take was not recorded, and was not told the call was being recorded. The
   host's page says the take is still running as soon as it is back.
+- A media board pad whose file name is longer than 200 characters keeps its chapter
+  marker in a take that is resumed or recovered after a reload, and keeps its label
+  when a guest fires it. The label is cut to 200 characters.
 
 ### Security
 

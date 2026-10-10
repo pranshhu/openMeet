@@ -44,6 +44,8 @@ import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
+import { listSpeakers, setSpeaker } from '@/lib/speaker';
+import { useSpeakerId } from '@/hooks/use-speaker';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -159,6 +161,9 @@ export function Lobby({
   const [devices, setDevices] = useState<DeviceList>(EMPTY_DEVICES);
   const [micId, setMicId] = useState('');
   const [camId, setCamId] = useState('');
+  // Read once, with the cameras and microphones. Empty where the browser cannot switch outputs.
+  const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
+  const speaker = useSpeakerId();
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
@@ -324,6 +329,8 @@ export function Lobby({
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
         setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
         setActual(describeTrack(s.getVideoTracks()[0]));
+        const outputs = await listSpeakers();
+        if (outputs.length > 0) setSpeakers(outputs);
       })
       .catch((e: unknown) => setPreviewError(previewProblem(e)));
   }
@@ -947,6 +954,24 @@ export function Lobby({
                     {devices.audioInputs.map((d) => (
                       <option key={d.deviceId} value={d.deviceId}>
                         {d.label || 'Microphone'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {speakers.length > 0 && (
+                <label className={`${picker} sm:col-span-2`}>
+                  <Icon name="settings" size={18} className="shrink-0" />
+                  <select
+                    aria-label="Speaker"
+                    value={speaker}
+                    onChange={(e) => setSpeaker(e.target.value)}
+                    className={select}
+                  >
+                    <option value="">Speaker: System default</option>
+                    {speakers.map((d, i) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {`Speaker: ${d.label || `Output ${i + 1}`}`}
                       </option>
                     ))}
                   </select>
