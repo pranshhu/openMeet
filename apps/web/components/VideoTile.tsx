@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { followSpeaker } from '@/lib/speaker';
 
 function initial(label: string): string {
   const m = label.trim().match(/[a-z0-9]/i);
@@ -61,6 +62,14 @@ export function VideoTile({
     stream.addEventListener('removetrack', reload);
     return () => stream.removeEventListener('removetrack', reload);
   }, [stream]);
+
+  // A tile that sounds plays through the speaker the person chose. A muted one
+  // (their own camera, the lobby preview) plays nothing, so it is left alone.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || muted) return;
+    return followSpeaker(el);
+  }, [muted]);
 
   const showVideo = !!stream && !camOff;
 

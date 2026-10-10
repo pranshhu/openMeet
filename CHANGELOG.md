@@ -136,6 +136,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- A speaker picker, in the lobby and in the call (the arrow beside the mic button):
+  everyone's voice, a presented screen, the media board's pads and a video you
+  present play through the output chosen. The choice is remembered per browser,
+  and a chosen speaker that is unplugged falls back to the system default.
 
 ### Changed
 

@@ -28,6 +28,7 @@ import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
+import { SpeakerRow } from './SpeakerRow';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -970,6 +971,7 @@ export function CallStage({
                         role="menu"
                         className="absolute bottom-full mb-2 left-0 z-30 min-w-64 max-w-[calc(100vw-2rem)] max-h-60 overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
                       >
+                        <SpeakerRow devices={devices} />
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Microphone
                         </div>
