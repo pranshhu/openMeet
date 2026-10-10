@@ -114,6 +114,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- The host can copy the **producer link** and the **Present-only link** from an
+  arrow beside **Copy invite link**, in the waiting room and in the call, each
+  with a line saying what it is, instead of adding `?producer=1` or `?present=1`
+  by hand.
 - **Stop incoming video**, in the call's camera menu, for a weak connection: the
   other participants stop sending you their camera and shared screen. You still
   hear everyone, they still see you, and no recording is affected. It stays off

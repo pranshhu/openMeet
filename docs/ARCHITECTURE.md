@@ -270,7 +270,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   says so in an alert and keeps the row.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
-  CallStage's status bar keeps the host's Copy invite link during `in-call`. The lobby preview and the
+  CallStage's status bar keeps the host's Copy invite link during `in-call`.
+  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
+  and the Present-only link (the plain link plus `?producer=1` or `?present=1`, the flags
+  `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.
@@ -866,3 +870,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
+- **The producer and Present-only links are offered only to the host, in the waiting
+  room and in the call's top bar before a take.** The lobby and the take summary offer
+  the plain invite link alone, and during a take and after one the top bar has neither.
+  Each is still the invite link plus `?producer=1` or `?present=1`.
