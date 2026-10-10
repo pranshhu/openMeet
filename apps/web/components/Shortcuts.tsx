@@ -41,10 +41,13 @@ export function Shortcuts() {
         return;
       }
       if (e.shiftKey) return;
-      let letter = e.key.toUpperCase();
-      // With Alt held a Mac turns the letter into a symbol, so there it is read
-      // from the key's place.
-      if (e.altKey && !/^[A-Z]$/.test(letter)) letter = e.code.replace(/^Key/, '');
+      // With Alt held a Mac types a symbol in place of the letter, so a chord is
+      // read from the key code: the letter this keyboard has on that key, or the
+      // key's place on a keyboard without Latin letters. `code` is the place
+      // alone, and Colemak has R where QWERTY has S: the key that starts a take
+      // would end one. Not upper-cased: the key codes of the function keys and
+      // the number pad are lower-case letters, F4 being "s".
+      const letter = e.altKey ? String.fromCharCode(e.keyCode) : e.key.toUpperCase();
       // One Latin letter: it goes into a selector.
       if (!/^[A-Z]$/.test(letter)) return;
       const button = document.querySelector<HTMLElement>(

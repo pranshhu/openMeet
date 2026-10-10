@@ -66,7 +66,7 @@ describe('Shortcuts', () => {
     press('a', { repeat: true });
     press('a', { ctrlKey: true });
     press('a', { metaKey: true });
-    press('a', { altKey: true });
+    press('a', { altKey: true, keyCode: 65 });
     press('A', { shiftKey: true });
     // A letter no button carries is left to the browser.
     expect(press('x')).toBe(true);
@@ -163,6 +163,22 @@ describe('Shortcuts', () => {
     expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
     press('?', { shiftKey: true });
     expect(screen.queryByText('Microphone on or off')).toBeNull();
+  });
+
+  it('does not open the list for a held ?, or for ? with Ctrl or Cmd', () => {
+    render(<Shortcuts />);
+    press('?', { shiftKey: true, repeat: true });
+    press('?', { shiftKey: true, ctrlKey: true });
+    press('?', { shiftKey: true, metaKey: true });
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
+  });
+
+  it('keeps the list out of what the status bar announces', () => {
+    render(<Shortcuts />);
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(screen.getByText('Keyboard shortcuts').parentElement).toHaveAttribute('aria-live', 'off');
   });
 });
 
@@ -265,7 +281,11 @@ describe('CallStage: shortcut keys', () => {
 describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
   /** Alt with one letter, as a keyboard that types the letter itself sends it. */
   const alt = (letter: 'r' | 's', init: KeyboardEventInit = {}, target: Element = document.body) =>
-    press(letter, { code: `Key${letter.toUpperCase()}`, altKey: true, ...init }, target);
+    press(
+      letter,
+      { code: `Key${letter.toUpperCase()}`, keyCode: letter.toUpperCase().charCodeAt(0), altKey: true, ...init },
+      target
+    );
 
   it('Alt+R presses Record for the host, and Alt+S presses End & save once the take runs', () => {
     const onRecord = vi.fn();
@@ -295,15 +315,15 @@ describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
     expect(onRecord).toHaveBeenCalledTimes(1);
   });
 
-  it('reads the letter from the key’s place when Option has turned it into a symbol', () => {
+  it('reads the letter from the key code when Option has turned it into a symbol', () => {
     const onRecord = vi.fn();
     const onEnd = vi.fn();
     const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
-    press('®', { code: 'KeyR', altKey: true });
+    press('®', { code: 'KeyR', keyCode: 82, altKey: true });
     expect(onRecord).toHaveBeenCalledTimes(1);
 
     rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
-    press('ß', { code: 'KeyS', altKey: true });
+    press('ß', { code: 'KeyS', keyCode: 83, altKey: true });
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
@@ -366,6 +386,42 @@ describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
     alt('r');
     alt('s');
     expect(onRecord).not.toHaveBeenCalled();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
+  it('finds a chord by the letter the keyboard has on the key, not by the key’s place', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    // Colemak has R on the key QWERTY calls S; on a Mac, Option types a symbol there.
+    press('r', { code: 'KeyS', keyCode: 82, altKey: true });
+    press('®', { code: 'KeyS', keyCode: 82, altKey: true });
+    // A keyboard without Latin letters: the browser reports the letter of the key's place.
+    press('к', { code: 'KeyR', keyCode: 82, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(3);
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    // The key that starts a take never ends one, wherever the layout puts it.
+    press('r', { code: 'KeyS', keyCode: 82, altKey: true });
+    press('®', { code: 'KeyS', keyCode: 82, altKey: true });
+    expect(onEnd).not.toHaveBeenCalled();
+    // Colemak's S, on the key QWERTY calls D.
+    press('ß', { code: 'KeyD', keyCode: 83, altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not take a function key for a letter', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    // F3 has key code 114, a lower-case r, and F4 has 115, a lower-case s.
+    press('F3', { code: 'F3', keyCode: 114, altKey: true });
+    press('r', { code: 'KeyR', keyCode: 82, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    press('F4', { code: 'F4', keyCode: 115, altKey: true });
+    expect(onRecord).toHaveBeenCalledTimes(1);
     expect(onEnd).not.toHaveBeenCalled();
   });
 
