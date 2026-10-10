@@ -1,6 +1,10 @@
 /**
  * Which output device plays the call: one choice per browser, kept in
  * localStorage. '' is the system default.
+ *
+ * The browser plays nothing through a device that has gone away and does not
+ * move the sound by itself, so a chosen speaker that is not listed any more,
+ * or that the browser refuses, puts the choice back on the system default.
  */
 
 const KEY = 'om_speaker';
@@ -35,11 +39,20 @@ export function setSpeaker(id: string): void {
   for (const listener of [...listeners]) listener();
 }
 
-/** Calls `listener` after every change of the choice. Returns an unsubscribe. */
+/**
+ * Calls `listener` after every change of the choice. Returns an unsubscribe.
+ * While anything listens, every device change is checked for the chosen speaker.
+ */
 export function onSpeakerChange(listener: () => void): () => void {
+  if (listeners.size === 0 && typeof navigator !== 'undefined') {
+    navigator.mediaDevices?.addEventListener?.('devicechange', dropIfGone);
+  }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0 && typeof navigator !== 'undefined') {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', dropIfGone);
+    }
   };
 }
 
@@ -48,6 +61,25 @@ export function speakersIn(devices: readonly MediaDeviceInfo[]): MediaDeviceInfo
   if (!canSwitch()) return [];
   // 'default' is the system default, which the pickers offer under a name of their own.
   return devices.filter((d) => d.kind === 'audiooutput' && d.deviceId !== '' && d.deviceId !== 'default');
+}
+
+/** The outputs the browser names when asked; none when it cannot be asked. */
+export async function listSpeakers(): Promise<MediaDeviceInfo[]> {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return [];
+    return speakersIn(await navigator.mediaDevices.enumerateDevices());
+  } catch {
+    return [];
+  }
+}
+
+function dropIfGone(): void {
+  const id = speakerId();
+  if (!id) return;
+  void listSpeakers().then((list) => {
+    // An empty list says nothing: without microphone permission the browser names no output.
+    if (list.length > 0 && id === speakerId() && !list.some((d) => d.deviceId === id)) setSpeaker('');
+  });
 }
 
 /**
@@ -68,7 +100,11 @@ export function followSpeaker(el: HTMLMediaElement): () => void {
         // the device the element was leaving, so look again.
         if (following && speakerId() !== id) apply();
       },
-      () => {}
+      () => {
+        // Gone or refused. The system default is the one output that is always there.
+        // Not for an element that was released: its failure says nothing about the device.
+        if (following && id && id === speakerId()) setSpeaker('');
+      }
     );
   };
   apply();

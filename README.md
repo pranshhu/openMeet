@@ -76,8 +76,8 @@ retention policy to trust, because there's nothing retained.
   the rear camera)
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
-- Choose the speaker or headphones the call plays through, from the arrow beside the mic
-  button; remembered per browser
+- Choose the speaker or headphones the call plays through, in the lobby or from the arrow
+  beside the mic button; remembered per browser
 - A sound when a recording problem appears during a take, and a system
   notification when the tab is in the background
 - A note in the call when your own microphone has sent no sound for 10 seconds

@@ -311,10 +311,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the call, kept in `localStorage` as `om_speaker`; `''` is the system default. The call's
   microphone menu starts with a **Speaker** `<select>` (`components/SpeakerRow.tsx`) of the
   outputs the browser names (`speakersIn`: none where `setSinkId` is missing, which hides the
-  row), and `setSpeaker` stores the choice. Every `VideoTile` that is not muted follows it
-  (`followSpeaker` calls `setSinkId` on its `<video>`), so the other people's cameras and a
-  presented screen move together, and a tile mounted later starts on it. Nothing in `hooks/` or
-  `lib/` that records reads a media element, so no file depends on the choice.
+  row), and `setSpeaker` stores the choice. The lobby has the same choice as a row under its
+  microphone picker, filled once when the preview starts (`listSpeakers`). Every `VideoTile`
+  that is not muted follows it (`followSpeaker` calls `setSinkId` on its `<video>`), so the
+  other people's cameras and a presented screen move together, and a tile mounted later starts
+  on it. A chosen device that the browser refuses, or that is not listed any more after a
+  `devicechange` (`dropIfGone`, listening while a tile follows the choice or a picker shows
+  it), puts the choice back on the system default: the browser plays nothing through an
+  output that has gone away and does not move the sound by itself. An empty list changes
+  nothing, because without microphone permission the browser names no output. Nothing in
+  `hooks/` or `lib/` that records reads a media element, so no file depends on the choice.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -913,15 +919,17 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has neither.
   Each is still the invite link plus `?producer=1` or `?present=1`.
-- **A speaker that is unplugged leaves the call silent on that device.** The browser plays
-  nothing through an output that has gone away and does not move the sound by itself; the
-  person has to choose another speaker, or **System default**, in the microphone menu. A
-  device the browser refuses stays shown as chosen while the sound stays where it was.
+- **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
+  back to the system default at once, and plugging the device in again does not bring the
+  choice back. A producer joins without microphone permission; a browser that refuses a
+  remembered speaker for that reason forgets it for the next call as well.
 - **The media board's pads, a video heard by the person who presents it and the two warning
   beeps play on the system default output,** whatever speaker is chosen.
 - **A producer has no speaker picker.** It has no microphone menu, and without microphone
   permission the browser names no outputs. It hears the call on the system default, or on a
   speaker chosen earlier in the same browser. A Present-only device plays no call sound.
-- **The lobby has no speaker picker.** The choice is made in the call and remembered.
+- **The lobby has no test sound for the speaker, and reads its list once.** The choice is
+  first heard when someone speaks in the call, where the microphone menu can change it; an
+  output plugged in while the lobby is open is listed after a reload.
 - **Two tabs do not share a change of speaker while both are open.** Each reads the stored
   choice when it loads.
