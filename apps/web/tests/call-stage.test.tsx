@@ -2590,3 +2590,18 @@ describe('CallStage: stop incoming video', () => {
     expect(within(line).getByRole('button', { name: 'Show video' })).toHaveClass('min-h-11');
   });
 });
+
+describe('CallStage: a private message arrives', () => {
+  it('says in the pop-up that it was sent privately', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    rerender(
+      <CallStage
+        {...baseProps}
+        messages={[{ from: 'producer' as const, text: 'two minutes', ts: 1, fromName: 'Pat', private: true }]}
+      />
+    );
+    const popup = screen.getByRole('status');
+    expect(popup).toHaveTextContent('Pat, privately to you');
+    expect(popup).toHaveTextContent('two minutes');
+  });
+});

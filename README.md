@@ -377,7 +377,7 @@ All in the one folder the host picks, per take:
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
-| `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out the messages of anyone set as not recorded |
+| `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out private messages and the messages of anyone set as not recorded |
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each

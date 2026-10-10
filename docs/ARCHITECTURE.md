@@ -368,6 +368,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   rebuilt connection, from a ref the switch writes itself.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
+- Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
+  `private-message` to one person, and adds the sender's own line to `state.messages` at once.
+  A private line carries `private` (plus `toName` on the sender's side):
+  `chatSenderLabel` words it "…, privately to you" / "You, privately to …" in the chat list and
+  in the pop-up, and `buildChatLog` leaves it out of `chat_<id>.txt`, whichever side the host was
+  on. Its text is checked on arrival like `chat`: a string of at most `MAX_CHAT_MESSAGE_LENGTH`.
 
 ### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`

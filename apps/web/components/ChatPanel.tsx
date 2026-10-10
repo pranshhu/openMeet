@@ -6,8 +6,13 @@ import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage } from '@/lib/sync-report';
 
 export type { ChatMessage };
 
-export function chatSenderLabel(m: Pick<ChatMessage, 'from' | 'fromName' | 'self'>): string {
-  return m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
+export function chatSenderLabel(
+  m: Pick<ChatMessage, 'from' | 'fromName' | 'self' | 'private' | 'toName'>
+): string {
+  const who = m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
+  if (!m.private) return who;
+  // Said in words, in the list and in the pop-up alike: nothing else marks the line.
+  return m.self ? `${who}, privately to ${m.toName || 'one person'}` : `${who}, privately to you`;
 }
 
 export function ChatPanel({
