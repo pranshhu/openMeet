@@ -337,7 +337,12 @@ export function RoomView({ slug }: { slug: string }) {
       chaptersUrl={state.chaptersUrl}
       summary={state.summary}
       takes={state.takes}
-      onNewTake={newTake}
+      onNewTake={() => {
+        // With nobody else here the next take is the host's alone, and it
+        // belongs on this screen, count included.
+        if (!state.remoteStream) setAlone(true);
+        newTake();
+      }}
       onDiscardTake={discardTake}
       onOpenMediaBoard={openMediaBoard}
       onRecord={() => void recordWithCountdown()}

@@ -145,3 +145,62 @@ describe('a host who can record, with nobody else in the room', () => {
     expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
   });
 });
+
+describe('another take with nobody else in the room', () => {
+  const summary = {
+    files: { host: 'host_1.mp4' },
+    fileList: [{ name: 'host_1.mp4', kind: 'video' as const }],
+    audioMasters: { host: null },
+    screenFiles: [],
+    alignment: '',
+    backupNote: '',
+    integrity: { ok: true, text: 'Every file is complete.' },
+    warnings: [],
+    markers: [],
+    commands: [],
+  };
+  const done = {
+    phase: 'done',
+    summary,
+    takes: [{ take: 1, startedAt: 0, durationMs: 60_000, discarded: false }],
+  };
+
+  it('starts it from the summary and keeps the call screen up while it counts', () => {
+    canRecord();
+    hook.newTake = vi.fn();
+    hook.recordWithCountdown = vi.fn();
+    Object.assign(state, done);
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record another take' }));
+    expect(hook.newTake).toHaveBeenCalledTimes(1);
+    expect(hook.recordWithCountdown).toHaveBeenCalledTimes(1);
+
+    // What newTake does to the phase when nobody else is in the room.
+    state = { ...state, phase: 'waiting', summary: null };
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText('Waiting for others to join')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+  });
+
+  it('still shows a host who had guests the waiting room once they have all left', () => {
+    canRecord();
+    hook.newTake = vi.fn();
+    hook.recordWithCountdown = vi.fn();
+    Object.assign(state, done, {
+      // The tile listens on the stream it is given, so it has to be a target.
+      remoteStream: Object.assign(new EventTarget(), {
+        getTracks: () => [],
+        getVideoTracks: () => [],
+        getAudioTracks: () => [],
+      }) as unknown as MediaStream,
+      remotePeers: [{ peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' }],
+    });
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Record another take' }));
+
+    state = { ...state, phase: 'peer-left', summary: null, remoteStream: null, remotePeers: [] };
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('heading', { name: 'Everyone else left' })).toBeInTheDocument();
+  });
+});

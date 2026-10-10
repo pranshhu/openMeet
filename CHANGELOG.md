@@ -157,6 +157,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   later refuses to write to that folder, the next Record asks for a folder again.
 - After **Record** is pressed the take starts three seconds later, and Record
   cannot be pressed again meanwhile. The recording folder is asked for first.
+- **Record another take** is offered when everyone else has left too, and records the
+  host alone, in place of the Copy invite link the summary showed then. A host with
+  nobody else in the room can present, and the screen is recorded to its own file.
 
 ### Fixed
 

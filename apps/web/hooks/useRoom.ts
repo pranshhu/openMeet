@@ -2272,7 +2272,10 @@ export function useRoom(slug: string) {
   const toggleScreenShare = useCallback(
     async (source?: File | 'rear-camera') => {
       const peer = peerRef.current;
-      if (!peer) return;
+      // A guest's screen recording travels over its connection to the host.
+      // The host writes its own to the folder, so it can present with nobody
+      // connected.
+      if (!peer && roleRef.current !== 'host') return;
       if (!screenSharingRef.current) {
         let screen: MediaStream;
         let isRearCamera = false;
@@ -2451,7 +2454,7 @@ export function useRoom(slug: string) {
     // or everything shared before the first toggle is lost.
     const activeScreen = screenStreamRef.current;
     const recNow = recordingRef.current;
-    if (activeScreen && recNow && peerRef.current) {
+    if (activeScreen && recNow) {
       await startScreenRecording(
         recNow,
         activeScreen,

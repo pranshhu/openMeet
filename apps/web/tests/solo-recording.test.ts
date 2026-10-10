@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
-import { startHostRecording } from '@/hooks/recording-controller';
+import { startHostRecording, startScreenRecording } from '@/hooks/recording-controller';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
+import { getScreenStream } from '@/lib/screen';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let signalSent: any[] = [];
@@ -90,7 +91,13 @@ vi.mock('@/hooks/recording-controller', async () => {
   return {
     ...actual,
     startHostRecording: vi.fn().mockResolvedValue({ recordingId: 'rec-host', hostStartMs: 0 }),
+    startScreenRecording: vi.fn().mockResolvedValue(undefined),
   };
+});
+
+vi.mock('@/lib/screen', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/screen')>('@/lib/screen');
+  return { ...actual, getScreenStream: vi.fn() };
 });
 
 function emit(type: string, payload: any) {
@@ -166,5 +173,66 @@ describe('a host records with nobody else in the room', () => {
     });
     expect(result.current.state.phase).toBe('recording');
     expect(result.current.state.remotePeers.map((p) => p.name)).toEqual(['Bob']);
+  });
+});
+
+describe('a host presents with nobody else in the room', () => {
+  const screenTrack = { kind: 'video', readyState: 'live', addEventListener: vi.fn(), stop: vi.fn() };
+  const screenStream = {
+    getTracks: () => [screenTrack],
+    getVideoTracks: () => [screenTrack],
+  } as unknown as MediaStream;
+
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    vi.stubGlobal('MediaStream', FakeStream);
+    vi.mocked(getScreenStream).mockResolvedValue(screenStream);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('records the screen it starts presenting during a take', async () => {
+    const { result } = await joinAs('host', []);
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    await act(async () => {
+      await result.current.toggleScreenShare();
+    });
+
+    expect(result.current.state.screenSharing).toBe(true);
+    expect(vi.mocked(startScreenRecording)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(startScreenRecording).mock.calls[0]!;
+    expect(call[1]).toBe(screenStream);
+    expect(call[2]).toBe('host');
+    expect(call[3]).toBeNull();
+  });
+
+  it('records a screen it was already presenting when a take starts', async () => {
+    const { result } = await joinAs('host', []);
+    await act(async () => {
+      await result.current.toggleScreenShare();
+    });
+    expect(result.current.state.screenSharing).toBe(true);
+    expect(vi.mocked(startScreenRecording)).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(vi.mocked(startScreenRecording)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startScreenRecording).mock.calls[0]![1]).toBe(screenStream);
+  });
+
+  it('lets a guest with no connection to the host present nothing', async () => {
+    const { result } = await joinAs('guest', []);
+    await act(async () => {
+      await result.current.toggleScreenShare();
+    });
+    expect(vi.mocked(getScreenStream)).not.toHaveBeenCalled();
+    expect(result.current.state.screenSharing).toBe(false);
   });
 });

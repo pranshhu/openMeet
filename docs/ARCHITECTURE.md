@@ -329,7 +329,9 @@ null; `CallStage` shows it as a note that can be dismissed until the next take s
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
-stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
+stream); stop = `removeTrack` + renegotiate, idempotent. A host can present with nobody connected:
+its screen file is written to the folder, so only a guest needs the connection to the host.
+`onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
 unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
@@ -477,8 +479,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   "Download sync.json" (downloaded as
   `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
-  `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
-  button copies the invite link instead and the summary stays. The summary's file list leaves out a
+  `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
+  in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
+  through the count. The summary's file list leaves out a
   guest WAV that was never opened, host files a host companion never opened, empty guest screen
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
@@ -927,3 +930,6 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   are forgotten, as when everyone leaves.
 - **Continue alone is not remembered.** After a reload the host is in the waiting room
   again, and the call screen is one press away.
+- **The done screen has no Copy invite link.** The summary's main button records the next
+  take whether or not anyone else is in the room; the address in the address bar is the
+  invite link.
