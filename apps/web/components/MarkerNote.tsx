@@ -41,12 +41,15 @@ export function MarkerNote({
   onClose,
   className = 'top-3 flex',
 }: {
-  onMark: (label: string) => void;
+  /** `at` is when this field opened: the moment the note is about. */
+  onMark: (label: string, at?: number) => void;
   onClose: () => void;
   /** Where it sits in its positioned parent, and whether it is shown. */
   className?: string;
 }) {
   const [text, setText] = useState('');
+  // Typing takes seconds, and the moment is the one the field opened at.
+  const [openedAt] = useState(() => Date.now());
   const note = text.trim();
   return (
     // The band lets clicks through; only the field itself takes them.
@@ -55,7 +58,7 @@ export function MarkerNote({
         onSubmit={(e) => {
           e.preventDefault();
           if (!note) return;
-          onMark(note);
+          onMark(note, openedAt);
           onClose();
         }}
         onKeyDown={(e) => {

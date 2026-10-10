@@ -166,7 +166,7 @@ describe('CallStage: a marker with a typed note', () => {
     fireEvent.click(noteButton());
     fireEvent.change(field()!, { target: { value: 'cut this' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    expect(onMark).toHaveBeenCalledWith('cut this');
+    expect(onMark).toHaveBeenCalledWith('cut this', expect.any(Number));
     expect(field()).toBeNull();
   });
 
@@ -176,5 +176,22 @@ describe('CallStage: a marker with a typed note', () => {
     const form = field()!.closest('form')!;
     expect(form.parentElement).toHaveClass('pointer-events-none');
     expect(form).toHaveClass('pointer-events-auto');
+  });
+});
+
+describe('CallStage: a note marks the moment its field opened', () => {
+  it('hands onMark the moment the field opened, not the moment of Enter', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      render(<CallStage {...props} />);
+      fireEvent.click(noteButton());
+      now.mockReturnValue(1_008_000);
+      const input = field()!;
+      fireEvent.change(input, { target: { value: 'great answer' } });
+      fireEvent.submit(input.closest('form')!);
+      expect(onMark).toHaveBeenCalledWith('great answer', 1_000_000);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

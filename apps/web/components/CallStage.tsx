@@ -186,7 +186,8 @@ export function CallStage({
   onLeave: () => void;
   onSendChat: (text: string) => void;
   slug: string;
-  onMark: (label: string) => void;
+  /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
+  onMark: (label: string, at?: number) => void;
   markerCount: number;
   chaptersUrl: string | null;
   summary: SyncReportData | null;

@@ -317,6 +317,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `sync_<id>.json`, the summary and the crash copy's `take.json`. The field takes at most
   `MAX_MARKER_LABEL_LENGTH` characters (`lib/sync-report.ts`): the length the host accepts from
   another participant, and the length the crash copy reads back.
+  `useRoom().addMarker(label, at)` cuts every label this page makes to that length (a media
+  board pad's file name can be longer) and places the host's own note at `at`, the moment its
+  field opened, because typing takes seconds; nothing of `at` is sent, so a guest's note is
+  placed when it reaches the host, like every relayed marker.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -927,3 +931,6 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   take and nothing is marked before Enter. A reload of the page loses it the same way.
 - **A producer, and a guest whose browser cannot record, have no marker controls.** The marker
   button, the note button and both keys are there only while this tab's own capture runs.
+- **A guest's note is placed when it reaches the host, not when the guest began typing.** The
+  host's own note is placed at the moment its field opened. A guest's clock is not trusted and
+  the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
