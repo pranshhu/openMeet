@@ -438,4 +438,40 @@ describe('CallStage speaker picker', () => {
     render(<CallStage {...inCall} />);
     expect(await openSpeakerSelect()).toHaveValue('out-speakers');
   });
+
+  it('has no speaker row when the browser names no output, or cannot switch outputs', async () => {
+    vi.mocked(navigator.mediaDevices.enumerateDevices).mockResolvedValue(MOCK_DEVICES);
+    const first = render(<CallStage {...inCall} />);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/select microphone/i));
+    });
+    // The list has arrived: the microphones are on screen.
+    await screen.findByRole('menuitemradio', { name: /usb podcast mic/i });
+    expect(screen.queryByRole('combobox', { name: 'Speaker' })).toBeNull();
+    first.unmount();
+
+    vi.mocked(navigator.mediaDevices.enumerateDevices).mockResolvedValue(WITH_OUTPUTS);
+    delete (HTMLMediaElement.prototype as { setSinkId?: unknown }).setSinkId;
+    render(<CallStage {...inCall} />);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(/select microphone/i));
+    });
+    await screen.findByRole('menuitemradio', { name: /usb podcast mic/i });
+    expect(screen.queryByRole('combobox', { name: 'Speaker' })).toBeNull();
+  });
+
+  it('names an output the browser gives no name by its place in the list', async () => {
+    vi.mocked(navigator.mediaDevices.enumerateDevices).mockResolvedValue([
+      ...WITH_OUTPUTS,
+      { deviceId: 'out-unnamed', kind: 'audiooutput', label: '', groupId: 'g7', toJSON: () => ({}) },
+    ]);
+    render(<CallStage {...inCall} />);
+    const select = await openSpeakerSelect();
+    expect(Array.from(select.options).map((o) => o.text)).toEqual([
+      'System default',
+      'Speakers',
+      'Headphones',
+      'Speaker 3',
+    ]);
+  });
 });
