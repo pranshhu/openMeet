@@ -19,6 +19,7 @@ import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { BackupNotice } from './BackupNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
+import { RoleLinks } from './RoleLinks';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { LISTENING_TAG } from '@/lib/listening';
 import { isPhone } from '@/lib/switchable-media';
@@ -650,6 +651,9 @@ export function CallStage({
                 ? 'Couldn’t copy — use the address bar'
                 : 'Copy invite link'}
           </button>
+        )}
+        {isHost && phase === 'in-call' && (
+          <RoleLinks className="-my-2 -ml-2" menuClassName="left-4 top-full min-[861px]:left-14" />
         )}
         {/* Why there is no Record button, when that is just how the room works
             (a guest or producer). A real problem gets the yellow line below. */}

@@ -359,7 +359,8 @@ shared by these two:
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
-  **Copy invite link** always copies the plain link, so build this one by hand.
+  **Copy invite link** always copies the plain link; the arrow beside it, in the
+  waiting room and in the call, copies this link and the Present-only link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
