@@ -155,6 +155,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 6.6 | Capacity | Try a 5th recorded participant | "This room is full" screen with **Try again** | ☐ | |
 | 6.7 | Producer | Join with `?producer=1` on the invite link | No camera or mic; can chat and present; never recorded; doesn't take a recorded seat | ☐ | |
 | 6.8 | Unrecorded slots are shared | Fill both unrecorded slots (two producers, or one producer and one Present-only screen), then add a third | The third gets "This room is full" | ☐ | |
+| 6.9 | Producer and Present-only links | As host, alone in the waiting room, click the arrow beside **Copy invite link**. Press **Copy producer link** and open what was copied in a second profile; press **Copy Present-only link** and open that in a third. Press Escape. Repeat the first step on a phone | The panel says what each link is and "To record someone, send the invite link."; after a press it reads "Producer link copied." The first link opens "Join as a producer", the second "Ready to present?". Escape closes the panel. On the phone the panel is inside the screen, no text is cut off and the arrow is as tall as **Copy invite link** | ☐ | |
 
 ## 7 — Connection failure
 
