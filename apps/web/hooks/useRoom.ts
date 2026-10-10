@@ -9,7 +9,9 @@ import {
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
+  isListening,
   type BrowserNote,
+  type Listening,
   type Role,
   type ServerMessage,
 } from '@openmeet/protocol';
@@ -31,6 +33,7 @@ import { journalSpaceCheck } from '@/lib/preflight';
 import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
+import { listeningField } from '@/lib/listening';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
   buildSyncReport,
@@ -226,7 +229,7 @@ export interface RoomState {
    * instead of finding out at playback. Populated from `recording-capability`
    * relays; an entry is dropped when that peer leaves.
    */
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   /** List of guests the host is still receiving tail data from during finalize. */
   finalizingGuests: string[];
   /** Backups on their way from a guest to the host: incoming on the host, outgoing on a guest. */
@@ -1557,7 +1560,7 @@ export function useRoom(slug: string) {
         // Tell every peer already in the room what THIS browser can capture.
         // A producer or companion publishes no camera/mic media, so it has nothing to report.
         if (!asProducer && !asCompanion) {
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         }
         // Back in a room whose take died with the last document: the guests may
         // still be here with the take's channels open, so offer to continue it.
@@ -1577,7 +1580,7 @@ export function useRoom(slug: string) {
           // Re-announce on every join, not just once: the DO relay only reaches
           // peers connected at send time, so a late joiner never saw the
           // capability we sent right after our own role-assigned.
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         } else if (asCompanion) {
           peer.setLocalStreamAfterFirstOffer(
             localStream,
@@ -1703,7 +1706,13 @@ export function useRoom(slug: string) {
           ...s,
           capabilities: {
             ...s.capabilities,
-            [m.fromPeerId]: { mp4: m.mp4, wav: m.wav, ...(m.note ? { note: m.note } : {}) },
+            [m.fromPeerId]: {
+              mp4: m.mp4,
+              wav: m.wav,
+              ...(m.note ? { note: m.note } : {}),
+              // The Room checked it; a page does not take the Room's word either.
+              ...(isListening(m.listening) ? { listening: m.listening } : {}),
+            },
           },
         }))
       );

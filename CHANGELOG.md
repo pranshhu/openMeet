@@ -117,6 +117,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The lobby asks whether you are on headphones or speakers. On speakers you can
   turn echo cancellation on for your own microphone; your recording is then
   processed audio, not raw. The answer is remembered in that browser.
+- The host sees on each person's name tag whether they said headphones or
+  speakers in the lobby, and whether their echo cancellation is on.
 
 ### Changed
 

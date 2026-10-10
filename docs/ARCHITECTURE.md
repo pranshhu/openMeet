@@ -74,6 +74,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
+  `recording-capability` also carries the sender's lobby answer, `listening` (one of
+  `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
+  when it is one of those codes, and the page that receives it checks again.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
@@ -318,6 +321,10 @@ backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
+The lobby's answer to "headphones or speakers" reaches the hook through `chooseListening`
+(`lib/listening.ts`), the way the bitrate level does through `chooseBitrate`, and rides on
+every `recording-capability` this tab sends (`listeningField`); `capabilities` keeps each
+peer's, and the host's name tags show it (`LISTENING_TAG`).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -853,3 +860,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   speakers has been listened to (`MANUAL-TESTING.md`, the echo cancellation row in section 8).
   Whether the browser still delivers two channels with it on is read from the microphone, not
   assumed: Stereo is offered only when the microphone reports two.
+- **The lobby answer goes to every tab in the room.** Only the host's page shows it, on the
+  name tag; the Room relays `recording-capability` to everyone, as it does the browser notes.
+- **The answer on a name tag can be cut off.** A name tag truncates in a small tile; the whole
+  text is in its tooltip. A guest on speakers gets no line of their own.

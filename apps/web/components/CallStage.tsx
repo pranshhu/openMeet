@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { BrowserNote, Role } from '@openmeet/protocol';
+import type { BrowserNote, Listening, Role } from '@openmeet/protocol';
 import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
@@ -20,6 +20,7 @@ import { BackupNotice } from './BackupNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
+import { LISTENING_TAG } from '@/lib/listening';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
@@ -32,12 +33,13 @@ import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
  * Shown only to the host, next to that participant's name tag, BEFORE Record
  * is pressed, not at playback.
  */
-function capabilityNote(cap: { mp4: boolean; wav: boolean; note?: BrowserNote } | undefined): string | null {
+function capabilityNote(cap: { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening } | undefined): string | null {
   if (!cap) return null;
   const parts: string[] = [];
   if (!cap.mp4) parts.push("won't be recorded (browser can't record MP4)");
   if (cap.note) parts.push(BROWSER_NOTE_TEXT[cap.note]);
   if (!cap.wav) parts.push('no WAV master');
+  if (cap.listening) parts.push(LISTENING_TAG[cap.listening]);
   return parts.length > 0 ? parts.join('; ') : null;
 }
 
@@ -45,7 +47,7 @@ function nameWithCapability(
   name: string,
   peerId: string | undefined,
   isHost: boolean,
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>
 ): string {
   if (!isHost || !peerId) return name;
   const note = capabilityNote(capabilities[peerId]);
@@ -192,7 +194,7 @@ export function CallStage({
   onOpenMediaBoard: () => MediaBoard | null;
   onToggleScreen: (source?: File | 'rear-camera') => void;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
   onSwitchCamera?: (deviceId: string) => Promise<void>;
   activeMicId?: string | undefined;

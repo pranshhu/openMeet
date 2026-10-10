@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
+import { chooseListening, listeningField } from '@/lib/listening';
 
 /** A lobby stream whose microphone reports the echo cancellation it was opened with. */
 function streamWith(echoCancellation: boolean) {
@@ -233,5 +234,55 @@ describe('Lobby: headphones or speakers', () => {
     } finally {
       localStorage.removeItem('om_host_xyz-abcd-pqr');
     }
+  });
+});
+
+describe('Lobby: the answer goes with the join', () => {
+  afterEach(() => {
+    chooseListening('');
+    localStorage.removeItem('om_listening');
+    vi.unstubAllGlobals();
+  });
+
+  async function join(onJoin: ReturnType<typeof vi.fn>) {
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    const button = screen.getByRole('button', { name: /join now/i });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    // The same five arguments as before the question existed.
+    await waitFor(() =>
+      expect(onJoin).toHaveBeenCalledWith(expect.anything(), 'Alice', false, undefined, false)
+    );
+  }
+
+  it('hands the call the answer that was showing', async () => {
+    const onJoin = vi.fn();
+    stubMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    fireEvent.change(await ready(), { target: { value: 'speakers' } });
+    await join(onJoin);
+    expect(listeningField()).toEqual({ listening: 'speakers' });
+  });
+
+  it('hands over nothing when the question was left unanswered', async () => {
+    // Left over from an earlier join in this page.
+    chooseListening('headphones');
+    const onJoin = vi.fn();
+    stubMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await ready();
+    await join(onJoin);
+    expect(listeningField()).toEqual({});
+  });
+
+  it('hands over speakers when echo cancellation was asked for and the microphone does not report it', async () => {
+    const onJoin = vi.fn();
+    stubMedia(() => false);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    const select = await ready();
+    fireEvent.change(select, { target: { value: 'speakers-ec' } });
+    await waitFor(() => expect(select).toHaveValue('speakers'));
+    await join(onJoin);
+    expect(listeningField()).toEqual({ listening: 'speakers' });
   });
 });

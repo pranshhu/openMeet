@@ -111,6 +111,8 @@ export type ClientRecordingCapability = {
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
 };
 
 /**
@@ -270,6 +272,8 @@ export type ServerRecordingCapability = {
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
   from: Role;
   fromPeerId: string;
 };

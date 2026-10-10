@@ -342,6 +342,9 @@ it, so their files hold processed audio, not raw. Noise suppression and gain con
 stay off. The answer is given before joining and remembered in that browser; to change
 it, leave the call and join again.
 
+The host sees each person's answer on their name tag in the call: "headphones", "on
+speakers" or "on speakers, echo cancelled". Nobody else's screen shows it.
+
 ### Producers and Present only
 
 A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are

@@ -50,7 +50,7 @@ import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
-import { LISTENING_HINT, LISTENING_LABEL } from '@/lib/listening';
+import { LISTENING_HINT, LISTENING_LABEL, chooseListening } from '@/lib/listening';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -776,6 +776,7 @@ export function Lobby({
               if (!stream || !name.trim()) return;
               if (!(await okToTakeSeat())) return;
               chooseBitrate(shownBitrate);
+              chooseListening(shownListening);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               onJoin(stream, name.trim(), false, undefined, stereo);
