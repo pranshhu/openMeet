@@ -3,6 +3,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { MediaBoard, Pad } from '@/lib/media-board';
 import { BOARD_SOUNDS, soundFile, type BoardSound } from '@/lib/board-sounds';
+import { SOUND_FILES, fetchSoundFile, type SoundFile } from '@/lib/sound-files';
 import { Icon } from './Icon';
 
 /**
@@ -44,12 +45,12 @@ export function MediaBoardPanel({
     setPads([...board.pads]);
   }
 
-  async function addSound(sound: BoardSound) {
+  async function addSound(sound: BoardSound | SoundFile) {
     if (!board) return;
     setError(null);
     setAdding(true);
     try {
-      const pad = await board.load(soundFile(sound));
+      const pad = await board.load('file' in sound ? await fetchSoundFile(sound) : soundFile(sound));
       if (sound.bed) {
         board.setLoop(pad.id, true);
         board.setFade(pad.id, true);
@@ -85,7 +86,7 @@ export function MediaBoardPanel({
   }
 
   // A sound already on the board is not offered again.
-  const ready = BOARD_SOUNDS.filter((s) => !pads.some((p) => p.name === s.name));
+  const ready = [...BOARD_SOUNDS, ...SOUND_FILES].filter((s) => !pads.some((p) => p.name === s.name));
   // Drawn above an empty board's text, and first in the scrolling list once
   // there are pads: there it takes its room from the list, so the panel is
   // no taller for it and does not reach the status bar on a phone.

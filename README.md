@@ -324,6 +324,16 @@ The wall stays off until all three values are set. After that:
 straight from the URL the sponsor gave (with no referrer), so that host sees the
 visitor's IP address. Look at a sponsor's logo URL before you approve them.
 
+### Ready sounds of your own (optional)
+
+The media board offers three ready sounds that are made in the browser. To offer
+recordings of your own beside them (a jingle, applause), put each audio file in
+`apps/web/public/sounds/`, list it in `apps/web/lib/sound-files.ts` with the license
+that lets you hand it out and where it came from, then build and deploy the site as
+usual. A file is downloaded only when someone adds its sound to their board. Keep
+each file at 1 MiB or less: `pnpm -r test` fails on a larger file, on a file in the
+folder that is not listed, and on an entry with no license or source.
+
 ---
 
 ## Recording notes

@@ -4,6 +4,13 @@ import { MediaBoardPanel } from '@/components/MediaBoardPanel';
 import { BOARD_SOUNDS, soundFile } from '@/lib/board-sounds';
 import { fakeBoard } from './board-fakes';
 
+// These tests are about the sounds made in the page: a recording a deploy
+// lists must not change what they see.
+vi.mock('@/lib/sound-files', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sound-files')>()),
+  SOUND_FILES: [],
+}));
+
 const RATE = 48_000;
 const sound = (name: string) => BOARD_SOUNDS.find((s) => s.name === name)!;
 const peak = (s: Float32Array) => s.reduce((m, v) => Math.max(m, Math.abs(v)), 0);

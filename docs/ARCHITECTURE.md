@@ -524,6 +524,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   offered again. The panel draws the row above an empty board's text and, once the board holds
   a pad, as the first item of the scrolling list, so the row never makes the panel taller than
   a full list does.
+- `sound-files.ts` `SOUND_FILES`: recordings a deploy ships as further ready sounds, offered
+  after the computed ones. An entry names a file in `apps/web/public/sounds/` (served at
+  `/sounds/<file>`), the license it is handed out under and its source. `fetchSoundFile`
+  fetches it when its button is clicked and never before, and `MediaBoard.load` makes the pad
+  as for any file; a fetch or a decode that fails shows "Could not add …" and leaves the
+  button. The list is empty in this repository. `tests/sound-files-manifest.test.ts` fails on
+  a file in the folder that is not listed, a listed file that is missing, an entry with no
+  license or source, a file over 1 MiB, and a name used twice or longer than 20 characters.
 - `hooks/backup-return.ts` `BackupIntake`: host side of returned guest backups. Offers are keyed by
   the backup's file name, validated, and counted per sender (max 8 waiting, a moved offer included).
   An accepted backup can be restarted only by the key of the offer that created it; another key can
@@ -799,6 +807,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and Rimshot peak at about 0.4 of full scale and Soft bed at about 0.13, mixed over the
   voice. Like every pad, a ready sound is gone from the board after a reload and is added
   again with one click.
+- **Nothing bounds the number of ready sounds a site lists.** Each shipped recording is one
+  more button in `SOUND_FILES`. Once the board holds a pad the row scrolls with the pads. On
+  an empty board on a phone about three buttons fit on a line and every further line makes
+  the open board about 52 px taller; from the fourth line on it is taller than a full board
+  of pads and can reach the top status bar.
+- **A ready sound added twice.** A shipped recording is downloaded when its button is
+  clicked. If the media board is closed and opened again before the download ends, the
+  board offers that button again and does not show the new pad until it is opened once
+  more or something else is added; a click in between adds the sound a second time.
 - **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
   timeout); otherwise the offset is null and `sync.json` says to align by waveform.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**

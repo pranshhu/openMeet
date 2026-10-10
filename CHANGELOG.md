@@ -117,6 +117,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
   on the board as pads with one click. They are made in the browser, so no
   audio file is downloaded, and the bed arrives set to loop and fade.
+- A site can ship recordings of its own as ready sounds for the media board:
+  put the file in `apps/web/public/sounds/` and list it, with its license, in
+  `apps/web/lib/sound-files.ts`. A file is downloaded only when someone adds
+  its sound to their board. This repository ships none.
 
 ### Changed
 
