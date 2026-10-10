@@ -6066,4 +6066,59 @@ describe('marker labels and positions where they enter', () => {
     expect(result.current.state.markers.map((m) => m.label)).toEqual(['n'.repeat(200)]);
     await stopTake();
   });
+
+  it('keeps the host’s own note in this browser and sends none of it to the Room', async () => {
+    const { result } = await hostRecording(60_000);
+    act(() => {
+      result.current.addMarker('great answer', Date.now() - 8_000);
+      result.current.addMarker('');
+    });
+    expect(result.current.state.markers).toHaveLength(2);
+    expect(signalSent.filter((m) => m.type === 'marker')).toEqual([]);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('places a relayed marker when it arrives, and takes neither a position nor a label that is not text from its sender', async () => {
+    const { result, start } = await hostRecording(60_000);
+    act(() => {
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'from Bob',
+        from: 'guest',
+        fromPeerId: 'p-guest',
+        fromName: 'Bob',
+        at: start + 5_000,
+        atMs: 5_000,
+      } as never);
+      emitSignal('marker', { type: 'marker', label: ['x'], from: 'guest', fromPeerId: 'p-guest' } as never);
+      emitSignal('marker', { type: 'marker', label: { length: 1 }, from: 'guest', fromPeerId: 'p-guest' } as never);
+    });
+    const [relayed, list, lookalike] = result.current.state.markers;
+    expect(relayed).toMatchObject({ label: 'from Bob', from: 'guest', name: 'Bob' });
+    // A minute into the take, when it arrived: not the five seconds it names.
+    expect(relayed!.atMs).toBeGreaterThanOrEqual(60_000);
+    expect(list!.label).toBe('');
+    expect(lookalike!.label).toBe('');
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('lists a note started before an earlier marker in time order, in sync.json and the summary', async () => {
+    const { result, start, writtenFiles } = await hostRecording(60_000);
+    act(() => {
+      result.current.addMarker('');
+      result.current.addMarker('started earlier', start + 10_000);
+    });
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    const sync = JSON.parse(new TextDecoder().decode(writtenFiles.get('sync_rec-notes.json')?.data));
+    expect(sync.markers.map((m: { label: string }) => m.label)).toEqual(['started earlier', '']);
+    expect(result.current.state.summary?.markers.map((m) => m.label)).toEqual(['started earlier', '']);
+  });
 });

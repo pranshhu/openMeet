@@ -195,3 +195,43 @@ describe('CallStage: a note marks the moment its field opened', () => {
     }
   });
 });
+
+describe('CallStage: the keys while typing elsewhere, and where the field sits', () => {
+  it('ignores N and M typed into the teleprompter script or into editable text', () => {
+    render(<CallStage {...props} />);
+    // With no script saved for this room the teleprompter opens in its editor.
+    fireEvent.click(screen.getByRole('button', { name: 'Show teleprompter' }));
+    const script = screen.getByLabelText('Teleprompter script');
+    expect(script.tagName).toBe('TEXTAREA');
+    const editable = document.body.appendChild(document.createElement('div'));
+    Object.defineProperty(editable, 'isContentEditable', { value: true });
+    try {
+      for (const el of [script, editable]) {
+        // true: not cancelled, so the letter reaches what is being typed in.
+        expect(fireEvent.keyDown(el, { key: 'n' })).toBe(true);
+        fireEvent.keyDown(el, { key: 'm' });
+      }
+      expect(field()).toBeNull();
+      expect(onMark).not.toHaveBeenCalled();
+    } finally {
+      editable.remove();
+    }
+  });
+
+  it('opens on a capital N, and not with the Meta or Alt key held', () => {
+    render(<CallStage {...props} />);
+    fireEvent.keyDown(document.body, { key: 'n', metaKey: true });
+    fireEvent.keyDown(document.body, { key: 'n', altKey: true });
+    expect(field()).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'N' });
+    expect(field()).toHaveFocus();
+  });
+
+  it('sits at the bottom of the stage on a computer while the teleprompter is open', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show teleprompter' }));
+    fireEvent.click(noteButton());
+    const band = field()!.closest('form')!.parentElement!;
+    expect(band).toHaveClass('top-3', 'sm:top-auto', 'sm:bottom-3');
+  });
+});
