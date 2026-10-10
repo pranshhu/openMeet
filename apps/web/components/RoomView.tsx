@@ -87,6 +87,7 @@ export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
   } = useRoom(slug);
@@ -328,6 +329,9 @@ export function RoomView({ slug }: { slug: string }) {
       onEnd={() => void endRecording()}
       onLeave={leave}
       onSendChat={sendChat}
+      incomingScript={state.incomingScript}
+      onSendScript={sendScript}
+      onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}

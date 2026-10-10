@@ -129,10 +129,13 @@ export class SignalClient {
     return () => this.anyHandlers.delete(handler);
   }
 
-  send(msg: ClientMessage): void {
+  /** Whether the message went out. One sent while the socket is not open is dropped, not queued. */
+  send(msg: ClientMessage): boolean {
     if (this.ws && this.ws.readyState === 1) {
       this.ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
 
   close(): void {

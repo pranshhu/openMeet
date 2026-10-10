@@ -62,6 +62,12 @@ export type ClientRecordingStop = { type: 'recording-stop'; recordingId: string 
  * whether or not this arrived.
  */
 export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's teleprompter script, offered to everyone else in the room. Each
+ * person takes it or leaves it; it replaces nothing by itself. `text` is at
+ * most MAX_SCRIPT_LENGTH long.
+ */
+export type ClientScript = { type: 'script'; text: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 export type ClientPresence = {
   type: 'presence';
@@ -115,6 +121,7 @@ export type ClientMessage =
   | ClientRecordingCompleted
   | ClientRecordingStop
   | ClientRecordingCountdown
+  | ClientScript
   | ClientChat
   | ClientPresence
   | ClientMarker
@@ -242,6 +249,11 @@ export type ServerRecordingStop = { type: 'recording-stop'; recordingId: string;
  * room. Only the host's is passed on, so it carries no `from`.
  */
 export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's ClientScript, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerScript = { type: 'script'; text: string };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -280,6 +292,7 @@ export type ServerMessage =
   | ServerRecordingStarted
   | ServerRecordingStop
   | ServerRecordingCountdown
+  | ServerScript
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
@@ -296,6 +309,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-completed',
   'recording-stop',
   'recording-countdown',
+  'script',
   'chat',
   'presence',
   'marker',
@@ -318,6 +332,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-started',
   'recording-stop',
   'recording-countdown',
+  'script',
   'recording-ack',
   'room-closed',
   'pong',

@@ -64,7 +64,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (16 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -196,6 +196,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `recording-countdown` is **passed on only from the host**, and only with a finite
   `seconds`, to every other joined peer. Nothing is kept and `recording` does not change:
   the take starts with `recording-started`.
+- `script` (`text`, in both unions like `recording-countdown`) is the host's teleprompter
+  script. It is **passed on only from the host**, to every other joined peer and with no
+  `from`, and only when `text` is a string of at most `MAX_SCRIPT_LENGTH` (50,000) UTF-16
+  units. Nothing is kept, so a peer that joins later is not sent it.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -375,9 +379,22 @@ A take that took the room while it counted (a resume) keeps it, and `resumeRecor
 down. The host sends `recording-countdown` as its count starts; every other tab counts from the
 cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the count down on
 `recording-started`. A lost cue costs the count, never the take.
+`sendScript(text)` sends the host's teleprompter script as `script` and returns whether it went
+out. Every other tab keeps the newest one the Room passes on in `incomingScript`, when it is a
+non-blank string of at most `MAX_SCRIPT_LENGTH` units, until `dismissIncomingScript` (the
+person took it or turned it down); nothing else in the state changes.
+
+`CallStage` hands the three to `components/Teleprompter.tsx`, each person's own script overlay
+(not on a present-only device; its text is kept in `localStorage` per room and is in no file).
+A host's editor has **Send to everyone**, with a line saying whether it went out. Everyone
+else is offered what arrives: a dot on the teleprompter button while the panel is closed, and
+**Use it** / **Ignore** inside it; their own text changes only on **Use it**, and either
+answer clears the offer. The editor shows a script's reading time at 150 words a minute
+(`readingMinutes`).
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
+  It returns whether the message went out.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
@@ -990,3 +1007,11 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A script is sent once, to the people in the room at that moment.** Someone who joins
+  afterwards is not sent it, and an offer nobody answered does not survive a reload of that
+  person's page. The host sends it again, and everyone else is offered it again, also those
+  who already used or ignored it. The host is not told who used it.
+- **Using the host's script replaces the person's own for that room, with no way back.** The
+  offer says so before the click, and shows the reading time but not the text. The reading
+  time counts words by spaces, so a script in a language written without them reads as about
+  a minute.

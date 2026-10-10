@@ -219,6 +219,9 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.39 | Marker note after a reload | Record with a guest, add a note, reload the host tab, join, press **Resume recording**, add a second note, End & save. Then record again, add a note, reload, and press **Save to folder** in the lobby | Both notes are in the chapters file of the resumed take; the lobby's save writes a chapters file with the note | ☐ | |
 | 8.40 | A note marks the moment it was started | As host, record; when the timer reads 0:10 press **N**, wait until 0:20, type a note, Enter. Have the guest do the same at 0:30 and 0:40. Then, as host, add a note that is a pasted link of about 150 characters. End & save | In `chapters_<id>.txt` the host's note is at 0:10 or 0:11; the guest's is at about 0:40. In the summary the link wraps inside the Chapters list, and the summary does not scroll sideways | ☐ | |
 | 8.41 | Long pad name | Load an audio file whose name is about 210 characters long into the media board, fire it during a take, reload the host tab and press **Save to folder** in the lobby | The chapters file the save writes has that marker, with the first 200 characters of the name | ☐ | |
+| 8.42 | Teleprompter reading time | Open the teleprompter, press **Edit** if a script is saved, paste about 400 words, then clear the script. Repeat on a phone | Under the script: "About 3 min to read"; with the script cleared the line is gone. The header and its controls are as before | ☐ | |
+| 8.43 | Send the script | Host and one guest in a call. The guest types a script of their own in the teleprompter and closes it. The host opens the teleprompter, presses **Edit** if a script is saved, types a script and presses **Send to everyone**. The guest opens the teleprompter from the button with the dot and presses **Use it**. The host changes a word and sends again; the guest presses **Ignore**. Repeat with the guest on a phone | The host reads "Sent. The others can use it or ignore it." each time. The guest's teleprompter button shows a dot; the offer names the reading time and says it replaces the guest's own script, which is still on screen until **Use it**; after **Use it** the host's script is in the guest's teleprompter and is still there after a reload; **Ignore** leaves it as it was. The dot goes either way. On the phone the offer and its two buttons fit inside the panel | ☐ | |
+| 8.44 | Send the script during a take | Host and one guest record. The host presses **Send to everyone** about 5 s in, the guest presses **Use it** about 5 s later; End & save. Then paste more than 50,000 characters into the host's teleprompter | The take never stops and no banner appears; every file reads complete in the summary, and no file in the folder holds the script. With the long text **Send to everyone** is disabled and the line reads "Too long to send: 50,000 characters at most." | ☐ | |
 
 ## 9 — Deploy
 
@@ -274,6 +277,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **A teleprompter script is sent once.** Someone who joins or reloads afterwards
+  asks the host to send it again.
 
 ## When something fails
 
