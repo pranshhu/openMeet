@@ -313,6 +313,22 @@ export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: Room
 }
 
 /**
+ * Whether a terminal server close ends this tab's capture before the terminal
+ * screen shows.
+ *
+ * Only a guest's capture that is still starting. It runs into this browser's
+ * backup from the host's Record, but reaches 'recording' only once its channel
+ * to the host has opened; until then there is no call screen to hold and no
+ * button that ends it, and with the room gone the host's stop cannot arrive.
+ * One that has reached 'recording' or 'finalizing' is held by
+ * phaseOnFatalClose, and a host's take is never ended from here: End & save
+ * is what closes its files.
+ */
+export function endsCaptureOnFatalClose(role: Role | null, capturing: boolean, phase: RoomPhase): boolean {
+  return role === 'guest' && capturing && phase !== 'recording' && phase !== 'finalizing';
+}
+
+/**
  * Should this peer start its own capture when a `recording-started` arrives?
  *
  * Pure and exported because every branch here is a silent failure if it is
@@ -1198,18 +1214,10 @@ export function useRoom(slug: string) {
               }
               return { ...s, ...next };
             });
-          // A guest's capture starts with the host's Record, into this browser's
-          // backup, and reaches 'recording' only once its channel to the host has
-          // opened. Until then there is no call screen to hold and no button that
-          // ends it, and with the room gone the host's stop cannot arrive. So it
-          // is ended here, backup kept, before the terminal screen shows: that
+          // Ended here, backup kept, before the terminal screen shows: that
           // screen must never sit over a camera that is still being recorded.
-          const starting =
-            roleRef.current === 'guest' &&
-            recordingRef.current &&
-            phaseRef.current !== 'recording' &&
-            phaseRef.current !== 'finalizing';
-          if (starting) void endRecordingRef.current({ internal: true }).then(settle, settle);
+          if (endsCaptureOnFatalClose(roleRef.current, recordingRef.current !== null, phaseRef.current))
+            void endRecordingRef.current({ internal: true }).then(settle, settle);
           else settle();
         },
       });

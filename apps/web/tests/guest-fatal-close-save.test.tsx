@@ -315,6 +315,68 @@ describe('a guest the host removes during a take', () => {
     expect(result.current.state.phase).toBe('done');
     expect(result.current.state.backupBlobUrl).toBeTruthy();
   });
+
+  it('is not ended a second time when the room closes on them again while it saves', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+
+    const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+    const fakeStream = Object.assign(new EventTarget(), {
+      getTracks: () => [fakeAudio, fakeVideo],
+      getAudioTracks: () => [fakeAudio],
+      getVideoTracks: () => [fakeVideo],
+    }) as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Bob');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-4',
+        kind: 'camera',
+        filename: 'host_rec-host-4.mp4',
+      });
+    });
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+
+    // Stop and save, with the tail still on its way out.
+    let finish!: (r: { drained: boolean; backup: Blob }) => void;
+    vi.mocked(endGuestRecording).mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    let saved!: Promise<void>;
+    act(() => {
+      saved = result.current.endRecording();
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+
+    // The page tries the room again once its connection to the host has failed
+    // twice, and the Room refuses the removed tab again.
+    await act(async () => {
+      onFatalCloseCallback?.(4007, 'removed');
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(vi.mocked(endGuestRecording)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish({ drained: true, backup: new Blob(['backup-bytes']) });
+      await saved;
+    });
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
 });
 
 describe('a guest the host removes while their capture is still starting', () => {

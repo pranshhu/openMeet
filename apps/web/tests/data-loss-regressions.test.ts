@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { phaseOnFatalClose } from '@/hooks/useRoom';
+import { endsCaptureOnFatalClose, phaseOnFatalClose } from '@/hooks/useRoom';
 import { allWriters, bindHostChannel, endHostRecording, endGuestRecording, type RecordingHandles } from '@/hooks/recording-controller';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { ChunkSender } from '@/lib/chunk-sender';
@@ -37,6 +37,23 @@ describe('phaseOnFatalClose — a terminal close must not unmount a live recordi
   it('handles replaced host close code 4006', () => {
     expect(phaseOnFatalClose('in-call', 4006)).toEqual({ phase: 'replaced' });
     expect(phaseOnFatalClose('recording', 4006)).toBeNull();
+  });
+});
+
+describe('endsCaptureOnFatalClose: a terminal close ends only a guest capture that is still starting', () => {
+  it('ends a guest capture that has not reached recording', () => {
+    expect(endsCaptureOnFatalClose('guest', true, 'connecting')).toBe(true);
+    expect(endsCaptureOnFatalClose('guest', true, 'in-call')).toBe(true);
+  });
+
+  it('leaves a capture that is recording or saving to the held call screen', () => {
+    expect(endsCaptureOnFatalClose('guest', true, 'recording')).toBe(false);
+    expect(endsCaptureOnFatalClose('guest', true, 'finalizing')).toBe(false);
+  });
+
+  it('never ends a host take, and has nothing to end without a capture', () => {
+    expect(endsCaptureOnFatalClose('host', true, 'in-call')).toBe(false);
+    expect(endsCaptureOnFatalClose('guest', false, 'connecting')).toBe(false);
   });
 });
 
