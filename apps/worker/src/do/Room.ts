@@ -7,6 +7,7 @@ import {
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
   WS_CLOSE_REPLACED,
+  isListening,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -605,6 +606,7 @@ export class Room implements DurableObject {
           mp4: parsed.mp4,
           wav: parsed.wav,
           ...((BROWSER_NOTES as readonly unknown[]).includes(parsed.note) ? { note: parsed.note } : {}),
+          ...(isListening(parsed.listening) ? { listening: parsed.listening } : {}),
           from: p.role,
           fromPeerId: p.peerId,
         });

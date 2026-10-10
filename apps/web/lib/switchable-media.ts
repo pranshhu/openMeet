@@ -55,6 +55,7 @@ export class SwitchableMedia {
   private stopMicWatch: (() => void) | null = null;
   private qualityId: string;
   private frameRate: number;
+  private echoCancellation: boolean;
   private options: SwitchableMediaOptions;
 
   constructor(localStream: MediaStream, options: SwitchableMediaOptions = {}) {
@@ -69,6 +70,13 @@ export class SwitchableMedia {
       (typeof asked === 'number' ? asked : asked?.ideal) ||
       rawCamTrack?.getSettings?.().frameRate ||
       RECORDING_FRAME_RATE;
+    // Read from the track like the frame rate, asked-for before delivered: a
+    // switched-to microphone is processed the way the lobby's was, so what the
+    // host was told about this person's audio stays true for the whole call.
+    const askedEcho = rawMicTrack?.getConstraints?.().echoCancellation;
+    this.echoCancellation = Boolean(
+      typeof askedEcho === 'boolean' ? askedEcho : rawMicTrack?.getSettings?.().echoCancellation
+    );
     this.isFallback = !isTrackGeneratorSupported();
 
     this._currentCameraTrack = rawCamTrack;
@@ -274,7 +282,7 @@ export class SwitchableMedia {
         throw new Error('Switch after this take');
       }
       const oldTrack = this._currentMicTrack;
-      const constraints = micConstraints(deviceId);
+      const constraints = micConstraints(deviceId, this.echoCancellation);
       const newStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
@@ -291,7 +299,7 @@ export class SwitchableMedia {
     }
 
     const oldTrack = this._currentMicTrack;
-    const constraints = micConstraints(deviceId);
+    const constraints = micConstraints(deviceId, this.echoCancellation);
     const newStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
     const newTrack = newStream.getAudioTracks()[0];
     if (!newTrack) return;

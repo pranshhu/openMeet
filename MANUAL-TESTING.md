@@ -219,6 +219,10 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.39 | Marker note after a reload | Record with a guest, add a note, reload the host tab, join, press **Resume recording**, add a second note, End & save. Then record again, add a note, reload, and press **Save to folder** in the lobby | Both notes are in the chapters file of the resumed take; the lobby's save writes a chapters file with the note | ☐ | |
 | 8.40 | A note marks the moment it was started | As host, record; when the timer reads 0:10 press **N**, wait until 0:20, type a note, Enter. Have the guest do the same at 0:30 and 0:40. Then, as host, add a note that is a pasted link of about 150 characters. End & save | In `chapters_<id>.txt` the host's note is at 0:10 or 0:11; the guest's is at about 0:40. In the summary the link wraps inside the Chapters list, and the summary does not scroll sideways | ☐ | |
 | 8.41 | Long pad name | Load an audio file whose name is about 210 characters long into the media board, fire it during a take, reload the host tab and press **Save to folder** in the lobby | The chapters file the save writes has that marker, with the first 200 characters of the name | ☐ | |
+| 8.42 | Headphones or speakers | In the lobby, under the name, open **Headphones or speakers?** and pick **Listening on: speakers**; reload. Repeat on a phone about 390 px wide | The preview does not restart when it is picked; the answer is still chosen after the reload; on the phone the control is above **Join now** with its text on one line | ☐ | |
+| 8.43 | Echo cancellation | On a computer with speakers and no headphones, pick **Speakers, echo cancellation on**, join, and have a second person talk; record 30 s, End & save. Then join again with **Listening on: speakers** and repeat | With it on: the lobby line ends "· echo cancellation on", the second person does not hear themselves back, the first person's MP4 and WAV hold their own voice with little of the other, and no "microphone is silent" note appears while they only listen. Without it: the second person hears an echo and the first person's files hold both voices | ☐ | |
+| 8.44 | Host sees the answer | Three people join: one picks **Listening on: headphones**, one **Speakers, echo cancellation on**, and the host leaves the question unanswered | On the host's screen the two name tags read "<name> — headphones" and "<name> — on speakers, echo cancelled"; hovering a cut-off tag shows all of it. On the two guests' screens no tag says anything about headphones or speakers | ☐ | |
+| 8.45 | Echo cancellation in the notes | A guest joins with **Speakers, echo cancellation on**; record 20 s, switch the guest's microphone from the call's microphone menu, record 10 s more; the guest leaves; End & save | The summary's Camera and Audio master rows for that guest read "(echo cancellation on)", the host's rows do not, and `sync_*.json` in the folder has `echoCancellation.files` with those two names. The guest's echo stayed cancelled after the switch | ☐ | |
 
 ## 9 — Deploy
 
@@ -274,6 +278,8 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **Echo cancellation is chosen in the lobby.** To turn it on or off, leave the call
+  and join again.
 
 ## When something fails
 
