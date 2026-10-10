@@ -7,16 +7,19 @@ import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage } from '@/lib/sync-report';
 export type { ChatMessage };
 
 export function chatSenderLabel(
-  m: Pick<ChatMessage, 'from' | 'fromName' | 'self' | 'private' | 'toName'>
+  m: Pick<ChatMessage, 'from' | 'fromName' | 'self'>
 ): string {
-  const who = m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
-  return who;
+  return m.self ? 'You' : (m.fromName || (m.from.charAt(0).toUpperCase() + m.from.slice(1)));
 }
 
-/** Who else is on a private line, in this page's own words: never the sender's text alone. */
-export function privateDetail(m: Pick<ChatMessage, 'from' | 'self' | 'toName'>): string {
-  if (m.self) return `to ${m.toName || 'one person'}`;
-  return m.from === 'host' ? 'from the host' : m.from === 'producer' ? 'from a producer' : 'from a guest';
+/** Who else is on a private line, in this page's own words. */
+export function privateDetail(
+  m: Pick<ChatMessage, 'from' | 'self' | 'fromPeerId' | 'toPeerId' | 'toRole'>,
+  numbers: Map<string, number>
+): string {
+  if (m.self) return m.toPeerId ? `to ${personTag(m.toPeerId, m.toRole ?? 'guest', numbers)}` : 'to one person';
+  if (m.fromPeerId) return `from ${personTag(m.fromPeerId, m.from, numbers)}`;
+  return m.from === 'host' ? 'from Host' : m.from === 'producer' ? 'from a producer' : 'from a guest';
 }
 
 /**
@@ -37,34 +40,39 @@ export function PrivateMark({ detail }: { detail: string }) {
 }
 
 // A display name is its owner's text, up to 64 characters; an option has to fit a phone.
-// Direction marks are taken out: one left in a name turns round the words this
-// page writes after it, the role among them.
 const optionName = (name: string) => {
-  const chars = Array.from(name.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, ''));
-  return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : chars.join('');
+  const chars = Array.from(name);
+  return chars.length > 16 ? `${chars.slice(0, 16).join('')}…` : name;
 };
 
-// What a person is called under To: the name they chose, cut to fit a phone,
-// and the role the Room gave them, which they did not choose. Two who would
-// read the same get a number. `given` is the caller's memory of the labels
-// handed out: a label stays with the person who got it and is never given
-// to anyone else, also after that person has left, because a reader who
-// learned which of two is which must not find the label on the other one.
+/**
+ * What this page calls a person, in its own words: the role the Room gave
+ * them and, for anyone but the host, a number this page gave them when it
+ * first met them. Nothing in it is the person's own text, so no name can
+ * draw it, imitate it or share it. `numbers` is the caller's memory for as
+ * long as the call screen is up: a number stays with its id and is never
+ * given to anyone else, also after that person has left.
+ */
+export function personTag(peerId: string, role: string, numbers: Map<string, number>): string {
+  if (role === 'host') return 'Host';
+  let n = numbers.get(peerId);
+  if (!n) {
+    n = numbers.size + 1;
+    numbers.set(peerId, n);
+  }
+  return `${role === 'producer' ? 'Producer' : 'Guest'} ${n}`;
+}
+
+// A person under To: this page's words for them first, then the name they
+// chose, cut to fit a phone. An option holds text only, so the name comes
+// last, where nothing this page writes can be changed by it.
 export function recipientLabels<T extends { peerId: string; name: string; role: string }>(
   recipients: T[],
-  given: Map<string, string> = new Map()
-): (T & { label: string })[] {
+  numbers: Map<string, number>
+): (T & { tag: string; label: string })[] {
   return recipients.map((r) => {
-    const base = `${optionName(r.name)} (${r.role})`;
-    const key = `${r.peerId} ${base}`;
-    let label = given.get(key);
-    if (!label) {
-      const taken = new Set(given.values());
-      label = base;
-      for (let n = 2; taken.has(label); n++) label = `${base} ${n}`;
-      given.set(key, label);
-    }
-    return { ...r, label };
+    const tag = personTag(r.peerId, r.role, numbers);
+    return { ...r, tag, label: `${tag}: ${optionName(r.name)}` };
   });
 }
 
@@ -73,7 +81,7 @@ export function ChatPanel({
   recipients = [],
   to = '',
   onTo,
-  labels,
+  numbers,
   onSend,
   onClose,
 }: {
@@ -87,19 +95,21 @@ export function ChatPanel({
   to?: string;
   onTo?: (to: string) => void;
   /**
-   * The labels handed out under To, kept by the caller for the reason it
-   * keeps `to`: this panel is gone whenever chat is closed.
+   * The numbers this page has given people, kept by the caller for the
+   * reason it keeps `to`: this panel is gone whenever chat is closed.
    */
-  labels?: Map<string, string>;
+  numbers?: Map<string, number>;
   onSend: (text: string, to?: string) => void;
   onClose: () => void;
 }) {
   const [text, setText] = useState('');
+  const [own] = useState(() => new Map<string, number>());
+  const known = numbers ?? own;
   // The person the next message is for, while they are in the call. Once they
   // have left, or come back under a new id, nothing is sent until the sender
   // chooses again: falling back to everyone would publish a message written
   // for one person.
-  const labelled = recipientLabels(recipients, labels);
+  const labelled = recipientLabels(recipients, known);
   const person = labelled.find((r) => r.peerId === to);
   const gone = to !== '' && !person;
   const listRef = useRef<HTMLDivElement>(null);
@@ -163,8 +173,8 @@ export function ChatPanel({
             // message never reads as a second text field.
             <div key={i} className={`text-sm ${m.self ? 'flex flex-col items-end' : ''}`}>
               <div className="mb-0.5 text-xs font-medium text-white/70">
-                {m.private && <PrivateMark detail={privateDetail(m)} />}
-                {sender}
+                {m.private && <PrivateMark detail={privateDetail(m, known)} />}
+                <bdi>{sender}</bdi>
               </div>
               <p
                 className={`w-fit max-w-full rounded-2xl bg-[#3c4043] px-3 py-2 text-white/95 wrap-anywhere ${m.self ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}
@@ -217,7 +227,8 @@ export function ChatPanel({
           </p>
         ) : person ? (
           <p key="note" id="chat-to-note" className="mb-2 px-1 text-xs text-white/70">
-            {`Only ${person.label} gets it. It is left out of the recorded chat.`}
+            Only {person.tag} (<bdi>{optionName(person.name)}</bdi>) gets it. It is left out of the
+            recorded chat.
           </p>
         ) : null}
         {/* The input drops its own outline; the pill shows focus instead. */}

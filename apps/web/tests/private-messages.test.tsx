@@ -1,6 +1,58 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, renderHook, act } from '@testing-library/react';
 import { ChatPanel, chatSenderLabel, recipientLabels } from '@/components/ChatPanel';
+import { useRoom } from '@/hooks/useRoom';
+
+let signalHandlers: Record<string, ((m: any) => void)[]> = {};
+
+vi.mock('@/lib/api', () => ({
+  getTurnCred: vi.fn().mockResolvedValue({ iceServers: [] }),
+  getRoom: vi.fn().mockResolvedValue({ slug: 'test-room', expires_at: Date.now() + 10000 }),
+}));
+
+vi.mock('@/lib/host-token', () => ({
+  getHostToken: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('@/lib/signal', () => ({
+  SignalClient: vi.fn().mockImplementation(() => ({
+    connect: vi.fn(),
+    close: vi.fn(),
+    send: vi.fn(),
+    on: vi.fn((type: string, handler: (m: any) => void) => {
+      (signalHandlers[type] ??= []).push(handler);
+    }),
+  })),
+}));
+
+vi.mock('@/lib/peer', () => ({
+  PeerConnection: vi.fn().mockImplementation(() => ({
+    start: vi.fn(),
+    close: vi.fn(),
+    setLocalStream: vi.fn(),
+    setLocalStreamAfterFirstOffer: vi.fn(),
+    createControlChannel: vi.fn(),
+    addTransceiver: vi.fn(),
+    restartIce: vi.fn(),
+    addTrack: vi.fn(),
+    connectionState: 'connected',
+    rawConnection: null,
+    setPeerCount: vi.fn(),
+    whenConnected: vi.fn().mockResolvedValue(undefined),
+    createRecordingChannel: vi.fn().mockReturnValue({
+      readyState: 'open',
+      addEventListener: vi.fn(),
+      send: vi.fn(),
+      close: vi.fn(),
+    }),
+    createRecordingAudioChannel: vi.fn().mockReturnValue({
+      readyState: 'open',
+      addEventListener: vi.fn(),
+      send: vi.fn(),
+      close: vi.fn(),
+    }),
+  })),
+}));
 
 describe('ChatPanel: a private line', () => {
   it('says who it is between, on the recipient’s screen and on the sender’s', () => {
@@ -9,7 +61,7 @@ describe('ChatPanel: a private line', () => {
         messages={[
           { from: 'producer', text: 'two minutes', ts: 1, fromName: 'Pat', private: true },
           { from: 'guest', text: 'psst', ts: 2, private: true },
-          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toName: 'Pat' },
+          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toPeerId: 'p-pat', toRole: 'producer' },
           { from: 'host', text: 'to someone', ts: 4, self: true, private: true },
           { from: 'guest', text: 'hello all', ts: 5, fromName: 'Bob' },
           { from: 'host', text: 'hello Bob', ts: 6, self: true },
@@ -23,7 +75,7 @@ describe('ChatPanel: a private line', () => {
     expect(screen.getByText('Private · from a producer')).toHaveAttribute('data-private-mark');
     expect(line('Private · from a producer')).toBe('Private · from a producerPat');
     expect(line('Private · from a guest')).toBe('Private · from a guestGuest');
-    expect(line('Private · to Pat')).toBe('Private · to PatYou');
+    expect(line('Private · to Producer 1')).toBe('Private · to Producer 1You');
     expect(line('Private · to one person')).toBe('Private · to one personYou');
     // A line for everyone reads as it always did.
     expect(screen.getByText('Bob')).toBeInTheDocument();
@@ -52,9 +104,9 @@ describe('ChatPanel: choosing who a message is for', () => {
     );
     expect(Array.from(to().options).map((o) => o.textContent)).toEqual([
       'Everyone',
-      'Bob (guest)',
-      'Pat (guest)',
-      `${'x'.repeat(16)}… (guest)`,
+      'Guest 1: Bob',
+      'Guest 2: Pat',
+      `Guest 3: ${'x'.repeat(16)}…`,
     ]);
     expect(to().value).toBe('');
 
@@ -73,7 +125,9 @@ describe('ChatPanel: choosing who a message is for', () => {
 
     rerender(<ChatPanel {...props} to="p-bob" />);
     expect(to().value).toBe('p-bob');
-    expect(screen.getByText('Only Bob (guest) gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Guest 1 (Bob) gets it. It is left out of the recorded chat.'
+    );
     type('psst');
     submit();
     expect(onSend).toHaveBeenLastCalledWith('psst', 'p-bob');
@@ -103,7 +157,7 @@ describe('ChatPanel: choosing who a message is for', () => {
     expect(Array.from(to().options).map((o) => [o.value, o.textContent])).toEqual([
       ['', 'Everyone'],
       ['p-bob', 'Not available'],
-      ['p-pat', 'Pat (guest)'],
+      ['p-pat', 'Guest 2: Pat'],
     ]);
     expect(to().value).toBe('p-bob');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
@@ -134,7 +188,10 @@ describe('ChatPanel: choosing who a message is for', () => {
     expect(to()).not.toHaveAttribute('aria-describedby');
 
     rerender(<ChatPanel {...props} recipients={[bob, pat]} to="p-bob" />);
-    expect(to()).toHaveAccessibleDescription('Only Bob (guest) gets it. It is left out of the recorded chat.');
+    expect(to()).toHaveAttribute('aria-describedby', 'chat-to-note');
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Guest 1 (Bob) gets it. It is left out of the recorded chat.'
+    );
 
     rerender(<ChatPanel {...props} recipients={[pat]} to="p-bob" />);
     expect(to()).toHaveAccessibleDescription('That person left the call or reconnected. Choose who to send to.');
@@ -151,8 +208,10 @@ describe('ChatPanel: choosing who a message is for', () => {
       />
     );
     const cut = `${'😀'.repeat(16)}…`;
-    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob (guest)', `${cut} (guest)`]);
-    expect(screen.getByText(`Only ${cut} (guest) gets it. It is left out of the recorded chat.`)).toBeInTheDocument();
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Guest 1: Bob', `Guest 2: ${cut}`]);
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      `Only Guest 2 (${cut}) gets it. It is left out of the recorded chat.`
+    );
   });
 });
 
@@ -176,7 +235,7 @@ describe('ChatPanel: a private mark no name can draw, and a recipient that stays
         messages={[
           { from: 'guest', text: 'psst', ts: 1, fromName: 'Hana', private: true },
           { from: 'host', text: 'hi', ts: 2, private: true },
-          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toName: 'Pat' },
+          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toPeerId: 'p-pat', toRole: 'guest' },
         ]}
         onSend={vi.fn()}
         onClose={vi.fn()}
@@ -185,12 +244,12 @@ describe('ChatPanel: a private mark no name can draw, and a recipient that stays
     const line = (mark: string) => screen.getByText(mark).parentElement?.textContent;
     expect(screen.getByText('Private · from a guest')).toHaveAttribute('data-private-mark');
     expect(line('Private · from a guest')).toBe('Private · from a guestHana');
-    expect(line('Private · from the host')).toBe('Private · from the hostHost');
-    expect(line('Private · to Pat')).toBe('Private · to PatYou');
+    expect(line('Private · from Host')).toBe('Private · from HostHost');
+    expect(line('Private · to Guest 1')).toBe('Private · to Guest 1You');
   });
 
   it('the label is the name alone', () => {
-    expect(chatSenderLabel({ from: 'guest', fromName: 'Hana', private: true })).toBe('Hana');
+    expect(chatSenderLabel({ from: 'guest', fromName: 'Hana' })).toBe('Hana');
   });
 
   it('tells apart two people who read the same under To', () => {
@@ -210,12 +269,14 @@ describe('ChatPanel: a private mark no name can draw, and a recipient that stays
     );
     expect(Array.from(toSelect().options).map((o) => o.textContent)).toEqual([
       'Everyone',
-      'Ana (host)',
-      'Ana (guest)',
-      'Ana (guest) 2',
-      'Everyone (guest)',
+      'Host: Ana',
+      'Guest 1: Ana',
+      'Guest 2: Ana',
+      'Guest 3: Everyone',
     ]);
-    expect(screen.getByText('Only Ana (guest) 2 gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Guest 2 (Ana) gets it. It is left out of the recorded chat.'
+    );
   });
 
   it('says messages go to everyone only while they do', () => {
@@ -231,36 +292,176 @@ describe('ChatPanel: a private mark no name can draw, and a recipient that stays
   });
 
   it('never gives one person’s label to another', () => {
-    const given = new Map<string, string>();
+    const given = new Map<string, number>();
     const bob = { peerId: 'p-bob', name: 'Bob', role: 'guest' };
     const other = { peerId: 'p-other', name: 'Bob', role: 'guest' };
     const labels = (list: { peerId: string; name: string; role: string }[]) =>
       recipientLabels(list, given).map((r) => [r.peerId, r.label]);
     expect(labels([bob, other])).toEqual([
-      ['p-bob', 'Bob (guest)'],
-      ['p-other', 'Bob (guest) 2'],
+      ['p-bob', 'Guest 1: Bob'],
+      ['p-other', 'Guest 2: Bob'],
     ]);
     expect(labels([bob, other])).toEqual([
-      ['p-bob', 'Bob (guest)'],
-      ['p-other', 'Bob (guest) 2'],
+      ['p-bob', 'Guest 1: Bob'],
+      ['p-other', 'Guest 2: Bob'],
     ]);
     expect(labels([other, { ...bob, peerId: 'p-bob-again' }])).toEqual([
-      ['p-other', 'Bob (guest) 2'],
-      ['p-bob-again', 'Bob (guest) 3'],
+      ['p-other', 'Guest 2: Bob'],
+      ['p-bob-again', 'Guest 3: Bob'],
     ]);
-  });
-
-  it('drops direction marks from a name, so the role after it reads as written', () => {
-    const marks = '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069';
-    const label = (name: string) => recipientLabels([{ peerId: 'p-x', name, role: 'guest' }])[0]?.label;
-    expect(label('Bob (host)\u202E')).toBe('Bob (host) (guest)');
-    expect(label(`A${marks}na`)).toBe('Ana (guest)');
   });
 
   it('gives a person whose name arrives later a label for that name', () => {
-    const given = new Map<string, string>();
+    const given = new Map<string, number>();
     const label = (name: string) => recipientLabels([{ peerId: 'p-x', name, role: 'guest' }], given)[0]?.label;
-    expect(label('Guest')).toBe('Guest (guest)');
-    expect(label('Ana')).toBe('Ana (guest)');
+    expect(label('Guest')).toBe('Guest 1: Guest');
+    expect(label('Ana')).toBe('Guest 1: Ana');
+  });
+});
+
+describe('ChatPanel: a person is named by this page, then by their name', () => {
+  const label = (name: string, role = 'guest') =>
+    recipientLabels([{ peerId: 'p-x', name, role }], new Map<string, number>())[0]?.label;
+
+  it('names that draw alike are still told apart', () => {
+    const names = ['Bob', 'Bob​', 'Bob⁠', 'B‍ob', 'Bob­', 'Bob ', 'Bob️', '͏Bob'];
+    const labels = recipientLabels(
+      names.map((name, i) => ({ peerId: `p-${i}`, name, role: 'guest' })),
+      new Map<string, number>()
+    ).map((r) => r.label);
+    expect(labels).toHaveLength(8);
+    names.forEach((_, i) => expect(labels[i]?.startsWith(`Guest ${i + 1}: `)).toBe(true));
+  });
+
+  it('the page’s words come before the name', () => {
+    expect(label('Host: Priya')).toBe('Guest 1: Host: Priya');
+    expect(label('Ana (host)')).toBe('Guest 1: Ana (host)');
+  });
+
+  it('a number stays with its person and is never handed on', () => {
+    const numbers = new Map<string, number>();
+    const bob = { peerId: 'p-bob', name: 'Bob', role: 'guest' };
+    const other = { peerId: 'p-other', name: 'Bob', role: 'guest' };
+    const labels = (list: { peerId: string; name: string; role: string }[]) =>
+      recipientLabels(list, numbers).map((r) => [r.peerId, r.label]);
+    labels([bob, other]);
+    expect(labels([other, { peerId: 'p-bob-2', name: 'Bob', role: 'guest' }])).toEqual([
+      ['p-other', 'Guest 2: Bob'],
+      ['p-bob-2', 'Guest 3: Bob'],
+    ]);
+  });
+
+  it('the host has no number and uses none up', () => {
+    const labels = recipientLabels(
+      [
+        { peerId: 'p-h', name: 'Ana', role: 'host' },
+        { peerId: 'p-g', name: 'Bob', role: 'guest' },
+      ],
+      new Map<string, number>()
+    ).map((r) => r.label);
+    expect(labels).toEqual(['Host: Ana', 'Guest 1: Bob']);
+  });
+
+  it('the note names the person in the page’s words and sets the name apart', () => {
+    render(
+      <ChatPanel
+        messages={[]}
+        recipients={[{ peerId: 'p-bob', name: 'Bob', role: 'guest' }]}
+        to="p-bob"
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('To')).toHaveAttribute('aria-describedby', 'chat-to-note');
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Guest 1 (Bob) gets it. It is left out of the recorded chat.'
+    );
+    expect(document.querySelector('#chat-to-note bdi')?.textContent).toBe('Bob');
+  });
+
+  it('a private line says who it is from in the page’s words, with the name set apart', () => {
+    render(
+      <ChatPanel
+        messages={[
+          { from: 'producer', text: 'two minutes', ts: 1, fromName: 'Pat', fromPeerId: 'p-pat', private: true },
+          { from: 'host', text: 'hi', ts: 2, private: true },
+          { from: 'host', text: 'ok', ts: 3, self: true, private: true, toPeerId: 'p-pat', toRole: 'producer' },
+        ]}
+        recipients={[
+          { peerId: 'p-bob', name: 'Bob', role: 'guest' },
+          { peerId: 'p-pat', name: 'Pat', role: 'producer' },
+        ]}
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const line = (mark: string) => screen.getByText(mark).parentElement?.textContent;
+    expect(line('Private · from Producer 2')).toBe('Private · from Producer 2Pat');
+    expect(line('Private · from Host')).toBe('Private · from HostHost');
+    expect(line('Private · to Producer 2')).toBe('Private · to Producer 2You');
+    expect(screen.getByText('Pat').tagName).toBe('BDI');
+    expect(screen.getByText('You').tagName).toBe('BDI');
+  });
+
+  it('a name that holds a right-to-left override changes nothing this page wrote', () => {
+    render(
+      <ChatPanel
+        messages={[]}
+        recipients={[{ peerId: 'p-x', name: 'Bob (host)‮', role: 'guest' }]}
+        to="p-x"
+        onSend={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const select = screen.getByLabelText('To') as HTMLSelectElement;
+    expect(select.options[1]?.textContent?.startsWith('Guest 1: ')).toBe(true);
+    const note = document.getElementById('chat-to-note')!;
+    const outside = Array.from(note.childNodes)
+      .filter((n) => n.nodeName !== 'BDI')
+      .map((n) => n.textContent)
+      .join('')
+      .replace(/\s+/g, ' ');
+    expect(outside).toBe('Only Guest 1 () gets it. It is left out of the recorded chat.');
+  });
+});
+
+describe('useRoom: a line this tab sent privately', () => {
+  it('remembers who it went to, by id and by the role the Room gave', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const stream = {
+      getTracks: () => [],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    } as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(stream, 'Host Hana');
+    });
+    act(() => {
+      for (const handler of signalHandlers['role-assigned'] ?? []) {
+        handler({
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [{ peerId: 'p-pat', ordinal: 2, role: 'producer', displayName: 'Pat' }],
+          recording: false,
+        });
+      }
+    });
+    act(() => {
+      result.current.sendChat('hi', 'p-pat');
+    });
+    expect(result.current.state.messages).toEqual([
+      {
+        from: 'host',
+        text: 'hi',
+        ts: expect.any(Number),
+        self: true,
+        fromName: 'Host Hana',
+        private: true,
+        toPeerId: 'p-pat',
+        toRole: 'producer',
+      },
+    ]);
   });
 });

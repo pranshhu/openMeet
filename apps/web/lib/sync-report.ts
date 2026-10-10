@@ -20,8 +20,9 @@ export interface ChatMessage {
   notRecorded?: boolean;
   /** Sent to one person only: shown to the two of them, left out of the take's chat file. */
   private?: boolean;
-  /** On a private line this tab sent: the name of the person it went to. */
-  toName?: string;
+  /** On a private line this tab sent: who it went to, by id and by the Room's role. */
+  toPeerId?: string;
+  toRole?: Role;
 }
 
 export interface GuestSyncInput {

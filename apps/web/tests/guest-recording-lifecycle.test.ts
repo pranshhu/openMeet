@@ -6025,8 +6025,8 @@ describe('private messages in useRoom', () => {
     const own = { from: 'host', ts: expect.any(Number), self: true, fromName: 'Host Hana' };
     expect(result.current.state.messages).toEqual([
       { ...own, text: 'to everyone' },
-      { ...own, text: 'for Bob', private: true, toName: 'Bob' },
-      { ...own, text: 'for someone gone', private: true },
+      { ...own, text: 'for Bob', private: true, toPeerId: 'p-bob', toRole: 'guest' },
+      { ...own, text: 'for someone gone', private: true, toPeerId: 'p-gone', toRole: 'guest' },
     ]);
   });
 

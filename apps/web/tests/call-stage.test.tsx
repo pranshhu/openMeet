@@ -2635,9 +2635,9 @@ describe('CallStage: a chat message for one person', () => {
     // A present-only device is someone's second screen, not a person to write to.
     expect(Array.from(to().options).map((o) => [o.value, o.textContent])).toEqual([
       ['', 'Everyone'],
-      ['p-bob', 'Bob (guest)'],
-      ['p-pat', 'Pat (producer)'],
-      ['p-anon', 'Host (host)'],
+      ['p-bob', 'Guest 1: Bob'],
+      ['p-pat', 'Producer 2: Pat'],
+      ['p-anon', 'Host: Host'],
     ]);
 
     fireEvent.change(to(), { target: { value: 'p-pat' } });
@@ -2668,9 +2668,11 @@ describe('CallStage: a chat message for one person', () => {
     rerender(<CallStage {...props} messages={[fromPat]} />);
 
     // From the pop-up: the commonest way to answer.
-    fireEvent.click(screen.getByRole('button', { name: /Private · from a producer\s*Pat/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Producer 1\s*Pat/ }));
     expect(to().value).toBe('p-pat');
-    expect(screen.getByText('Only Pat (producer) gets it. It is left out of the recorded chat.')).toBeInTheDocument();
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Producer 1 (Pat) gets it. It is left out of the recorded chat.'
+    );
   });
 
   it('does the same from the Chat button, once: a choice made after reading it is left alone', () => {
@@ -2819,7 +2821,7 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     const { rerender } = render(<CallStage {...props} />);
     rerender(<CallStage {...props} messages={[fromPat]} />);
     expect(screen.getByRole('status').querySelector('[data-private-mark]')).toHaveTextContent(
-      'Private · from a producer'
+      'Private · from Producer 1'
     );
 
     rerender(<CallStage {...props} messages={[fromPat, claim]} />);
@@ -2831,7 +2833,7 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     const dee = { peerId: 'p-dee', name: 'Dee', stream: null, role: undefined };
     render(<CallStage {...baseProps} remotePeers={[bob, dee]} />);
     fireEvent.click(screen.getByLabelText('Chat'));
-    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Bob (guest)', 'Dee (guest)']);
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Guest 1: Bob', 'Guest 2: Dee']);
   });
 
   it('keeps a label with its person when someone who reads the same reconnects', () => {
@@ -2840,11 +2842,33 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     const options = () => Array.from(to().options).map((o) => o.textContent);
     const { rerender } = render(<CallStage {...baseProps} remotePeers={[bob, other]} />);
     fireEvent.click(screen.getByLabelText('Chat'));
-    expect(options()).toEqual(['Everyone', 'Bob (guest)', 'Bob (guest) 2']);
+    expect(options()).toEqual(['Everyone', 'Guest 1: Bob', 'Guest 2: Bob']);
     fireEvent.click(screen.getByLabelText('Chat'));
 
     rerender(<CallStage {...baseProps} remotePeers={[other, bobAgain]} />);
     fireEvent.click(screen.getByLabelText('Chat'));
-    expect(options()).toEqual(['Everyone', 'Bob (guest) 2', 'Bob (guest) 3']);
+    expect(options()).toEqual(['Everyone', 'Guest 2: Bob', 'Guest 3: Bob']);
+  });
+});
+
+describe('CallStage: the pop-up names a private sender in the page’s words', () => {
+  it('shows the number the chat list gives the same person, and sets the name apart', () => {
+    const bob = { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' as const };
+    const dee = { peerId: 'p-dee', name: 'Dee', stream: null, role: 'guest' as const };
+    const fromDee = { from: 'guest' as const, text: 'psst', ts: 1, fromName: 'Dee', fromPeerId: 'p-dee', private: true };
+    const props = { ...baseProps, remotePeers: [bob, dee] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromDee]} />);
+
+    const popup = screen.getByRole('status');
+    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from Guest 1');
+    expect(popup.querySelector('bdi')?.textContent).toBe('Dee');
+
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Guest 1\s*Dee/ }));
+    expect(Array.from((screen.getByLabelText('To') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
+      'Everyone',
+      'Guest 2: Bob',
+      'Guest 1: Dee',
+    ]);
   });
 });

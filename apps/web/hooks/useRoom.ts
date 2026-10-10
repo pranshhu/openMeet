@@ -2269,7 +2269,7 @@ export function useRoom(slug: string) {
     // know it drops it, where it would send a `chat` with one more field
     // to everyone.
     signalRef.current?.send(to ? { type: 'private-message', to, text } : { type: 'chat', text, ts });
-    const toName = to ? remotePeersRef.current.find((r) => r.peerId === to)?.name : null;
+    const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
       from,
@@ -2277,7 +2277,7 @@ export function useRoom(slug: string) {
       ts,
       self: true,
       ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
-      ...(to ? { private: true, ...(toName ? { toName } : {}) } : {}),
+      ...(to ? { private: true, toPeerId: to, toRole } : {}),
     };
     messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({

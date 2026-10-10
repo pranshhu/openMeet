@@ -362,10 +362,10 @@ export function CallStage({
   // message must still be chosen when chat opens again, or the next message
   // meant for them goes to everyone.
   const [chatTo, setChatTo] = useState('');
-  // The labels people were given under To, for as long as this screen is up:
-  // one person's label is never handed to another when someone leaves or
-  // reconnects.
-  const [chatLabels] = useState(() => new Map<string, string>());
+  // The numbers this page gave people under To, for as long as this screen
+  // is up: a number is never handed to another person when someone leaves
+  // or reconnects.
+  const [chatNumbers] = useState(() => new Map<string, number>());
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {
@@ -419,7 +419,7 @@ export function CallStage({
         const text = newest.text.length > 120 ? `${newest.text.slice(0, 120)}…` : newest.text;
         setPopup({
           sender: chatSenderLabel(newest),
-          ...(newest.private ? { privateDetail: privateDetail(newest) } : {}),
+          ...(newest.private ? { privateDetail: privateDetail(newest, chatNumbers) } : {}),
           text,
         });
       }
@@ -591,7 +591,7 @@ export function CallStage({
       >
         <span className="block text-xs font-medium text-white/70">
           {popup.privateDetail && <PrivateMark detail={popup.privateDetail} />}
-          {popup.sender}
+          <bdi>{popup.sender}</bdi>
         </span>
         <span className="block text-sm text-white/95 wrap-anywhere">{popup.text}</span>
       </button>
@@ -1365,7 +1365,7 @@ export function CallStage({
               recipients={chatRecipients}
               to={chatTo}
               onTo={setChatTo}
-              labels={chatLabels}
+              numbers={chatNumbers}
               onSend={onSendChat}
               onClose={closeChat}
             />

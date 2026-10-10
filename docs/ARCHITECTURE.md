@@ -370,19 +370,23 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
 - Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
   `private-message` to one person, and adds the sender's own line to `state.messages` at once.
-  A private line carries `private` (plus `toName` on the sender's side). `PrivateMark` draws the
-  mark in the chat list and in the pop-up from that flag, never from the name: "Private · from
-  the host", "from a producer" or "from a guest" by the Room's role, or "to <name>" on the
-  sender's own line. `chatSenderLabel` is the name alone. `buildChatLog` leaves the line out of
+  A private line carries `private` (plus `toPeerId` and `toRole` on the sender's side: who it went
+  to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
+  pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
+  guest" by the Room's role when the sender's id is not known, "from Guest 1" or "from Producer 2"
+  by the number this page gave that id, or "to Guest 1" on the sender's own line.
+  `chatSenderLabel` is the name alone. `buildChatLog` leaves the line out of
   `chat_<id>.txt`, whichever side the host was on. Its text is checked on arrival like `chat`: a
   string of at most `MAX_CHAT_MESSAGE_LENGTH`.
   `ChatPanel` offers the choice under **To** when there are two or more other people
-  (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as its
-  name and the Room's role, `Name (guest)`, with ` 2` and ` 3` for a second and third who read
-  the same. A label stays with the person it was given to for as long as the call screen is up
-  (`chatLabels` in `CallStage`) and is never given to anyone else, so a number is not dealt again
-  when someone leaves or reconnects; direction marks in a name are left out of it. The choice
-  lives in `CallStage` (`chatTo`), because the panel unmounts when chat closes, and stays until it
+  (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as the
+  page's own words first, `Host: Ana`, `Guest 1: Bob` or `Producer 2: Pat`, then the name the
+  person chose, cut to 16 characters. A number is given the first time the page meets a person
+  and stays with that id for as long as the call screen is up (`chatNumbers` in `CallStage`), so
+  no one else is given it when someone leaves or reconnects; a person who reconnects arrives under
+  a new id and gets a new number. The name sits in a `<bdi>` element wherever other words follow
+  it. The choice lives in `CallStage` (`chatTo`), because the panel unmounts when chat closes, and
+  stays until it
   is changed. `openChat` moves it only from Everyone: to the sender of the newest private message
   among those that arrived while chat was closed, once per message, if that person is still in the
   call. A person already chosen is never replaced, and a message for everyone that arrived after it
@@ -946,15 +950,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   chat file never does.
 - **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
   id, so the chat panel says the person left or reconnected and sends nothing until someone is
-  chosen. Under **To** a person reads as name and role, with a number when two read the same;
-  someone who comes back gets a number nobody had, never another person's label, and a
-  present-only device is not listed.
+  chosen. Under **To** a person reads as the page's own words and a number, `Guest 2`; someone who
+  comes back gets a number nobody had, never another person's number, and a present-only device
+  is not listed.
 - **A private message that arrives while chat is open does not move To.** An answer goes where
   **To** says, to everyone if nobody is chosen. And chat opened on Everyone is addressed to the
   sender of the newest private message that arrived while chat was closed, if that person is
   still in the call; a person already chosen is not replaced. That also holds when a message for
   everyone arrived after the private one: an answer goes to that person alone until **To** is
   changed.
-- **A display name can still claim a role in words.** A guest named "Host" reads "Host" in chat
-  and under To; the role beside the name and on a private line's mark is the Room's, and it is
-  the one to trust.
+- **A number under To is this page's own.** `Guest 2` on one person's screen is not `Guest 2` on
+  another's, and a person who reconnects gets a new number. A display name is still its owner's
+  text and can say anything; the words before it are the page's, and they are the ones to trust.
