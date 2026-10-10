@@ -325,6 +325,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   connect nothing to their graph's own output, because the browser suspends a graph whose
   output device goes away, and those graphs also feed the call and the recordings. Nothing in
   `hooks/` or `lib/` that records reads a media element, so no file depends on the choice.
+- **`components/LevelsPanel.tsx`** — **Levels** in the control bar (not on a present-only device,
+  which plays nobody) opens a strip between the stage and the bar with a fader for each person
+  who has a tile. `CallStage` keeps the values (`volumes`, 0 to 1 by `peerId`) and gives each to
+  that person's `StageFeed.volume`; `VideoTile` sets it as the `volume` of its `<video>`. It is
+  this tab's playback only: nothing is sent, and no recorder, backup or call-audio copy reads a
+  tile's element. While someone is below full volume the button carries a dot.
+  Each row also has a meter of what arrives from that person, read before the fader: while the
+  panel is on screen one `AudioContext` of its own holds a `MediaStreamAudioSourceNode` and an
+  `AnalyserNode` per stream, connected to nothing else, and a 100 ms timer writes each bar
+  straight to the DOM. Hiding the panel closes the context.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -848,6 +858,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
   the tab shows "Everyone else left", there is no media board on screen; the pad plays on
   until someone joins and the call is back, or until Leave.
+- **A level set in Levels is forgotten when its person reconnects, and on a reload.** It is
+  kept by `peerId` in the call screen, and the Room gives a returning connection a new id, so
+  that person plays at full volume again. A fader only turns a person down from full volume,
+  and the sound of a shared screen or a presented video has no fader.
+- **M does not mark a moment while a fader has the keyboard.** The marker key skips every
+  `<input>`, as it does for the teleprompter's sliders; the bookmark button still marks.
+- **A level meter is drawn only while Levels is open.** It shows what arrives, so it does not
+  move with the fader, and it has one colour: nothing marks a person who is clipping.
 - **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
   and Rimshot peak at about 0.4 of full scale and Soft bed at about 0.13, mixed over the
   voice. Like every pad, a ready sound is gone from the board after a reload and is added

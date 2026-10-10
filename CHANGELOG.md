@@ -52,6 +52,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be
   dismissed.
+- **Levels**, in the call's control bar: a fader for each other person sets how
+  loud your browser plays them. Only you hear the difference; what the others
+  hear and every recording are unchanged.
+- **Levels** shows a meter beside each fader: how loud that person arrives,
+  whatever their fader is set to.
 - A live track panel during a take: beside the Recording pill, the host sees every
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much

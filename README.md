@@ -82,6 +82,8 @@ retention policy to trust, because there's nothing retained.
   notification when the tab is in the background
 - A note in the call when your own microphone has sent no sound for 10 seconds
   (unplugged, muted on the device, wrong input) or keeps clipping
+- **Levels**: see how loud each person arrives and turn one down for your own ears;
+  what the others hear and what is recorded do not change
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up, with a low-power

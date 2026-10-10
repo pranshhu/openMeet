@@ -25,6 +25,10 @@ export function VideoTile({
   // Flip the picture like a mirror, as a self-view should be. Display only: the
   // stream (and so the recording) is untouched.
   mirror = false,
+  // How loud this tile plays in this tab, 0 to 1. It is the element's own
+  // volume: nobody else hears it, and a recorder reads the stream, never
+  // this element.
+  volume = 1,
 }: {
   stream: MediaStream | null;
   muted: boolean;
@@ -35,6 +39,7 @@ export function VideoTile({
   className?: string;
   tagClassName?: string;
   mirror?: boolean;
+  volume?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
 
@@ -67,6 +72,10 @@ export function VideoTile({
   }, [muted]);
 
   const showVideo = !!stream && !camOff;
+
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
 
   return (
     <div
