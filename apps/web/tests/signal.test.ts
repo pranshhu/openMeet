@@ -266,3 +266,31 @@ describe('SignalClient', () => {
     expect(JSON.parse(ws2.sent[0]!).type).toBe('join');
   });
 });
+
+describe('SignalClient: removed by the host', () => {
+  beforeEach(() => {
+    FakeWS.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not reconnect on code 4007 (WS_CLOSE_REMOVED) and reports it', () => {
+    const onFatalClose = vi.fn();
+    const c = new SignalClient({
+      slug: 'xyz-abcd-pqr',
+      wsBase: 'ws://localhost:8787',
+      displayName: 'Guest',
+      userAgent: 'test-ua',
+      onFatalClose,
+      wsFactory: (url) => new FakeWS(url) as unknown as WebSocket,
+    });
+    c.connect();
+    FakeWS.instances[0]!.fireOpen();
+    FakeWS.instances[0]!.fireClose(4007);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1); // no reconnect attempt
+    expect(onFatalClose).toHaveBeenCalledWith(4007, '');
+  });
+});

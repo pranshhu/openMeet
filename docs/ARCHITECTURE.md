@@ -64,13 +64,16 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (17 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
+  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
+  is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
@@ -117,7 +120,8 @@ DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each opti
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
 going back to the host). WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
-`4005` invalid message, `4006` replaced (another host connection took over).
+`4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
+host removed this participant, and the same tab is refused until the session ends).
 
 ---
 
@@ -166,7 +170,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
-  as not recorded, at most 16, emptied when the session ends) and reloaded in the constructor via
+  as not recorded, at most 16, emptied when the session ends, and those of the tabs the host
+  removed, kept the same way) and reloaded in the constructor via
   `blockConcurrencyWhile`, so a woken instance picks up exactly where the evicted one left off.
   The client's `{"type":"ping"}` heartbeat is answered `{"type":"pong"}` by
   `setWebSocketAutoResponse` without waking the DO; the `ping` case in the message switch stays as
@@ -200,6 +205,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
   sends `peer-recorded` to every joined peer, the host included.
+- `peer-mute` is **passed on only from the host**, to the one joined peer it names and never back
+  to the sender, as `{type:'peer-mute'}`. Nothing is kept, a take changes nothing about it, and
+  the Room turns no microphone on or off: the page that receives it does, and can turn it back on.
+- `peer-remove` is **acted on only from the host**, for a joined peer that is not a host, during
+  a take as outside one: the DO remembers that peer's client id (`session.removed`, the newest 16),
+  closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
+  everyone else gets `peer-left` with that reason. A later `join` that presents a remembered id is
+  closed with the same code before it is seated; one that proves the host token is never refused.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -837,3 +850,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   else leaves and the tab shows "Everyone else left", there is no Stop presenting on
   screen; on a computer the clip is heard until someone joins and the call is back, or
   until Leave.
+- **A removed participant can come back in another tab.** The Room remembers the tab's id
+  (`lib/client-id.ts`, session storage), and the invite link is still the only credential: a new
+  tab, a private window or another browser is a new id, a client that sends no id is closed but
+  cannot be remembered, and a browser that blocks session storage sends a new id on every load,
+  so that tab gets back in by reloading. The list is the session's: when the last person leaves,
+  or a host who is alone in the room reloads, it is emptied and the removed tab can join again.
+- **A mute is a request.** The Room passes it on and the muted person's own page carries it out;
+  a page that does not know the message, or was changed to ignore it, stays unmuted. Removal is
+  what the Room enforces.
