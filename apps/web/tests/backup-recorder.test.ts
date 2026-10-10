@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName, type BackupRecorderOpts } from '@/lib/backup-recorder';
 import { openTakeJournal, findTakeJournals, deleteTakeJournal, isJournalFileName } from '@/lib/take-journal';
 import { wavHeader } from '@/lib/wav';
+import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
 import { presetById } from '@/lib/quality';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
 import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
@@ -1675,6 +1676,17 @@ describe('take journal — small closed parts in browser storage', () => {
       { file: 'guest_z.wav', kind: 'wav' },
     ]);
     expect(notes.markers).toEqual([{ atMs: 3, label: 'kept', from: 'guest' }]);
+  });
+
+  // The call cuts a label to this length so that the crash copy reads it back.
+  it('keeps a marker whose label is as long as a label may be', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const dir = await root.getDirectoryHandle(TAKE_DIR, { create: true });
+    const label = 'n'.repeat(MAX_MARKER_LABEL_LENGTH);
+    await putText(dir, 'take.json', JSON.stringify(record({ markers: [{ atMs: 1, label, from: 'host' }] })));
+
+    const found = await listed(root);
+    expect(found[0]!.notes.markers).toEqual([{ atMs: 1, label, from: 'host' }]);
   });
 
   it('backups keep only known directory names and the first sixteen', async () => {

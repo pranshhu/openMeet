@@ -12,6 +12,8 @@ export interface StageFeed {
   presence?: ReactNode;
   /** Flip the picture, for your own camera. Display only. */
   mirror?: boolean;
+  /** How loud this feed plays in this tab, 0 to 1; 1 when left out. */
+  volume?: number;
 }
 
 function feedProps(f: StageFeed) {
@@ -23,6 +25,7 @@ function feedProps(f: StageFeed) {
     // Avoid passing an explicit `presence: undefined` (exactOptionalPropertyTypes).
     ...(f.presence !== undefined ? { presence: f.presence } : {}),
     ...(f.mirror ? { mirror: true } : {}),
+    ...(f.volume !== undefined ? { volume: f.volume } : {}),
   };
 }
 

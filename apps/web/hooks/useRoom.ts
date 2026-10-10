@@ -37,6 +37,7 @@ import {
   buildSyncReport,
   buildChatLog,
   MAX_CHAT_MESSAGE_LENGTH,
+  MAX_MARKER_LABEL_LENGTH,
   type ChapterMarker,
   type SyncReport,
   type SyncReportData,
@@ -576,7 +577,6 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
-export const MAX_MARKER_LABEL_LENGTH = 200;
 
 /**
  * Whether a take's warning says its crash copy is gone. The text is matched as
@@ -837,13 +837,15 @@ export function useRoom(slug: string) {
    * relative to the host's recording start — including for markers relayed from
    * the guest. Markers are second-granularity, so the ~10-50ms of relay latency
    * is irrelevant, and stamping locally avoids depending on a peer clock that
-   * may be arbitrarily wrong.
+   * may be arbitrarily wrong. `at` is when the moment was on this page's own
+   * clock (the host began a note that took seconds to type); it is never taken
+   * from another participant.
    */
-  const recordMarker = useCallback((label: string, from: Role, name?: string): boolean => {
+  const recordMarker = useCallback((label: string, from: Role, name?: string, at?: number): boolean => {
     const start = hostStartRef.current;
     if (start === null) return false; // not recording; nothing to anchor to
     const marker: ChapterMarker = {
-      atMs: Date.now() - start,
+      atMs: Math.max(0, (at ?? Date.now()) - start),
       label,
       from,
       ...(name ? { name } : {}),
@@ -1931,12 +1933,20 @@ export function useRoom(slug: string) {
     }));
   }, []);
 
-  /** UI entry point: mark the current moment. Guests relay to the host. */
+  /**
+   * UI entry point: mark a moment. Guests relay to the host. Every label this
+   * page makes comes through here (a typed note, a pad's file name, none), so
+   * here it is cut to the length the host accepts from a participant and the
+   * crash copy reads back. `at` is when the moment was, on this page's clock;
+   * only the host's own is used, because the host takes no position from
+   * anyone else.
+   */
   const addMarker = useCallback(
-    (label: string) => {
+    (raw: string, at?: number) => {
+      const label = raw.slice(0, MAX_MARKER_LABEL_LENGTH);
       const role: Role = roleRef.current ?? 'host';
       if (role === 'host') {
-        recordMarker(label, 'host', localNameRef.current || undefined);
+        recordMarker(label, 'host', localNameRef.current || undefined, at);
         return;
       }
       signalRef.current?.send({ type: 'marker', label });
