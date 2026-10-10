@@ -86,6 +86,7 @@ function isPresentLink(): boolean {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
+    mutePeer, removePeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
@@ -142,6 +143,18 @@ export function RoomView({ slug }: { slug: string }) {
       <StatusScreen title="You joined from another tab or device" action="Use this tab instead">
         The call continues in the other tab or device. Using this tab instead disconnects that one — if
         it’s recording, press End &amp; save there first.
+      </StatusScreen>
+    );
+  }
+  if (state.phase === 'removed') {
+    return (
+      <StatusScreen
+        title="The host removed you from this call"
+        action="Back to the lobby"
+        secondary={{ label: 'Back to home', href: '/' }}
+      >
+        This tab can’t rejoin until the call has ended. If you were being recorded, your backup
+        copy stays in this browser — the lobby lists it.
       </StatusScreen>
     );
   }
@@ -329,6 +342,9 @@ export function RoomView({ slug }: { slug: string }) {
       onLeave={leave}
       onSendChat={sendChat}
       onSetPeerRecorded={setPeerRecorded}
+      hostMuted={state.hostMuted}
+      onMutePeer={mutePeer}
+      onRemovePeer={removePeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}

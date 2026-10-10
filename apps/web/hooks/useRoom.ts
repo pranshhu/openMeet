@@ -7,6 +7,7 @@ import {
   DATA_CHANNEL_RECORDING_SCREEN,
   RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
   type BrowserNote,
@@ -101,6 +102,9 @@ export type RoomPhase =
   // host seat over (4006). Each gets its own screen and next step.
   | 'full'
   | 'replaced'
+  // The host removed this participant (4007). The Room refuses this tab until
+  // the session ends, so the screen offers the lobby and a way home.
+  | 'removed'
   | 'error';
 
 export type { ChatMessage };
@@ -193,6 +197,8 @@ export interface RoomState {
   connectionWarning: string | null;
   // This participant's own mic, judged where it enters the recording; a note in the call.
   micWarning: MicWarning | null;
+  /** The host turned this participant's microphone off, and it has not been turned back on. */
+  hostMuted: boolean;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -283,7 +289,7 @@ export function computeRecordingCapability(ua?: string): { mp4: boolean; wav: bo
  * full hook harness; it is the highest-consequence branch in the file.
  */
 /** Phases a live media event must never drag the room out of. */
-const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'error']);
+const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'removed', 'error']);
 
 export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
   return phase === 'recording' || phase === 'finalizing' || phase === 'done' ? phase : 'peer-left';
@@ -301,9 +307,26 @@ export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
 export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: RoomPhase } | null {
   if (phase === 'recording' || phase === 'finalizing') return null;
   if (code === WS_CLOSE_REPLACED) return { phase: 'replaced' };
+  if (code === WS_CLOSE_REMOVED) return { phase: 'removed' };
   return code === WS_CLOSE_CAPACITY_FULL
     ? { phase: 'full' }
     : { phase: 'not-found' }; // invalid (4002) or expired (4003) slug
+}
+
+/**
+ * Whether a terminal server close ends this tab's capture before the terminal
+ * screen shows.
+ *
+ * Only a guest's capture that is still starting. It runs into this browser's
+ * backup from the host's Record, but reaches 'recording' only once its channel
+ * to the host has opened; until then there is no call screen to hold and no
+ * button that ends it, and with the room gone the host's stop cannot arrive.
+ * One that has reached 'recording' or 'finalizing' is held by
+ * phaseOnFatalClose, and a host's take is never ended from here: End & save
+ * is what closes its files.
+ */
+export function endsCaptureOnFatalClose(role: Role | null, capturing: boolean, phase: RoomPhase): boolean {
+  return role === 'guest' && capturing && phase !== 'recording' && phase !== 'finalizing';
 }
 
 /**
@@ -586,6 +609,7 @@ export function useRoom(slug: string) {
     recordingError: null,
     connectionWarning: null,
     micWarning: null,
+    hostMuted: false,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -1174,21 +1198,30 @@ export function useRoom(slug: string) {
         // closes the file handles — the same trap peer-left and room-closed
         // both guard against with phaseOnPeerLeft. This path had no guard, so a
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
-        onFatalClose: (code) =>
-          setState((s) => {
-            const next = phaseOnFatalClose(s.phase, code);
-            if (!next) {
-              fatalCloseRef.current = true;
-              return {
-                ...s,
-                recordingError:
-                  roleRef.current === 'guest'
-                    ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
-                    : 'The connection to the room ended. Press End & save to keep this recording.',
-              };
-            }
-            return { ...s, ...next };
-          }),
+        onFatalClose: (code) => {
+          const settle = () =>
+            setState((s) => {
+              const next = phaseOnFatalClose(s.phase, code);
+              if (!next) {
+                fatalCloseRef.current = true;
+                return {
+                  ...s,
+                  recordingError:
+                    code === WS_CLOSE_REMOVED
+                      ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+                      : roleRef.current === 'guest'
+                        ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
+                        : 'The connection to the room ended. Press End & save to keep this recording.',
+                };
+              }
+              return { ...s, ...next };
+            });
+          // Ended here, backup kept, before the terminal screen shows: that
+          // screen must never sit over a camera that is still being recorded.
+          if (endsCaptureOnFatalClose(roleRef.current, recordingRef.current !== null, phaseRef.current))
+            void endRecordingRef.current({ internal: true }).then(settle, settle);
+          else settle();
+        },
       });
       signalRef.current = signal;
 
@@ -1745,6 +1778,19 @@ export function useRoom(slug: string) {
           remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
         }));
       });
+      // The host asked for this microphone to be off. This page does it, with
+      // the steps of its own mic switch, so the person sees it and can turn it
+      // back on. A host is never muted this way, and a microphone that is off
+      // already (or absent: a producer, a present-only device) is left as it
+      // is, so no note appears for a mute that changed nothing.
+      signal.on('peer-mute', () => {
+        if (roleRef.current === 'host' || !micOnRef.current) return;
+        switchableMediaRef.current?.setAudioEnabled(false);
+        mediaRef.current?.setAudioEnabled(false);
+        micOnRef.current = false;
+        sendPresence();
+        setState((s) => ({ ...s, hostMuted: true }));
+      });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
         const msg: ChatMessage = {
@@ -1848,6 +1894,8 @@ export function useRoom(slug: string) {
       mediaRef.current?.setAudioEnabled(on);
       micOnRef.current = on;
       sendPresence();
+      // Their own switch ends a mute the host asked for.
+      if (on) setState((s) => (s.hostMuted ? { ...s, hostMuted: false } : s));
     },
     [sendPresence]
   );
@@ -2277,6 +2325,16 @@ export function useRoom(slug: string) {
   /** Host: choose whether one guest is recorded in the takes that follow. The Room's answer updates the state. */
   const setPeerRecorded = useCallback((peerId: string, recorded: boolean) => {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
+  }, []);
+
+  /** Host: ask for one person's microphone to be turned off. Their page does it, and their presence shows it. */
+  const mutePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-mute', peerId });
+  }, []);
+
+  /** Host: remove one person from the room. The Room closes their socket, and its `peer-left` updates the state. */
+  const removePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-remove', peerId });
   }, []);
 
   const toggleScreenShare = useCallback(
@@ -2777,7 +2835,7 @@ export function useRoom(slug: string) {
   // 'finalizing', and a take still starting up (handles set, phase not yet
   // 'recording') keeps its tracks too.
   useEffect(() => {
-    const terminal = ['full', 'replaced', 'not-found', 'error'].includes(state.phase);
+    const terminal = ['full', 'replaced', 'removed', 'not-found', 'error'].includes(state.phase);
     if (terminal && !recordingRef.current) release();
   }, [state.phase, release]);
 
@@ -2869,6 +2927,8 @@ export function useRoom(slug: string) {
     switchMic,
     sendChat,
     setPeerRecorded,
+    mutePeer,
+    removePeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,

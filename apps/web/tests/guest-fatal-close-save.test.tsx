@@ -5,6 +5,8 @@ import { useRoom } from '@/hooks/useRoom';
 import { CallStage } from '@/components/CallStage';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { endGuestRecording } from '@/hooks/recording-controller';
+import { PeerConnection } from '@/lib/peer';
+import { MediaManager } from '@/lib/media';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let signalSent: any[] = [];
@@ -242,5 +244,216 @@ describe('guest fatal close hold and stop-and-save action', () => {
     expect(stopButton).toBeInTheDocument();
     stopButton.click();
     expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a guest the host removes during a take', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    onFatalCloseCallback = null;
+    endGuestRecordingCalled = false;
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps the call screen, is told the host did it, and can still stop and save', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+
+    const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+    const fakeStream = Object.assign(new EventTarget(), {
+      getTracks: () => [fakeAudio, fakeVideo],
+      getAudioTracks: () => [fakeAudio],
+      getVideoTracks: () => [fakeVideo],
+    }) as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Bob');
+    });
+
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-2',
+        kind: 'camera',
+        filename: 'host_rec-host-2.mp4',
+      });
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+
+    // Held: the Stop and save button is the only thing that ends this capture.
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.recordingError).toBe(
+      'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+    );
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    expect(endGuestRecordingCalled).toBe(true);
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
+
+  it('is not ended a second time when the room closes on them again while it saves', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+
+    const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+    const fakeStream = Object.assign(new EventTarget(), {
+      getTracks: () => [fakeAudio, fakeVideo],
+      getAudioTracks: () => [fakeAudio],
+      getVideoTracks: () => [fakeVideo],
+    }) as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Bob');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-4',
+        kind: 'camera',
+        filename: 'host_rec-host-4.mp4',
+      });
+    });
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+
+    // Stop and save, with the tail still on its way out.
+    let finish!: (r: { drained: boolean; backup: Blob }) => void;
+    vi.mocked(endGuestRecording).mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    let saved!: Promise<void>;
+    act(() => {
+      saved = result.current.endRecording();
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+
+    // The page tries the room again once its connection to the host has failed
+    // twice, and the Room refuses the removed tab again.
+    await act(async () => {
+      onFatalCloseCallback?.(4007, 'removed');
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(vi.mocked(endGuestRecording)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish({ drained: true, backup: new Blob(['backup-bytes']) });
+      await saved;
+    });
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
+});
+
+describe('a guest the host removes while their capture is still starting', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    onFatalCloseCallback = null;
+    endGuestRecordingCalled = false;
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('ends the capture, lets go of camera and mic, and shows the removed screen', async () => {
+    // The connection to the host never comes up, so the capture never reaches 'recording'.
+    vi.mocked(PeerConnection).mockImplementationOnce(
+      () =>
+        ({
+          start: vi.fn(),
+          close: vi.fn(),
+          setLocalStream: vi.fn(),
+          setLocalStreamAfterFirstOffer: vi.fn(),
+          createControlChannel: vi.fn(),
+          addTransceiver: vi.fn(),
+          restartIce: vi.fn(),
+          connectionState: 'connecting',
+          rawConnection: null,
+          setPeerCount: vi.fn(),
+          whenConnected: vi.fn(() => new Promise(() => {})),
+        }) as never
+    );
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+
+    const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+    const fakeStream = Object.assign(new EventTarget(), {
+      getTracks: () => [fakeAudio, fakeVideo],
+      getAudioTracks: () => [fakeAudio],
+      getVideoTracks: () => [fakeVideo],
+    }) as unknown as MediaStream;
+
+    await act(async () => {
+      await result.current.join(fakeStream, 'Guest Bob');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-guest',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+        recording: false,
+      });
+    });
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-3',
+        kind: 'camera',
+        filename: 'host_rec-host-3.mp4',
+      });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Captured into this browser's backup already, with no call screen to stop it from.
+    expect(vi.mocked(BackupRecorder).mock.results[0]!.value.start).toHaveBeenCalled();
+    expect(result.current.state.phase).not.toBe('recording');
+
+    await act(async () => {
+      onFatalCloseCallback?.(4007, 'removed');
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(endGuestRecordingCalled).toBe(true);
+    expect(result.current.state.phase).toBe('removed');
+    expect(vi.mocked(MediaManager).mock.results[0]!.value.stop).toHaveBeenCalled();
   });
 });

@@ -64,13 +64,16 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (17 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
+  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
+  is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
@@ -117,7 +120,8 @@ DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each opti
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
 going back to the host). WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
-`4005` invalid message, `4006` replaced (another host connection took over).
+`4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
+host removed this participant, and the same tab is refused until the session ends).
 
 ---
 
@@ -166,7 +170,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
-  as not recorded, at most 16, emptied when the session ends) and reloaded in the constructor via
+  as not recorded, at most 16, emptied when the session ends, and those of the tabs the host
+  removed, kept the same way) and reloaded in the constructor via
   `blockConcurrencyWhile`, so a woken instance picks up exactly where the evicted one left off.
   The client's `{"type":"ping"}` heartbeat is answered `{"type":"pong"}` by
   `setWebSocketAutoResponse` without waking the DO; the `ping` case in the message switch stays as
@@ -200,6 +205,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
   sends `peer-recorded` to every joined peer, the host included.
+- `peer-mute` is **passed on only from the host**, to the one joined peer it names and never back
+  to the sender, as `{type:'peer-mute'}`. Nothing is kept, a take changes nothing about it, and
+  the Room turns no microphone on or off: the page that receives it does, and can turn it back on.
+- `peer-remove` is **acted on only from the host**, for a joined peer that is not a host, during
+  a take as outside one: the DO remembers that peer's client id (`session.removed`, the newest 16),
+  closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
+  everyone else gets `peer-left` with that reason. A later `join` that presents a remembered id is
+  closed with the same code before it is seated; one that proves the host token is never refused.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -253,7 +266,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
-  `replaced` (4006: another tab/device took the host seat), `left` (Rejoin + Back to home, plus
+  `replaced` (4006: another tab/device took the host seat), `removed` (4007: the host removed
+  this participant; Back to the lobby + Back to home), `left` (Rejoin + Back to home, plus
   download links for sync.json/chapters.txt/backups when a take was finalized on the way out; a host
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
@@ -278,6 +292,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.
+  `components/PeoplePanel.tsx` is the host's list of everyone else in the call, opened by
+  **People** in the control bar and laid out like the media board (on a phone the two share a
+  place, so opening one closes the other): a row per person with **Mute**, which a producer
+  and a present-only device do not get. A person the host muted sees their own mic button off
+  and a `role="status"` line that says so, and during their own capture that their recording
+  has no sound until they turn it back on.
+  Each row also has **Remove**, which asks in the row itself before it calls
+  `useRoom().removePeer` (a blocking dialog would stall the tab that writes the take), with
+  **Cancel** focused and last, at the row's right end where Remove was; during a take, and
+  while an interrupted take can still be resumed, the question says that a recorded
+  person's recording here ends.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
@@ -352,7 +377,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
-(+ `not-found|peer-left|left|full|replaced|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
+(+ `not-found|peer-left|left|full|replaced|removed|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
@@ -362,6 +387,17 @@ backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
+`hostMuted` is true from the moment a host's `peer-mute` turned this participant's microphone
+off until they turn it back on: the handler does what `setMic(false)` does (track off,
+`presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
+already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
+sends `peer-mute`, and the panel follows that person's `presence`.
+`removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
+On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
+that is running, as it does for every terminal close, with a banner that names the host. A guest's
+capture that has started but not reached `recording` (its channel to the host has not opened)
+cannot be held, having no call screen: on any terminal close it is ended first through
+`endRecording({ internal: true })`, its backup kept, and the terminal screen follows.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -990,3 +1026,35 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A removed participant can come back in another tab.** The Room remembers the tab's id
+  (`lib/client-id.ts`, session storage), and the invite link is still the only credential: a new
+  tab, a private window or another browser is a new id, a client that sends no id is closed but
+  cannot be remembered, and a browser that blocks session storage sends a new id on every load,
+  so that tab gets back in by reloading. The list is the session's: when the last person leaves,
+  or a host who is alone in the room reloads, it is emptied and the removed tab can join again.
+- **A mute is a request.** The Room passes it on and the muted person's own page carries it out;
+  a page that does not know the message, or was changed to ignore it, stays unmuted. Removal is
+  what the Room enforces.
+- **A host's mute turns off a microphone and nothing else.** That person's media board pads and
+  the sound of a video they present keep playing, in the call and in their files; the host can
+  ask, or remove them. A mute is not remembered either: after the muted person reloads, their
+  microphone is as their lobby left it.
+- **A person muted while their page still reads "Connecting…" sees the mic button there as
+  on.** The waiting view keeps its own switch. The call screen shows it off, with the note, as
+  soon as it appears, and one press there turns it back on.
+- **A participant removed during a take keeps recording in their own browser.** Their page holds
+  the call screen, as for any terminal close during a take, and says "The host removed you from
+  this call. Press Stop and save my recording to keep this recording."; until they press it, or
+  Leave, their camera and microphone go on into their own backup and nothing more reaches the
+  host. On the host their files end at the removal and read incomplete (no finish signal), and
+  End & save does not wait for them. A capture that had started but not yet reached the host
+  is ended for them instead, and they get the removed screen; its backup is in their browser.
+- **After Stop and save, a removed participant's page stays on the call screen.** Its tiles are
+  frozen, and its line may still say to rejoin and send the backup; Leave and then Rejoin end on
+  "The host removed you from this call". A backup that tab was sending back stays stalled on
+  the host; the removed person still has it, listed in every lobby.
+- **Nobody else is told why a person left.** A removal reaches the other participants as an
+  ordinary `peer-left`; its `reason` is `removed`, and no page reads it.
+- **The People panel exists on the call screen only.** A host whose page still reads
+  "Connecting…" cannot mute or remove the person it is connecting to, and a removal cannot be
+  undone from the panel: the removed person opens the link in a new tab.

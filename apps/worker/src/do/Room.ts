@@ -6,6 +6,7 @@ import {
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   type ClientMessage,
   type Role,
@@ -66,6 +67,7 @@ interface SessionRow {
   recording: boolean;
   recordingCount?: number;
   notRecorded?: string[];
+  removed?: string[];
 }
 
 /**
@@ -91,6 +93,9 @@ const MAX_RECORDING_ID_LENGTH = 64;
 const MAX_FILENAME_LENGTH = 255;
 const MAX_RECORDINGS_PER_SESSION = 256;
 const MAX_NOT_RECORDED_CLIENTS = 16;
+// Tabs the host removed, kept so the same tab stays out until the session
+// ends. Past the bound the oldest is forgotten and can join again.
+const MAX_REMOVED_CLIENTS = 16;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -113,6 +118,9 @@ export class Room implements DurableObject {
   // Client ids of the guests the host set as not recorded. By client id, not
   // peerId: a peerId is minted per socket and does not survive a reconnect.
   private notRecorded: string[] = [];
+  // Client ids of the tabs the host removed in this session. By client id for
+  // the same reason: it is what a tab presents again on its next socket.
+  private removed: string[] = [];
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -138,6 +146,7 @@ export class Room implements DurableObject {
         this.recording = session.recording;
         this.recordingCount = session.recordingCount ?? 0;
         this.notRecorded = session.notRecorded ?? [];
+        this.removed = session.removed ?? [];
       }
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
@@ -184,6 +193,7 @@ export class Room implements DurableObject {
       recording: this.recording,
       recordingCount: this.recordingCount,
       notRecorded: this.notRecorded,
+      removed: this.removed,
     } satisfies SessionRow);
   }
 
@@ -342,6 +352,16 @@ export class Room implements DurableObject {
           p.companion = true;
         }
         this.save(ws, p);
+        // A tab the host removed stays out until the session ends. A host is
+        // never refused: the token outranks whatever id its tab presents.
+        if (p.role !== 'host' && p.clientId && this.removed.includes(p.clientId)) {
+          try {
+            ws.close(WS_CLOSE_REMOVED, 'removed');
+          } catch {
+            // already gone
+          }
+          return;
+        }
         // Now the role is known: enforce per-role caps.
         // A companion does not count toward MAX_RECORDED_PEERS; it counts with
         // producers toward the 2 unrecorded slots.
@@ -609,6 +629,37 @@ export class Room implements DurableObject {
           fromPeerId: p.peerId,
         });
         break;
+      case 'peer-mute': {
+        // A request, passed on only from the host and only to the one person
+        // named. That person's own page turns the microphone off and can turn
+        // it back on; the Room reaches no microphone, and nothing here turns
+        // one on.
+        if (p.role !== 'host' || typeof parsed.peerId !== 'string') break;
+        const target = this.joinedPeers().find(({ ws: to, p: pp }) => to !== ws && pp.peerId === parsed.peerId);
+        if (target) this.send(target.ws, { type: 'peer-mute' });
+        break;
+      }
+      case 'peer-remove': {
+        // Only the host removes, and never a host. The tab is remembered before
+        // its socket is closed, so it cannot be seated again in between.
+        if (p.role !== 'host' || typeof parsed.peerId !== 'string') break;
+        const target = this.joinedPeers().find(({ p: pp }) => pp.peerId === parsed.peerId);
+        if (!target || target.p.role === 'host') break;
+        const clientId = target.p.clientId;
+        if (clientId) {
+          this.removed = [...this.removed, clientId].slice(-MAX_REMOVED_CLIENTS);
+          await this.saveSession();
+        }
+        try {
+          target.ws.close(WS_CLOSE_REMOVED, 'removed');
+        } catch {
+          // already gone
+        }
+        // Tells everyone else, with this reason, and marks the socket left, so
+        // the close callback that follows does not tell them again.
+        await this.onClose(target.ws, 'removed');
+        break;
+      }
       case 'peer-recorded': {
         // The host's choice for the takes that follow. Refused from anyone else,
         // and while a take is running, so who is recorded never changes under a
@@ -722,6 +773,7 @@ export class Room implements DurableObject {
       this.recording = false;
       this.recordingCount = 0;
       this.notRecorded = [];
+      this.removed = [];
       await this.saveSession();
     }
   }

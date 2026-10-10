@@ -65,6 +65,8 @@ retention policy to trust, because there's nothing retained.
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
+- Host controls in **People**: turn a participant's microphone off for the call (they
+  are told, and turn it back on themselves), or remove someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
@@ -420,6 +422,17 @@ into the host's folder, a copy that starts only after that guest's browser has b
 its own recording. **The host is responsible for getting consent where the law requires
 it** (all-party-consent jurisdictions, GDPR).
 
+The host can turn a participant's microphone off from **People** in the call. That
+person is told at once and turns it back on with their own microphone button. While
+it is off their recording has no sound from the microphone, exactly as when they turn
+it off themselves; nobody can turn another person's microphone on.
+
+The host can also remove a participant from **People**. That person is told the host
+removed them. What they recorded before the removal stays in the host's folder and
+ends there; the rest is in their own browser's backup, which is never deleted for
+them. If a take was running, their browser keeps recording into that backup until
+they press **Stop and save**.
+
 ---
 
 ## After the session
@@ -568,6 +581,9 @@ Known gaps, listed below:
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
+- **Removing a participant keeps out that tab, not that person.** The room refuses the
+  removed tab until everyone has left, but the invite link is the only credential: a new
+  tab or another browser joins again.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 

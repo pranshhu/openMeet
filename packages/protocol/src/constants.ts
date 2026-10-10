@@ -138,4 +138,5 @@ export const WS_CLOSE_INVALID_SLUG = 4002;
 export const WS_CLOSE_EXPIRED_SLUG = 4003;
 export const WS_CLOSE_INVALID_MESSAGE = 4005;
 export const WS_CLOSE_REPLACED = 4006;
-
+// The host removed this participant. The same tab is refused until the session ends.
+export const WS_CLOSE_REMOVED = 4007;

@@ -136,6 +136,13 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- The host can turn a participant's microphone off, from **People** in the call's
+  control bar. That person is told at once and turns it back on with their own
+  microphone button; during a take their recording has no sound until they do.
+- The host can remove a participant, from **People** in the call's control bar,
+  after a confirmation. The room keeps that tab out until everyone has left; what
+  the person recorded stays in the host's folder up to the removal, and in their
+  own browser's backup beyond it.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed
@@ -277,6 +284,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take in which no guest was recorded no longer leaves an empty
   `guest_<id>.mp4` in the recording folder, or warnings about it in the
   summary.
+- A guest whose recording had started in their own browser but had not yet reached
+  the host is no longer left with the camera on behind a screen that says the room
+  is gone, full, or that the host removed them. That recording is ended and its
+  backup kept.
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.

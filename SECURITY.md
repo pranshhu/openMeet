@@ -89,6 +89,11 @@ they're already known:
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
   joining a room as a guest. Treat an invite link as a secret.
+- **Removing a participant keeps out that tab, not that person.** The room refuses
+  the tab the host removed until everyone has left, but the invite link is still the
+  only credential: a new tab, a private window or another browser joins again. A
+  host's mute is a request the muted person's own page carries out; it can turn no
+  microphone on, and a page that ignores it stays unmuted.
 
 ## Scope
 
