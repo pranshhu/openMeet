@@ -258,6 +258,39 @@ describe('the record of who was told, in a take', () => {
     expect(notice.people).toEqual([{ name: 'Bob', role: 'guest', listedAtMs: 900, confirmedAtMs: null }]);
   });
 
+  it('adds nothing to the record once End & save is pressed, while the guests send their last seconds', async () => {
+    const result = await hostIn([ROOM[0]!]);
+    clock = 1_000_040;
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    // End & save waits here for the guests' last seconds.
+    let closeFiles!: () => void;
+    vi.mocked(endHostRecording).mockImplementationOnce(
+      () => new Promise((resolve) => (closeFiles = () => resolve({ backup: null } as never)))
+    );
+    let saved!: Promise<void>;
+    await act(async () => {
+      saved = result.current.endRecording();
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+
+    clock = 1_030_000;
+    await act(async () => {
+      emit('peer-joined', { peerId: 'p-dee', ordinal: 6, role: 'guest', displayName: 'Dee', userAgent: 'x' });
+    });
+    channelFrom('p-bob', 'recording#K1');
+
+    await act(async () => {
+      closeFiles();
+      await saved;
+    });
+    expect(result.current.state.phase).toBe('done');
+    // Bob's line as the stop found it, and no line for Dee.
+    expect(lastNotice().people).toEqual([{ name: 'Bob', role: 'guest', listedAtMs: 40, confirmedAtMs: null }]);
+  });
+
   it('gives a take resumed in this page no record from before the resume, also after a save that failed', async () => {
     const result = await hostIn([ROOM[0]!]);
     clock = 1_000_040;

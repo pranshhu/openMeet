@@ -80,10 +80,10 @@ describe('NoticeLog', () => {
   it('takes nothing on trust from a name, a role or an id', () => {
     const log = new NoticeLog(
       [
-        { peerId: 'p-1', name: 'A‮b\u0000c  ', role: 'admin', companion: 'yes', notRecorded: 'yes' },
+        { peerId: 'p-1', name: 'A\u202Eb\u0000c  ', role: 'admin', companion: 'yes', notRecorded: 'yes' },
         { peerId: 'p-2', name: 'x'.repeat(500), role: 'guest' },
         { peerId: 'p-3', name: { toString: () => { throw new Error('not text'); } }, role: 'guest' },
-        { peerId: 'p-4', name: ' ‎ ', role: 'guest' },
+        { peerId: 'p-4', name: ' \u200E ', role: 'guest' },
         { peerId: 7, name: 'A number for an id', role: 'guest' },
         { peerId: '', name: 'No id', role: 'guest' },
         { peerId: 'i'.repeat(65), name: 'An id too long', role: 'guest' },
