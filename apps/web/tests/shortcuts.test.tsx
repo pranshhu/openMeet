@@ -663,7 +663,7 @@ describe('Shortcuts: the switch for the single keys', () => {
     const button = screen.getByRole('button', { name: 'Keyboard shortcuts' });
     expect(button).toHaveAttribute('title', 'Keyboard shortcuts');
     fireEvent.click(button);
-    const said = 'Single keys are off. Alt+R and Alt+S still work.';
+    const said = 'Single keys are off. Alt+R and Alt+S stay on.';
     expect(screen.getByText(said)).toBeInTheDocument();
     const row = (does: string) => screen.getByText(does).parentElement!;
     for (const does of ['Microphone on or off', 'Marker with a note, while recording', 'This list']) {

@@ -93,7 +93,7 @@ export function Shortcuts() {
         // aria-live off: the status bar is a live region, and the list is not news.
         <div
           aria-live="off"
-          className="absolute right-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl bg-[#202124] p-3 text-sm text-white shadow-2xl ring-1 ring-white/10"
+          className="absolute right-0 top-full z-40 mt-2 max-h-[calc(100dvh-5rem)] w-80 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl bg-[#202124] p-3 text-sm text-white shadow-2xl ring-1 ring-white/10"
         >
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/70">Keyboard shortcuts</div>
           <dl className="space-y-1.5">
@@ -122,9 +122,9 @@ export function Shortcuts() {
             />
             Single-key shortcuts
           </label>
-          {!singleKeys && <p className="text-xs text-white">Single keys are off. Alt+R and Alt+S still work.</p>}
+          {!singleKeys && <p className="text-xs text-white">Single keys are off. Alt+R and Alt+S stay on.</p>}
           <p className="mt-2 text-xs text-white/70">
-            {'A key presses its button, so it works while that button is shown. Keys do nothing while you type in a field. On a Mac, Alt is the Option key.'}
+            {'A key works while its button is shown. Keys do nothing while you type in a field. On a Mac, Alt is the Option key.'}
           </p>
         </div>
       )}
