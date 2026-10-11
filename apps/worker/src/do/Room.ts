@@ -491,6 +491,9 @@ export class Room implements DurableObject {
           micOn: parsed.micOn,
           camOn: parsed.camOn,
           screenSharing: parsed.screenSharing,
+          // A raised hand travels only as a real `true`: the field is the
+          // sender's, and every other screen draws what is passed on here.
+          ...(parsed.handRaised === true ? { handRaised: true } : {}),
           from: p.role,
           fromPeerId: p.peerId,
           ...(p.displayName ? { fromName: p.displayName } : {}),

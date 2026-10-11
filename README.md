@@ -86,6 +86,9 @@ retention policy to trust, because there's nothing retained.
   (unplugged, muted on the device, wrong input) or keeps clipping
 - **Levels**: see how loud each person arrives and turn one down for your own ears;
   what the others hear and what is recorded do not change
+- **Raise hand**: one click puts a mark on your tile for everyone, so a panel can take
+  turns without talking over the recording (a phone held upright shows the hands and
+  has no button)
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up, with a low-power

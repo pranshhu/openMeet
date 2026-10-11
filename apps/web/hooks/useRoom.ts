@@ -109,6 +109,8 @@ export interface PeerPresence {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** A hand is raised: this person is waiting to speak. Absent while it is down. */
+  handRaised?: boolean;
 }
 
 export interface RemotePeer {
@@ -124,12 +126,14 @@ export interface RemotePeer {
 
 export function applyRemotePeerPresence(
   remotePeers: RemotePeer[],
-  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean }
+  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean }
 ): RemotePeer[] {
   const presence: PeerPresence = {
     micOn: m.micOn,
     camOn: m.camOn,
     screenSharing: m.screenSharing,
+    // Another participant's field, so only a real `true` is a raised hand.
+    ...(m.handRaised === true ? { handRaised: true } : {}),
   };
   const targetPeerId = m.fromPeerId ?? remotePeers[0]?.peerId;
   if (!targetPeerId) return remotePeers;
@@ -227,6 +231,8 @@ export interface RoomState {
    * no recording is affected.
    */
   incomingVideoOff: boolean;
+  /** This person has a hand raised. Everyone in the call sees it on their tile. */
+  handRaised: boolean;
   /**
    * What each remote peer's browser can actually capture, keyed by peerId.
    * Lets the host see BEFORE pressing Record who won't be captured, and why,
@@ -600,6 +606,7 @@ export function useRoom(slug: string) {
     notRecorded: false,
     lowPower: false,
     incomingVideoOff: false,
+    handRaised: false,
     capabilities: {},
     finalizingGuests: [],
     backupTransfers: [],
@@ -664,6 +671,9 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
+  // Written by setHandRaised itself: sendPresence reads it, and a join or a
+  // reconnect may send presence before the next render.
+  const handRaisedRef = useRef(false);
   const companionRef = useRef(false);
   // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
   // which read refs.
@@ -713,6 +723,8 @@ export function useRoom(slug: string) {
       micOn: micOnRef.current,
       camOn: camOnRef.current,
       screenSharing: screenSharingRef.current,
+      // Absent while the hand is down, like every optional field on the wire.
+      ...(handRaisedRef.current ? { handRaised: true } : {}),
     });
   }, []);
 
@@ -2230,6 +2242,19 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * Raise or lower this person's hand. It travels with presence, which is sent
+   * again to everyone who joins and after a reconnect, so nobody misses it.
+   */
+  const setHandRaised = useCallback(
+    (raised: boolean) => {
+      handRaisedRef.current = raised;
+      sendPresence();
+      setState((s) => ({ ...s, handRaised: raised }));
+    },
+    [sendPresence]
+  );
+
+  /**
    * Build the soundboard on first use and route its mix to every peer.
    *
    * From here on the mix replaces the raw mic on every connection, now and later
@@ -2888,5 +2913,6 @@ export function useRoom(slug: string) {
     readLoad,
     setLowPower,
     setIncomingVideoOff,
+    setHandRaised,
   };
 }

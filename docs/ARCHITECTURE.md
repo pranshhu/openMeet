@@ -74,6 +74,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
+  `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
+  when it is exactly `true`, and a page reads nothing else as a raised hand.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
@@ -185,6 +187,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
+- `presence` is relayed with `handRaised: true` only when the sender's field is exactly
+  `true`; any other value is left out. Nothing is kept.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
   except one the host set as not recorded), but **persisted to D1 only by the host**
   (`insertRecording`, capped at 256 rows per session).
@@ -335,6 +339,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   panel is on screen one `AudioContext` of its own holds a `MediaStreamAudioSourceNode` and an
   `AnalyserNode` per stream, connected to nothing else, and a 100 ms timer writes each bar
   straight to the DOM. Hiding the panel closes the context.
+- **Raise hand** — a button in the call's control bar (`CallStage`; not for a producer or a
+  present-only device, which have no tile; below the `sm` width, where a phone's bar is full
+  while a take runs, it is shown only while the hand is up, so that a hand can always be
+  lowered). `useRoom().setHandRaised` keeps the choice in a ref and in
+  `state.handRaised` and sends it with `presence` as `handRaised: true`; the field is left
+  out while the hand is down. Presence is sent again to everyone who joins and after a
+  reconnect, so a late joiner sees a hand that is already up. `PresenceBadge` draws the
+  mark on that person's tile, first and in the accent colour, and `CallStage` gives the
+  person's own tile the same mark. The names of the people who have a tile and a raised
+  hand are put in the status bar's live region for screen readers ("Hand raised: …").
+  Nothing of it reaches a recorder, a file or the crash copy.
 - **`components/MarkerNote.tsx`** — a chapter marker with a typed note. `useMarkerNote` holds
   whether the field is open for the take that is running and listens for **N** (ignored while
   typing, as **M** is); the pencil button beside the marker button opens it too. `MarkerNote` is
@@ -990,3 +1005,16 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A phone held upright has no Raise hand button.** With a take running, a recorded
+  person's control bar there has no room for one more button without a third row, so the
+  button is shown from 640 px of width up: on a computer and on a phone turned on its side.
+  A narrower window still shows every raised hand. A hand raised in a wide window keeps its
+  button when the window gets narrower, so that it can be lowered; during a take Leave is
+  then on a third row until it is. A producer and a Present-only device have no button at
+  any width: they have no tile to show it on.
+- **A raised hand stays up until its owner lowers it.** Nobody else can lower it, speaking
+  does not, and it is still up when the call comes back after everyone else left. A reload
+  lowers it. Hands are not kept in order: the tiles show who, not who was first.
+- **While a screen is presented in a window narrower than 768 px only the first other
+  person has a tile,** so another person's raised hand is not on screen there. A screen
+  reader still reads it out.

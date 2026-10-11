@@ -68,6 +68,8 @@ export type ClientPresence = {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** This person has a hand raised: they are waiting to speak. Sent only while true. */
+  handRaised?: boolean;
 };
 /**
  * Chapter marker dropped during a recording.
@@ -221,6 +223,8 @@ export type ServerPresence = {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** The sender has a hand raised. The Room passes it on only when it is exactly true. */
+  handRaised?: boolean;
   from: Role;
   fromPeerId?: string;
   fromName?: string;
