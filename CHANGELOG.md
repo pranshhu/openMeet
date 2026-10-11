@@ -294,6 +294,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   the host had no **Record** button and the summary offered **Copy invite
   link** in place of **Record another take** while a guest was still in the
   call. No file was affected.
+- In a call of three or more, a person whose camera has not reached this tab
+  yet has a tile with their initial under their own name, wherever the room
+  lists them. The first tile takes its name and its microphone and camera
+  badges only from the person it shows: for a moment after a join it could
+  show those of a Present-only device listed before that person.
 
 ### Security
 

@@ -356,6 +356,38 @@ describe('CallStage recording-capability labels', () => {
     expect(screen.getByRole('img', { name: 'Sharing screen' })).toBeInTheDocument();
   });
 
+  it('draws the first person once, as an initial, while only a later person’s camera has arrived', () => {
+    const carol = Object.assign(new EventTarget(), { id: 'stream-carol' }) as unknown as MediaStream;
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remotePeers={[
+          { peerId: 'p-bob', name: 'Bob', stream: null },
+          { peerId: 'p-carol', name: 'Carol', stream: carol },
+        ]}
+      />
+    );
+    const bobTile = screen.getByText('Bob').parentElement as HTMLElement;
+    expect(within(bobTile).getByText('B')).toBeInTheDocument();
+    expect((bobTile.querySelector('video') as unknown as { srcObject?: unknown }).srcObject ?? null).toBeNull();
+    expect(screen.getAllByText('Carol')).toHaveLength(1);
+    const playing = Array.from(container.querySelectorAll('video')).filter(
+      (v) => (v as unknown as { srcObject?: unknown }).srcObject === carol
+    );
+    expect(playing).toHaveLength(1);
+  });
+
+  it('keeps the stage on this camera until the only other person’s camera arrives', () => {
+    render(<CallStage {...baseProps} remotePeers={[{ peerId: 'p-bob', name: 'Bob', stream: null }]} />);
+    expect(screen.queryByText('Bob')).toBeNull();
+    expect(screen.getByText('Alice (You)')).toBeInTheDocument();
+  });
+
+  it('draws no tile for a stream when nobody on the stage is listed', () => {
+    render(<CallStage {...baseProps} remoteStream={new EventTarget() as unknown as MediaStream} />);
+    expect(screen.queryByText('Bob')).toBeNull();
+  });
+
   // The line is said to everyone: a guest set as not recorded can be heard
   // through someone else's microphone, so it is a state of the room, not a
   // private setting.

@@ -27,6 +27,7 @@ import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
+import { isStagePeer } from '@/lib/stage-peers';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 import { SpeakerRow } from './SpeakerRow';
@@ -512,7 +513,7 @@ export function CallStage({
     // A self-view reads mirrored, as in the lobby; a rear camera shows the world.
     mirror: currentFacingMode !== 'environment',
   };
-  const stagePeers = remotePeers.filter((p) => p.role !== 'producer' && !p.companion);
+  const stagePeers = remotePeers.filter(isStagePeer);
   // Levels: how loud this tab plays each other person, 0 to 1 by peerId. The
   // value goes to that person's <video> elements only, so nobody else hears
   // it and no recorder, backup or call-audio copy reads it.
@@ -524,7 +525,10 @@ export function CallStage({
   const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
-  const remote: StageFeed | null = stagePeers.length > 0 && remoteStream
+  // With one other person the stage stays on this camera until theirs arrives.
+  // With more, everyone listed has a tile, the first one too: their initial
+  // until their own camera arrives.
+  const remote: StageFeed | null = stagePeers.length > 0 && (remoteStream || stagePeers.length > 1)
     ? {
         stream: remoteStream,
         volume: volumeOf(firstRemote?.peerId),

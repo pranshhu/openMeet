@@ -581,6 +581,32 @@ const inCall = {
 const copy =
   'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.';
 
+describe('the first person’s tile', () => {
+  it('takes its name and badges from that person, not from a present-only device listed first', () => {
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    Object.assign(state, inCall, {
+      remoteStream: bob,
+      remotePeers: [
+        {
+          peerId: 'p-deck',
+          name: 'Deck',
+          stream: null,
+          role: 'guest',
+          companion: true,
+          presence: { micOn: false, camOn: false, screenSharing: false },
+        },
+        { peerId: 'p-bob', name: null, stream: bob, role: 'host' },
+      ],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByTitle('Host')).toBeInTheDocument();
+    expect(screen.queryByTitle('Deck')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Muted' })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Camera off' })).toBeNull();
+  });
+});
+
 describe('mic warning', () => {
   it('hands the warning to the call screen for guest and host', () => {
     Object.assign(state, inCall, { micWarning: 'silent' });

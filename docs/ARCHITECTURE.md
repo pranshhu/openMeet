@@ -285,7 +285,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
   feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
-  (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
+  (role fallback). While one other person is on the stage, their tile is drawn once their own camera
+  stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
+  initial until their stream arrives. Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area,
+  mobile chat is a
   full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
   `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the

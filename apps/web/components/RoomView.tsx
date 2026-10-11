@@ -8,6 +8,7 @@ import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
 import { downloadNamesFor } from '@/lib/file-names';
+import { isStagePeer } from '@/lib/stage-peers';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -282,7 +283,7 @@ export function RoomView({ slug }: { slug: string }) {
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}
-      peerName={state.remotePeers.find((p) => p.role !== 'producer')?.name ?? null}
+      peerName={state.remotePeers.find(isStagePeer)?.name ?? null}
       screenSharing={state.screenSharing}
       canRecord={record.canRecord}
       roomRecording={state.peerRecording}
@@ -292,7 +293,7 @@ export function RoomView({ slug }: { slug: string }) {
       recordBlocked={record.blocked}
       recordUnavailableReason={record.reason}
       messages={state.messages}
-      peerPresence={state.remotePeers.find((p) => p.role !== 'producer')?.presence ?? null}
+      peerPresence={state.remotePeers.find(isStagePeer)?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}
       wavBackupUrl={state.wavBackupBlobUrl}
