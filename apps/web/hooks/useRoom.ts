@@ -9,7 +9,9 @@ import {
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
+  isListening,
   type BrowserNote,
+  type Listening,
   type Role,
   type ServerMessage,
 } from '@openmeet/protocol';
@@ -31,6 +33,7 @@ import { journalSpaceCheck } from '@/lib/preflight';
 import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
+import { listeningField } from '@/lib/listening';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
   buildSyncReport,
@@ -233,7 +236,7 @@ export interface RoomState {
    * instead of finding out at playback. Populated from `recording-capability`
    * relays; an entry is dropped when that peer leaves.
    */
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   /** List of guests the host is still receiving tail data from during finalize. */
   finalizingGuests: string[];
   /** Backups on their way from a guest to the host: incoming on the host, outgoing on a guest. */
@@ -554,6 +557,8 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
+/** How many peers' "echo cancellation on" a tab remembers. A peer id is new on every reconnect. */
+const MAX_ECHO_PEERS = 64;
 
 /**
  * Whether a take's warning says its crash copy is gone. The text is matched as
@@ -658,6 +663,10 @@ export function useRoom(slug: string) {
   // rather than a stale `state` closure.
   const remotePeersRef = useRef<RemotePeer[]>([]);
   const capabilitiesRef = useRef<RoomState['capabilities']>({});
+  // Peers that said their microphone has echo cancellation on. Written where
+  // the message arrives, and kept after a peer leaves: a take's notes are
+  // written at its end, when a guest may be gone.
+  const echoPeersRef = useRef(new Set<string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
@@ -1568,7 +1577,7 @@ export function useRoom(slug: string) {
         // Tell every peer already in the room what THIS browser can capture.
         // A producer or companion publishes no camera/mic media, so it has nothing to report.
         if (!asProducer && !asCompanion) {
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         }
         // Back in a room whose take died with the last document: the guests may
         // still be here with the take's channels open, so offer to continue it.
@@ -1588,7 +1597,7 @@ export function useRoom(slug: string) {
           // Re-announce on every join, not just once: the DO relay only reaches
           // peers connected at send time, so a late joiner never saw the
           // capability we sent right after our own role-assigned.
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         } else if (asCompanion) {
           peer.setLocalStreamAfterFirstOffer(
             localStream,
@@ -1714,10 +1723,24 @@ export function useRoom(slug: string) {
           ...s,
           capabilities: {
             ...s.capabilities,
-            [m.fromPeerId]: { mp4: m.mp4, wav: m.wav, ...(m.note ? { note: m.note } : {}) },
+            [m.fromPeerId]: {
+              mp4: m.mp4,
+              wav: m.wav,
+              ...(m.note ? { note: m.note } : {}),
+              // The Room checked it; a page does not take the Room's word either.
+              ...(isListening(m.listening) ? { listening: m.listening } : {}),
+            },
           },
         }))
       );
+      signal.on('recording-capability', (m) => {
+        if (typeof m.fromPeerId !== 'string') return;
+        const peers = echoPeersRef.current;
+        if (m.listening === 'speakers-ec') peers.add(m.fromPeerId);
+        else peers.delete(m.fromPeerId);
+        // The oldest goes first: a Set keeps the order things were added in.
+        if (peers.size > MAX_ECHO_PEERS) peers.delete(peers.values().next().value as string);
+      });
       signal.on('peer-recorded', (m) => {
         if (typeof m.peerId !== 'string' || typeof m.recorded !== 'boolean') return;
         const notRecorded = !m.recorded;
@@ -2624,6 +2647,13 @@ export function useRoom(slug: string) {
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
             callCopies: collectCallCopies(h),
             callCopiesCapped: h.callCopiesCapped,
+            echoCancelled: {
+              // Anything but false or nothing is on, as in the lobby.
+              host: Boolean(switchableMediaRef.current?.currentMicTrack?.getSettings?.().echoCancellation),
+              slots: guestReports
+                .filter((g) => echoPeersRef.current.has(h.slotPeerIds?.get(g.slot) ?? ''))
+                .map((g) => g.slot),
+            },
             ...(h.resumed ? { resumed: true } : {}),
             ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),
           };
