@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BackupIntake, BackupSend, type BackupTransfer } from '@/hooks/backup-return';
+import {
+  BackupIntake,
+  BackupSend,
+  MAX_BACKUP_OFFERS_PER_PEER,
+  type BackupTransfer,
+} from '@/hooks/backup-return';
 import { MAX_SHARED_FILE_BYTES, SHARED_FILE_ID } from '@/lib/shared-file';
 import { fakeChannel, fakeFolder, fakePair, flush, framesFor } from './backup-fakes';
 
@@ -205,6 +210,60 @@ describe('BackupIntake taking a picked file', () => {
 
     expect(state.items.map((t) => t.status)).toEqual(['failed']);
     expect(folder.files.size).toBe(0);
+  });
+
+  it('lets one participant keep eight offers waiting, picked files and backups together', async () => {
+    const { state, intake } = intakeFor();
+    const from = { peerId: 'p1', name: 'Alice' };
+    const idOf = (n: number) => `${ID.slice(0, -1)}${n}`;
+    const backup = fakeChannel(`backup#${BACKUP_ID}`);
+    intake.offer(backup, from);
+    backup.deliver(offer({ key: 'kb' }));
+    for (let n = 1; n < MAX_BACKUP_OFFERS_PER_PEER; n++) {
+      const ch = fakeChannel(`backup#${idOf(n)}`);
+      intake.offer(ch, from);
+      ch.deliver(offer({ key: `k${n}` }));
+    }
+    await flush();
+    expect(state.items.map((t) => t.kind)).toEqual(['camera', ...Array(7).fill('file')]);
+
+    const ninth = fakeChannel(`backup#${idOf(9)}`);
+    intake.offer(ninth, from);
+    ninth.deliver(offer({ key: 'k9' }));
+    await flush();
+
+    expect(state.items).toHaveLength(MAX_BACKUP_OFFERS_PER_PEER);
+    expect(ninth.sent).toEqual([NO_COPY]);
+    expect(ninth.readyState).toBe('closed');
+  });
+
+  it('keeps the name the host read when a waiting offer moves to another channel', async () => {
+    const { state, intake, ch } = await offered();
+    const moved = fakeChannel(`backup#${ID}`);
+    intake.offer(moved, { peerId: 'p1', name: 'Alice' });
+    moved.deliver(offer({ name: 'Other.png', size: 2000 }));
+    await flush();
+
+    expect(state.items).toEqual([
+      { id: ID, kind: 'file', size: 2000, status: 'offered', percent: 0, from: 'Alice', name: SAVED },
+    ]);
+    expect(ch.readyState).toBe('closed');
+    expect(moved.sent).toEqual([]);
+  });
+
+  it('holds an offer that moves to another channel to the type list and the limit', async () => {
+    const { state, intake, ch } = await offered();
+    const listed = state.items;
+    for (const over of [{ name: 'setup.exe' }, { size: MAX_SHARED_FILE_BYTES + 1 }]) {
+      const moved = fakeChannel(`backup#${ID}`);
+      intake.offer(moved, { peerId: 'p1', name: 'Alice' });
+      moved.deliver(offer(over));
+      await flush();
+      expect(moved.sent).toEqual([NO_COPY]);
+      expect(moved.readyState).toBe('closed');
+    }
+    expect(state.items).toBe(listed);
+    expect(ch.readyState).toBe('open');
   });
 
   it('declines only the offers it is handed', async () => {

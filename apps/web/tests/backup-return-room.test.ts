@@ -969,6 +969,19 @@ describe('a host answering picked files and backups apart', () => {
     return channel;
   }
 
+  it.each([
+    ['a producer', { peerId: 'p-producer', ordinal: 3, role: 'producer', displayName: 'Pia' }],
+    ['a Present-only device', { peerId: 'p-screen', ordinal: 3, role: 'guest', displayName: 'Sam', companion: true }],
+  ])('is asked about a file from %s', async (_who, peer) => {
+    usePicker(fakeFolder());
+    const { result, opts } = await joined('host', [peer]);
+    const file = await offerFile(opts);
+
+    expect(kinds(result)).toEqual([['file', 'offered']]);
+    expect(file.sent).toEqual([]);
+    expect(file.readyState).toBe('open');
+  });
+
   it('Save on the files takes the files it is handed and leaves an offered backup waiting', async () => {
     const folder = fakeFolder();
     usePicker(folder);
@@ -1140,5 +1153,17 @@ describe('a participant sending the host a picked file', () => {
     });
     expect(backupChannels()).toEqual([]);
     expect(result.current.state.backupTransfers).toEqual([]);
+  });
+
+  it('opens no channel while only another guest is in the room, and keeps the pick waiting', async () => {
+    const { result } = await joined('guest', [OTHER_GUEST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers.map((t) => [t.kind, t.status])).toEqual([
+      ['file', 'offered'],
+    ]);
   });
 });

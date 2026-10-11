@@ -54,6 +54,8 @@ describe('SHARED_FILE_ID', () => {
     expect(SHARED_FILE_ID.test(`file-${crypto.randomUUID()}`)).toBe(true);
     expect(SHARED_FILE_ID.test('file-')).toBe(false);
     expect(SHARED_FILE_ID.test('file-3f2b8c1e')).toBe(false);
+    expect(SHARED_FILE_ID.test('file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f0')).toBe(false);
+    expect(SHARED_FILE_ID.test('xfile-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f')).toBe(false);
     expect(SHARED_FILE_ID.test('file-../../../../../../../../../../../x')).toBe(false);
     expect(SHARED_FILE_ID.test('openmeet-backup-1700000000000-abc-defg-hij.mp4')).toBe(false);
   });
