@@ -1,14 +1,17 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { MAX_SCRIPT_LENGTH } from '@openmeet/protocol';
 import { Icon } from './Icon';
 
 /**
- * Script overlay for the host, positioned high on the stage so the reader's
- * eyeline stays near the camera.
+ * Script overlay, positioned high on the stage so the reader's eyeline stays
+ * near the camera.
  *
- * Host-only and never transmitted: the text lives in localStorage keyed by room,
- * so there is no protocol change and nothing about it reaches the recording.
+ * Each person's script is their own: the text lives in localStorage keyed by
+ * room, and nothing about it reaches the recording. It leaves this browser
+ * only when a host presses Send to everyone, and a script that arrives that
+ * way replaces nothing until the person presses Use it.
  */
 
 const key = (slug: string) => `om_prompter_${slug}`;
@@ -39,7 +42,29 @@ function isInteractive(el: EventTarget | null): boolean {
   return el instanceof Element && el.closest('button, input, select, textarea, a') !== null;
 }
 
-export function Teleprompter({ slug, onClose }: { slug: string; onClose: () => void }) {
+/** Whole minutes to read `text` aloud at 150 words a minute, a usual speaking pace. */
+export function readingMinutes(text: string): number {
+  // Words are what spaces separate, so a script in a language written
+  // without them counts as one word and reads as a minute.
+  return Math.ceil((text.match(/\S+/g)?.length ?? 0) / 150);
+}
+
+export function Teleprompter({
+  slug,
+  onClose,
+  incoming = null,
+  onIncomingDone,
+  onSend,
+}: {
+  slug: string;
+  onClose: () => void;
+  /** A script the host sent that this person has not answered; null when none. */
+  incoming?: string | null;
+  /** The person took the offered script or turned it down. */
+  onIncomingDone?: (() => void) | undefined;
+  /** Host only: offer this script to everyone else. False when it did not go out. */
+  onSend?: ((text: string) => boolean) | undefined;
+}) {
   const [text, setText] = useState('');
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(40); // px/sec
@@ -54,6 +79,21 @@ export function Teleprompter({ slug, onClose }: { slug: string; onClose: () => v
   const grab = useRef<{ dx: number; dy: number } | null>(null);
   // Sub-pixel accumulator: at slow speeds a whole-pixel step per tick stutters.
   const carry = useRef(0);
+  // What the last Send did, for the line under the editor. An edit clears
+  // it: the line is about the text that was sent.
+  const [sent, setSent] = useState<boolean | null>(null);
+  // Counted when the text changes, not on every render: a drag renders on
+  // every pointer move.
+  const minutes = useMemo(() => readingMinutes(text), [text]);
+  const incomingMinutes = useMemo(() => readingMinutes(incoming ?? ''), [incoming]);
+  const tooLong = text.length > MAX_SCRIPT_LENGTH;
+  const sendNote = tooLong
+    ? `Too long to send: ${MAX_SCRIPT_LENGTH.toLocaleString('en-US')} characters at most.`
+    : sent === true
+      ? 'Sent. The others can use it or ignore it.'
+      : sent === false
+        ? 'Not sent: no connection. Try again in a moment.'
+        : null;
 
   useEffect(() => {
     try {
@@ -158,6 +198,16 @@ export function Teleprompter({ slug, onClose }: { slug: string; onClose: () => v
     carry.current = 0;
   };
 
+  // The one place the host's script replaces this person's own: their click.
+  const take = () => {
+    if (incoming === null) return;
+    setText(incoming);
+    setEditing(false);
+    setPlaying(false);
+    restart();
+    onIncomingDone?.();
+  };
+
   return (
     <div
       ref={panelRef}
@@ -247,6 +297,32 @@ export function Teleprompter({ slug, onClose }: { slug: string; onClose: () => v
         </button>
       </div>
 
+      {incoming !== null && (
+        <div
+          role="group"
+          aria-label="Script from the host"
+          className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-black/80 px-3 py-1.5 text-xs text-white"
+        >
+          <span className="min-w-40 flex-1">
+            {`The host sent a script, about ${incomingMinutes} min to read.`}
+            {text.trim() ? ' Using it replaces yours.' : ''}
+          </span>
+          <button
+            type="button"
+            onClick={take}
+            className="min-h-11 rounded-full bg-white px-3 py-1.5 font-medium text-[#202124] hover:bg-white/90 sm:min-h-0"
+          >
+            Use it
+          </button>
+          <button
+            type="button"
+            onClick={() => onIncomingDone?.()}
+            className="min-h-11 rounded-full bg-white/10 px-3 py-1.5 text-white hover:bg-white/15 sm:min-h-0"
+          >
+            Ignore
+          </button>
+        </div>
+      )}
       {editing ? (
         <>
           <label htmlFor="teleprompter-script" className="sr-only">
@@ -255,10 +331,37 @@ export function Teleprompter({ slug, onClose }: { slug: string; onClose: () => v
           <textarea
             id="teleprompter-script"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              setSent(null);
+            }}
             placeholder="Paste your script or talking points…"
             className="h-48 w-full resize-none bg-transparent p-3 text-base text-white outline-none placeholder:text-white/60 sm:text-sm"
           />
+          {/* Under the script, where it is written. Its own dark strip, like the
+              header's, so it stays readable however far the backdrop fades. */}
+          {(minutes > 0 || onSend) && (
+            <div className="flex flex-wrap items-center gap-x-3 border-t border-white/10 bg-black/80 px-3 py-1.5 text-xs text-white/70">
+              <span className="flex-1">{minutes > 0 ? `About ${minutes} min to read` : ''}</span>
+              {onSend && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSent(onSend(text))}
+                    disabled={!text.trim() || tooLong}
+                    className="min-h-11 rounded-full bg-white/10 px-3 py-1.5 text-white enabled:hover:bg-white/15 disabled:cursor-not-allowed disabled:text-white/40 sm:min-h-0"
+                  >
+                    Send to everyone
+                  </button>
+                  {/* Mounted whether or not it has something to say: many screen
+                      readers skip a live region inserted along with its text. */}
+                  <div role="status" className="basis-full">
+                    {sendNote && <p className="pt-1">{sendNote}</p>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </>
       ) : (
         <div

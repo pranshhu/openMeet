@@ -62,6 +62,12 @@ export type ClientRecordingStop = { type: 'recording-stop'; recordingId: string 
  * whether or not this arrived.
  */
 export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's teleprompter script, offered to everyone else in the room. Each
+ * person takes it or leaves it; it replaces nothing by itself. `text` is at
+ * most MAX_SCRIPT_LENGTH long.
+ */
+export type ClientScript = { type: 'script'; text: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 export type ClientPresence = {
   type: 'presence';
@@ -93,11 +99,26 @@ export type ClientPing = { type: 'ping' };
 export const BROWSER_NOTES = ['safari', 'ios', 'android', 'mobile'] as const;
 export type BrowserNote = (typeof BROWSER_NOTES)[number];
 
+/**
+ * How a person said, in the lobby, that they hear the call. A code, not copy.
+ * `speakers-ec` is speakers with the browser's echo cancellation on for that
+ * person's own microphone, so their recorded audio is processed. Someone who
+ * did not say has no code at all.
+ */
+export const LISTENING_CHOICES = ['headphones', 'speakers', 'speakers-ec'] as const;
+export type Listening = (typeof LISTENING_CHOICES)[number];
+
+export function isListening(v: unknown): v is Listening {
+  return (LISTENING_CHOICES as readonly unknown[]).includes(v);
+}
+
 export type ClientRecordingCapability = {
   type: 'recording-capability';
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
 };
 
 /**
@@ -105,6 +126,20 @@ export type ClientRecordingCapability = {
  * Acted on only from the host, and never while a take is running.
  */
 export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
+/**
+ * The host asks for one person's microphone to be turned off. Passed on only
+ * from the host, to that person alone, whose own page carries it out and can
+ * turn the microphone back on. Nobody's microphone is turned on this way.
+ */
+export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
+
+/**
+ * The host removes one person from the room. Acted on only from the host:
+ * the Room closes that socket with WS_CLOSE_REMOVED, tells everyone else
+ * with `peer-left`, and refuses the same tab until the session ends.
+ */
+export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
 
 export type ClientMessage =
   | ClientJoin
@@ -115,12 +150,15 @@ export type ClientMessage =
   | ClientRecordingCompleted
   | ClientRecordingStop
   | ClientRecordingCountdown
+  | ClientScript
   | ClientChat
   | ClientPresence
   | ClientMarker
   | ClientLeave
   | ClientPing
   | ClientRecordingCapability
+  | ClientPeerMute
+  | ClientPeerRemove
   | ClientPeerRecorded;
 
 export interface PeerInfo {
@@ -242,6 +280,11 @@ export type ServerRecordingStop = { type: 'recording-stop'; recordingId: string;
  * room. Only the host's is passed on, so it carries no `from`.
  */
 export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's ClientScript, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerScript = { type: 'script'; text: string };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -257,6 +300,8 @@ export type ServerRecordingCapability = {
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
   from: Role;
   fromPeerId: string;
 };
@@ -266,6 +311,13 @@ export type ServerRecordingCapability = {
  * in the room, the host included. Not a relay: it carries no `from`.
  */
 export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
+
+/**
+ * A host's ClientPeerMute, handed to the one person it names. It carries
+ * nothing: only the host's is passed on, and whoever receives it is the
+ * person meant.
+ */
+export type ServerPeerMute = { type: 'peer-mute' };
 
 export type ServerMessage =
   | ServerRoleAssigned
@@ -280,11 +332,13 @@ export type ServerMessage =
   | ServerRecordingStarted
   | ServerRecordingStop
   | ServerRecordingCountdown
+  | ServerScript
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
   | ServerError
   | ServerRecordingCapability
+  | ServerPeerMute
   | ServerPeerRecorded;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
@@ -296,12 +350,15 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-completed',
   'recording-stop',
   'recording-countdown',
+  'script',
   'chat',
   'presence',
   'marker',
   'leave',
   'ping',
   'recording-capability',
+  'peer-mute',
+  'peer-remove',
   'peer-recorded',
 ]);
 
@@ -318,11 +375,13 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-started',
   'recording-stop',
   'recording-countdown',
+  'script',
   'recording-ack',
   'room-closed',
   'pong',
   'error',
   'recording-capability',
+  'peer-mute',
   'peer-recorded',
 ]);
 

@@ -5,11 +5,15 @@ import {
   DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING_AUDIO,
   DATA_CHANNEL_RECORDING_SCREEN,
+  MAX_SCRIPT_LENGTH,
   RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
+  isListening,
   type BrowserNote,
+  type Listening,
   type Role,
   type ServerMessage,
 } from '@openmeet/protocol';
@@ -31,6 +35,7 @@ import { journalSpaceCheck } from '@/lib/preflight';
 import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
+import { listeningField } from '@/lib/listening';
 import { isStagePeer } from '@/lib/stage-peers';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
@@ -102,6 +107,9 @@ export type RoomPhase =
   // host seat over (4006). Each gets its own screen and next step.
   | 'full'
   | 'replaced'
+  // The host removed this participant (4007). The Room refuses this tab until
+  // the session ends, so the screen offers the lobby and a way home.
+  | 'removed'
   | 'error';
 
 export type { ChatMessage };
@@ -194,6 +202,8 @@ export interface RoomState {
   connectionWarning: string | null;
   // This participant's own mic, judged where it enters the recording; a note in the call.
   micWarning: MicWarning | null;
+  /** The host turned this participant's microphone off, and it has not been turned back on. */
+  hostMuted: boolean;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -234,7 +244,7 @@ export interface RoomState {
    * instead of finding out at playback. Populated from `recording-capability`
    * relays; an entry is dropped when that peer leaves.
    */
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   /** List of guests the host is still receiving tail data from during finalize. */
   finalizingGuests: string[];
   /** Backups on their way from a guest to the host: incoming on the host, outgoing on a guest. */
@@ -247,6 +257,11 @@ export interface RoomState {
   takeNotice: string | null;
   /** A Resume or a Save of the interrupted take is running: its buttons wait, and this tab holds the take lock. */
   recoveryBusy: boolean;
+  /**
+   * The teleprompter script the host last sent, held until this person takes
+   * it or turns it down; null when none is waiting.
+   */
+  incomingScript: string | null;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt: number | null;
 }
@@ -284,7 +299,7 @@ export function computeRecordingCapability(ua?: string): { mp4: boolean; wav: bo
  * full hook harness; it is the highest-consequence branch in the file.
  */
 /** Phases a live media event must never drag the room out of. */
-const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'error']);
+const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'removed', 'error']);
 
 export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
   return phase === 'recording' || phase === 'finalizing' || phase === 'done' ? phase : 'peer-left';
@@ -302,9 +317,26 @@ export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
 export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: RoomPhase } | null {
   if (phase === 'recording' || phase === 'finalizing') return null;
   if (code === WS_CLOSE_REPLACED) return { phase: 'replaced' };
+  if (code === WS_CLOSE_REMOVED) return { phase: 'removed' };
   return code === WS_CLOSE_CAPACITY_FULL
     ? { phase: 'full' }
     : { phase: 'not-found' }; // invalid (4002) or expired (4003) slug
+}
+
+/**
+ * Whether a terminal server close ends this tab's capture before the terminal
+ * screen shows.
+ *
+ * Only a guest's capture that is still starting. It runs into this browser's
+ * backup from the host's Record, but reaches 'recording' only once its channel
+ * to the host has opened; until then there is no call screen to hold and no
+ * button that ends it, and with the room gone the host's stop cannot arrive.
+ * One that has reached 'recording' or 'finalizing' is held by
+ * phaseOnFatalClose, and a host's take is never ended from here: End & save
+ * is what closes its files.
+ */
+export function endsCaptureOnFatalClose(role: Role | null, capturing: boolean, phase: RoomPhase): boolean {
+  return role === 'guest' && capturing && phase !== 'recording' && phase !== 'finalizing';
 }
 
 /**
@@ -555,6 +587,8 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
+/** How many peers' "echo cancellation on" a tab remembers. A peer id is new on every reconnect. */
+const MAX_ECHO_PEERS = 64;
 
 /**
  * Whether a take's warning says its crash copy is gone. The text is matched as
@@ -587,6 +621,7 @@ export function useRoom(slug: string) {
     recordingError: null,
     connectionWarning: null,
     micWarning: null,
+    hostMuted: false,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -608,6 +643,7 @@ export function useRoom(slug: string) {
     resumeOffer: null,
     takeNotice: null,
     recoveryBusy: false,
+    incomingScript: null,
     countdownEndsAt: null,
   });
   // Peer ids whose camera recording channel has arrived for the take in
@@ -659,6 +695,10 @@ export function useRoom(slug: string) {
   // rather than a stale `state` closure.
   const remotePeersRef = useRef<RemotePeer[]>([]);
   const capabilitiesRef = useRef<RoomState['capabilities']>({});
+  // Peers that said their microphone has echo cancellation on. Written where
+  // the message arrives, and kept after a peer leaves: a take's notes are
+  // written at its end, when a guest may be gone.
+  const echoPeersRef = useRef(new Set<string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
@@ -685,6 +725,10 @@ export function useRoom(slug: string) {
   // instant it arrives rather than at finalize.
   const hostStartRef = useRef<number | null>(null);
   const fatalCloseRef = useRef(false);
+  // The Room closed this tab with 4007. Written by the close handler itself:
+  // Stop and save reads it the moment it is pressed. Never cleared, because
+  // every way on from a removed tab reloads the page or leaves it.
+  const removedRef = useRef(false);
   const lastIceReconnectRef = useRef(0);
   // Chosen once per session and reused: showDirectoryPicker needs transient user
   // activation, so a second take could not prompt again from a non-click path.
@@ -1175,21 +1219,43 @@ export function useRoom(slug: string) {
         // closes the file handles — the same trap peer-left and room-closed
         // both guard against with phaseOnPeerLeft. This path had no guard, so a
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
-        onFatalClose: (code) =>
-          setState((s) => {
-            const next = phaseOnFatalClose(s.phase, code);
-            if (!next) {
-              fatalCloseRef.current = true;
-              return {
-                ...s,
-                recordingError:
-                  roleRef.current === 'guest'
-                    ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
-                    : 'The connection to the room ended. Press End & save to keep this recording.',
-              };
-            }
-            return { ...s, ...next };
-          }),
+        onFatalClose: (code) => {
+          if (code === WS_CLOSE_REMOVED) {
+            removedRef.current = true;
+            // Every other page closes its side of the connection to a removed
+            // tab, and this one has no socket to make a new one: nothing
+            // queued for the host can leave. It is not kept, and Stop and save
+            // does not wait for it. The backup has all of it.
+            const h = recordingRef.current;
+            for (const s of [h?.sender, h?.wavSender, h?.screenSender]) s?.giveUp();
+          }
+          const settle = () =>
+            setState((s) => {
+              const next = phaseOnFatalClose(s.phase, code);
+              if (!next) {
+                fatalCloseRef.current = true;
+                return {
+                  ...s,
+                  // The host's stop cannot reach a tab the room has closed, so
+                  // what the room last said about its take is dropped here.
+                  // This tab's own capture is told by its phase.
+                  peerRecording: false,
+                  recordingError:
+                    code === WS_CLOSE_REMOVED
+                      ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'
+                      : roleRef.current === 'guest'
+                        ? 'The connection to the room ended. Press Stop and save my recording to keep this recording.'
+                        : 'The connection to the room ended. Press End & save to keep this recording.',
+                };
+              }
+              return { ...s, ...next };
+            });
+          // Ended here, backup kept, before the terminal screen shows: that
+          // screen must never sit over a camera that is still being recorded.
+          if (endsCaptureOnFatalClose(roleRef.current, recordingRef.current !== null, phaseRef.current))
+            void endRecordingRef.current({ internal: true }).then(settle, settle);
+          else settle();
+        },
       });
       signalRef.current = signal;
 
@@ -1555,6 +1621,21 @@ export function useRoom(slug: string) {
           notRecorded: m.notRecorded === true,
         }));
         sendPresence();
+        // The Room drops its recording flag with the host's socket, and tells a
+        // host that comes back `recording: false` while the files are still
+        // open. A guest who joined from then on would never be started.
+        // Announced again under its own id the take is the Room's again: a
+        // guest already in it ignores the repeat, and the Room keeps the row
+        // it has. Not while the take is being saved: the stop has gone out.
+        const mine = recordingRef.current;
+        if (m.role === 'host' && mine && !m.recording && phaseRef.current === 'recording') {
+          signal.send({
+            type: 'recording-started',
+            recordingId: mine.recordingId,
+            kind: 'camera',
+            filename: `host_${mine.recordingId}.mp4`,
+          });
+        }
         // Joined mid-recording (rejoin after a crash, or just arriving late):
         // the recording-started broadcast went out before this socket existed,
         // so catch up from the room state instead of sitting there unrecorded.
@@ -1572,7 +1653,7 @@ export function useRoom(slug: string) {
         // Tell every peer already in the room what THIS browser can capture.
         // A producer or companion publishes no camera/mic media, so it has nothing to report.
         if (!asProducer && !asCompanion) {
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         }
         // Back in a room whose take died with the last document: the guests may
         // still be here with the take's channels open, so offer to continue it.
@@ -1592,7 +1673,7 @@ export function useRoom(slug: string) {
           // Re-announce on every join, not just once: the DO relay only reaches
           // peers connected at send time, so a late joiner never saw the
           // capability we sent right after our own role-assigned.
-          signal.send({ type: 'recording-capability', ...computeRecordingCapability() });
+          signal.send({ type: 'recording-capability', ...computeRecordingCapability(), ...listeningField() });
         } else if (asCompanion) {
           peer.setLocalStreamAfterFirstOffer(
             localStream,
@@ -1703,6 +1784,15 @@ export function useRoom(slug: string) {
         setState((s) => (s.peerRecording ? s : { ...s, countdownEndsAt: endsAt }));
       });
 
+      // The host's teleprompter script, offered to this person. Only the
+      // newest is held, so a host that sends many costs this tab one string.
+      // The Room passes on only the host's; what this page keeps is checked
+      // here again, and a blank one is no offer.
+      signal.on('script', (m) => {
+        if (typeof m.text !== 'string' || m.text.length > MAX_SCRIPT_LENGTH || !m.text.trim()) return;
+        setState((s) => ({ ...s, incomingScript: m.text }));
+      });
+
       signal.on('marker', (m) => {
         // The same setting that closes this peer's recording channels keeps its
         // markers out of the take.
@@ -1718,10 +1808,24 @@ export function useRoom(slug: string) {
           ...s,
           capabilities: {
             ...s.capabilities,
-            [m.fromPeerId]: { mp4: m.mp4, wav: m.wav, ...(m.note ? { note: m.note } : {}) },
+            [m.fromPeerId]: {
+              mp4: m.mp4,
+              wav: m.wav,
+              ...(m.note ? { note: m.note } : {}),
+              // The Room checked it; a page does not take the Room's word either.
+              ...(isListening(m.listening) ? { listening: m.listening } : {}),
+            },
           },
         }))
       );
+      signal.on('recording-capability', (m) => {
+        if (typeof m.fromPeerId !== 'string') return;
+        const peers = echoPeersRef.current;
+        if (m.listening === 'speakers-ec') peers.add(m.fromPeerId);
+        else peers.delete(m.fromPeerId);
+        // The oldest goes first: a Set keeps the order things were added in.
+        if (peers.size > MAX_ECHO_PEERS) peers.delete(peers.values().next().value as string);
+      });
       signal.on('peer-recorded', (m) => {
         if (typeof m.peerId !== 'string' || typeof m.recorded !== 'boolean') return;
         const notRecorded = !m.recorded;
@@ -1748,6 +1852,19 @@ export function useRoom(slug: string) {
           ...s,
           remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
         }));
+      });
+      // The host asked for this microphone to be off. This page does it, with
+      // the steps of its own mic switch, so the person sees it and can turn it
+      // back on. A host is never muted this way, and a microphone that is off
+      // already (or absent: a producer, a present-only device) is left as it
+      // is, so no note appears for a mute that changed nothing.
+      signal.on('peer-mute', () => {
+        if (roleRef.current === 'host' || !micOnRef.current) return;
+        switchableMediaRef.current?.setAudioEnabled(false);
+        mediaRef.current?.setAudioEnabled(false);
+        micOnRef.current = false;
+        sendPresence();
+        setState((s) => ({ ...s, hostMuted: true }));
       });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
@@ -1852,6 +1969,8 @@ export function useRoom(slug: string) {
       mediaRef.current?.setAudioEnabled(on);
       micOnRef.current = on;
       sendPresence();
+      // Their own switch ends a mute the host asked for.
+      if (on) setState((s) => (s.hostMuted ? { ...s, hostMuted: false } : s));
     },
     [sendPresence]
   );
@@ -2278,15 +2397,43 @@ export function useRoom(slug: string) {
     }));
   }, []);
 
+  /**
+   * Host: offer this teleprompter script to everyone else in the room. False
+   * when it did not go out because the socket is not open. The Room
+   * passes on only a host's, and only a text within MAX_SCRIPT_LENGTH.
+   */
+  const sendScript = useCallback(
+    (text: string): boolean => signalRef.current?.send({ type: 'script', text }) ?? false,
+    []
+  );
+
+  /** The person took the offered script or turned it down. */
+  const dismissIncomingScript = useCallback(() => {
+    setState((s) => ({ ...s, incomingScript: null }));
+  }, []);
+
   /** Host: choose whether one guest is recorded in the takes that follow. The Room's answer updates the state. */
   const setPeerRecorded = useCallback((peerId: string, recorded: boolean) => {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
   }, []);
 
+  /** Host: ask for one person's microphone to be turned off. Their page does it, and their presence shows it. */
+  const mutePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-mute', peerId });
+  }, []);
+
+  /** Host: remove one person from the room. The Room closes their socket, and its `peer-left` updates the state. */
+  const removePeer = useCallback((peerId: string) => {
+    signalRef.current?.send({ type: 'peer-remove', peerId });
+  }, []);
+
   const toggleScreenShare = useCallback(
     async (source?: File | 'rear-camera') => {
       const peer = peerRef.current;
-      if (!peer) return;
+      // A guest's screen recording travels over its connection to the host.
+      // The host writes its own to the folder, so it can present with nobody
+      // connected.
+      if (!peer && roleRef.current !== 'host') return;
       if (!screenSharingRef.current) {
         let screen: MediaStream;
         let isRearCamera = false;
@@ -2381,9 +2528,11 @@ export function useRoom(slug: string) {
     // A resume or a save of the interrupted take is still running on its crash
     // copy and its guests: a fresh take beside it would be a second one.
     if (recoveryBusyRef.current) return;
-    const peer = peerRef.current;
+    // A host records its own camera with nobody connected. What a take
+    // cannot do without is the stream, and a tab that has let go of the
+    // room holds none.
     const localStream = localStreamRef.current;
-    if (!peer || !localStream) return;
+    if (!localStream) return;
     const recordingId = crypto.randomUUID();
     takeTroubleRef.current = false;
     setState((s) => ({ ...s, recordingError: null, resumeOffer: null, takeNotice: null }));
@@ -2463,7 +2612,7 @@ export function useRoom(slug: string) {
     // or everything shared before the first toggle is lost.
     const activeScreen = screenStreamRef.current;
     const recNow = recordingRef.current;
-    if (activeScreen && recNow && peerRef.current) {
+    if (activeScreen && recNow) {
       await startScreenRecording(
         recNow,
         activeScreen,
@@ -2567,7 +2716,9 @@ export function useRoom(slug: string) {
           recordingRef.current = null;
           setState((s) => ({
             ...s,
-            phase: 'done',
+            // A removed tab has no call to go back to. Its take is saved, so
+            // the removed screen follows, with this backup on it.
+            phase: removedRef.current ? 'removed' : 'done',
             ...(s.recordingError === 'The other person disconnected. Press End & save to keep this recording.' ||
               s.recordingError?.includes('keep this recording')
               ? { recordingError: null }
@@ -2628,6 +2779,13 @@ export function useRoom(slug: string) {
             screenSegments: collectScreenSegments(h, (peerId) => peerNameMap.get(peerId)),
             callCopies: collectCallCopies(h),
             callCopiesCapped: h.callCopiesCapped,
+            echoCancelled: {
+              // Anything but false or nothing is on, as in the lobby.
+              host: Boolean(switchableMediaRef.current?.currentMicTrack?.getSettings?.().echoCancellation),
+              slots: guestReports
+                .filter((g) => echoPeersRef.current.has(h.slotPeerIds?.get(g.slot) ?? ''))
+                .map((g) => g.slot),
+            },
             ...(h.resumed ? { resumed: true } : {}),
             ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),
           };
@@ -2764,6 +2922,9 @@ export function useRoom(slug: string) {
     peersRef.current.clear();
     peerRef.current?.close();
     peerRef.current = null;
+    // The tracks are stopped below. startRecording reads this ref, so a
+    // countdown that is still running when the host leaves starts nothing.
+    localStreamRef.current = null;
     if (customStopRef.current) {
       try {
         customStopRef.current();
@@ -2781,7 +2942,7 @@ export function useRoom(slug: string) {
   // 'finalizing', and a take still starting up (handles set, phase not yet
   // 'recording') keeps its tracks too.
   useEffect(() => {
-    const terminal = ['full', 'replaced', 'not-found', 'error'].includes(state.phase);
+    const terminal = ['full', 'replaced', 'removed', 'not-found', 'error'].includes(state.phase);
     if (terminal && !recordingRef.current) release();
   }, [state.phase, release]);
 
@@ -2872,7 +3033,11 @@ export function useRoom(slug: string) {
     switchCamera,
     switchMic,
     sendChat,
+    sendScript,
+    dismissIncomingScript,
     setPeerRecorded,
+    mutePeer,
+    removePeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,
