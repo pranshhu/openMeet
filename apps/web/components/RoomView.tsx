@@ -8,6 +8,7 @@ import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
 import { downloadNamesFor } from '@/lib/file-names';
+import { isStagePeer } from '@/lib/stage-peers';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -89,13 +90,32 @@ function isCheckLink(): boolean {
   return new URLSearchParams(window.location.search).get('check') === '1';
 }
 
+/** Download links for files this tab holds only as links in memory. */
+function FileLinks({ files }: { files: readonly (readonly [string | null, string, string])[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap justify-center gap-x-5">
+      {files.map(([url, name, label]) => (
+        <a
+          key={name}
+          href={url ?? undefined}
+          download={name}
+          className="inline-flex min-h-11 items-center rounded-sm text-[15px] font-medium text-[#0b57d0] underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]"
+        >
+          {label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
+    mutePeer, removePeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
-    resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
+    resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised, sendReaction,
     declineFiles, sendFile,
   } = useRoom(slug);
   const producer = isProducerLink();
@@ -155,6 +175,31 @@ export function RoomView({ slug }: { slug: string }) {
       <StatusScreen title="You joined from another tab or device" action="Use this tab instead">
         The call continues in the other tab or device. Using this tab instead disconnects that one — if
         it’s recording, press End &amp; save there first.
+      </StatusScreen>
+    );
+  }
+  if (state.phase === 'removed') {
+    // The backup of a recording this tab saved is a link held in memory, and
+    // Back to the lobby reloads the page. Offered here first; the lobby lists
+    // the copy in browser storage afterwards.
+    const names = downloadNamesFor({ room: slug, localName: state.localName, role: state.role });
+    const files = (
+      [
+        [state.backupBlobUrl, names.backup, 'Download your backup'],
+        [state.wavBackupBlobUrl, names.wav, 'Download your WAV backup'],
+      ] as const
+    ).filter(([url]) => url);
+    return (
+      <StatusScreen
+        title="The host removed you from this call"
+        action="Back to the lobby"
+        secondary={{ label: 'Back to home', href: '/' }}
+      >
+        This tab can’t rejoin until the call has ended.{' '}
+        {files.length > 0
+          ? 'Your backup copies stay in this browser — download them now, or later from the lobby.'
+          : 'If you were being recorded, your backup copy stays in this browser — the lobby lists it.'}
+        {files.length > 0 && <FileLinks files={files} />}
       </StatusScreen>
     );
   }
@@ -271,18 +316,7 @@ export function RoomView({ slug }: { slug: string }) {
               ? 'Download these before you close this tab — they exist only here.'
               : // A guest's backups are never deleted and are listed in every lobby.
                 'Your backup copies stay in this browser — download them now, or later from the lobby next time you open openMeet.'}
-            <div className="mt-2 flex flex-wrap justify-center gap-x-5">
-              {files.map(([url, name, label]) => (
-                <a
-                  key={name}
-                  href={url ?? undefined}
-                  download={name}
-                  className="inline-flex min-h-11 items-center rounded-sm text-[15px] font-medium text-[#0b57d0] underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]"
-                >
-                  {label}
-                </a>
-              ))}
-            </div>
+            <FileLinks files={files} />
           </>
         ) : (
           'Your camera and microphone are off. You can close this tab.'
@@ -309,7 +343,7 @@ export function RoomView({ slug }: { slug: string }) {
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}
-      peerName={state.remotePeers.find((p) => p.role !== 'producer')?.name ?? null}
+      peerName={state.remotePeers.find(isStagePeer)?.name ?? null}
       screenSharing={state.screenSharing}
       canRecord={record.canRecord}
       roomRecording={state.peerRecording}
@@ -319,7 +353,7 @@ export function RoomView({ slug }: { slug: string }) {
       recordBlocked={record.blocked}
       recordUnavailableReason={record.reason}
       messages={state.messages}
-      peerPresence={state.remotePeers.find((p) => p.role !== 'producer')?.presence ?? null}
+      peerPresence={state.remotePeers.find(isStagePeer)?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}
       wavBackupUrl={state.wavBackupBlobUrl}
@@ -341,6 +375,10 @@ export function RoomView({ slug }: { slug: string }) {
       onSetLowPower={setLowPower}
       incomingVideoOff={state.incomingVideoOff}
       onSetIncomingVideoOff={setIncomingVideoOff}
+      handRaised={state.handRaised}
+      onSetHandRaised={setHandRaised}
+      reactions={state.reactions}
+      onReact={sendReaction}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}
@@ -364,6 +402,9 @@ export function RoomView({ slug }: { slug: string }) {
       onSendScript={sendScript}
       onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
+      hostMuted={state.hostMuted}
+      onMutePeer={mutePeer}
+      onRemovePeer={removePeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}

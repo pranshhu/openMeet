@@ -1075,3 +1075,30 @@ describe('saving a take from its crash copy', () => {
     }
   });
 });
+
+describe('the record of who was told, in a take saved from its crash copy', () => {
+  it('lists each guest whose camera channel had been bound, and no times', async () => {
+    const notes = notesWith({
+      files: [
+        // Opened at Record and never bound: no guest's channel reached it.
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0 },
+        { file: 'guest2_r.mp4', kind: 'camera', slot: 1, key: 'K2', who: 'Bob' },
+        { file: 'guest2_r.wav', kind: 'wav', slot: 1, key: 'K2', who: 'Bob' },
+        { file: 'guest_screen_r.mp4', kind: 'screen', segment: 1, who: 'Cam' },
+      ],
+    });
+    const { journal } = fakeJournal(notes, { 'guest2_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    const result = await saveRecoveredTake(journal, folderOf(folder));
+
+    expect(result.json).toBe('sync_rec-1.json');
+    const notice = JSON.parse(
+      new TextDecoder().decode(folder.written.get('sync_rec-1.json')!.data)
+    ).recordingNotice;
+    expect(notice.fromCrashCopy).toEqual([{ name: 'Bob', file: 'guest2_r.mp4' }]);
+    expect(notice.people).toEqual([]);
+    expect('announcedAtMs' in notice).toBe(false);
+    expect(notice.note).toContain('keeps no record of who was told');
+  });
+});

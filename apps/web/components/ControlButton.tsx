@@ -1,6 +1,7 @@
 'use client';
 
 import { Icon, type IconName } from './Icon';
+import { useSingleKeys } from '@/hooks/use-single-keys';
 
 type Variant = 'default' | 'danger' | 'active' | 'record';
 
@@ -12,6 +13,7 @@ export function ControlButton({
   icon,
   label,
   text,
+  shortcut,
   onClick,
   variant = 'default',
   wide = false,
@@ -21,6 +23,8 @@ export function ControlButton({
   icon: IconName;
   label: string;
   text?: string;
+  /** The key that presses this button; `Shortcuts` looks it up and the tooltip names it. */
+  shortcut?: string;
   onClick?: () => void;
   variant?: Variant;
   wide?: boolean;
@@ -28,6 +32,10 @@ export function ControlButton({
   /** A small dot in the corner, e.g. unread chat. Put the count in `label` too. */
   badge?: boolean;
 }) {
+  // A single key that is switched off presses nothing, so the button does not
+  // name it. A chord such as Alt+R is longer than one character and stays.
+  const singleKeys = useSingleKeys();
+  const named = shortcut && (singleKeys || shortcut.length > 1) ? shortcut : undefined;
   const base =
     'relative inline-flex h-12 items-center justify-center rounded-full transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]';
   const shape = text ? 'w-12 sm:w-auto sm:gap-2 sm:pl-4 sm:pr-5' : wide ? 'w-16' : 'w-12';
@@ -45,7 +53,8 @@ export function ControlButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      title={label}
+      aria-keyshortcuts={named}
+      title={named ? `${label} (${named})` : label}
       className={`${base} ${shape} ${skin}`}
     >
       {/* A grey button with a red dot, so Record never reads as a twin of the red Leave button. */}

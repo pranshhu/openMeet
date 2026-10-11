@@ -149,6 +149,36 @@ describe('ChunkSender', () => {
     await expect(p).resolves.toBe(false);
   });
 
+  it('giveUp() keeps nothing more for the host, answers drain() at once and reports no error', async () => {
+    const ch = new FakeChannel();
+    ch.readyState = 'closed';
+    const onError = vi.fn();
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel, onError });
+    s.sendChunk(chunk(0, 0, 8));
+    expect(s.hasQueuedChunks).toBe(true);
+
+    s.giveUp();
+    expect(s.hasQueuedChunks).toBe(false);
+    s.sendChunk(chunk(1, 8, 8));
+    expect(s.hasQueuedChunks).toBe(false);
+    expect(s.isAbandoned).toBe(true);
+    await expect(s.drain()).resolves.toBe(false);
+    expect(ch.sent).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('giveUp() ends a drain that is already waiting', async () => {
+    const ch = new FakeChannel();
+    ch.bufferedAmount = 1000;
+    const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
+    let answer: boolean | undefined;
+    void s.drain().then((drained) => (answer = drained));
+
+    s.giveUp();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(answer).toBe(false);
+  });
+
   it('truncates the retransmit buffer on ack and replays since lastIdx on resume', () => {
     const ch = new FakeChannel();
     const s = new ChunkSender({ recordingId: 'r1', channel: ch as unknown as RTCDataChannel });
