@@ -191,6 +191,15 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Pop out**, in the call's camera menu on a computer: one other person's
+  picture floats in a small window that stays on top of your other windows. Put
+  it just under your webcam and looking at them is looking at the lens. Their
+  sound, the speaker you chose, Levels and every recording are unchanged. The
+  window closes by itself when that person leaves or reconnects and while
+  incoming video is stopped.
+- **Framing guide**, on the lobby's camera preview on a computer: a
+  rule-of-thirds grid to frame yourself by. It is drawn on your own screen only
+  and is never in a recording.
 - A **rundown** for the host: write the show's segments in the call, one per line, and
   step through them during a take, one press a segment. Each segment that starts is a
   chapter marker with its name, so the take's chapters file is the rundown with the

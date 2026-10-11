@@ -459,6 +459,28 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   starts nothing, because a keyboard moves through a list one row at a time and a row passed
   on the way must not become a marker; the choice is dropped when a segment starts and when
   the take ends.
+- **Pop out** (`hooks/use-pop-out.ts`) — the camera menu lists **Pop out <name>** for each
+  other person who has a camera tile. `popOut(stream, onEnd)` gives the stream to a muted
+  `<video>` of its own, which is never put in the page, and asks the browser for its floating
+  (Picture-in-Picture) window once the first frame has come. The person's tile is not
+  involved: it keeps playing the sound, so the chosen speaker and the Levels fader apply as
+  before, the window survives a change of layout, and nothing that records reads either
+  element. `usePopOut` holds the stream that floats; popping out someone else moves the
+  window, and leaving the call screen closes it. `CallStage` hands it the streams of the
+  people on camera, and none while incoming video is stopped; once the stream that floats is
+  not among them (that person left, or a connection was rebuilt) the window is closed and is
+  not opened again without a click. A window that did not open, because the browser refused
+  it or no first frame came within 3 s (`FIRST_FRAME_MS`), shows as the `deviceError` line.
+  The items are not offered on a phone (`isPhone()`: the lens is beside the picture there),
+  where `document.pictureInPictureEnabled` is false, while incoming video is stopped, or for
+  a person whose stream has not arrived; a producer and a present-only device have no camera
+  menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
+  `picture-in-picture`, which is therefore allowed, and no new document is opened.
+- **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
+  guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
+  The page draws the lines over the tile and the component is given no stream, so nothing of
+  them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
+  where the preview shows a band of a tall picture.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1308,3 +1330,20 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   shown with hours (`90:00` reads `1:30:00`). After a host reload the clock of the segment
   the host goes on with counts from the press that started it again, not from where that
   segment began.
+- **Pop out floats one person, and never a shared screen.** The browser gives a page one
+  such window: popping out a second person moves it. A screen someone presents has no item.
+- **The popped-out window is the bare picture.** It has no name tag and no mic badge, and
+  it does not show the initial a tile shows while that person's camera is off.
+- **Someone who presents their entire screen shows the popped-out window too.** It lies on
+  top of everything on that screen, so the call sees it and it is in that screen recording,
+  a guest set as not recorded included. A shared tab or window does not contain it.
+- **Pop out is not offered on a phone, to a producer or to a present-only device.** After
+  a reload nobody is popped out, and the item is clicked again.
+- **A popped-out window closes when its person reconnects, and is not opened again.** It
+  holds that connection's stream, a rebuilt connection has a new one, and the browser
+  opens such a window only on a click. The line about a window that did not open stays
+  until the next pop out or the next camera or microphone switch.
+- **The framing guide divides the preview, which is not always the whole picture.** The
+  lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
+  the recording has a little more above and below than the lines show. The guide is not
+  offered on a phone, is not remembered from one visit to the next, and the call has none.

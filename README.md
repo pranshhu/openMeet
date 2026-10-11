@@ -91,6 +91,8 @@ retention policy to trust, because there's nothing retained.
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - **Test your mic** in the green room: five seconds of your own microphone, played
   back to you and then deleted
+- A framing guide in the lobby: a rule-of-thirds grid over your preview, on your own
+  screen only and never in a recording (computers)
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
@@ -110,6 +112,8 @@ retention policy to trust, because there's nothing retained.
   mode that sends the others a smaller live picture and leaves the recording alone
 - **Stop incoming video** on a weak connection: the others stop sending you their
   cameras and shared screens, you still hear everyone, and your recording goes on
+- **Pop out** one person into a small window that stays on top of everything else and
+  put it just under your webcam, so looking at them is looking at the lens (computers)
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 

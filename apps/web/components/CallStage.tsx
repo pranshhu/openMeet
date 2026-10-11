@@ -36,6 +36,7 @@ import { isStagePeer } from '@/lib/stage-peers';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 import { SpeakerRow } from './SpeakerRow';
+import { canPopOut, usePopOut } from '@/hooks/use-pop-out';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -570,6 +571,13 @@ export function CallStage({
   // Said on the button, because the panel is usually hidden: a person turned
   // down and forgotten looks like a dead microphone.
   const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
+  // Pop out: one other person's picture in the browser's floating window, to
+  // sit just under the webcam. `popped` is the stream that floats, or null.
+  const [popped, setPopped] = usePopOut(
+    // With incoming video stopped there is no picture to float.
+    incomingVideoOff ? [] : stagePeers.map((p) => p.stream),
+    () => setDeviceError('Could not open the pop-out window. Try again once you can see them.')
+  );
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
   // With one other person the stage stays on this camera until theirs arrives.
@@ -1165,6 +1173,26 @@ export function CallStage({
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
+                        {!phone && !incomingVideoOff && canPopOut() &&
+                          stagePeers.map((p) =>
+                            p.stream ? (
+                              <button
+                                key={p.peerId}
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={popped === p.stream}
+                                onClick={() => {
+                                  setCamMenuOpen(false);
+                                  setDeviceError(null);
+                                  setPopped(popped === p.stream ? null : p.stream);
+                                }}
+                                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                              >
+                                <span className="max-w-48 truncate">{`Pop out ${p.name || 'Guest'}`}</span>
+                                {popped === p.stream && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                              </button>
+                            ) : null
+                          )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>
