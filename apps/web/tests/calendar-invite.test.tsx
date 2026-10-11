@@ -303,6 +303,15 @@ describe('Lobby: calendar entry', () => {
     await screen.findByText(/Couldn’t check how long this room stays open/);
   });
 
+  it('does not offer it on the check page, which joins no call', async () => {
+    localStorage.setItem('om_host_xyz-abcd-pqr', 'host-tok');
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly />);
+    await screen.findByRole('heading', { name: 'Check your setup' });
+    // The host check runs in an effect; let it and the preview settle.
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: 'Add to calendar' })).toBeNull();
+  });
+
   it('does not offer it to a guest', async () => {
     render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
     await screen.findByRole('button', { name: 'Copy invite link' });
