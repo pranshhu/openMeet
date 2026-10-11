@@ -280,6 +280,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.
+- The first person's tile stays when someone else leaves a call that a
+  Present-only device joined first. That tile used to go empty, with the
+  person neither seen nor heard, until their camera was announced again.
 
 ### Security
 

@@ -1810,7 +1810,7 @@ export function useRoom(slug: string) {
           if (m.peerId) delete capabilities[m.peerId];
           // Others still present → the call continues; only an empty mesh ends it.
           if (remotePeers.length > 0) {
-            return { ...s, remotePeers, capabilities, remoteStream: remotePeers.find((p) => p.role !== 'producer')?.stream ?? null };
+            return { ...s, remotePeers, capabilities, remoteStream: remotePeers.find((p) => p.role !== 'producer' && !p.companion)?.stream ?? null };
           }
           return {
             ...s,

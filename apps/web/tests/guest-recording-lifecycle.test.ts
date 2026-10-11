@@ -2813,6 +2813,49 @@ describe('host backup after a take in useRoom', () => {
     }
   });
 
+  describe('the first person’s stream', () => {
+    const remoteStreamFrom = (peerId: string) =>
+      vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+        .onRemoteStream;
+
+    it('is kept when someone else leaves and a present-only device is listed first', async () => {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(
+          { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+          'Host Hana'
+        );
+      });
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [
+            { peerId: 'p-deck', ordinal: 2, role: 'guest', displayName: 'Deck', companion: true },
+            { peerId: 'p-guest', ordinal: 3, role: 'guest', displayName: 'Bob' },
+            { peerId: 'p-carol', ordinal: 4, role: 'guest', displayName: 'Carol' },
+          ],
+          recording: false,
+        });
+      });
+      const bob = { id: 'bob' } as unknown as MediaStream;
+      act(() => {
+        remoteStreamFrom('p-guest')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-carol', role: 'guest' });
+      });
+
+      // A present-only device has no camera stream; taking it for the first
+      // person left that person's tile empty: not seen and not heard.
+      expect(result.current.state.remoteStream).toBe(bob);
+    });
+  });
+
   describe('call-audio copies', () => {
     const stream = () => ({ id: 'remote' }) as unknown as MediaStream;
     const remoteStreamFrom = (peerId: string) =>
