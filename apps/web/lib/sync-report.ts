@@ -1,5 +1,6 @@
 import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
 import { cleanFps } from './quality';
+import type { NoticeRecord } from './notice-log';
 
 export interface ChapterMarker {
   /** Milliseconds from the host's recording start. */
@@ -110,6 +111,8 @@ export interface SyncReportInput {
   resumed?: boolean | undefined;
   /** The host's own files, each with its offset from hostStartMs; the take's first file first. */
   hostParts?: { name: string; offsetMs: number; kind: 'camera' | 'wav' }[] | undefined;
+  /** Who was told this take was being recorded, as far as the host's page could know. */
+  recordingNotice?: NoticeRecord | undefined;
 }
 
 export interface SummaryFile {
@@ -736,6 +739,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
           },
         }
       : {}),
+    ...(input.recordingNotice ? { recordingNotice: input.recordingNotice } : {}),
     integrity: overallIntegrity.text,
     verification: fileList.map((f) => ({
       file: f.name,

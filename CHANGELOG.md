@@ -146,6 +146,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- `sync.json` gains a `recordingNotice` section: when the host's browser announced
+  the take, everyone the room listed then or who joined while it ran, and when each
+  one's own recording channel reached the host, which shows their browser had been
+  told. A note in it says what each line proves and what it does not. Nothing more
+  is kept on the server.
 
 ### Changed
 

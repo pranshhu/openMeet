@@ -420,6 +420,19 @@ into the host's folder, a copy that starts only after that guest's browser has b
 its own recording. **The host is responsible for getting consent where the law requires
 it** (all-party-consent jurisdictions, GDPR).
 
+Each take's `sync_<id>.json` holds a record of who was told (`recordingNotice`): when the
+host's browser announced the take, everyone the room listed then or who joined while it
+ran, and for each of them the moment their own recording channel reached the host. A
+participant's page opens that channel only after it was told that a take is running,
+which is also what puts the notice on its screen, so that moment shows the page was
+told. A producer, a Present-only device that is not presenting, a guest set as not
+recorded and a browser that cannot record open no such channel: for them the record
+shows only that they were listed, and a guest set as not recorded is listed without a
+name. It does not show that anyone read the notice, and nothing more is kept on the
+server.
+The record lives in the host's page while the take runs, so a take resumed after a
+reload, or saved from the crash copy, has none.
+
 ---
 
 ## After the session

@@ -521,6 +521,21 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+- `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
+  recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
+  it through). `useRoom` makes one as `startRecording` announces the take, with everyone
+  in `remotePeersRef`; an effect on `state.remotePeers` gives whoever is listed later a
+  line (`listed`); and `onDataChannel` calls `confirmed` where a camera recording channel
+  is bound, beside `setToldPeers`, and where a screen channel is. `endRecording` takes
+  the log out of the ref as it starts, so a save that fails leaves none for a take
+  resumed later in the same page. A line holds the name, the role, `presentOnly`,
+  `setAsNotRecorded`, `listedAtMs` and `confirmedAtMs`, as offsets from `hostStartMs` on
+  the host's clock. It holds only what the host's page can know: `SignalClient.send`
+  drops a message while the socket is down, so `announcedAtMs` is not proof of delivery,
+  and only a channel that arrived shows that a page was told. A guest set as not
+  recorded is listed without a name, as its chat and markers are left out. A take keeps
+  at most `MAX_NOTICE_PEOPLE` (64) lines and says `capped` past that. Nothing is sent to
+  the Room, and nothing is added to D1 or to the crash copy.
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
@@ -990,3 +1005,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **The record of who was told does not survive the host's page.** `recordingNotice` is
+  built from a log held in memory, so the sync file of a take resumed after a reload, or
+  saved from its crash copy, has no such section.
+- **Only a recording channel shows that a page was told.** A producer, a Present-only
+  device that is not presenting, a guest set as not recorded and a guest whose browser
+  cannot record open none, so their lines in `recordingNotice` never get a
+  `confirmedAtMs`. No acknowledgement is sent for them, and nothing shows that a person
+  read the notice.
+- **A person who reconnects has one line per connection in `recordingNotice`.** The Room
+  gives a returning connection a new id and the record does not join the two. A take
+  keeps 64 lines; past that it says `capped` and later connections have none.
