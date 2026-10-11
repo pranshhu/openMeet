@@ -59,6 +59,7 @@ and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
 persisted, but it is not end-to-end encrypted either.
 A teleprompter script the host sends to the others travels the same way: relayed,
 not persisted, and not end-to-end encrypted.
+Reactions are relayed the same way and are not persisted either.
 
 **The signaling socket accepts only the site's own origin.** A WebSocket handshake
 whose `Origin` isn't the deployment's `PAGES_ORIGIN` gets a 403, so another website
@@ -93,6 +94,11 @@ they're already known:
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
   joining a room as a guest. Treat an invite link as a secret.
+- **Removing a participant keeps out that tab, not that person.** The room refuses
+  the tab the host removed until everyone has left, but the invite link is still the
+  only credential: a new tab, a private window or another browser joins again. A
+  host's mute is a request the muted person's own page carries out; it can turn no
+  microphone on, and a page that ignores it stays unmuted.
 
 ## Scope
 

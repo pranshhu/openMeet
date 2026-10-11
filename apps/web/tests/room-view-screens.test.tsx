@@ -131,6 +131,53 @@ describe('left', () => {
   });
 });
 
+describe('removed', () => {
+  it('offers the backups this tab holds, named for the room and the person', () => {
+    Object.assign(state, {
+      phase: 'removed',
+      role: 'guest',
+      localName: 'Sam Lee',
+      backupBlobUrl: 'blob:backup',
+      wavBackupBlobUrl: 'blob:wav',
+      // Left over from the call screen; none of it belongs on this one.
+      peerRecording: true,
+      connectionWarning: 'Connection unstable — reconnecting…',
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByRole('heading', { name: 'The host removed you from this call' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your backup copies stay in this browser — download them now, or later from the lobby\./)
+    ).toBeInTheDocument();
+    const mp4 = screen.getByRole('link', { name: 'Download your backup' });
+    expect(mp4).toHaveAttribute('href', 'blob:backup');
+    expect(mp4).toHaveAttribute('download', 'openmeet-abc-defg-hij-backup-sam-lee.mp4');
+    expect(mp4.className).toMatch(/(^|\s)min-h-11(\s|$)/);
+    const wav = screen.getByRole('link', { name: 'Download your WAV backup' });
+    expect(wav).toHaveAttribute('href', 'blob:wav');
+    expect(wav).toHaveAttribute('download', 'openmeet-abc-defg-hij-backup-sam-lee.wav');
+    expect(screen.getByRole('button', { name: 'Back to the lobby' })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Recording|reconnecting|Can’t connect/);
+  });
+
+  it('offers only the copy there is', () => {
+    Object.assign(state, { phase: 'removed', role: 'guest', backupBlobUrl: 'blob:backup' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
+    expect(screen.queryByText('Download your WAV backup')).toBeNull();
+  });
+
+  it('with no backup in this tab, draws no link and says where one would be', () => {
+    Object.assign(state, { phase: 'removed', role: 'guest' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(
+      screen.getByText(/If you were being recorded, your backup copy stays in this browser — the lobby lists it\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/download them now/)).toBeNull();
+    expect(screen.queryByText(/^Download your/)).toBeNull();
+  });
+});
+
 describe('present-only device', () => {
   it('waiting: confirms its screen is being presented', () => {
     Object.assign(state, { phase: 'waiting', role: 'guest', companion: true, screenSharing: true, localStream: empty });
@@ -580,6 +627,32 @@ const inCall = {
 };
 const copy =
   'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.';
+
+describe('the first person’s tile', () => {
+  it('takes its name and badges from that person, not from a present-only device listed first', () => {
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    Object.assign(state, inCall, {
+      remoteStream: bob,
+      remotePeers: [
+        {
+          peerId: 'p-deck',
+          name: 'Deck',
+          stream: null,
+          role: 'guest',
+          companion: true,
+          presence: { micOn: false, camOn: false, screenSharing: false },
+        },
+        { peerId: 'p-bob', name: null, stream: bob, role: 'host' },
+      ],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByTitle('Host')).toBeInTheDocument();
+    expect(screen.queryByTitle('Deck')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Muted' })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Camera off' })).toBeNull();
+  });
+});
 
 describe('mic warning', () => {
   it('hands the warning to the call screen for guest and host', () => {

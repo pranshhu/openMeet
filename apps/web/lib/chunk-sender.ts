@@ -109,6 +109,17 @@ export class ChunkSender {
     return this.queue.length > 0;
   }
 
+  /**
+   * The far end is gone for good and no channel will replace this one. Nothing
+   * more is kept for it, drain() answers at once and no finish signal follows:
+   * the take's backup is the copy that has all of it. Unlike the backlog cap,
+   * there is nobody to tell and nothing to report.
+   */
+  giveUp(): void {
+    this._abandoned = true;
+    this.queue = [];
+  }
+
   digestHex(): Promise<string> {
     return this.hash.digestHex();
   }

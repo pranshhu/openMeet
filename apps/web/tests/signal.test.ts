@@ -266,3 +266,79 @@ describe('SignalClient', () => {
     expect(JSON.parse(ws2.sent[0]!).type).toBe('join');
   });
 });
+
+describe('SignalClient: removed by the host', () => {
+  beforeEach(() => {
+    FakeWS.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not reconnect on code 4007 (WS_CLOSE_REMOVED) and reports it', () => {
+    const onFatalClose = vi.fn();
+    const c = new SignalClient({
+      slug: 'xyz-abcd-pqr',
+      wsBase: 'ws://localhost:8787',
+      displayName: 'Guest',
+      userAgent: 'test-ua',
+      onFatalClose,
+      wsFactory: (url) => new FakeWS(url) as unknown as WebSocket,
+    });
+    c.connect();
+    FakeWS.instances[0]!.fireOpen();
+    FakeWS.instances[0]!.fireClose(4007);
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1); // no reconnect attempt
+    expect(onFatalClose).toHaveBeenCalledWith(4007, '');
+  });
+});
+
+describe('SignalClient.reconnect() once the room has closed this tab for good', () => {
+  beforeEach(() => {
+    FakeWS.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function connected(onFatalClose = vi.fn()) {
+    const c = new SignalClient({
+      slug: 'xyz-abcd-pqr',
+      wsBase: 'ws://localhost:8787',
+      displayName: 'Guest',
+      userAgent: 'test-ua',
+      onFatalClose,
+      wsFactory: (url) => new FakeWS(url) as unknown as WebSocket,
+    });
+    c.connect();
+    FakeWS.instances[0]!.fireOpen();
+    return c;
+  }
+
+  it.each([
+    ['the host removed it', 4007],
+    ['another tab took its place', 4006],
+    ['the room was full', 4001],
+  ])('opens no socket after %s (%i)', (_, code) => {
+    const onFatalClose = vi.fn();
+    const c = connected(onFatalClose);
+    FakeWS.instances[0]!.fireClose(code);
+
+    c.reconnect();
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1);
+    expect(onFatalClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens no socket after close()', () => {
+    const c = connected();
+    c.close();
+
+    c.reconnect();
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWS.instances.length).toBe(1);
+  });
+});

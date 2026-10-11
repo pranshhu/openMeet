@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
 import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
+import { singleKeysOn } from '@/hooks/use-single-keys';
 
 /**
  * Whether the note field is open, for one take. N opens it, as M drops a bare
@@ -18,6 +19,8 @@ export function useMarkerNote(recording: boolean): [boolean, (open: boolean) => 
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'n' && e.key !== 'N') return;
+      // The single keys can be switched off; the choice is asked as the key arrives.
+      if (!singleKeysOn()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
