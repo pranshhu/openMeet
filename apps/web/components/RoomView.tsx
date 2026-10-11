@@ -83,15 +83,23 @@ function isPresentLink(): boolean {
   return new URLSearchParams(window.location.search).get('present') === '1';
 }
 
+/** `?check=1` on the room link: the lobby's preview and checks, with no way into the room. */
+function isCheckLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('check') === '1';
+}
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
+  const check = isCheckLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
   // A host who went on without anyone else. Kept while this tab stays in the
   // room: the call screen then stays up while they are alone, while someone
@@ -162,6 +170,7 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
+        checkOnly={check}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>
           void join(stream, name, producer, asCompanion, screenStream, stereo)
@@ -349,6 +358,9 @@ export function RoomView({ slug }: { slug: string }) {
       onEnd={() => void endRecording()}
       onLeave={leave}
       onSendChat={sendChat}
+      incomingScript={state.incomingScript}
+      onSendScript={sendScript}
+      onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}

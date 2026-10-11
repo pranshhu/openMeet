@@ -119,6 +119,22 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- The lobby asks whether you are on headphones or speakers. On speakers you can
+  turn echo cancellation on for your own microphone; your recording is then
+  processed audio, not raw. The answer is remembered in that browser.
+- The host sees on each person's name tag whether they said headphones or
+  speakers in the lobby, and whether their echo cancellation is on.
+- The session summary and `sync.json` say which files were recorded with echo
+  cancellation on, and a microphone switched during the call keeps that choice.
+- **Test your mic** in the lobby's readiness panel: five seconds of your own
+  microphone are recorded, played back to you and deleted. The clip never leaves
+  the browser.
+- A **check link** for a room (**Copy check link** in the host's lobby, or `?check=1`
+  on the invite link): a guest tests camera, microphone and connection ahead of the
+  call, on the lobby's own checks, without joining the room.
+- **Copy result** under the lobby's readiness checks: the checks as plain text, with
+  the names of your camera and microphone, to paste into a message to the host. It
+  goes to the clipboard and nowhere else.
 - Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
   on the board as pads with one click. They are made in the browser, so no
   audio file is downloaded, and the bed arrives set to loop and fade.
@@ -139,6 +155,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Record alone: a host with nobody else in the room presses **Continue alone** in the
   waiting room and records from the call screen. Anyone who joins during the take is
   recorded from then on.
+- The teleprompter's editor shows how long the script takes to read aloud.
+- The host can send their teleprompter script to everyone else in the call, from
+  the teleprompter's editor. Each person uses it in their own teleprompter or
+  ignores it, and nobody's own script is replaced without their click.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed

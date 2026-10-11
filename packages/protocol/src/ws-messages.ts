@@ -62,6 +62,12 @@ export type ClientRecordingStop = { type: 'recording-stop'; recordingId: string 
  * whether or not this arrived.
  */
 export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's teleprompter script, offered to everyone else in the room. Each
+ * person takes it or leaves it; it replaces nothing by itself. `text` is at
+ * most MAX_SCRIPT_LENGTH long.
+ */
+export type ClientScript = { type: 'script'; text: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 export type ClientPresence = {
   type: 'presence';
@@ -93,11 +99,26 @@ export type ClientPing = { type: 'ping' };
 export const BROWSER_NOTES = ['safari', 'ios', 'android', 'mobile'] as const;
 export type BrowserNote = (typeof BROWSER_NOTES)[number];
 
+/**
+ * How a person said, in the lobby, that they hear the call. A code, not copy.
+ * `speakers-ec` is speakers with the browser's echo cancellation on for that
+ * person's own microphone, so their recorded audio is processed. Someone who
+ * did not say has no code at all.
+ */
+export const LISTENING_CHOICES = ['headphones', 'speakers', 'speakers-ec'] as const;
+export type Listening = (typeof LISTENING_CHOICES)[number];
+
+export function isListening(v: unknown): v is Listening {
+  return (LISTENING_CHOICES as readonly unknown[]).includes(v);
+}
+
 export type ClientRecordingCapability = {
   type: 'recording-capability';
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
 };
 
 /**
@@ -115,6 +136,7 @@ export type ClientMessage =
   | ClientRecordingCompleted
   | ClientRecordingStop
   | ClientRecordingCountdown
+  | ClientScript
   | ClientChat
   | ClientPresence
   | ClientMarker
@@ -242,6 +264,11 @@ export type ServerRecordingStop = { type: 'recording-stop'; recordingId: string;
  * room. Only the host's is passed on, so it carries no `from`.
  */
 export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: number };
+/**
+ * The host's ClientScript, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerScript = { type: 'script'; text: string };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -257,6 +284,8 @@ export type ServerRecordingCapability = {
   mp4: boolean;
   wav: boolean;
   note?: BrowserNote;
+  /** How the sender said they hear the call; absent when they did not say. */
+  listening?: Listening;
   from: Role;
   fromPeerId: string;
 };
@@ -280,6 +309,7 @@ export type ServerMessage =
   | ServerRecordingStarted
   | ServerRecordingStop
   | ServerRecordingCountdown
+  | ServerScript
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
@@ -296,6 +326,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-completed',
   'recording-stop',
   'recording-countdown',
+  'script',
   'chat',
   'presence',
   'marker',
@@ -318,6 +349,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-started',
   'recording-stop',
   'recording-countdown',
+  'script',
   'recording-ack',
   'room-closed',
   'pong',

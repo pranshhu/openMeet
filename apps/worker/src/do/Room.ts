@@ -1,12 +1,14 @@
 import {
   BROWSER_NOTES,
   MAX_RECORDED_PEERS,
+  MAX_SCRIPT_LENGTH,
   ROOM_TTL_MS,
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
   WS_CLOSE_REPLACED,
+  isListening,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -596,6 +598,19 @@ export class Room implements DurableObject {
         if (p.role !== 'host' || !Number.isFinite(parsed.seconds)) break;
         this.broadcastExcept(ws, { type: 'recording-countdown', seconds: parsed.seconds });
         break;
+      case 'script':
+        // The host's teleprompter script, for the others to take or leave.
+        // Only the host's is passed on, and only a text within the bound.
+        // Nothing is kept, so a person who joins later is not sent it.
+        if (
+          p.role !== 'host' ||
+          typeof parsed.text !== 'string' ||
+          parsed.text.length > MAX_SCRIPT_LENGTH
+        ) {
+          break;
+        }
+        this.broadcastExcept(ws, { type: 'script', text: parsed.text });
+        break;
       case 'recording-capability':
         // Relay only, like presence — a live UI hint for the host, not room
         // state. Lets the host see before pressing Record which participants
@@ -605,6 +620,7 @@ export class Room implements DurableObject {
           mp4: parsed.mp4,
           wav: parsed.wav,
           ...((BROWSER_NOTES as readonly unknown[]).includes(parsed.note) ? { note: parsed.note } : {}),
+          ...(isListening(parsed.listening) ? { listening: parsed.listening } : {}),
           from: p.role,
           fromPeerId: p.peerId,
         });
