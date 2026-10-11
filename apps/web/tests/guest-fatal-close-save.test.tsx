@@ -450,6 +450,40 @@ describe('a guest the host removes during a take', () => {
     });
     for (const s of Object.values(senders)) expect(s.giveUp).toHaveBeenCalledTimes(1);
   });
+
+  // The host pressed End & save and then removed this guest, whose page was
+  // still saving. The removal arrives after the save began, so the streams are
+  // given up under the save and the removal is read when the save ends.
+  it('removed while the save the host asked for is running: its streams give up and the removed screen follows', async () => {
+    const gaveUp = () => ({ giveUp: vi.fn() });
+    const senders = { sender: gaveUp(), wavSender: gaveUp(), screenSender: gaveUp() };
+    vi.mocked(startGuestRecording).mockReturnValueOnce({ recordingId: 'rec-test-4', ...senders } as never);
+    const result = await recordingGuest();
+
+    let finish!: (r: { drained: boolean; backup: Blob }) => void;
+    vi.mocked(endGuestRecording).mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    await act(async () => {
+      emitSignal('recording-stop', { type: 'recording-stop', from: 'host', recordingId: 'rec-host-5' });
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+    for (const s of Object.values(senders)) expect(s.giveUp).not.toHaveBeenCalled();
+
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+    // Still the one save: the removal neither ends the capture again nor waits.
+    expect(result.current.state.phase).toBe('finalizing');
+    expect(vi.mocked(endGuestRecording)).toHaveBeenCalledTimes(1);
+    for (const s of Object.values(senders)) expect(s.giveUp).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish({ drained: false, backup: new Blob(['backup-bytes']) });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(result.current.state.phase).toBe('removed');
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
+    expect(vi.mocked(MediaManager).mock.results[0]!.value.stop).toHaveBeenCalled();
+  });
 });
 
 describe('a guest the host removes while their capture is still starting', () => {
