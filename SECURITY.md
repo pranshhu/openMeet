@@ -51,6 +51,8 @@ as a producer (in the call, never written to a file) or as a Present-only screen
 that stays in use never lapses. A room is marked `consumed` on first join, but
 nothing reads that flag, so the link keeps working as long as a slot is free.
 Treat an invite link as a live secret, not a one-time ticket.
+A check link (the invite link with `?check=1`) is the same secret: whoever holds it can
+join the room.
 
 **Chat and presence pass through the server in plaintext.** Only recording bytes
 and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
