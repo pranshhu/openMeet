@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
+import { popOut } from '@/hooks/use-pop-out';
 
 // EventTargets, because a tile listens on the stream it is given.
 const streamOf = (id: string) => Object.assign(new EventTarget(), { id }) as unknown as MediaStream;
@@ -267,5 +268,123 @@ describe('CallStage: pop out', () => {
       'Pop out Carol',
       'Camera',
     ]);
+  });
+});
+
+describe('CallStage: a popped-out window without its picture', () => {
+  it('closes when that person’s connection is rebuilt or they leave, and is not opened again by itself', async () => {
+    const view = render(<CallStage {...props} />);
+    await popOutPerson('Bob');
+    // A rebuilt connection hands the page a new stream under the same peerId.
+    const bobAgain = streamOf('stream-bob-again');
+    const rebuilt = props.remotePeers.map((p) => (p.peerId === 'p-bob' ? { ...p, stream: bobAgain } : p));
+    view.rerender(<CallStage {...props} remoteStream={bobAgain} remotePeers={rebuilt} />);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(floating).toBeNull();
+    expect(made).toHaveLength(1);
+    expect(ticked('Bob')).toBe(false);
+
+    await popOutPerson('Carol');
+    view.rerender(
+      <CallStage {...props} remoteStream={bobAgain} remotePeers={rebuilt.filter((p) => p.peerId !== 'p-carol')} />
+    );
+    expect(exit).toHaveBeenCalledTimes(2);
+    expect(floating).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('closes, and the items go, while incoming video is stopped', async () => {
+    const view = render(<CallStage {...props} onSetIncomingVideoOff={vi.fn()} />);
+    await popOutPerson('Bob');
+    view.rerender(<CallStage {...props} incomingVideoOff onSetIncomingVideoOff={vi.fn()} />);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(floating).toBeNull();
+    toggleMenu();
+    expect(screen.getAllByRole('menuitemcheckbox').map((i) => i.textContent)).toEqual(['Stop incoming video']);
+    toggleMenu();
+
+    view.rerender(<CallStage {...props} onSetIncomingVideoOff={vi.fn()} />);
+    expect(ticked('Bob')).toBe(false);
+  });
+
+  it('says so and unticks the person when no picture comes within three seconds', () => {
+    vi.useFakeTimers();
+    try {
+      render(<CallStage {...props} />);
+      toggleMenu();
+      fireEvent.click(item('Bob'));
+      act(() => {
+        vi.advanceTimersByTime(2999);
+      });
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Could not open the pop-out window. Try again once you can see them.'
+      );
+      expect(made[0]!.srcObject).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+      expect(ticked('Bob')).toBe(false);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('popOut', () => {
+  it('stops waiting once a picture has come', async () => {
+    vi.useFakeTimers();
+    try {
+      const onEnd = vi.fn();
+      const close = popOut(bob, onEnd);
+      made[0]!.dispatchEvent(new Event('loadedmetadata'));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(floating).toBe(made[0]);
+      vi.advanceTimersByTime(60_000);
+      expect(onEnd).not.toHaveBeenCalled();
+      expect(floating).toBe(made[0]);
+      close();
+      expect(floating).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves no timer behind when it is closed before a picture came', () => {
+    vi.useFakeTimers();
+    try {
+      const close = popOut(bob, vi.fn());
+      expect(vi.getTimerCount()).toBe(1);
+      close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands back a window the browser grants after it was closed, and reports no end', async () => {
+    let grant!: () => void;
+    request.mockImplementationOnce(function (this: HTMLVideoElement) {
+      return new Promise((resolve) => {
+        grant = () => {
+          floating = this;
+          resolve({});
+        };
+      });
+    });
+    const onEnd = vi.fn();
+    const close = popOut(bob, onEnd);
+    made[0]!.dispatchEvent(new Event('loadedmetadata'));
+    close();
+    expect(exit).not.toHaveBeenCalled();
+    grant();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(floating).toBeNull();
+    expect(onEnd).not.toHaveBeenCalled();
   });
 });

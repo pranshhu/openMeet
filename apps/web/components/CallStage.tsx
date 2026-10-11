@@ -525,8 +525,10 @@ export function CallStage({
   const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
   // Pop out: one other person's picture in the browser's floating window, to
   // sit just under the webcam. `popped` is the stream that floats, or null.
-  const [popped, setPopped] = usePopOut(() =>
-    setDeviceError('Could not open the pop-out window. Try again once you can see them.')
+  const [popped, setPopped] = usePopOut(
+    // With incoming video stopped there is no picture to float.
+    incomingVideoOff ? [] : stagePeers.map((p) => p.stream),
+    () => setDeviceError('Could not open the pop-out window. Try again once you can see them.')
   );
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
@@ -1080,7 +1082,7 @@ export function CallStage({
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
-                        {!phone && canPopOut() &&
+                        {!phone && !incomingVideoOff && canPopOut() &&
                           stagePeers.map((p) =>
                             p.stream ? (
                               <button

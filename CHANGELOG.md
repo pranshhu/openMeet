@@ -149,7 +149,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Pop out**, in the call's camera menu on a computer: one other person's
   picture floats in a small window that stays on top of your other windows. Put
   it just under your webcam and looking at them is looking at the lens. Their
-  sound, the speaker you chose, Levels and every recording are unchanged.
+  sound, the speaker you chose, Levels and every recording are unchanged. The
+  window closes by itself when that person leaves or reconnects and while
+  incoming video is stopped.
 
 ### Changed
 

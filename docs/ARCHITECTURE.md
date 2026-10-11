@@ -356,11 +356,15 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   involved: it keeps playing the sound, so the chosen speaker and the Levels fader apply as
   before, the window survives a change of layout, and nothing that records reads either
   element. `usePopOut` holds the stream that floats; popping out someone else moves the
-  window, and leaving the call screen closes it. A window the browser refuses shows as the
-  `deviceError` line. The items are not offered on a phone (`isPhone()`: the lens is beside
-  the picture there), where `document.pictureInPictureEnabled` is false, or for a person
-  whose stream has not arrived; a producer and a present-only device have no camera menu.
-  `public/_headers` needs nothing for it: `Permissions-Policy` does not name
+  window, and leaving the call screen closes it. `CallStage` hands it the streams of the
+  people on camera, and none while incoming video is stopped; once the stream that floats is
+  not among them (that person left, or a connection was rebuilt) the window is closed and is
+  not opened again without a click. A window that did not open, because the browser refused
+  it or no first frame came within 3 s (`FIRST_FRAME_MS`), shows as the `deviceError` line.
+  The items are not offered on a phone (`isPhone()`: the lens is beside the picture there),
+  where `document.pictureInPictureEnabled` is false, while incoming video is stopped, or for
+  a person whose stream has not arrived; a producer and a present-only device have no camera
+  menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
 
 ### Call orchestration (`hooks/useRoom.ts`)
@@ -1012,3 +1016,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   a guest set as not recorded included. A shared tab or window does not contain it.
 - **Pop out is not offered on a phone, to a producer or to a present-only device.** After
   a reload nobody is popped out, and the item is clicked again.
+- **A popped-out window closes when its person reconnects, and is not opened again.** It
+  holds that connection's stream, a rebuilt connection has a new one, and the browser
+  opens such a window only on a click. The line about a window that did not open stays
+  until the next pop out or the next camera or microphone switch.
