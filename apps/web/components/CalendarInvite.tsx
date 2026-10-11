@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { buildIcs, googleCalendarUrl } from '@/lib/calendar-invite';
+import { ROOM_TTL_MS } from '@openmeet/protocol';
+import { getRoom } from '@/lib/api';
+import { SESSION_MS, buildIcs, googleCalendarUrl } from '@/lib/calendar-invite';
 import { Icon } from './Icon';
 
 const focus = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]';
@@ -17,17 +19,43 @@ const action = `inline-flex min-h-11 w-full items-center justify-center rounded-
 export function CalendarInvite({ slug }: { slug: string }) {
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState('');
+  // When the room closes, by the server: null until it has answered, 'failed'
+  // when the answer was not a time.
+  const [closesAt, setClosesAt] = useState<number | 'failed' | null>(null);
   // The picker's value names no zone, so it is read on this computer's clock.
   const startMs = when ? new Date(when).getTime() : NaN;
+  // The whole hour has to fit, so a guest who joins late still finds the room.
+  const tooLate = typeof closesAt === 'number' && startMs + SESSION_MS > closesAt;
   // origin+pathname is the plain invite link, whatever query this page has.
-  // Read only once a start is picked, which no server render reaches.
-  const link = Number.isFinite(startMs) ? `${location.origin}${location.pathname}` : null;
+  // Read only once an entry can be made, which no server render reaches.
+  const link =
+    typeof closesAt === 'number' && Number.isFinite(startMs) && !tooLate
+      ? `${location.origin}${location.pathname}`
+      : null;
+
+  function toggle() {
+    setOpen(!open);
+    if (open) return;
+    // Asked at each opening and not when the lobby loads: a lobby that never
+    // opens this asks nothing, and a call in the room since has moved the date.
+    getRoom(slug).then(
+      // The answer is the server's: only a real time counts, and no room stays
+      // open longer than ROOM_TTL_MS from now.
+      (room) =>
+        setClosesAt(
+          room && Number.isFinite(room.expires_at)
+            ? Math.min(room.expires_at, Date.now() + ROOM_TTL_MS)
+            : 'failed'
+        ),
+      () => setClosesAt('failed')
+    );
+  }
 
   return (
     <div className="flex w-full flex-col items-center gap-3">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-expanded={open}
         className={`inline-flex min-h-11 items-center gap-1 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focus}`}
       >
@@ -45,6 +73,25 @@ export function CalendarInvite({ slug }: { slug: string }) {
               className="min-h-11 w-full rounded-lg border border-[#dadce0] bg-white px-3 text-base font-normal outline-none focus:border-[#0b57d0] focus:ring-1 focus:ring-[#0b57d0]"
             />
           </label>
+          {/* Mounted with the panel, and only its text changes, so a screen
+              reader announces the server's answer. */}
+          <p
+            role="status"
+            className={`text-[13px] leading-relaxed ${closesAt === 'failed' ? 'text-[#b3261e]' : 'text-[#5f6368]'}`}
+          >
+            {closesAt === null
+              ? 'Checking how long this room stays open…'
+              : closesAt === 'failed'
+                ? 'Couldn’t check how long this room stays open. Reload the page and try again.'
+                : `This room is open until ${new Date(closesAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}. A room closes 30 days after its last call.`}
+          </p>
+          {tooLate && (
+            // Inserted, not toggled, so a screen reader announces it.
+            <p role="alert" className="text-[13px] leading-relaxed text-[#b3261e]">
+              That is after this room closes. Pick an earlier time, or join the room once: it then stays
+              open for 30 days from that call.
+            </p>
+          )}
           {link && (
             <>
               <a

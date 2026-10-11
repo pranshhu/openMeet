@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CalendarInvite } from '@/components/CalendarInvite';
 import { Lobby } from '@/components/Lobby';
 import { buildIcs, googleCalendarUrl, inviteText } from '@/lib/calendar-invite';
+import { ROOM_TTL_MS } from '@openmeet/protocol';
+import { getRoom } from '@/lib/api';
+
+// Only the room lookup is replaced: the lobby's own checks keep the rest of the module.
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  getRoom: vi.fn(),
+}));
 
 const LINK = 'https://meet.example.org/r/xyz-abcd-pqr/';
 // 20 October 2026, 15:00 UTC, in a file made on the 11th.
@@ -81,39 +89,82 @@ describe('calendar entry', () => {
 });
 
 describe('CalendarInvite', () => {
+  // The room closes on 20 October at 15:30 on this computer's clock, 19 days after "now".
+  const CLOSES = new Date('2026-10-20T15:30').getTime();
+  const shown = (ms: number) =>
+    new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const room = (expires_at: number) => ({ slug: 'xyz-abcd-pqr', expires_at, consumed: 1 });
+
+  beforeEach(() => {
+    // Only the clock is held still: the server's answer still arrives by itself.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T12:00'));
+    vi.mocked(getRoom).mockResolvedValue(room(CLOSES));
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(getRoom).mockReset();
     window.history.pushState({}, '', '/');
   });
 
   const toggle = () => screen.getByRole('button', { name: 'Add to calendar' });
   const pick = (value: string) =>
     fireEvent.change(screen.getByLabelText('Session start'), { target: { value } });
+  const says = (text: string) => waitFor(() => expect(screen.getByRole('status').textContent).toBe(text));
+  const openUntil = (ms: number) =>
+    says(`This room is open until ${shown(ms)}. A room closes 30 days after its last call.`);
 
-  it('stays closed until its button is pressed, and offers no entry without a start', () => {
+  it('asks when the room closes at each opening, not before, and says the date', async () => {
     render(<CalendarInvite slug="xyz-abcd-pqr" />);
+    // A lobby in which nobody opens this asks the server nothing.
+    expect(getRoom).not.toHaveBeenCalled();
     expect(toggle()).toHaveAttribute('aria-expanded', 'false');
     // 44px to tap on a phone.
     expect(toggle()).toHaveClass('min-h-11');
     expect(screen.queryByLabelText('Session start')).toBeNull();
+    // The status line is mounted with the panel, so a screen reader sees it appear.
+    expect(screen.queryByRole('status')).toBeNull();
 
     fireEvent.click(toggle());
     expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(getRoom).toHaveBeenCalledWith('xyz-abcd-pqr');
     expect(screen.getByLabelText('Session start')).toHaveAttribute('type', 'datetime-local');
     expect(screen.getByLabelText('Session start')).toHaveClass('min-h-11');
+    expect(screen.getByRole('status').textContent).toBe('Checking how long this room stays open…');
+    await openUntil(CLOSES);
     // No time, no entry.
     expect(screen.queryByRole('link')).toBeNull();
 
     fireEvent.click(toggle());
     expect(toggle()).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByLabelText('Session start')).toBeNull();
+    // Closing asks nothing.
+    expect(getRoom).toHaveBeenCalledTimes(1);
+
+    // Until the server answers again, the last answer stays on screen.
+    vi.mocked(getRoom).mockReturnValueOnce(new Promise<never>(() => {}));
+    fireEvent.click(toggle());
+    expect(getRoom).toHaveBeenCalledTimes(2);
+    await openUntil(CLOSES);
+
+    // A call in the room since the last opening has moved the date.
+    fireEvent.click(toggle());
+    vi.mocked(getRoom).mockResolvedValue(room(CLOSES + 60_000));
+    fireEvent.click(toggle());
+    await openUntil(CLOSES + 60_000);
   });
 
-  it('offers the calendar file and the Google Calendar link once a start is picked', async () => {
+  it('offers the calendar file and the Google Calendar link for a session that ends by then', async () => {
     // A query on the host's own page must not get into the entry.
     window.history.pushState({}, '', '/r/xyz-abcd-pqr/?present=1');
     render(<CalendarInvite slug="xyz-abcd-pqr" />);
     fireEvent.click(toggle());
+    // Its hour ends at the minute the room closes.
     pick('2026-10-20T14:30');
+    // Nothing is offered before the server has said when the room closes.
+    expect(screen.queryByRole('link')).toBeNull();
+    await openUntil(CLOSES);
 
     const link = `${location.origin}/r/xyz-abcd-pqr/`;
     // The picker's value names no zone: it is 14:30 on this computer's clock.
@@ -136,11 +187,60 @@ describe('CalendarInvite', () => {
     // 44px tall and as wide as the panel, so they sit one above the other on a phone.
     expect(file).toHaveClass('min-h-11', 'w-full');
     expect(google).toHaveClass('min-h-11', 'w-full');
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(
       screen.getByText(
         /Anyone who can read the entry can join the room\. On the day, open the room in this browser: you are its host only here\./
       )
     ).toBeInTheDocument();
+  });
+
+  it('makes no entry for a session that would end after the room closes', async () => {
+    render(<CalendarInvite slug="xyz-abcd-pqr" />);
+    fireEvent.click(toggle());
+    await openUntil(CLOSES);
+
+    // Starts half an hour before the room closes, ends half an hour after.
+    pick('2026-10-20T15:00');
+    expect(screen.getByRole('alert').textContent).toBe(
+      'That is after this room closes. Pick an earlier time, or join the room once: it then stays open for 30 days from that call.'
+    );
+    expect(screen.queryByRole('link')).toBeNull();
+
+    pick('2026-10-20T14:30');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getAllByRole('link')).toHaveLength(2);
+  });
+
+  it('makes no entry when the server gives no closing time', async () => {
+    const answers = [
+      () => Promise.reject(new Error('offline')),
+      () => Promise.resolve(null),
+      () => Promise.resolve(room('soon' as unknown as number)),
+    ];
+    for (const answer of answers) {
+      vi.mocked(getRoom).mockImplementationOnce(answer);
+      const { unmount } = render(<CalendarInvite slug="xyz-abcd-pqr" />);
+      fireEvent.click(toggle());
+      await says('Couldn’t check how long this room stays open. Reload the page and try again.');
+      pick('2026-10-20T14:30');
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('takes no closing time later than any room can have', async () => {
+    // A year away; a room closes at most 30 days after it was last joined.
+    vi.mocked(getRoom).mockResolvedValue(room(new Date('2027-10-01T12:00').getTime()));
+    render(<CalendarInvite slug="xyz-abcd-pqr" />);
+    fireEvent.click(toggle());
+    await openUntil(Date.now() + ROOM_TTL_MS);
+
+    // 45 days after "now".
+    pick('2026-11-15T12:00');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });
 

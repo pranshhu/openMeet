@@ -358,6 +358,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the plain invite link and `inviteText`: a short checklist for the guest and a line about
   recording. Nothing is stored and nothing about the entry is sent to the Worker: the room
   knows no date.
+  At each opening the panel asks `getRoom` for the room's `expires_at`, takes it as no later
+  than `ROOM_TTL_MS` from now, and says it. A session whose hour would end after it gets a
+  line saying so and no link, and so does an answer that is not a time.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1008,3 +1011,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   **Open in Google Calendar** hands that link to Google. Opened from a calendar in another
   browser on the day, the link makes the host a guest with no Record button: the host token
   is only in the browser that made the room, which the panel says.
+- **A session more than 30 days ahead cannot be put in a calendar from the lobby.** The entry
+  is refused by the room's closing time as it stands, and a join only moves that to 30 days
+  from the join. The host makes the entry within 30 days of the session, after joining the
+  room once if it was last used longer ago than that.

@@ -151,6 +151,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   is one hour long and carries the room link and a short checklist for the guest
   (browser, headphones, a quiet room). It is made in the browser: nothing about it
   is stored or sent to the server.
+- **Add to calendar** says until when the room stays open (30 days after its last
+  call) and makes no entry for a session that would end after that.
 
 ### Changed
 
