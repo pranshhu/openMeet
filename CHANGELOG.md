@@ -144,7 +144,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   the person recorded stays in the host's folder up to the removal, and in their
   own browser's backup beyond it. The screen that tells them they were removed offers the
   backups their tab holds as downloads. Removed during a take, their **Stop and save**
-  saves the recording at once.
+  saves the recording at once. Their page then becomes that screen, with the backup links.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed

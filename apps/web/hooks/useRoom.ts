@@ -708,6 +708,10 @@ export function useRoom(slug: string) {
   // instant it arrives rather than at finalize.
   const hostStartRef = useRef<number | null>(null);
   const fatalCloseRef = useRef(false);
+  // The Room closed this tab with 4007. Written by the close handler itself:
+  // Stop and save reads it the moment it is pressed. Never cleared, because
+  // every way on from a removed tab reloads the page or leaves it.
+  const removedRef = useRef(false);
   const lastIceReconnectRef = useRef(0);
   // Chosen once per session and reused: showDirectoryPicker needs transient user
   // activation, so a second take could not prompt again from a non-click path.
@@ -1200,6 +1204,7 @@ export function useRoom(slug: string) {
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
         onFatalClose: (code) => {
           if (code === WS_CLOSE_REMOVED) {
+            removedRef.current = true;
             // Every other page closes its side of the connection to a removed
             // tab, and this one has no socket to make a new one: nothing
             // queued for the host can leave. It is not kept, and Stop and save
@@ -2633,7 +2638,9 @@ export function useRoom(slug: string) {
           recordingRef.current = null;
           setState((s) => ({
             ...s,
-            phase: 'done',
+            // A removed tab has no call to go back to. Its take is saved, so
+            // the removed screen follows, with this backup on it.
+            phase: removedRef.current ? 'removed' : 'done',
             ...(s.recordingError === 'The other person disconnected. Press End & save to keep this recording.' ||
               s.recordingError?.includes('keep this recording')
               ? { recordingError: null }

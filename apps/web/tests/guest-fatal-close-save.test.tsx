@@ -355,7 +355,9 @@ describe('a guest the host removes during a take', () => {
       await result.current.endRecording();
     });
     expect(endGuestRecordingCalled).toBe(true);
-    expect(result.current.state.phase).toBe('done');
+    // Saved, so the removed screen follows, and it lets go of camera and mic.
+    expect(result.current.state.phase).toBe('removed');
+    expect(vi.mocked(MediaManager).mock.results[0]!.value.stop).toHaveBeenCalled();
     expect(result.current.state.backupBlobUrl).toBeTruthy();
   });
 
@@ -417,8 +419,23 @@ describe('a guest the host removes during a take', () => {
       finish({ drained: true, backup: new Blob(['backup-bytes']) });
       await saved;
     });
-    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.phase).toBe('removed');
     expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
+
+  it('keeps the call screen with the error when its save fails', async () => {
+    const result = await recordingGuest();
+
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+    vi.mocked(endGuestRecording).mockRejectedValueOnce(new Error('disk full'));
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.recordingError).toBe('Sending your recording didn’t finish (disk full).');
   });
 
   it('stops keeping anything for the host at the removal, on every stream of its take', async () => {

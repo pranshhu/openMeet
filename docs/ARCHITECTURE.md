@@ -405,7 +405,10 @@ first through `endRecording({ internal: true })`, its backup kept, and the termi
 On a removal (`4007`) the close handler also tells the take's camera, WAV and screen senders to
 `giveUp()`: every other page closes its side of the connection on `peer-left` and this tab has no
 socket to make a new one, so nothing queued can reach the host. **Stop and save** therefore waits
-for no drain, and the track readout shows those tracks as stopped.
+for no drain, and the track readout shows those tracks as stopped. The handler also writes
+`removedRef` itself, and the guest branch of `endRecording` reads it to end on `removed`
+instead of `done`: the removed screen shows with the backup links, and the effect that lets
+go on a terminal screen closes the connections and releases camera and microphone.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -1071,10 +1074,18 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   host. On the host their files end at the removal and read incomplete (no finish signal), and
   End & save does not wait for them. A capture that had started but not yet reached the host
   is ended for them instead, and they get the removed screen; its backup is in their browser.
-- **After Stop and save, a removed participant's page stays on the call screen.** Its tiles are
-  frozen, and its line may still say to rejoin and send the backup; Leave and then Rejoin end on
-  "The host removed you from this call". A backup that tab was sending back stays stalled on
-  the host; the removed person still has it, listed in every lobby.
+- **A removed participant who presses Leave call instead of Stop and save reads "You left
+  the call".** The take is saved the same way and that screen offers the backup, but its
+  **Rejoin** is refused: joining again from that tab ends on "The host removed you from
+  this call".
+- **A backup a removed participant was sending back stays stalled on the host.** The
+  removed person still has it, listed in every lobby.
+- **While a removed participant's save runs, the notice reads "Sending your last few
+  seconds to the host."** Nothing is sent or waited for: the recorders and the backup
+  stop, which takes a moment, and the removed screen follows.
+- **A present-only device removed during a take gets no download link.** It has no camera
+  backup. The backup of the screen it was presenting stays in that browser, and its lobby
+  lists it.
 - **Nobody else is told why a person left.** A removal reaches the other participants as an
   ordinary `peer-left`; its `reason` is `removed`, and no page reads it.
 - **The People panel exists on the call screen only.** A host whose page still reads

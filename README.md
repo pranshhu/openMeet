@@ -431,7 +431,8 @@ The host can also remove a participant from **People**. That person is told the 
 removed them. What they recorded before the removal stays in the host's folder and
 ends there; the rest is in their own browser's backup, which is never deleted for
 them. If a take was running, their browser keeps recording into that backup until
-they press **Stop and save**.
+they press **Stop and save**; their page then offers the backup as a download, and
+the lobby in that browser lists it afterwards.
 
 ---
 
