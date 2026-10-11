@@ -142,7 +142,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The host can remove a participant, from **People** in the call's control bar,
   after a confirmation. The room keeps that tab out until everyone has left; what
   the person recorded stays in the host's folder up to the removal, and in their
-  own browser's backup beyond it.
+  own browser's backup beyond it. The screen that tells them they were removed offers the
+  backups their tab holds as downloads.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed

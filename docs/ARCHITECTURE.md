@@ -267,7 +267,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   and any connection warning, and for `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
   `replaced` (4006: another tab/device took the host seat), `removed` (4007: the host removed
-  this participant; Back to the lobby + Back to home), `left` (Rejoin + Back to home, plus
+  this participant; Back to the lobby + Back to home, plus **Download your backup** and
+  **Download your WAV backup** when this tab holds the backup of a recording it saved, drawn by
+  the same `FileLinks` as the `left` screen's), `left` (Rejoin + Back to home, plus
   download links for sync.json/chapters.txt/backups when a take was finalized on the way out; a host
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
