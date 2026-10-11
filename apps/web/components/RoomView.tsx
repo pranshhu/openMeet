@@ -83,6 +83,12 @@ function isPresentLink(): boolean {
   return new URLSearchParams(window.location.search).get('present') === '1';
 }
 
+/** `?check=1` on the room link: the lobby's preview and checks, with no way into the room. */
+function isCheckLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('check') === '1';
+}
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
@@ -92,6 +98,7 @@ export function RoomView({ slug }: { slug: string }) {
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
+  const check = isCheckLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
@@ -158,6 +165,7 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
+        checkOnly={check}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>
           void join(stream, name, producer, asCompanion, screenStream, stereo)

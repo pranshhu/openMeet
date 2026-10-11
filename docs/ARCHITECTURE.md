@@ -263,11 +263,20 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
+  (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
+  microphone for five seconds, played back from an object URL that is revoked when the clip
+  ends. Leaving the lobby aborts it, so that recorder never runs into the call.
   Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
   room can choose it with **Send to host**; the choice is handed to the hook on join.
   A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save
   to folder and Delete; both are disabled while a save runs, and a save that left something out
   says so in an alert and keeps the row.
+  `?check=1` on the room link (`isCheckLink` in `RoomView`; the host's **Copy check link** in the
+  lobby builds it) renders the same `Lobby` with `checkOnly`: preview, pickers and readiness
+  panel, with the join form hidden and the backup and unsaved-recording lists left out, so a
+  guest can test a device ahead of the call. It never calls `join`. A link that also carries
+  `producer=1` or `present=1` is that link, and `check` is ignored.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
@@ -990,3 +999,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A check link works only while its room does, and it is the invite link.** The checks
+  run against the room, so an expired room shows "Room not found or expired"; opening a
+  check link joins nothing and so does not extend the room's 30 days. Without `?check=1`
+  it is the invite link, so it is exactly as private. The page starts on the browser's
+  default camera and microphone, like the lobby, and no device choice is remembered for
+  the day of the call.

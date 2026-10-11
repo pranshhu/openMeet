@@ -130,6 +130,7 @@ export function Lobby({
   onSendBackups,
   producer = false,
   present = false,
+  checkOnly = false,
 }: {
   slug: string;
   onJoin: (
@@ -145,6 +146,8 @@ export function Lobby({
   producer?: boolean;
   /** Join as a screen-sharing companion only: no camera/mic acquisition. */
   present?: boolean;
+  /** The check link: the lobby's preview and checks, with no way into the room. */
+  checkOnly?: boolean;
 }) {
   // A producer link that also carries ?present=1 is still a producer.
   const isPresent = present && !producer;
@@ -156,6 +159,7 @@ export function Lobby({
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [copied, setCopied] = useState(false);
+  const [checkCopied, setCheckCopied] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [devices, setDevices] = useState<DeviceList>(EMPTY_DEVICES);
@@ -434,6 +438,13 @@ export function Lobby({
     setTimeout(() => setCopied(false), 1500);
   }
 
+  /** The room link with ?check=1: the lobby's checks, with no way into the room. */
+  function copyCheckLink() {
+    void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?check=1`);
+    setCheckCopied(true);
+    setTimeout(() => setCheckCopied(false), 1500);
+  }
+
   /**
    * Joining from this tab takes the host seat, and a take that another tab of
    * this browser is recording ends where it is. Asked right before the stream
@@ -507,6 +518,22 @@ export function Lobby({
         <Icon name={copied ? 'check' : 'copy'} size={18} />
         {copied ? 'Link copied' : 'Copy invite link'}
       </button>
+      {isHost && (
+        <div className="flex flex-col items-center">
+          <button
+            type="button"
+            onClick={copyCheckLink}
+            aria-describedby="check-link-hint"
+            className={`inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+          >
+            <Icon name={checkCopied ? 'check' : 'copy'} size={18} />
+            {checkCopied ? 'Link copied' : 'Copy check link'}
+          </button>
+          <span id="check-link-hint" className="text-xs text-[#5f6368]">
+            A guest opens it to test their camera and mic before the call, without joining.
+          </span>
+        </div>
+      )}
       <p className="text-xs text-[#5f6368]">Room: {slug}</p>
     </>
   );
@@ -708,9 +735,36 @@ export function Lobby({
         {/* Join panel. Top-aligned with the preview, so it stays put while the
             column under the preview fills in. */}
         <div className="flex w-full max-w-sm flex-col items-center gap-6 text-center lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start">
-          <h1 className="text-[28px] font-normal leading-tight tracking-tight">Ready to join?</h1>
+          <h1 className="text-[28px] font-normal leading-tight tracking-tight">
+            {checkOnly ? 'Check your setup' : 'Ready to join?'}
+          </h1>
+          {checkOnly && (
+            <div className="flex w-full flex-col items-center gap-2">
+              <p className="text-[15px] leading-relaxed text-[#5f6368]">
+                You’re not in the room. This page tests your camera, microphone and connection on
+                this device.
+              </p>
+              {stream && (
+                <a
+                  href="#preflight"
+                  className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+                >
+                  See your checks ↓
+                </a>
+              )}
+              <a
+                href={`/r/${encodeURIComponent(slug)}/`}
+                className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+              >
+                Go to the room
+              </a>
+            </div>
+          )}
+          {/* The check link has no way in: the name field, Join and Present only are
+              hidden with the form. */}
           <form
             className="flex w-full flex-col gap-6"
+            hidden={checkOnly}
             onSubmit={async (e) => {
               e.preventDefault();
               if (!stream || !name.trim()) return;
@@ -765,7 +819,7 @@ export function Lobby({
           {invite}
           {/* Beside Join, not under the checklist: a guest back after a crash may
               hold the only copy of their part, and has to see it without scrolling. */}
-          {backups.length > 0 && (
+          {!checkOnly && backups.length > 0 && (
             <section
               aria-labelledby="backups-title"
               className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
@@ -856,7 +910,7 @@ export function Lobby({
           {/* Beside Join, like the backups: a host back after a browser crash
               has to see the interrupted take without scrolling, and only when
               no tab here still records this room — a live take is not unsaved. */}
-          {journals.length > 0 && (
+          {!checkOnly && journals.length > 0 && (
             <section
               aria-labelledby="unsaved-title"
               className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"

@@ -72,7 +72,12 @@ retention policy to trust, because there's nothing retained.
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- A **check link** for each room (**Copy check link** in the host's lobby): a guest
+  tests camera, microphone and connection days ahead, on the green room's own checks,
+  without joining
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- **Test your mic** in the green room: five seconds of your own microphone, played
+  back to you and then deleted
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
