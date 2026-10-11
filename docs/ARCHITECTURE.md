@@ -309,6 +309,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+  `components/FileNotice.tsx` does the same for a file a participant picked to send the host
+  (`kind: 'file'`), in words of its own: the host's question names the senders, each file as
+  it will be called in the folder and the total size, and its Save to folder and Not now
+  answer only the files that row shows; the sender's rows say waiting, sending, paused while
+  its own take records, saved or not saved. `BackupNotice` skips those items.
 - **Speaker** (`lib/speaker.ts`, `hooks/use-speaker.ts`): one output device per browser plays
   the call, kept in `localStorage` as `om_speaker`; `''` is the system default. The call's
   microphone menu starts with a **Speaker** `<select>` (`components/SpeakerRow.tsx`) of the
@@ -369,6 +374,9 @@ register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presen
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
 stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
+`acceptBackups` saves the offered backups, or, handed the picked files a row showed, those
+files; `declineBackups` turns down the backups and `declineFiles` the files it is handed, so
+one answer never covers the other kind.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
 unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
 asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`

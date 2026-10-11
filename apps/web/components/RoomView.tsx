@@ -89,6 +89,7 @@ export function RoomView({ slug }: { slug: string }) {
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
+    declineFiles,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -340,6 +341,8 @@ export function RoomView({ slug }: { slug: string }) {
       onDeclineBackups={declineBackups}
       onDismissBackup={dismissBackup}
       onStopBackup={stopBackup}
+      onAcceptFiles={(shown) => void acceptBackups(shown)}
+      onDeclineFiles={declineFiles}
       {...(state.isFallbackMedia !== undefined ? { isFallbackMedia: state.isFallbackMedia } : {})}
     />
   );

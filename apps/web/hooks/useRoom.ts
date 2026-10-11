@@ -2120,15 +2120,20 @@ export function useRoom(slug: string) {
     }));
   }, []);
 
-  /** Host: save every offered backup into the recording folder. Must run inside a click. */
-  const acceptBackups = useCallback(async () => {
+  /**
+   * Host: save the offered backups into the recording folder, or, handed the
+   * picked files a row showed, those files. Must run inside a click.
+   */
+  const acceptBackups = useCallback(async (only?: BackupTransfer[]) => {
     const intake = backupIntakeRef.current;
     if (!intake) return;
     // This click covers exactly the offers that were on screen when it was
     // pressed. An offer that arrives, or whose size changes, while the folder
     // prompt is open is a backup the host was never shown: it waits for the
     // next Save instead of being taken at a size nobody read.
-    const shown = backupShownRef.current;
+    // A picked file is asked about in a row of its own, which hands over the
+    // files it showed; without them this is the Save on the backups.
+    const shown = only ?? backupShownRef.current.filter((t) => t.kind !== 'file');
     // A folder already chosen this session is reused, so a take and the backups
     // returned for it sit together; otherwise this click opens the prompt.
     let dir = dirRef.current;
@@ -2143,14 +2148,23 @@ export function useRoom(slug: string) {
     await intake.accept(dir, shown);
   }, []);
 
-  const declineBackups = useCallback(() => backupIntakeRef.current?.decline(), []);
+  const declineBackups = useCallback(
+    () => backupIntakeRef.current?.decline(backupShownRef.current.filter((t) => t.kind !== 'file')),
+    []
+  );
+
+  /** Host: turn down the picked files a row showed. */
+  const declineFiles = useCallback(
+    (shown: BackupTransfer[]) => backupIntakeRef.current?.decline(shown),
+    []
+  );
 
   /** Host: give up on a dead transfer, so its sender may offer that name again. */
   const dismissBackup = useCallback(async (id: string) => {
     await backupIntakeRef.current?.dismiss(id);
   }, []);
 
-  /** Host: end a transfer that is still running, keeping the part that arrived. */
+  /** Host: end a transfer that is still running. A backup keeps the part that arrived; a picked file is removed whole. */
   const stopBackup = useCallback((id: string) => backupIntakeRef.current?.stop(id), []);
 
   /** Guest: send these leftover backups to the host, at once or as soon as the host is connected. */
@@ -2879,6 +2893,7 @@ export function useRoom(slug: string) {
     declineBackups,
     dismissBackup,
     stopBackup,
+    declineFiles,
     sendBackups,
     addMarker,
     openMediaBoard,

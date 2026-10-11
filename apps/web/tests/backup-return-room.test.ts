@@ -938,3 +938,95 @@ describe('a guest offering leftover backups', () => {
     expect(channel.sent).toHaveLength(1);
   });
 });
+
+describe('a host answering picked files and backups apart', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+    vi.clearAllMocks();
+  });
+
+  const FILE_ID = 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f';
+  const FILE_OFFER = JSON.stringify({ type: 'backup_offer', size: 4, key: 'kf', name: 'Headshot.JPG' });
+  const kinds = (result: { current: ReturnType<typeof useRoom> }) =>
+    result.current.state.backupTransfers.map((t) => [t.kind, t.status]);
+  const filesOf = (result: { current: ReturnType<typeof useRoom> }) =>
+    result.current.state.backupTransfers.filter((t) => t.kind === 'file');
+
+  /** Hands the handler a channel carrying one picked file, as a guest's page sends it. */
+  async function offerFile(opts: { onDataChannel?: (channel: RTCDataChannel) => void }): Promise<FakeChannel> {
+    const channel = backupChannel(FILE_ID);
+    await act(async () => {
+      opts.onDataChannel!(channel as unknown as RTCDataChannel);
+      channel.deliver(FILE_OFFER);
+      await flush();
+    });
+    return channel;
+  }
+
+  it('Save on the files takes the files it is handed and leaves an offered backup waiting', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    const backup = await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    await act(async () => {
+      await result.current.acceptBackups(filesOf(result));
+    });
+
+    expect(kinds(result)).toEqual([
+      ['camera', 'offered'],
+      ['file', 'active'],
+    ]);
+    expect([...folder.files.keys()]).toEqual(['shared_asha_headshot.jpg']);
+    expect(backup.sent).toEqual([]);
+    expect(file.sent.map((s) => JSON.parse(s as string).type)).toEqual(['resume_offset']);
+  });
+
+  it('Save on the backups leaves an offered file waiting', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    await act(async () => {
+      await result.current.acceptBackups();
+    });
+
+    expect(kinds(result)).toEqual([
+      ['camera', 'active'],
+      ['file', 'offered'],
+    ]);
+    expect([...folder.files.keys()]).toEqual(['backup_asha_camera_20231114T221320000Z.mp4']);
+    expect(file.sent).toEqual([]);
+  });
+
+  it('Not now on one kind leaves the other waiting', async () => {
+    usePicker(fakeFolder());
+    const { result, opts } = await joined('host', [GUEST]);
+    const backup = await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    act(() => {
+      result.current.declineBackups();
+    });
+    expect(kinds(result)).toEqual([['file', 'offered']]);
+    expect(backup.readyState).toBe('closed');
+    expect(file.readyState).toBe('open');
+
+    const again = await offerBackup(opts, BACKUP_2);
+    act(() => {
+      result.current.declineFiles(filesOf(result));
+    });
+    expect(kinds(result)).toEqual([['camera', 'offered']]);
+    expect(file.readyState).toBe('closed');
+    expect(again.readyState).toBe('open');
+  });
+});

@@ -19,6 +19,7 @@ import { RecordingHealth } from './RecordingHealth';
 import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { MarkerNote, useMarkerNote } from './MarkerNote';
 import { BackupNotice } from './BackupNotice';
+import { FileNotice } from './FileNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -135,6 +136,8 @@ export function CallStage({
   onDeclineBackups,
   onDismissBackup,
   onStopBackup,
+  onAcceptFiles,
+  onDeclineFiles,
   resumeOffer,
   onResumeRecording,
   onSaveRecording,
@@ -226,6 +229,9 @@ export function CallStage({
   onDismissBackup?: (id: string) => void;
   /** The host ended a returned backup that was still running. */
   onStopBackup?: (id: string) => void;
+  /** Picked files: the host's two answers, each for the files its row showed. */
+  onAcceptFiles?: (shown: BackupTransfer[]) => void;
+  onDeclineFiles?: (shown: BackupTransfer[]) => void;
   /** A take in this room ended without its files and its crash copy is here. */
   resumeOffer?: { take: number; canResume: boolean } | null;
   onResumeRecording?: () => void;
@@ -812,6 +818,15 @@ export function CallStage({
         takeActive={isTakeActive}
         onAccept={onAcceptBackups}
         onDecline={onDeclineBackups}
+        onDismiss={onDismissBackup}
+        onStop={onStopBackup}
+      />
+      <FileNotice
+        role={role}
+        transfers={backupTransfers ?? []}
+        takeActive={isTakeActive}
+        onAccept={onAcceptFiles}
+        onDecline={onDeclineFiles}
         onDismiss={onDismissBackup}
         onStop={onStopBackup}
       />

@@ -5,19 +5,19 @@ import type { Role } from '@openmeet/protocol';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
 
-const quietBtn =
+export const quietBtn =
   'inline-flex min-h-11 items-center rounded-full px-2 py-0.5 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-8';
-const filledBtn =
+export const filledBtn =
   'inline-flex min-h-11 items-center rounded-full bg-[#8ab4f8] px-4 font-medium text-[#202124] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-8';
 
 /** The names of a row's senders, or a stand-in when the offer carried none. */
-function whoOf(row: BackupTransfer[]): string {
+export function whoOf(row: BackupTransfer[]): string {
   const names = [...new Set(row.map((t) => t.from).filter((n): n is string => Boolean(n)))];
   return names.length > 0 ? names.join(', ') : 'A guest';
 }
 
 /** The size-weighted whole percent of the bytes in a row that are moving. */
-function pctOf(row: BackupTransfer[]): number {
+export function pctOf(row: BackupTransfer[]): number {
   const total = row.reduce((sum, t) => sum + t.size, 0);
   if (total <= 0) return 0;
   return Math.floor(row.reduce((sum, t) => sum + t.size * t.percent, 0) / total);
@@ -27,7 +27,7 @@ function files(n: number): string {
   return `${n} backup file${n === 1 ? '' : 's'}`;
 }
 
-function Row({ tone, children }: { tone: 'status' | 'saved' | 'alert'; children: ReactNode }) {
+export function Row({ tone, children }: { tone: 'status' | 'saved' | 'alert'; children: ReactNode }) {
   const colour =
     tone === 'alert' ? 'text-[#f6aea9]' : tone === 'saved' ? 'text-[#81c995]' : 'text-white/90';
   return (
@@ -59,7 +59,9 @@ export function BackupNotice(props: {
   // The settled items the user sent away, kept as the objects themselves: a
   // backup that is sent again is a new object and shows again.
   const [dismissed, setDismissed] = useState<BackupTransfer[]>([]);
-  const items = props.transfers.filter((t) => !dismissed.includes(t));
+  // A file a participant picked to send has rows of its own (FileNotice):
+  // every sentence here is about a backup.
+  const items = props.transfers.filter((t) => t.kind !== 'file' && !dismissed.includes(t));
   const byStatus = (...statuses: BackupTransfer['status'][]) =>
     items.filter((t) => statuses.includes(t.status));
   const failed = byStatus('failed');

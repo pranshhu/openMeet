@@ -757,3 +757,69 @@ describe('countdown', () => {
     expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
   });
 });
+
+describe('picked files', () => {
+  const offered = [
+    {
+      id: 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f',
+      kind: 'file',
+      size: 1_200_000,
+      status: 'offered',
+      percent: 0,
+      from: 'Asha',
+      name: 'shared_asha_headshot.jpg',
+    },
+  ];
+
+  it('asks the host about an offered file and saves it through the hook, with the files on screen', () => {
+    const acceptBackups = vi.fn();
+    Object.assign(hook, { acceptBackups, declineBackups: vi.fn(), declineFiles: vi.fn() });
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(
+      screen.getByText('Asha wants to send you a file (1 MB): shared_asha_headshot.jpg.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
+    expect(acceptBackups.mock.calls).toEqual([[offered]]);
+  });
+
+  it('turns an offered file down through the hook, and leaves the backups’ answer alone', () => {
+    const declineFiles = vi.fn();
+    const declineBackups = vi.fn();
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups, declineFiles });
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(declineFiles.mock.calls).toEqual([[offered]]);
+    expect(declineBackups).not.toHaveBeenCalled();
+  });
+
+  it('does not ask the host while a take records, and asks once it has ended', () => {
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups: vi.fn(), declineFiles: vi.fn() });
+    Object.assign(state, inCall, { phase: 'recording', role: 'host', backupTransfers: offered });
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+    unmount();
+
+    Object.assign(state, { phase: 'in-call' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('button', { name: 'Save to folder' })).toBeInTheDocument();
+  });
+
+  it('stops a picked file that is arriving, and dismisses one that stopped, through the hook', () => {
+    const stopBackup = vi.fn();
+    const dismissBackup = vi.fn();
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups: vi.fn(), declineFiles: vi.fn(), stopBackup, dismissBackup });
+    const arriving = { ...offered[0]!, status: 'active', percent: 30 };
+    const stalled = { ...offered[0]!, id: 'file-9c1d0e2f-3a4b-4c5d-8e6f-7a8b9c0d1e2f', status: 'stalled', percent: 10 };
+    Object.assign(state, inCall, { role: 'host', backupTransfers: [arriving, stalled] });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(stopBackup.mock.calls).toEqual([[arriving.id]]);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(dismissBackup.mock.calls).toEqual([[stalled.id]]);
+  });
+});
