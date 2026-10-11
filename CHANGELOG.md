@@ -191,6 +191,13 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Add to calendar**, in the host's lobby: pick a start time and download a
+  calendar file (.ics) or open Google Calendar with the entry filled in. The entry
+  is one hour long and carries the room link and a short checklist for the guest
+  (browser, headphones, a quiet room). It is made in the browser: nothing about it
+  is stored or sent to the server.
+- **Add to calendar** says until when the room stays open (30 days after its last
+  call) and makes no entry for a session that would end after that.
 - **Pop out**, in the call's camera menu on a computer: one other person's
   picture floats in a small window that stays on top of your other windows. Put
   it just under your webcam and looking at them is looking at the lens. Their

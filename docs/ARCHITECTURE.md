@@ -481,6 +481,19 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   The page draws the lines over the tile and the component is given no stream, so nothing of
   them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
   where the preview shows a band of a tall picture.
+- **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
+  panel, in the browser that holds the room's host token (`Lobby`'s `isHost`), and not on the
+  check page (`checkOnly`), which joins no call. The host picks a
+  start (`<input type="datetime-local">`, read on that computer's clock) and gets two links,
+  both built in the page by `lib/calendar-invite.ts`: a `data:` address that downloads
+  `openmeet-<slug>.ics` (`buildIcs`: one event of `SESSION_MS`, one hour, in UTC, its lines
+  folded at 75 octets) and Google Calendar's form filled in (`googleCalendarUrl`). Both hold
+  the plain invite link and `inviteText`: a short checklist for the guest and a line about
+  recording. Nothing is stored and nothing about the entry is sent to the Worker: the room
+  knows no date.
+  At each opening the panel asks `getRoom` for the room's `expires_at`, takes it as no later
+  than `ROOM_TTL_MS` from now, and says it. A session whose hour would end after it gets a
+  line saying so and no link, and so does an answer that is not a time.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1347,3 +1360,16 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
   the recording has a little more above and below than the lines show. The guide is not
   offered on a phone, is not remembered from one visit to the next, and the call has none.
+- **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
+  no **Add to calendar**, and a host in a browser without the room's host token is a guest
+  there. The entry is one hour long with a fixed title and text; the calendar that opens it
+  can change them. A start in the past is accepted.
+- **The room knows nothing of a calendar entry.** It shows no countdown and sends no reminder.
+  The entry holds the invite link, so whoever can read the calendar can join the room, and
+  **Open in Google Calendar** hands that link to Google. Opened from a calendar in another
+  browser on the day, the link makes the host a guest with no Record button: the host token
+  is only in the browser that made the room, which the panel says.
+- **A session more than 30 days ahead cannot be put in a calendar from the lobby.** The entry
+  is refused by the room's closing time as it stands, and a join only moves that to 30 days
+  from the join. The host makes the entry within 30 days of the session, after joining the
+  room once if it was last used longer ago than that.

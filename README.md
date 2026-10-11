@@ -93,6 +93,8 @@ retention policy to trust, because there's nothing retained.
   back to you and then deleted
 - A framing guide in the lobby: a rule-of-thirds grid over your preview, on your own
   screen only and never in a recording (computers)
+- **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
+  entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
