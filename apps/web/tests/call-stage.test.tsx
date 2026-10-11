@@ -1482,23 +1482,20 @@ describe('CallStage after a take', () => {
     expect(onRecord).toHaveBeenCalledTimes(1);
   });
 
-  // newTake dropped the host into the waiting room, losing the summary and
-  // the take's sync.json with it.
-  it('offers the invite link, and keeps the summary, when everyone else has left', async () => {
+  // A take needs no guest, so nobody left to record is no reason to stop.
+  it('records another take when everyone else has left', () => {
     const onNewTake = vi.fn();
     const onRecord = vi.fn();
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
     render(
       <CallStage {...doneProps} remoteStream={null} remotePeers={[]} onNewTake={onNewTake} onRecord={onRecord} />
     );
-    expect(screen.queryByRole('button', { name: 'Start recording' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
-    expect(writeText).toHaveBeenCalledWith(`${location.origin}${location.pathname}`);
-    expect(await screen.findByRole('button', { name: 'Link copied' })).toBeInTheDocument();
-    expect(onNewTake).not.toHaveBeenCalled();
-    expect(onRecord).not.toHaveBeenCalled();
-    expect(screen.getByTestId('summary-column')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy invite link' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record another take' }));
+    expect(onNewTake).toHaveBeenCalledTimes(1);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onNewTake.mock.invocationCallOrder[0]!).toBeLessThan(onRecord.mock.invocationCallOrder[0]!);
   });
 
   // The summary holds the host's downloads; the bar only gives the verdict.

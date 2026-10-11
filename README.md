@@ -55,11 +55,14 @@ retention policy to trust, because there's nothing retained.
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K, at 24, 25, 29.97 or
   30 fps, and 50 or 60 where the camera offers them
-- Raw audio — echo cancellation, noise suppression and AGC are all **off** (see
-  [Headphones](#headphones-really))
+- Raw audio — echo cancellation, noise suppression and AGC are all **off**, unless
+  someone on speakers turns echo cancellation on for their own microphone in the lobby
+  (see [Headphones](#headphones-really))
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- Record alone: a host with nobody else in the room presses **Continue alone** and
+  records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
@@ -75,7 +78,12 @@ retention policy to trust, because there's nothing retained.
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- A **check link** for each room (**Copy check link** in the host's lobby): a guest
+  tests camera, microphone and connection days ahead, on the green room's own checks,
+  without joining
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- **Test your mic** in the green room: five seconds of your own microphone, played
+  back to you and then deleted
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
@@ -357,6 +365,20 @@ exactly what a studio recorder exists to avoid. The trade is that anyone listeni
 speakers is echoed into the other person's file. Every serious remote-recording tool
 makes the same trade.
 
+The lobby asks each person whether they are on headphones or speakers. Someone on
+speakers can pick **Speakers, echo cancellation on**: the browser then takes the other
+voices out of that one person's microphone, for the call and for every recording of
+it, so their files hold processed audio, not raw. Noise suppression and gain control
+stay off. The answer is given before joining and remembered in that browser; to change
+it, leave the call and join again.
+
+The host sees each person's answer on their name tag in the call: "headphones", "on
+speakers" or "on speakers, echo cancelled". Nobody else's screen shows it.
+
+After a take, the session summary marks that person's camera and audio files with "echo
+cancellation on", and `sync.json` lists them under `echoCancellation`. A microphone
+switched during the call is opened the same way as the one chosen in the lobby.
+
 ### Producers and Present only
 
 A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are
@@ -413,7 +435,10 @@ earlier take that they send back is still offered to the host. Everyone in the
 call is told who is not recorded. A recorded participant who listens on speakers,
 or who shares a screen with its sound or with the call window on it, can still
 pick up that guest's voice or picture. Participants see a pre-join disclosure, a
-three-second countdown before each take, and an on-screen notice and REC pill.
+three-second countdown before each take, and an on-screen notice and REC pill. Someone
+who joins while a take is already running, for example after the host started recording
+alone, gets the notice and the REC pill as they join and no countdown, and is recorded
+from that moment.
 Files (including in-call chat) land only on the
 host's disk, plus a backup in each participant's own browser storage and a crash copy of
 each take's guest recordings in the host's browser storage, removed when the take ends
@@ -494,6 +519,10 @@ An unsaved recording holds the guests' camera, microphone and screen recordings,
 names and the chapter markers, in this browser on the host's computer and nowhere else. It
 stays there until it is saved or deleted in the lobby of the room it was recorded in, or
 until the site's data is cleared in the browser.
+
+A take recorded with nobody else in the room has no guest files to rebuild, so after a
+crash it is not listed as **Unsaved recording**. The host's own camera file and WAV master
+are in the lobby under **Backups on this device**, with **Download**.
 
 ---
 
