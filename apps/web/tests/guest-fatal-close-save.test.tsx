@@ -114,6 +114,43 @@ function emitSignal(type: string, payload: any) {
   }
 }
 
+/** A guest in a take the host started: joined, told its role, and recording. */
+async function recordingGuest() {
+  const { result } = renderHook(() => useRoom('xyz-test-room'));
+  const fakeAudio = { id: 'a1', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+  const fakeVideo = { id: 'v1', kind: 'video', enabled: true } as unknown as MediaStreamTrack;
+  const fakeStream = Object.assign(new EventTarget(), {
+    getTracks: () => [fakeAudio, fakeVideo],
+    getAudioTracks: () => [fakeAudio],
+    getVideoTracks: () => [fakeVideo],
+  }) as unknown as MediaStream;
+
+  await act(async () => {
+    await result.current.join(fakeStream, 'Guest Bob');
+  });
+  act(() => {
+    emitSignal('role-assigned', {
+      type: 'role-assigned',
+      role: 'guest',
+      peerId: 'p-guest',
+      ordinal: 2,
+      peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Host' }],
+      recording: false,
+    });
+  });
+  await act(async () => {
+    emitSignal('recording-started', {
+      type: 'recording-started',
+      from: 'host',
+      recordingId: 'rec-host-5',
+      kind: 'camera',
+      filename: 'host_rec-host-5.mp4',
+    });
+  });
+  expect(result.current.state.phase).toBe('recording');
+  return result;
+}
+
 describe('guest fatal close hold and stop-and-save action', () => {
   beforeEach(() => {
     signalHandlers = {};
@@ -362,8 +399,8 @@ describe('a guest the host removes during a take', () => {
     });
     expect(result.current.state.phase).toBe('finalizing');
 
-    // The page tries the room again once its connection to the host has failed
-    // twice, and the Room refuses the removed tab again.
+    // A terminal close can also arrive while the save runs. It must not end
+    // the capture a second time.
     await act(async () => {
       onFatalCloseCallback?.(4007, 'removed');
       await new Promise((r) => setTimeout(r, 50));
@@ -455,5 +492,44 @@ describe('a guest the host removes while their capture is still starting', () =>
     expect(endGuestRecordingCalled).toBe(true);
     expect(result.current.state.phase).toBe('removed');
     expect(vi.mocked(MediaManager).mock.results[0]!.value.stop).toHaveBeenCalled();
+  });
+});
+
+describe('a guest the room closes on for good during a take', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    onFatalCloseCallback = null;
+    endGuestRecordingCalled = false;
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The host's stop cannot reach a closed tab, and the call screen draws the
+  // backup links only once this flag is false.
+  it.each([
+    ['another tab took its place', 4006],
+    ['the room refused it', 4001],
+    ['the host removed it', 4007],
+  ])('stops saying the room is recording once %s (%i)', async (_, code) => {
+    const result = await recordingGuest();
+    expect(result.current.state.peerRecording).toBe(true);
+
+    act(() => {
+      onFatalCloseCallback?.(code, '');
+    });
+    // Held: this tab's own capture is still running, and its phase says so.
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.peerRecording).toBe(false);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    expect(result.current.state.peerRecording).toBe(false);
+    expect(result.current.state.backupBlobUrl).toBeTruthy();
   });
 });

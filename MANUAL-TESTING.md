@@ -173,6 +173,8 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
 | 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
 | 7.11 | One side reconnects | With a call running, move the guest's computer from Wi-Fi to a phone hotspot (or back) | The call is back within a few seconds on both sides, one tile per person, and no "Negotiation failed" message | ☐ | |
+| 7.12 | A tab that was taken over stays out | With a take running and one guest in the call, open the room in a second tab of the host's profile, press **Join now**, then **OK**. Leave both tabs open for two minutes, then press **End & save** in the first tab | The first tab keeps "The connection to the room ended. Press End & save to keep this recording." and **End & save** there still saves the take. The second tab is the host for the whole two minutes and never shows "You joined from another tab or device" | ☐ | |
+| 7.13 | A recorded guest's tab is duplicated mid-take | With a take running, duplicate the guest's tab (right-click the tab, **Duplicate**) and join from the copy. In the first tab press **Stop and save** and wait a minute | The first tab read "The connection to the room ended. Press Stop and save my recording to keep this recording." After the press, and a wait of up to half a minute, its status bar offers **Download your backup** and does not read "Recording" (a connection warning may show below it). The copy stays in the call the whole time | ☐ | |
 
 ## 8 — Extras
 

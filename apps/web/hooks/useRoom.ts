@@ -1206,6 +1206,10 @@ export function useRoom(slug: string) {
                 fatalCloseRef.current = true;
                 return {
                   ...s,
+                  // The host's stop cannot reach a tab the room has closed, so
+                  // what the room last said about its take is dropped here.
+                  // This tab's own capture is told by its phase.
+                  peerRecording: false,
                   recordingError:
                     code === WS_CLOSE_REMOVED
                       ? 'The host removed you from this call. Press Stop and save my recording to keep this recording.'

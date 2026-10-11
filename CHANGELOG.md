@@ -291,6 +291,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.
+- A tab the room has closed for good (the host removed it, another tab took its
+  place, the room was full or is gone) does not connect to the room again in the
+  background. A host tab that was taken over during a take stays out instead of
+  taking the call back, and a guest in that state who presses **Stop and save** gets
+  their backup links instead of a "Recording" label that never cleared.
 
 ### Security
 

@@ -394,10 +394,12 @@ already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's si
 sends `peer-mute`, and the panel follows that person's `presence`.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
-that is running, as it does for every terminal close, with a banner that names the host. A guest's
-capture that has started but not reached `recording` (its channel to the host has not opened)
-cannot be held, having no call screen: on any terminal close it is ended first through
-`endRecording({ internal: true })`, its backup kept, and the terminal screen follows.
+that is running, as it does for every terminal close, with a banner that names the host. A held
+close also sets `peerRecording` to false: the host's `recording-stop` cannot reach a closed tab, so
+the "Recording" label follows this tab's own `phase` from there and a guest's saved take draws its
+backup links. A guest's capture that has started but not reached `recording` (its channel to the
+host has not opened) cannot be held, having no call screen: on any terminal close it is ended
+first through `endRecording({ internal: true })`, its backup kept, and the terminal screen follows.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -414,6 +416,8 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
+  After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
+  `useRoom` calls on a connection's second `failed`, returns at once.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
@@ -858,7 +862,16 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
   shows "Press End & save to keep this recording", but its files stop at the takeover, and
   the rest of each guest's part exists only in that guest's backup. The new tab records
-  only from its own new take.
+  only from its own new take. The old tab opens no socket
+  again, so it does not take the seat back. After its End & save it still shows the
+  summary and offers **Record another take**, which would record that tab alone: nothing
+  it sends reaches the room, and Leave call is the way on.
+- **A guest whose tab the room closed during a take waits after Stop and save.** When a
+  copy of the tab took its place (4006), or the room refused it after a reconnect (4001),
+  the other people have closed their side of each connection. The save waits up to 30 s
+  for a drain that cannot finish, then reads "Some of your recording may not have reached
+  the host" with the backup links, and a connection warning can show below it. The backup
+  holds all of it.
 - **A screen share that is running when the host reloads is not recorded again until it is
   restarted.** Its channel arrived while no take was running and nothing binds it; the host is
   told whose share it is after the resume. The part before the reload is put back from the crash
