@@ -439,6 +439,26 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
   tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
   rows and says they are off. Alt+R and Alt+S are chords and stay on.
+- **`components/Rundown.tsx`** — the host's running order for a show. **Show rundown** in the
+  control bar (`hasRundown`: only for a host who can record, a present-only one included)
+  shows a strip between the stage and the bar, where the Levels strip goes. Outside a take
+  it is an editor: one segment per line (`parseRundown`, `lib/rundown.ts`), saved on every
+  change to `localStorage` under `om_rundown_<slug>` and never sent. During a take it shows
+  the running segment and one button, **Start** for the first segment and **Next** for each
+  following one. Starting a segment calls `onMark` with its name, the entry the marker button
+  uses, so a segment has no path of its own: it is a chapter marker in `chapters_<id>.txt`,
+  `sync_<id>.json`, the summary and the crash copy. Nothing starts by itself when a take
+  does. `CallStage` keeps the component mounted while the strip is hidden, so the place in
+  the show survives hiding it; the place is dropped when the take ends.
+  A line may end in a planned length in minutes and seconds (`Interview 20:00`), which
+  `parseRundown` takes off the name, so the marker carries the name alone and the length is
+  in no file. The running segment has a clock (`SegmentClock`: one render a second, and only
+  while the strip is shown) that counts from the segment's start, kept in `Rundown`, against
+  that length and says by how much the segment is over.
+  The list beside the button chooses another segment to start next (`picked`). Choosing
+  starts nothing, because a keyboard moves through a list one row at a time and a row passed
+  on the way must not become a marker; the choice is dropped when a segment starts and when
+  the take ends.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1264,3 +1284,27 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **The People panel exists on the call screen only.** A host whose page still reads
   "Connecting…" cannot mute or remove the person it is connecting to, and a removal cannot be
   undone from the panel: the removed person opens the link in a new tab.
+- **After a host reload the rundown has lost its place.** **Resume recording** brings back the
+  take's markers, not the segment that was running: the strip is hidden and, shown, reads
+  "Rundown not started" until the host chooses the segment the show had reached in the list
+  beside the button and starts it. That start is one more marker with the segment's name,
+  and the segment's clock counts from it.
+- **A rundown is started by hand.** A take does not start its first segment, so that
+  segment's marker is where the host pressed **Start**, and the chapter list opens with
+  `0:00 Start` before it when the press came a second or more into the take.
+- **A rundown cannot be changed during a take.** The editor is there between takes only, and
+  only in the call: the lobby and the waiting room have none, so a host alone in the room
+  cannot write one until someone else has joined. When everyone else leaves between takes
+  and someone joins again, the strip is hidden; the text is kept.
+- **The rundown is the host's alone, in one browser.** Guests and producers have none and
+  never see the host's, and a host whose browser cannot record has none. It is in no file
+  except as chapter markers. Another browser starts empty, a second tab of the same room
+  reads it once, when its call screen opens, and a room's rundown stays in the browser
+  after the room has expired, until the site's data is cleared.
+- **The rundown times one segment at a time.** Nothing adds the segments up against the take's
+  own clock, and a segment that runs over is said only in the strip, while it is shown: there
+  is no sound and no notice. A length is written as minutes and seconds (`2:00`); written
+  another way (`2 min`) it stays part of the segment's name, and one of an hour or more is
+  shown with hours (`90:00` reads `1:30:00`). After a host reload the clock of the segment
+  the host goes on with counts from the press that started it again, not from where that
+  segment began.
