@@ -119,6 +119,22 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- The lobby asks whether you are on headphones or speakers. On speakers you can
+  turn echo cancellation on for your own microphone; your recording is then
+  processed audio, not raw. The answer is remembered in that browser.
+- The host sees on each person's name tag whether they said headphones or
+  speakers in the lobby, and whether their echo cancellation is on.
+- The session summary and `sync.json` say which files were recorded with echo
+  cancellation on, and a microphone switched during the call keeps that choice.
+- **Test your mic** in the lobby's readiness panel: five seconds of your own
+  microphone are recorded, played back to you and deleted. The clip never leaves
+  the browser.
+- A **check link** for a room (**Copy check link** in the host's lobby, or `?check=1`
+  on the invite link): a guest tests camera, microphone and connection ahead of the
+  call, on the lobby's own checks, without joining the room.
+- **Copy result** under the lobby's readiness checks: the checks as plain text, with
+  the names of your camera and microphone, to paste into a message to the host. It
+  goes to the clipboard and nowhere else.
 - Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
   on the board as pads with one click. They are made in the browser, so no
   audio file is downloaded, and the bed arrives set to loop and fade.
@@ -145,6 +161,13 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   own browser's backup beyond it. The screen that tells them they were removed offers the
   backups their tab holds as downloads. Removed during a take, their **Stop and save**
   saves the recording at once. Their page then becomes that screen, with the backup links.
+- Record alone: a host with nobody else in the room presses **Continue alone** in the
+  waiting room and records from the call screen. Anyone who joins during the take is
+  recorded from then on.
+- The teleprompter's editor shows how long the script takes to read aloud.
+- The host can send their teleprompter script to everyone else in the call, from
+  the teleprompter's editor. Each person uses it in their own teleprompter or
+  ignores it, and nobody's own script is replaced without their click.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed
@@ -178,6 +201,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   later refuses to write to that folder, the next Record asks for a folder again.
 - After **Record** is pressed the take starts three seconds later, and Record
   cannot be pressed again meanwhile. The recording folder is asked for first.
+- **Record another take** is offered when everyone else has left too, and records the
+  host alone, in place of the Copy invite link the summary showed then. A host with
+  nobody else in the room can present, and the screen is recorded to its own file.
 
 ### Fixed
 
@@ -290,6 +316,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   the host is no longer left with the camera on behind a screen that says the room
   is gone, full, or that the host removed them. That recording is ended and its
   backup kept.
+- A guest who joined after the host's connection to the room had dropped and come back
+  during a take was not recorded, and was not told the call was being recorded. The
+  host's page says the take is still running as soon as it is back.
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.
