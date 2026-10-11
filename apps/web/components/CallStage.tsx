@@ -23,6 +23,7 @@ import { Rundown } from './Rundown';
 import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
 import { singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
+import { FileNotice } from './FileNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -153,6 +154,9 @@ export function CallStage({
   onDeclineBackups,
   onDismissBackup,
   onStopBackup,
+  onAcceptFiles,
+  onDeclineFiles,
+  onSendFile,
   resumeOffer,
   onResumeRecording,
   onSaveRecording,
@@ -259,6 +263,11 @@ export function CallStage({
   onDismissBackup?: (id: string) => void;
   /** The host ended a returned backup that was still running. */
   onStopBackup?: (id: string) => void;
+  /** Picked files: the host's two answers, each for the files its row showed. */
+  onAcceptFiles?: (shown: BackupTransfer[]) => void;
+  onDeclineFiles?: (shown: BackupTransfer[]) => void;
+  /** Offer the host one file from this device. Left out on the host's own page. */
+  onSendFile?: ((file: File) => void) | undefined;
   /** A take in this room ended without its files and its crash copy is here. */
   resumeOffer?: { take: number; canResume: boolean } | null;
   onResumeRecording?: () => void;
@@ -928,6 +937,15 @@ export function CallStage({
         onDismiss={onDismissBackup}
         onStop={onStopBackup}
       />
+      <FileNotice
+        role={role}
+        transfers={backupTransfers ?? []}
+        takeActive={isTakeActive}
+        onAccept={onAcceptFiles}
+        onDecline={onDeclineFiles}
+        onDismiss={onDismissBackup}
+        onStop={onStopBackup}
+      />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the
@@ -1589,7 +1607,7 @@ export function CallStage({
             data-testid="chat-column"
             className="absolute inset-0 z-20 sm:static sm:z-0 sm:w-80 sm:shrink-0 sm:pb-5 sm:pr-2 sm:pt-2"
           >
-            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} />
+            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} onSendFile={onSendFile} />
           </div>
         )}
 

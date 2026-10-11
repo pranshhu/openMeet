@@ -98,6 +98,8 @@ retention policy to trust, because there's nothing retained.
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
+- **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
+  first, and a file it accepts goes peer-to-peer into the recording folder
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - Choose the speaker or headphones the call plays through, in the lobby or from the arrow
@@ -425,6 +427,7 @@ All in the one folder the host picks, per take:
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
+| `shared_<name>_<file name>.<ext>` | A file a participant sent the host from chat (a photo, a document, slides, audio or video, 100 MB at most), saved after the host accepted it and its SHA-256 matched; `_2`, `_3` when that name is taken |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
 | `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out the messages of anyone set as not recorded |
 
@@ -449,7 +452,8 @@ set a guest as not recorded before a take: that guest stays in the call, and the
 camera, microphone, screen and chat messages are left out of every take until the
 host changes it or everyone has left the room — their browser records nothing and
 the host saves no file from them, from the next take on, though a backup of an
-earlier take that they send back is still offered to the host. Everyone in the
+earlier take that they send back, and a file they send from chat, are still offered
+to the host. Everyone in the
 call is told who is not recorded. A recorded participant who listens on speakers,
 or who shares a screen with its sound or with the call window on it, can still
 pick up that guest's voice or picture. Participants see a pre-join disclosure, a

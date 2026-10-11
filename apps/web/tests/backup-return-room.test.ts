@@ -938,3 +938,232 @@ describe('a guest offering leftover backups', () => {
     expect(channel.sent).toHaveLength(1);
   });
 });
+
+describe('a host answering picked files and backups apart', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+    vi.clearAllMocks();
+  });
+
+  const FILE_ID = 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f';
+  const FILE_OFFER = JSON.stringify({ type: 'backup_offer', size: 4, key: 'kf', name: 'Headshot.JPG' });
+  const kinds = (result: { current: ReturnType<typeof useRoom> }) =>
+    result.current.state.backupTransfers.map((t) => [t.kind, t.status]);
+  const filesOf = (result: { current: ReturnType<typeof useRoom> }) =>
+    result.current.state.backupTransfers.filter((t) => t.kind === 'file');
+
+  /** Hands the handler a channel carrying one picked file, as a guest's page sends it. */
+  async function offerFile(opts: { onDataChannel?: (channel: RTCDataChannel) => void }): Promise<FakeChannel> {
+    const channel = backupChannel(FILE_ID);
+    await act(async () => {
+      opts.onDataChannel!(channel as unknown as RTCDataChannel);
+      channel.deliver(FILE_OFFER);
+      await flush();
+    });
+    return channel;
+  }
+
+  it.each([
+    ['a producer', { peerId: 'p-producer', ordinal: 3, role: 'producer', displayName: 'Pia' }],
+    ['a Present-only device', { peerId: 'p-screen', ordinal: 3, role: 'guest', displayName: 'Sam', companion: true }],
+  ])('is asked about a file from %s', async (_who, peer) => {
+    usePicker(fakeFolder());
+    const { result, opts } = await joined('host', [peer]);
+    const file = await offerFile(opts);
+
+    expect(kinds(result)).toEqual([['file', 'offered']]);
+    expect(file.sent).toEqual([]);
+    expect(file.readyState).toBe('open');
+  });
+
+  it('Save on the files takes the files it is handed and leaves an offered backup waiting', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    const backup = await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    await act(async () => {
+      await result.current.acceptBackups(filesOf(result));
+    });
+
+    expect(kinds(result)).toEqual([
+      ['camera', 'offered'],
+      ['file', 'active'],
+    ]);
+    expect([...folder.files.keys()]).toEqual(['shared_asha_headshot.jpg']);
+    expect(backup.sent).toEqual([]);
+    expect(file.sent.map((s) => JSON.parse(s as string).type)).toEqual(['resume_offset']);
+  });
+
+  it('Save on the backups leaves an offered file waiting', async () => {
+    const folder = fakeFolder();
+    usePicker(folder);
+    const { result, opts } = await joined('host', [GUEST]);
+    await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    await act(async () => {
+      await result.current.acceptBackups();
+    });
+
+    expect(kinds(result)).toEqual([
+      ['camera', 'active'],
+      ['file', 'offered'],
+    ]);
+    expect([...folder.files.keys()]).toEqual(['backup_asha_camera_20231114T221320000Z.mp4']);
+    expect(file.sent).toEqual([]);
+  });
+
+  it('Not now on one kind leaves the other waiting', async () => {
+    usePicker(fakeFolder());
+    const { result, opts } = await joined('host', [GUEST]);
+    const backup = await offerBackup(opts);
+    const file = await offerFile(opts);
+
+    act(() => {
+      result.current.declineBackups();
+    });
+    expect(kinds(result)).toEqual([['file', 'offered']]);
+    expect(backup.readyState).toBe('closed');
+    expect(file.readyState).toBe('open');
+
+    const again = await offerBackup(opts, BACKUP_2);
+    act(() => {
+      result.current.declineFiles(filesOf(result));
+    });
+    expect(kinds(result)).toEqual([['camera', 'offered']]);
+    expect(file.readyState).toBe('closed');
+    expect(again.readyState).toBe('open');
+  });
+});
+
+describe('a participant sending the host a picked file', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const picked = (name = 'Headshot.JPG') => new File([new Uint8Array([1, 2, 3, 4])], name);
+  const fileChannel = () => backupChannels().find((c) => c.label.startsWith('backup#file-'))!;
+  const bytesSent = (channel: FakeChannel) => channel.sent.filter((d) => d instanceof ArrayBuffer);
+  const goAhead = JSON.stringify({ type: 'resume_offset', recordingId: 'x', lastByte: 0, lastIdx: -1 });
+
+  it('offers the host a picked file under an id of its own, with its name', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+
+    const channels = backupChannels();
+    expect(channels).toHaveLength(1);
+    expect(channels[0]!.label).toMatch(/^backup#file-[0-9a-f-]{36}$/);
+    expect(JSON.parse(channels[0]!.sent[0] as string)).toEqual({
+      type: 'backup_offer',
+      size: 4,
+      key: expect.any(String),
+      name: 'Headshot.JPG',
+    });
+    expect(result.current.state.backupTransfers).toEqual([
+      expect.objectContaining({ kind: 'file', name: 'Headshot.JPG', status: 'offered', size: 4 }),
+    ]);
+  });
+
+  it('sends it once the host accepts, with a backup of this page still unanswered', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      result.current.sendFile(picked('bio.txt'));
+      await flush();
+    });
+    const channel = fileChannel();
+    act(() => {
+      channel.deliver(goAhead);
+    });
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          expect(bytesSent(channel)).toHaveLength(1);
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  it('holds a picked file while a take records here, then sends it', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-x',
+        kind: 'camera',
+        filename: 'host_rec-x.mp4',
+      });
+    });
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    const channel = fileChannel();
+    act(() => {
+      channel.deliver(goAhead);
+    });
+    await act(async () => {
+      await flush();
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(bytesSent(channel)).toHaveLength(0);
+
+    await act(async () => {
+      emitSignal('recording-stop', {
+        type: 'recording-stop',
+        from: 'host',
+        recordingId: 'rec-x',
+      });
+      await flush();
+    });
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          expect(bytesSent(channel)).toHaveLength(1);
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  it('does nothing on the host’s own page', async () => {
+    const { result } = await joined('host', [GUEST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers).toEqual([]);
+  });
+
+  it('opens no channel while only another guest is in the room, and keeps the pick waiting', async () => {
+    const { result } = await joined('guest', [OTHER_GUEST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers.map((t) => [t.kind, t.status])).toEqual([
+      ['file', 'offered'],
+    ]);
+  });
+});

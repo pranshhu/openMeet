@@ -126,7 +126,9 @@ lobby's size figures follow the rate the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
-going back to the host). WS close codes: `4001` capacity-full,
+going back to the host); `backup#file-<uuid>` (one file a participant picked to send the
+host: the same channel and messages, with the file's own name in its `backup_offer`).
+WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
 host removed this participant, and the same tab is refused until the session ends).
@@ -384,6 +386,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+  `components/FileNotice.tsx` does the same for a file a participant picked to send the host
+  (`kind: 'file'`), in words of its own: the host's question names the senders, each file as
+  it will be called in the folder and the total size, and its Save to folder and Not now
+  answer only the files that row shows; the sender's rows say waiting, sending, paused while
+  its own take records, saved or not saved. `BackupNotice` skips those items.
+  `components/SendFile.tsx` is **Send a file to the host**, above the message box in
+  `ChatPanel` on every page but the host's: it picks one file and refuses, with the reason
+  under the button, a type that is not on the list, an empty file and one over 100 MB
+  (`sharedFileProblem` in `lib/shared-file.ts`). The host's page makes the same checks again
+  when the offer arrives.
 - **Speaker** (`lib/speaker.ts`, `hooks/use-speaker.ts`): one output device per browser plays
   the call, kept in `localStorage` as `om_speaker`; `''` is the system default. The call's
   microphone menu starts with a **Speaker** `<select>` (`components/SpeakerRow.tsx`) of the
@@ -579,8 +591,15 @@ stream); stop = `removeTrack` + renegotiate, idempotent. A host can present with
 its screen file is written to the folder, so only a guest needs the connection to the host.
 `onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
+`acceptBackups` saves the offered backups, or, handed the picked files a row showed, those
+files; `declineBackups` turns down the backups and `declineFiles` the files it is handed, so
+one answer never covers the other kind.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
-unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
+unfinished send to each new connection to the host.
+`sendFile` queues one for a file picked in chat (`shared`), on the same list and held by the
+same `hold`, but with no `after`: a picked file does not wait behind a backup the host has not
+answered. It does nothing on the host's own page.
+`recordWithCountdown` is the Record click: it
 asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
 draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.
 A take that took the room while it counted (a resume) keeps it, and `resumeRecording` never counts
@@ -874,6 +893,16 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   points every unfinished send at the rebuilt connection once it is connected, the send asks
   `resume_query` on the replacement channel and replays from the host's answer through
   `ChunkSender.rebind` + `resume`, and nothing goes out on that channel before the answer arrives.
+  The same two classes carry a file a participant picks to send the host (`kind: 'file'`).
+  `BackupSend` with `shared` travels under an id of its own, `file-<uuid>`, and puts the file's
+  name in its offer. `BackupIntake` takes that id where it takes a backup's name, and turns the
+  offer away before it is listed unless `sharedFileName` (`lib/shared-file.ts`) accepts the name
+  (a string of at most 255 characters whose extension is on a fixed list of pictures, documents,
+  slides, sound and video) and the size is at most `MAX_SHARED_FILE_BYTES` (100 MB). The file is
+  opened as `shared_<sender>_<name>.<ext>`, both parts cut down by `safeNamePart`, and the host is
+  shown that name, never the one the sender gave. It gets no note, and one that is stopped, cut
+  off or fails its check is removed from the folder whole. `decline` takes the offers to turn
+  down, so backups and picked files can be answered apart.
 
 ---
 
@@ -1471,3 +1500,25 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A person who reconnects has one line per connection in `recordingNotice`.** The Room
   gives a returning connection a new id and the record does not join the two. A take
   keeps 64 lines; past that it says `capped` and later connections have none.
+- **A file sent from chat is judged by its name.** `lib/shared-file.ts` lists the extensions
+  that may be sent and the host's page writes no other, but the bytes are not looked at: a
+  file of a listed type can still be harmful to the program that opens it.
+- **Only the host can be sent a file.** There is no way to send one to a guest, or from the
+  host to anyone.
+- **A file's sender cannot take the offer back,** and the host cannot stop one participant
+  from offering again after **Not now**. The file's name and size are all that leaves the
+  sender's device before **Save to folder**, and at most eight offers from one participant
+  wait at a time.
+- **The host is not asked about a file while its take records or saves.** The question
+  appears when the take has ended. A file accepted before Record goes on arriving during the
+  take when its sender's page records nothing (a producer, a guest set as not recorded, a
+  guest whose browser cannot record), 100 MB at most; a sender whose page records, a guest's
+  Present-only device included, waits for the take to end.
+- **A file that was arriving when the host reloads is lost.** Its sender reads that the host
+  did not save it, and sends it again. If the browser was killed before the page could end
+  the file, an empty file of that name can stay in the folder.
+- **A file sent from chat is in no take.** It is not listed in the session summary, the sync
+  file or the chat log, and the crash copy holds none of it.
+- **A sender who waits alone is told nothing of a file that is still offered.** Neither
+  "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
+  reaches the host when the host is back.
