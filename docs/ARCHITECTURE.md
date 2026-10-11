@@ -115,7 +115,9 @@ lobby's size figures follow the rate the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
 `recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
-going back to the host). WS close codes: `4001` capacity-full,
+going back to the host); `backup#file-<uuid>` (one file a participant picked to send the
+host: the same channel and messages, with the file's own name in its `backup_offer`).
+WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over).
 
@@ -619,6 +621,16 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   points every unfinished send at the rebuilt connection once it is connected, the send asks
   `resume_query` on the replacement channel and replays from the host's answer through
   `ChunkSender.rebind` + `resume`, and nothing goes out on that channel before the answer arrives.
+  The same two classes carry a file a participant picks to send the host (`kind: 'file'`).
+  `BackupSend` with `shared` travels under an id of its own, `file-<uuid>`, and puts the file's
+  name in its offer. `BackupIntake` takes that id where it takes a backup's name, and turns the
+  offer away before it is listed unless `sharedFileName` (`lib/shared-file.ts`) accepts the name
+  (a string of at most 255 characters whose extension is on a fixed list of pictures, documents,
+  slides, sound and video) and the size is at most `MAX_SHARED_FILE_BYTES` (100 MB). The file is
+  opened as `shared_<sender>_<name>.<ext>`, both parts cut down by `safeNamePart`, and the host is
+  shown that name, never the one the sender gave. It gets no note, and one that is stopped, cut
+  off or fails its check is removed from the folder whole. `decline` takes the offers to turn
+  down, so backups and picked files can be answered apart.
 
 ---
 

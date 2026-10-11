@@ -7,6 +7,7 @@ import {
 } from '@openmeet/protocol';
 import { integrityVerdict, sanitizeText } from '@/lib/sync-report';
 import { parseBackupName, type BackupName } from '@/lib/backup-recorder';
+import { MAX_SHARED_FILE_BYTES, SHARED_FILE_ID, sharedFileName } from '@/lib/shared-file';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { ChunkSender } from '@/lib/chunk-sender';
 import { DiskFullError, FileWriter, type FsDirectoryHandle } from '@/lib/fs-writer';
@@ -14,9 +15,9 @@ import { writeTakeSidecars } from './recording-controller';
 
 /** One backup on its way from a guest to the host, as either side shows it. */
 export interface BackupTransfer {
-  /** The backup's file name on the sender's device: unique per backup. */
+  /** A backup's file name on the sender's device, or the id a picked file's sender made for it: unique per transfer. */
   id: string;
-  kind: BackupName['kind'];
+  kind: BackupName['kind'] | 'file';
   size: number;
   /** offered: waiting for the host. stalled: the connection dropped part-way. */
   status: 'offered' | 'active' | 'stalled' | 'saved' | 'failed';
@@ -26,6 +27,11 @@ export interface BackupTransfer {
   from?: string;
   /** Host only: it failed because the disk filled up. */
   diskFull?: boolean;
+  /**
+   * A file a participant picked to send (`kind: 'file'`) only. On the host:
+   * the name it gets in the recording folder. On its sender: its own name.
+   */
+  name?: string;
 }
 
 /** The name a returned backup gets in the host's recording folder. */
@@ -128,7 +134,8 @@ export function refuseBackup(channel: RTCDataChannel): void {
 
 interface BackupRecord {
   item: BackupTransfer;
-  backup: BackupName;
+  /** null for a file a participant picked to send: it belongs to no take. */
+  backup: BackupName | null;
   peerId: string;
   channel: RTCDataChannel;
   key: string;
@@ -184,7 +191,8 @@ export class BackupIntake {
   offer(channel: RTCDataChannel, from: { peerId: string; name: string | null }): void {
     const id = recordingChannelKind(channel.label).key ?? '';
     const backup = parseBackupName(id);
-    if (!backup || backup.room !== this.room) {
+    // A key that is not a backup's name has to be the id of a picked file.
+    if (backup ? backup.room !== this.room : !SHARED_FILE_ID.test(id)) {
       refuseBackup(channel);
       return;
     }
@@ -198,14 +206,14 @@ export class BackupIntake {
 
   private async onMessage(
     id: string,
-    backup: BackupName,
+    backup: BackupName | null,
     channel: RTCDataChannel,
     from: { peerId: string; name: string | null },
     data: unknown
   ): Promise<void> {
     const msg = control(data);
     if (msg?.type === 'backup_offer') {
-      await this.handleOffer(id, backup, channel, from, msg.size, msg.key);
+      await this.handleOffer(id, backup, channel, from, msg.size, msg.key, msg.name);
       return;
     }
     if (msg?.type === 'resume_query') {
@@ -296,22 +304,26 @@ export class BackupIntake {
 
     const id = record.item.id;
     const file = record.file ?? receiver.fileName;
-    let content = '';
-    try {
-      content = buildBackupNote({
-        file,
-        backupOf: id,
-        backup: record.backup,
-        from: record.item.from ?? 'Guest',
-        sizeBytes: receiver.bytesWritten,
-        sha256Sent: receiver.senderSha256 ?? '',
-        sha256Written: written,
-      });
-    } catch {
-      // A note that cannot be built must not fail a verified backup.
-    }
-    if (record.dir) {
-      await writeTakeSidecars(record.dir, [{ name: file.replace(/\.[^.]+$/, '.json'), content }]);
+    const backup = record.backup;
+    // The note says how to line a backup up with its take; a picked file has no take.
+    if (backup) {
+      let content = '';
+      try {
+        content = buildBackupNote({
+          file,
+          backupOf: id,
+          backup,
+          from: record.item.from ?? 'Guest',
+          sizeBytes: receiver.bytesWritten,
+          sha256Sent: receiver.senderSha256 ?? '',
+          sha256Written: written,
+        });
+      } catch {
+        // A note that cannot be built must not fail a verified backup.
+      }
+      if (record.dir) {
+        await writeTakeSidecars(record.dir, [{ name: file.replace(/\.[^.]+$/, '.json'), content }]);
+      }
     }
 
     // The file is closed; the receiver stays so a later resume_query is answered.
@@ -330,17 +342,26 @@ export class BackupIntake {
 
   private async handleOffer(
     id: string,
-    backup: BackupName,
+    backup: BackupName | null,
     channel: RTCDataChannel,
     from: { peerId: string; name: string | null },
     size: unknown,
-    key: unknown
+    key: unknown,
+    name: unknown
   ): Promise<void> {
     if (!Number.isSafeInteger(size) || (size as number) <= 0) {
       turnAway(channel);
       return;
     }
     if (typeof key !== 'string' || key.length < 1 || key.length > 64) {
+      turnAway(channel);
+      return;
+    }
+    // A picked file is named by its sender and will be opened on the host's
+    // computer: its type has to be one this app passes on, and its size
+    // within the limit, before the host is asked anything.
+    const target = backup ? undefined : sharedFileName(name, from.name);
+    if (target === null || (!backup && (size as number) > MAX_SHARED_FILE_BYTES)) {
       turnAway(channel);
       return;
     }
@@ -391,11 +412,12 @@ export class BackupIntake {
 
     const item: BackupTransfer = {
       id,
-      kind: backup.kind,
+      kind: backup ? backup.kind : 'file',
       size: size as number,
       status: 'offered',
       percent: 0,
       from: who,
+      ...(target ? { name: target } : {}),
     };
     const newRecord: BackupRecord = {
       item,
@@ -442,7 +464,9 @@ export class BackupIntake {
       // replaced record must not get a file or a "go" for the host's yes.
       if (this.records.get(record.item.id) !== record) continue;
       try {
-        const candidate = returnedBackupName(record.backup, record.item.from ?? null);
+        const candidate = record.backup
+          ? returnedBackupName(record.backup, record.item.from ?? null)
+          : (record.item.name ?? '');
         const name = await freeName(dir, candidate);
         const writer = new FileWriter();
         try {
@@ -457,6 +481,8 @@ export class BackupIntake {
         record.dir = dir;
         record.file = writer.fileName;
         record.writer = writer;
+        // The folder may have numbered the name; the host is shown the one that exists.
+        if (!record.backup) record.item = { ...record.item, name: writer.fileName };
         if (this.records.get(record.item.id) !== record) {
           await this.endRecordFile(record);
           continue;
@@ -517,8 +543,10 @@ export class BackupIntake {
     // receiver that refuses stops counting writes that were already queued.
     const arrived = writer?.size ?? 0;
     // A transfer that wrote nothing leaves an empty file nobody asked for; a
-    // partial one is kept, and only a verified one gets a note.
-    if (writer && file && dir?.removeEntry && arrived === 0) {
+    // partial one is kept, and only a verified one gets a note. A picked file
+    // is all or nothing: part of a document is of no use, and one that failed
+    // its check must not stay in the folder under its name.
+    if (writer && file && dir?.removeEntry && (arrived === 0 || !record.backup)) {
       await dir.removeEntry(file).catch(() => {});
     }
   }
@@ -537,10 +565,13 @@ export class BackupIntake {
     }
   }
 
-  /** The host turned the waiting offers down: answer and drop each. */
-  decline(): void {
+  /**
+   * The host turned waiting offers down, every one of them or only the ones
+   * in `only`: answer and drop each.
+   */
+  decline(only?: readonly BackupTransfer[]): void {
     for (const [id, record] of this.records) {
-      if (record.item.status === 'offered') {
+      if (record.item.status === 'offered' && (!only || only.includes(record.item))) {
         this.records.delete(id);
         turnAway(record.channel);
       }
@@ -550,7 +581,8 @@ export class BackupIntake {
 
   /**
    * The host ended a transfer that is still running: answer its sender, close
-   * its channel and keep what arrived. Any other record is left alone.
+   * its channel and keep what arrived of a backup; a picked file is removed
+   * whole. Any other record is left alone.
    */
   stop(id: string): void {
     const record = this.records.get(id);
@@ -593,6 +625,7 @@ const POLL_MS = 200;
 export class BackupSend {
   private readonly opts: {
     file: File;
+    shared?: boolean | undefined;
     onChange?: (() => void) | undefined;
     after?: Promise<unknown> | undefined;
     hold?: (() => boolean) | undefined;
@@ -601,6 +634,7 @@ export class BackupSend {
   // host read a repeated offer on a rebuilt connection as the same sender, and
   // what turns another participant's offer for the same name away.
   private readonly key = crypto.randomUUID();
+  private readonly id: string;
   private current: BackupTransfer;
   private sender: ChunkSender | null = null;
   private channel: RTCDataChannel | null = null;
@@ -618,6 +652,11 @@ export class BackupSend {
 
   constructor(opts: {
     file: File;
+    /**
+     * A file the person picked to send the host, not a backup: it gets an
+     * id made here and names itself in its offer.
+     */
+    shared?: boolean;
     onChange?: () => void;
     /** Sends go one at a time: this one starts reading once `after` settles. */
     after?: Promise<unknown>;
@@ -625,12 +664,14 @@ export class BackupSend {
     hold?: () => boolean;
   }) {
     this.opts = opts;
+    this.id = opts.shared ? `file-${crypto.randomUUID()}` : opts.file.name;
     this.current = {
-      id: opts.file.name,
-      kind: parseBackupName(opts.file.name)?.kind ?? 'camera',
+      id: this.id,
+      kind: opts.shared ? 'file' : (parseBackupName(opts.file.name)?.kind ?? 'camera'),
       size: opts.file.size,
       status: 'offered',
       percent: 0,
+      ...(opts.shared ? { name: opts.file.name } : {}),
     };
     this.done = new Promise((resolve) => {
       this.settleDone = resolve;
@@ -662,7 +703,7 @@ export class BackupSend {
     if (this.sender) this.sender.rebind(channel);
     else
       this.sender = new ChunkSender({
-        recordingId: this.opts.file.name,
+        recordingId: this.id,
         channel,
         onBackpressure: (p) => {
           this.paused = p;
@@ -686,8 +727,13 @@ export class BackupSend {
     };
 
     const hello = this.started
-      ? { type: 'resume_query', recordingId: this.opts.file.name, key: this.key }
-      : { type: 'backup_offer', size: this.opts.file.size, key: this.key };
+      ? { type: 'resume_query', recordingId: this.id, key: this.key }
+      : {
+          type: 'backup_offer',
+          size: this.opts.file.size,
+          key: this.key,
+          ...(this.opts.shared ? { name: this.opts.file.name } : {}),
+        };
     if (channel.readyState === 'open') this.say(hello);
     else channel.onopen = () => this.say(hello);
   }
@@ -735,7 +781,7 @@ export class BackupSend {
     if (result === 'failed') {
       this.say({
         type: 'stream-abandoned',
-        recordingId: this.opts.file.name,
+        recordingId: this.id,
         lastIdx: this.sender?.lastSentIdx ?? -1,
       });
     }
@@ -806,7 +852,7 @@ export class BackupSend {
       await this.wait(() => this.ready && !this.sender!.hasQueuedChunks && this.channel !== told);
       if (this.finished) return;
       told = this.channel;
-      this.say({ type: 'recording-finalized', recordingId: file.name, totalBytes: file.size, sha256 });
+      this.say({ type: 'recording-finalized', recordingId: this.id, totalBytes: file.size, sha256 });
     }
   }
 
