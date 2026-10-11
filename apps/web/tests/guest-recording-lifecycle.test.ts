@@ -2813,6 +2813,158 @@ describe('host backup after a take in useRoom', () => {
     }
   });
 
+  describe('the first person’s stream', () => {
+    const remoteStreamFrom = (peerId: string) =>
+      vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+        .onRemoteStream;
+    const noTracks = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream;
+    const camera = (id: string) => ({ id }) as unknown as MediaStream;
+    const pia = { peerId: 'p-pia', ordinal: 2, role: 'producer', displayName: 'Pia' };
+    const bobInfo = { peerId: 'p-bob', ordinal: 3, role: 'guest', displayName: 'Bob' };
+    const deck = { peerId: 'p-deck', ordinal: 4, role: 'guest', displayName: 'Deck', companion: true };
+    const carolInfo = { peerId: 'p-carol', ordinal: 5, role: 'guest', displayName: 'Carol' };
+    const roomOf = (peers: unknown[]) => ({
+      type: 'role-assigned',
+      role: 'host',
+      peerCount: peers.length + 1,
+      peerId: 'p-host',
+      ordinal: 1,
+      peers,
+      recording: false,
+    });
+
+    /** A host in a call with the people the room lists. */
+    async function hostIn(peers: unknown[]) {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(noTracks, 'Host Hana');
+      });
+      act(() => {
+        emitSignal('role-assigned', roomOf(peers));
+      });
+      return result;
+    }
+
+    it('is kept when someone else leaves and a present-only device is listed first', async () => {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(
+          { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+          'Host Hana'
+        );
+      });
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [
+            { peerId: 'p-deck', ordinal: 2, role: 'guest', displayName: 'Deck', companion: true },
+            { peerId: 'p-guest', ordinal: 3, role: 'guest', displayName: 'Bob' },
+            { peerId: 'p-carol', ordinal: 4, role: 'guest', displayName: 'Carol' },
+          ],
+          recording: false,
+        });
+      });
+      const bob = { id: 'bob' } as unknown as MediaStream;
+      act(() => {
+        remoteStreamFrom('p-guest')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-carol', role: 'guest' });
+      });
+
+      // A present-only device has no camera stream; taking it for the first
+      // person left that person's tile empty: not seen and not heard.
+      expect(result.current.state.remoteStream).toBe(bob);
+    });
+
+    it('is the first person’s own, whichever camera arrives first, and never a producer’s or a present-only device’s', async () => {
+      const result = await hostIn([pia, bobInfo, deck, carolInfo]);
+      act(() => {
+        remoteStreamFrom('p-pia')?.(camera('pia'));
+      });
+      act(() => {
+        remoteStreamFrom('p-deck')?.(camera('deck'));
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+      expect(result.current.state.remotePeers.find((p) => p.peerId === 'p-carol')?.stream).toBe(carol);
+
+      const bob = camera('bob');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+    });
+
+    it('is dropped when this tab reconnects, until a camera arrives on a rebuilt connection', async () => {
+      const result = await hostIn([bobInfo, carolInfo]);
+      const bob = camera('bob');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('role-assigned', roomOf([carolInfo]));
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+      expect(result.current.state.remotePeers.map((p) => p.stream)).toEqual([null]);
+
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBe(carol);
+    });
+
+    it('passes to the next person when the first leaves and a present-only device is listed between them', async () => {
+      const result = await hostIn([bobInfo, deck, carolInfo]);
+      const bob = camera('bob');
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-bob', role: 'guest', reason: 'disconnect' });
+      });
+      expect(result.current.state.remoteStream).toBe(carol);
+    });
+
+    it('a new take stays in the call while a person who can be on camera is listed', async () => {
+      const result = await hostIn([bobInfo, carolInfo]);
+      act(() => {
+        remoteStreamFrom('p-carol')?.(camera('carol'));
+      });
+      act(() => {
+        result.current.newTake();
+      });
+      expect(result.current.state.phase).toBe('in-call');
+    });
+
+    it('a new take waits when only a producer and a present-only device are listed', async () => {
+      const result = await hostIn([pia, deck]);
+      act(() => {
+        result.current.newTake();
+      });
+      expect(result.current.state.phase).toBe('waiting');
+    });
+  });
+
   describe('call-audio copies', () => {
     const stream = () => ({ id: 'remote' }) as unknown as MediaStream;
     const remoteStreamFrom = (peerId: string) =>

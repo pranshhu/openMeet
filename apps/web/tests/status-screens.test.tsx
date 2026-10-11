@@ -276,3 +276,17 @@ describe('branding', () => {
     expect(container.querySelector('header')?.textContent).toBe('openMeet');
   });
 });
+
+describe('removed by the host (4007)', () => {
+  it('says so, offers the lobby and a way home, releases camera and mic', async () => {
+    const tracks = fakeTracks();
+    await joinRoom();
+    act(() => signalOpts!.onFatalClose(4007));
+
+    expect(screen.getByRole('heading', { name: 'The host removed you from this call' })).toBeInTheDocument();
+    expect(screen.getByText(/^This tab can’t rejoin until the call has ended\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to the lobby' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to home' })).toHaveAttribute('href', '/');
+    for (const t of tracks) expect(t.stop).toHaveBeenCalled();
+  });
+});

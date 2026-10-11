@@ -68,10 +68,20 @@ retention policy to trust, because there's nothing retained.
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
+- Host controls in **People**: turn a participant's microphone off for the call (they
+  are told, and turn it back on themselves), or remove someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
   press Enter, and the note is that marker's line in `chapters.txt`
+- Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
+  **M** marker, **N** marker with a note, and for the host **Alt+R** to record and
+  **Alt+S** to end and save; the **?** button in the call lists them, and a tick box
+  in that list and in the lobby turns the single keys off for people who use speech
+  input
+- A rundown for the host: list the show's segments, step through them during a take,
+  and each one becomes a chapter marker with its name
+  (give a segment a planned length and its clock shows when it runs over)
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
@@ -81,6 +91,10 @@ retention policy to trust, because there's nothing retained.
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
 - **Test your mic** in the green room: five seconds of your own microphone, played
   back to you and then deleted
+- A framing guide in the lobby: a rule-of-thirds grid over your preview, on your own
+  screen only and never in a recording (computers)
+- **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
+  entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
@@ -105,6 +119,8 @@ retention policy to trust, because there's nothing retained.
   mode that sends the others a smaller live picture and leaves the recording alone
 - **Stop incoming video** on a weak connection: the others stop sending you their
   cameras and shared screens, you still hear everyone, and your recording goes on
+- **Pop out** one person into a small window that stays on top of everything else and
+  put it just under your webcam, so looking at them is looking at the lens (computers)
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 
@@ -450,6 +466,18 @@ into the host's folder, a copy that starts only after that guest's browser has b
 its own recording. **The host is responsible for getting consent where the law requires
 it** (all-party-consent jurisdictions, GDPR).
 
+The host can turn a participant's microphone off from **People** in the call. That
+person is told at once and turns it back on with their own microphone button. While
+it is off their recording has no sound from the microphone, exactly as when they turn
+it off themselves; nobody can turn another person's microphone on.
+
+The host can also remove a participant from **People**. That person is told the host
+removed them. What they recorded before the removal stays in the host's folder and
+ends there; the rest is in their own browser's backup, which is never deleted for
+them. If a take was running, their browser keeps recording into that backup until
+they press **Stop and save**; their page then offers the backup as a download, and
+the lobby in that browser lists it afterwards.
+
 ---
 
 ## After the session
@@ -602,6 +630,9 @@ Known gaps, listed below:
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
+- **Removing a participant keeps out that tab, not that person.** The room refuses the
+  removed tab until everyone has left, but the invite link is the only credential: a new
+  tab or another browser joins again.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 
