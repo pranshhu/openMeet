@@ -195,6 +195,27 @@ describe('CallStage: raise hand', () => {
     expect(shown.className).not.toMatch(/(^|\s)hidden(\s|$)/);
     expect(shown.className).toMatch(/(^|\s)inline-flex(\s|$)/);
   });
+
+  // The first other person and the rest are drawn from two feeds.
+  it('marks the tile of a second other person too', () => {
+    render(
+      <CallStage
+        {...props}
+        remotePeers={[
+          { peerId: 'p-bob', name: 'Bob', stream: bob, presence: on },
+          { peerId: 'p-carol', name: 'Carol', stream: carol, presence: { ...on, handRaised: true } },
+        ]}
+      />
+    );
+    expect(within(tileOf('Carol')).getByRole('img', HAND)).toBeInTheDocument();
+    expect(within(tileOf('Bob')).queryByRole('img', HAND)).toBeNull();
+  });
+
+  it('offers the button and the reactions arrow while a take records', () => {
+    render(<CallStage {...props} phase="recording" onSetHandRaised={vi.fn()} onReact={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Raise hand' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reactions' })).toBeInTheDocument();
+  });
 });
 
 describe('RoomView: raise hand', () => {

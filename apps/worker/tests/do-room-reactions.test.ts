@@ -88,4 +88,18 @@ describe('Room DO: reactions', () => {
 
     [a.ws, b.ws].forEach((w) => w.close());
   });
+
+  it('passes on nothing a socket sends before it has joined', async () => {
+    const slug = 'rct-soon-aaa';
+    await seedRoom(slug, 'tok-rct-soon');
+    const a = await enter(slug, 'A');
+    const early = await openWs(slug);
+
+    early.send(JSON.stringify({ type: 'reaction', reaction: 'clap' }));
+    await settle();
+
+    expect(ofType(a.heard, 'reaction')).toEqual([]);
+
+    [a.ws, early].forEach((w) => w.close());
+  });
 });

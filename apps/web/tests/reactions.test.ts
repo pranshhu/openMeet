@@ -58,3 +58,13 @@ describe('takeReaction', () => {
     expect([...held.current]).toEqual([['p-bob', { reaction: 'heart', at: 10_000 }]]);
   });
 });
+
+describe('reaction timings', () => {
+  // A sender can redraw every screen in the call no faster than once a
+  // second, and a picture is gone after about three.
+  it('holds a sender to one a second and shows a reaction for about three', () => {
+    expect(REACTION_MIN_GAP_MS).toBeGreaterThanOrEqual(1000);
+    expect(REACTION_SHOWN_MS).toBeGreaterThanOrEqual(2000);
+    expect(REACTION_SHOWN_MS).toBeLessThanOrEqual(5000);
+  });
+});
