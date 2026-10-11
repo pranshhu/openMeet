@@ -549,7 +549,7 @@ export function CallStage({
   // "Record another take" has to record. newTake only resets the refs, and
   // startRecording reads refs and reuses the folder, so both run inside the one
   // click: no second folder prompt, and the user activation still holds.
-  const canRecordNext = isHost && canRecord && !!remote;
+  const canRecordNext = isHost && canRecord && stagePeers.length > 0;
   const handleRecord = () => {
     setRecordMenuOpen(false);
     requestProblemNotifications();

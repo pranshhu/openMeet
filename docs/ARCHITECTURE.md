@@ -362,6 +362,10 @@ backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
+`remoteStream` is the camera stream of the first other person who has a tile (`isStagePeer` in `lib/stage-peers.ts`:
+not a producer and not a Present-only device, which send no camera) and of nobody else: null until that stream arrives,
+and null again from this tab's reconnect until a camera arrives on a rebuilt connection. `newTake` goes back to
+`in-call` while such a person is listed and to `waiting` otherwise.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera

@@ -1501,6 +1501,28 @@ describe('CallStage after a take', () => {
     expect(screen.getByTestId('summary-column')).toBeInTheDocument();
   });
 
+  // A reconnect lists the guest again before their camera is back.
+  it('keeps Record and Record another take while a person who can be on camera is listed', () => {
+    render(<CallStage {...doneProps} remoteStream={null} remotePeers={[{ peerId: 'p-bob', name: 'Bob', stream: null }]} />);
+    expect(screen.getByRole('button', { name: 'Start recording' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Record another take' })).toBeInTheDocument();
+  });
+
+  it('offers the invite link when only a producer and a present-only device are left', () => {
+    render(
+      <CallStage
+        {...doneProps}
+        remoteStream={null}
+        remotePeers={[
+          { peerId: 'p-pia', name: 'Pia', stream: null, role: 'producer' },
+          { peerId: 'p-deck', name: 'Deck', stream: null, role: 'guest', companion: true },
+        ]}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Start recording' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeInTheDocument();
+  });
+
   // The summary holds the host's downloads; the bar only gives the verdict.
   it("keeps the host's status line to the verdict, with downloads named for the room and take", () => {
     render(<CallStage {...doneProps} />);
