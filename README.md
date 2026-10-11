@@ -92,6 +92,8 @@ retention policy to trust, because there's nothing retained.
   mode that sends the others a smaller live picture and leaves the recording alone
 - **Stop incoming video** on a weak connection: the others stop sending you their
   cameras and shared screens, you still hear everyone, and your recording goes on
+- **Pop out** one person into a small window that stays on top of everything else and
+  put it just under your webcam, so looking at them is looking at the lens (computers)
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 

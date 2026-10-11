@@ -349,6 +349,19 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   board pad's file name can be longer) and places the host's own note at `at`, the moment its
   field opened, because typing takes seconds; nothing of `at` is sent, so a guest's note is
   placed when it reaches the host, like every relayed marker.
+- **Pop out** (`hooks/use-pop-out.ts`) — the camera menu lists **Pop out <name>** for each
+  other person who has a camera tile. `popOut(stream, onEnd)` gives the stream to a muted
+  `<video>` of its own, which is never put in the page, and asks the browser for its floating
+  (Picture-in-Picture) window once the first frame has come. The person's tile is not
+  involved: it keeps playing the sound, so the chosen speaker and the Levels fader apply as
+  before, the window survives a change of layout, and nothing that records reads either
+  element. `usePopOut` holds the stream that floats; popping out someone else moves the
+  window, and leaving the call screen closes it. A window the browser refuses shows as the
+  `deviceError` line. The items are not offered on a phone (`isPhone()`: the lens is beside
+  the picture there), where `document.pictureInPictureEnabled` is false, or for a person
+  whose stream has not arrived; a producer and a present-only device have no camera menu.
+  `public/_headers` needs nothing for it: `Permissions-Policy` does not name
+  `picture-in-picture`, which is therefore allowed, and no new document is opened.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -990,3 +1003,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **Pop out floats one person, and never a shared screen.** The browser gives a page one
+  such window: popping out a second person moves it. A screen someone presents has no item.
+- **The popped-out window is the bare picture.** It has no name tag and no mic badge, and
+  it does not show the initial a tile shows while that person's camera is off.
+- **Someone who presents their entire screen shows the popped-out window too.** It lies on
+  top of everything on that screen, so the call sees it and it is in that screen recording,
+  a guest set as not recorded included. A shared tab or window does not contain it.
+- **Pop out is not offered on a phone, to a producer or to a present-only device.** After
+  a reload nobody is popped out, and the item is clicked again.

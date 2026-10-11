@@ -146,6 +146,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Pop out**, in the call's camera menu on a computer: one other person's
+  picture floats in a small window that stays on top of your other windows. Put
+  it just under your webcam and looking at them is looking at the lens. Their
+  sound, the speaker you chose, Levels and every recording are unchanged.
 
 ### Changed
 
