@@ -218,6 +218,14 @@ describe('CallStage: pop out', () => {
     ]);
   });
 
+  it('is not offered in a browser that has no floating window at all', () => {
+    // Such a browser has no such property: it is not there to read false.
+    delete (document as { pictureInPictureEnabled?: unknown }).pictureInPictureEnabled;
+    render(<CallStage {...props} />);
+    toggleMenu();
+    expect(screen.queryAllByRole('menuitemcheckbox')).toEqual([]);
+  });
+
   it('says so when the browser refuses the window, and forgets that on the next try', async () => {
     request.mockImplementationOnce(() => Promise.reject(new Error('refused')));
     render(<CallStage {...props} />);
@@ -330,6 +338,32 @@ describe('CallStage: a popped-out window without its picture', () => {
       cleanup();
       vi.useRealTimers();
     }
+  });
+
+  it('stays open on the same element while other people leave, join and present', async () => {
+    const view = render(<CallStage {...props} />);
+    await popOutPerson('Bob');
+    // Carol leaves: one stream fewer, and every entry is a new object around the same stream.
+    const withoutCarol = props.remotePeers.filter((p) => p.peerId !== 'p-carol').map((p) => ({ ...p }));
+    view.rerender(<CallStage {...props} remotePeers={withoutCarol} />);
+    // Erin joins: listed before her picture arrives, then with it.
+    const erin = streamOf('stream-erin');
+    view.rerender(
+      <CallStage {...props} remotePeers={[...withoutCarol, { peerId: 'p-erin', name: 'Erin', stream: null }]} />
+    );
+    view.rerender(
+      <CallStage {...props} remotePeers={[...withoutCarol, { peerId: 'p-erin', name: 'Erin', stream: erin }]} />
+    );
+    // Someone presents a screen and stops: the layout changes twice.
+    view.rerender(<CallStage {...props} remoteScreenStream={streamOf('stream-screen')} />);
+    view.rerender(<CallStage {...props} />);
+    expect(made).toHaveLength(1);
+    expect(floating).toBe(made[0]);
+    expect(made[0]!.srcObject).toBe(bob);
+    expect(exit).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(ticked('Bob')).toBe(true);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
