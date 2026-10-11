@@ -38,8 +38,8 @@ describe('sharedFileName', () => {
   it('lets nothing of the name through but its cleaned stem and a listed extension', () => {
     // A right-to-left override: "photo<override>gpj.exe" is drawn as "photoexe.jpg".
     // Written as an escape: the character itself must not be in this file.
-    expect(sharedFileName('photo‮gpj.exe', 'Ana')).toBeNull();
-    expect(sharedFileName('exe‮gnp.png', 'Ana')).toBe('shared_ana_exe-gnp.png');
+    expect(sharedFileName('photo\u202egpj.exe', 'Ana')).toBeNull();
+    expect(sharedFileName('exe\u202egnp.png', 'Ana')).toBe('shared_ana_exe-gnp.png');
     expect(sharedFileName('../../etc/passwd.txt', '../x')).toBe('shared_x_etc-passwd.txt');
     expect(sharedFileName('CON.txt', 'Ana')).toBe('shared_ana_con.txt');
     expect(sharedFileName(`${'a'.repeat(200)}.PNG`, 'b'.repeat(200))).toBe(
