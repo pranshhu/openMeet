@@ -611,7 +611,8 @@ export function Lobby({
 
   // The call's list of shortcuts has this box too, but its button is not shown
   // on a window narrower than 640px. Everyone enters the call through one of
-  // the three screens below, so the box is on each of them.
+  // the three screens below, so the box is on each of them. The check page
+  // joins no call and leaves it out.
   const keysSwitch = (
     <div className="flex flex-col items-center">
       <label className="inline-flex min-h-11 cursor-pointer items-center gap-2.5 text-sm">
@@ -1095,7 +1096,7 @@ export function Lobby({
               {saveNote.text}
             </p>
           )}
-          {keysSwitch}
+          {!checkOnly && keysSwitch}
         </div>
 
         {/* Devices + preflight. After the Join panel in the DOM, so a phone's

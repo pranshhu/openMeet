@@ -78,4 +78,11 @@ describe('Lobby: the switch for the single keys', () => {
     await settle();
     expect(box()).not.toBeChecked();
   });
+
+  it('is not on the check page, which joins no call', async () => {
+    render(<Lobby slug="abc-defg-hij" onJoin={vi.fn()} checkOnly />);
+    await settle();
+    expect(screen.getByText('Check your setup')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: 'Single-key shortcuts' })).toBeNull();
+  });
 });

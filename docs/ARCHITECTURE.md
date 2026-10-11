@@ -404,7 +404,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `singleKeysOn()` as a key arrives, so a change is in force for the next key. Escape closes the
   list and, when the keyboard was in it, hands focus back to the **?** button. The list holds the
   tick box (`useSingleKeys`, `setSingleKeys`), and `Lobby` has the same box last in the panel of
-  each of its three screens, because the **?** button is not shown below 640 px. While the keys
+  each of its three screens, because the **?** button is not shown below 640 px (the check
+  page, `checkOnly`, joins no call and leaves the box out). While the keys
   are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
   tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
   rows and says they are off. Alt+R and Alt+S are chords and stay on.
