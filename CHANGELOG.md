@@ -146,6 +146,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   turned off, for people whose speech input types letters: untick **Single-key
   shortcuts** in the list the **?** button opens. The browser remembers the choice,
   and **Alt+R** and **Alt+S** stay on. The list names **N** as well.
+- While the single-key shortcuts are turned off, no button names one in its tooltip or
+  its name, and the list says they are off. The lobby has the same tick box, so it can
+  be reached on a window too narrow to show the **?** button.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed

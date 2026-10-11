@@ -72,7 +72,8 @@ retention policy to trust, because there's nothing retained.
 - Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
   **M** marker, **N** marker with a note, and for the host **Alt+R** to record and
   **Alt+S** to end and save; the **?** button in the call lists them, and a tick box
-  in that list turns the single keys off for people who use speech input
+  in that list and in the lobby turns the single keys off for people who use speech
+  input
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt

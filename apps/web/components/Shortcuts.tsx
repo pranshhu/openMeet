@@ -83,7 +83,7 @@ export function Shortcuts() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label="Keyboard shortcuts"
-        title="Keyboard shortcuts (?)"
+        title={singleKeys ? 'Keyboard shortcuts (?)' : 'Keyboard shortcuts'}
         aria-expanded={open}
         className="flex h-11 w-11 items-center justify-center rounded-full text-base font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
       >
@@ -98,7 +98,12 @@ export function Shortcuts() {
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/70">Keyboard shortcuts</div>
           <dl className="space-y-1.5">
             {ROWS.map(([keys, does]) => (
-              <div key={keys} className="flex items-baseline gap-3">
+              // A single key that is switched off is dimmed; a chord is longer than
+              // one character and always works.
+              <div
+                key={keys}
+                className={`flex items-baseline gap-3${singleKeys || keys.length > 1 ? '' : ' opacity-60'}`}
+              >
                 <dt className="w-14 shrink-0">
                   <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-sans text-xs font-medium">{keys}</kbd>
                 </dt>
@@ -117,6 +122,7 @@ export function Shortcuts() {
             />
             Single-key shortcuts
           </label>
+          {!singleKeys && <p className="text-xs text-white">Single keys are off. Alt+R and Alt+S still work.</p>}
           <p className="mt-2 text-xs text-white/70">
             {'A key presses its button, so it works while that button is shown. Keys do nothing while you type in a field. On a Mac, Alt is the Option key.'}
           </p>

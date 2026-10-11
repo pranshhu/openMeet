@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { ControlButton } from '@/components/ControlButton';
 import { Shortcuts } from '@/components/Shortcuts';
@@ -593,5 +593,87 @@ describe('Shortcuts: the switch for the single keys', () => {
     press('Escape', {}, field);
     expect(screen.queryByText('Microphone on or off')).toBeNull();
     expect(field).toHaveFocus();
+  });
+
+  it('switched off, no button names a single key, and the two chords keep theirs', () => {
+    off();
+    const { rerender } = render(<CallStage {...callProps} />);
+    for (const name of ['Turn off microphone', 'Turn off camera', 'Chat', 'Show teleprompter']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).not.toHaveAttribute('aria-keyshortcuts');
+      expect(button).toHaveAttribute('title', name);
+    }
+    const record = screen.getByRole('button', { name: 'Start recording' });
+    expect(record).toHaveAttribute('aria-keyshortcuts', 'Alt+R');
+    expect(record).toHaveAttribute('title', 'Start recording (Alt+R)');
+
+    rerender(<CallStage {...callProps} phase="recording" roomRecording markerCount={2} />);
+    expect(screen.getByRole('button', { name: 'End & save recording' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Alt+S'
+    );
+    // The whole name is matched: neither holds a key.
+    expect(screen.getByRole('button', { name: 'Mark this moment — 2 so far' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark with a note' })).toBeInTheDocument();
+
+    // Switched on, each button names its key again without being mounted again.
+    on();
+    const mic = screen.getByRole('button', { name: 'Turn off microphone' });
+    expect(mic).toHaveAttribute('aria-keyshortcuts', 'A');
+    expect(mic).toHaveAttribute('title', 'Turn off microphone (A)');
+    expect(screen.getByRole('button', { name: 'Mark this moment (M) — 2 so far' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark with a note (N)' })).toBeInTheDocument();
+  });
+
+  it('a button follows the switch by itself: switched on again, its key is named and presses it', () => {
+    const onClick = vi.fn();
+    off();
+    // Beside the list, under nothing that shows the choice: only the button's
+    // own reading of it can draw the button again.
+    render(
+      <>
+        <Shortcuts />
+        <ControlButton icon="mic" label="Turn off microphone" shortcut="A" onClick={onClick} />
+      </>
+    );
+    const button = screen.getByRole('button', { name: 'Turn off microphone' });
+    expect(button).not.toHaveAttribute('aria-keyshortcuts');
+    press('a');
+    expect(onClick).not.toHaveBeenCalled();
+
+    on();
+    expect(button).toHaveAttribute('aria-keyshortcuts', 'A');
+    expect(button).toHaveAttribute('title', 'Turn off microphone (A)');
+    press('a');
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('switched off, closing the note field still hands focus back to its button', async () => {
+    off();
+    render(<CallStage {...callProps} phase="recording" roomRecording />);
+    const button = screen.getByRole('button', { name: 'Mark with a note' });
+    fireEvent.click(button);
+    fireEvent.keyDown(screen.getByLabelText('Note for this marker'), { key: 'Escape' });
+    await waitFor(() => expect(button).toHaveFocus());
+  });
+
+  it('switched off, the list says so, dims the single keys and leaves the chords as they are', () => {
+    off();
+    render(<Shortcuts />);
+    const button = screen.getByRole('button', { name: 'Keyboard shortcuts' });
+    expect(button).toHaveAttribute('title', 'Keyboard shortcuts');
+    fireEvent.click(button);
+    const said = 'Single keys are off. Alt+R and Alt+S still work.';
+    expect(screen.getByText(said)).toBeInTheDocument();
+    const row = (does: string) => screen.getByText(does).parentElement!;
+    for (const does of ['Microphone on or off', 'Marker with a note, while recording', 'This list']) {
+      expect(row(does)).toHaveClass('opacity-60');
+    }
+    for (const does of ['Record (host)', 'End & save (host)']) expect(row(does)).not.toHaveClass('opacity-60');
+
+    on();
+    expect(screen.queryByText(said)).toBeNull();
+    expect(row('Microphone on or off')).not.toHaveClass('opacity-60');
+    expect(button).toHaveAttribute('title', 'Keyboard shortcuts (?)');
   });
 });

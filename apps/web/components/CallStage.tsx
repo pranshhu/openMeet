@@ -20,7 +20,7 @@ import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { MarkerNote, useMarkerNote } from './MarkerNote';
 import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
-import { singleKeysOn } from '@/hooks/use-single-keys';
+import { singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -478,10 +478,12 @@ export function CallStage({
   }, [phase, onMark]);
   // N opens a field for a marker with a typed note; it closes with the take.
   const [noteOpen, setNoteOpen] = useMarkerNote(phase === 'recording');
+  // The two marker buttons name their keys only while those keys work.
+  const singleKeys = useSingleKeys();
   // Hand focus back to the note button, as closing chat does for its own.
   function closeNote() {
     setNoteOpen(false);
-    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="Mark with a note (N)"]')?.focus());
+    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label^="Mark with a note"]')?.focus());
   }
 
   useProblemAlert({
@@ -1351,12 +1353,12 @@ export function CallStage({
                 <>
                   <ControlButton
                     icon="bookmark"
-                    label={`Mark this moment (M)${markerCount ? ` — ${markerCount} so far` : ''}`}
+                    label={`Mark this moment${singleKeys ? ' (M)' : ''}${markerCount ? ` — ${markerCount} so far` : ''}`}
                     onClick={() => onMark('')}
                   />
                   <ControlButton
                     icon="edit"
-                    label="Mark with a note (N)"
+                    label={`Mark with a note${singleKeys ? ' (N)' : ''}`}
                     variant={noteOpen ? 'active' : 'default'}
                     onClick={() => setNoteOpen(!noteOpen)}
                   />

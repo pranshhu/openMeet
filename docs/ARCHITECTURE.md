@@ -368,7 +368,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   Each of the three listeners (`Shortcuts`, the **M** effect in `CallStage`, `useMarkerNote`) asks
   `singleKeysOn()` as a key arrives, so a change is in force for the next key. Escape closes the
   list and, when the keyboard was in it, hands focus back to the **?** button. The list holds the
-  tick box (`useSingleKeys`, `setSingleKeys`). Alt+R and Alt+S are chords and stay on.
+  tick box (`useSingleKeys`, `setSingleKeys`), and `Lobby` has the same box last in the panel of
+  each of its three screens, because the **?** button is not shown below 640 px. While the keys
+  are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
+  tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
+  rows and says they are off. Alt+R and Alt+S are chords and stay on.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1017,12 +1021,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   while any input has focus, a teleprompter slider included. The waiting room has no keys.
   Below 640 px the **?** button and its list are not shown, and a key that presses a button
   does nothing while chat or the summary covers the control bar.
-- **The single keys can be turned off only from the call's list, which a window narrower than
-  640 px does not show.** While they are off the buttons still name them in their tooltips,
-  and the two marker buttons in their names. The tick box is an input, so right after it is
-  ticked no key works until the keyboard leaves it (Escape closes the list). Two tabs do not
-  share a change while both are open: each reads the stored choice when it loads. In a browser
-  that blocks storage the choice lasts until the page is reloaded.
+- **In a call on a window narrower than 640 px the single keys cannot be turned off or on.**
+  The list is not shown there; the other tick box is in the lobby, a Leave and a Rejoin away.
+  The list's tick box is an input, so right after it is ticked no key works until the keyboard
+  leaves it (Escape closes the list). Two tabs do not share a change while both are open: each
+  reads the stored choice when it loads. In a browser that blocks storage the choice lasts
+  until the page is reloaded, so one made in the lobby holds for that call.
 - **On a keyboard without Latin letters, Alt+R and Alt+S are the keys where QWERTY has R and
   S.** A desktop or a browser that takes one of the chords for itself never passes it to the
   page. A guest's "Stop and save" has no key.

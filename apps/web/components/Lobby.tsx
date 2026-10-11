@@ -46,6 +46,7 @@ import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
 import { listSpeakers, setSpeaker } from '@/lib/speaker';
 import { useSpeakerId } from '@/hooks/use-speaker';
+import { setSingleKeys, useSingleKeys } from '@/hooks/use-single-keys';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -164,6 +165,7 @@ export function Lobby({
   // Read once, with the cameras and microphones. Empty where the browser cannot switch outputs.
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
   const speaker = useSpeakerId();
+  const singleKeys = useSingleKeys();
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
@@ -511,6 +513,27 @@ export function Lobby({
     </>
   );
 
+  // The call's list of shortcuts has this box too, but its button is not shown
+  // on a window narrower than 640px. Everyone enters the call through one of
+  // the three screens below, so the box is on each of them.
+  const keysSwitch = (
+    <div className="flex flex-col items-center">
+      <label className="inline-flex min-h-11 cursor-pointer items-center gap-2.5 text-sm">
+        <input
+          type="checkbox"
+          checked={singleKeys}
+          onChange={(e) => setSingleKeys(e.target.checked)}
+          aria-describedby="single-keys-hint"
+          className={`h-4 w-4 shrink-0 ${focusRing}`}
+        />
+        Single-key shortcuts
+      </label>
+      <span id="single-keys-hint" className="text-xs text-[#5f6368]">
+        A, V, C, T, M, N and ? in the call. Turn off if you use voice control or dictation.
+      </span>
+    </div>
+  );
+
   if (producer) {
     return (
       <main className="min-h-screen bg-white text-[#202124]">
@@ -538,6 +561,7 @@ export function Lobby({
             </button>
           </form>
           {invite}
+          {keysSwitch}
         </div>
       </main>
     );
@@ -587,6 +611,7 @@ export function Lobby({
           </form>
           <RecordingDisclosure isHost={isHost} presenting />
           {invite}
+          {keysSwitch}
         </div>
       </main>
     );
@@ -915,6 +940,7 @@ export function Lobby({
               {saveNote.text}
             </p>
           )}
+          {keysSwitch}
         </div>
 
         {/* Devices + preflight. After the Join panel in the DOM, so a phone's
