@@ -152,6 +152,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   real times. It is kept in the host's browser, one per room, and never sent to anyone.
   A line can end in a planned length (`Interview 20:00`): the running segment's clock
   counts against it and says by how much the segment is over.
+  Any segment can be started next from the list beside the button, which is how a take
+  resumed after a reload goes on with its rundown.
 
 ### Changed
 

@@ -31,25 +31,31 @@ export function Rundown({
   const segments = useMemo(() => parseRundown(text), [text]);
   // The segment that is running; null until one is started in this take.
   const [index, setIndex] = useState<number | null>(null);
+  // The segment chosen to start next, when it is not the one that follows.
+  const [picked, setPicked] = useState<number | null>(null);
   // When the running segment started, on this page's clock. Kept here and not
   // in the clock, which is unmounted while the strip is hidden.
   const [since, setSince] = useState(0);
   // Every take starts its rundown over.
   useEffect(() => {
-    if (!recording) setIndex(null);
+    if (!recording) {
+      setIndex(null);
+      setPicked(null);
+    }
   }, [recording]);
 
   function go(i: number) {
     const segment = segments[i];
     if (!segment) return;
     setIndex(i);
+    setPicked(null);
     setSince(Date.now());
     onMark(segment.name);
   }
 
   if (!open) return null;
   const current = index === null ? undefined : segments[index];
-  const target = index === null ? 0 : index + 1;
+  const target = picked ?? (index === null ? 0 : index + 1);
   const next = segments[target];
   const planned = segments.reduce((sum, s) => sum + (s.plannedMs ?? 0), 0);
   return (
@@ -103,6 +109,26 @@ export function Rundown({
             {current && <SegmentClock since={since} plannedMs={current.plannedMs} />}
           </div>
           <div className="mt-2 flex items-center justify-end gap-2">
+            {/* Choosing here starts nothing: a keyboard moves through a list one row
+                at a time, and a row passed on the way must not become a marker. */}
+            <select
+              aria-label="Segment to start next"
+              title="Segment to start next"
+              value={next ? target : ''}
+              onChange={(e) => setPicked(Number(e.target.value))}
+              className="h-11 min-w-0 flex-1 rounded-full bg-[#3c4043] px-3 text-sm text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:h-9"
+            >
+              {!next && (
+                <option value="" disabled>
+                  End of the rundown
+                </option>
+              )}
+              {segments.map((s, i) => (
+                <option key={i} value={i}>
+                  {`${i + 1}. ${optionName(s.name)}`}
+                </option>
+              ))}
+            </select>
             {/* Always here, so pressing it again and again never loses the
                 keyboard's place; after the last segment it is switched off. */}
             <button
@@ -146,4 +172,10 @@ function SegmentClock({ since, plannedMs }: { since: number; plannedMs: number |
       {over > 0 && <span className="text-[#fdd663]">{` ${formatTimecode(over * 1000)} over`}</span>}
     </span>
   );
+}
+
+// A native list is as wide as its longest row, so a long name is cut there.
+// The marker and the line above the list carry it whole.
+function optionName(name: string): string {
+  return name.length > 30 ? `${name.slice(0, 29)}…` : name;
 }

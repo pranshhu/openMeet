@@ -365,6 +365,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   in no file. The running segment has a clock (`SegmentClock`: one render a second, and only
   while the strip is shown) that counts from the segment's start, kept in `Rundown`, against
   that length and says by how much the segment is over.
+  The list beside the button chooses another segment to start next (`picked`). Choosing
+  starts nothing, because a keyboard moves through a list one row at a time and a row passed
+  on the way must not become a marker; the choice is dropped when a segment starts and when
+  the take ends.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1008,8 +1012,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
 - **After a host reload the rundown has lost its place.** **Resume recording** brings back the
   take's markers, not the segment that was running: the strip is hidden and, shown, reads
-  "Rundown not started", and its button starts at the first segment again, adding a marker
-  for every segment stepped through.
+  "Rundown not started" until the host chooses the segment the show had reached in the list
+  beside the button and starts it. That start is one more marker with the segment's name,
+  and the segment's clock counts from it.
 - **A rundown is started by hand.** A take does not start its first segment, so that
   segment's marker is where the host pressed **Start**, and the chapter list opens with
   `0:00 Start` before it when the press came a second or more into the take.

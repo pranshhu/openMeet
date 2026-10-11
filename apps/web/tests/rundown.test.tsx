@@ -367,3 +367,115 @@ describe('CallStage: the rundown’s timers', () => {
     expect(clock()).toHaveClass('shrink-0');
   });
 });
+
+describe('CallStage: the rundown, starting any segment next', () => {
+  const picker = () =>
+    within(strip()).getByRole('combobox', { name: 'Segment to start next' }) as HTMLSelectElement;
+  // A take that is running with no segment started: also what a resumed take looks like.
+  const taking = <CallStage {...props} phase="recording" />;
+
+  it('starts the segment chosen in the list, and choosing one marks nothing', () => {
+    localStorage.setItem(KEY, 'Intro\nInterview\nQuestions');
+    render(taking);
+    fireEvent.click(showButton());
+    expect(Array.from(picker().options).map((o) => o.textContent)).toEqual([
+      '1. Intro',
+      '2. Interview',
+      '3. Questions',
+    ]);
+    expect(picker()).toHaveValue('0');
+
+    fireEvent.change(picker(), { target: { value: '2' } });
+    expect(onMark).not.toHaveBeenCalled();
+    expect(running()).toHaveTextContent('Rundown not started');
+    const next = within(strip()).getByRole('button');
+    expect(next).toHaveTextContent('Start: Questions');
+
+    fireEvent.click(next);
+    expect(onMark).toHaveBeenCalledTimes(1);
+    expect(onMark).toHaveBeenLastCalledWith('Questions');
+    expect(running()).toHaveTextContent('3 of 3 Questions');
+
+    // Nothing follows the last segment, and an earlier one can still be chosen.
+    expect(next).toBeDisabled();
+    expect(picker()).toHaveDisplayValue('End of the rundown');
+    fireEvent.change(picker(), { target: { value: '0' } });
+    expect(next).toBeEnabled();
+    expect(next).toHaveTextContent('Next: Intro');
+    fireEvent.click(next);
+    expect(onMark).toHaveBeenLastCalledWith('Intro');
+    expect(running()).toHaveTextContent('1 of 3 Intro');
+
+    // Back on the segment that follows the one that is running.
+    expect(picker()).toHaveValue('1');
+    expect(next).toHaveTextContent('Next: Interview');
+    expect(onMark).toHaveBeenCalledTimes(2);
+  });
+
+  it('forgets a choice when the take ends', () => {
+    localStorage.setItem(KEY, 'Intro\nInterview\nQuestions');
+    const { rerender } = render(taking);
+    fireEvent.click(showButton());
+    fireEvent.change(picker(), { target: { value: '2' } });
+    rerender(<CallStage {...props} phase="finalizing" />);
+    rerender(taking);
+    expect(picker()).toHaveValue('0');
+    expect(onMark).not.toHaveBeenCalled();
+  });
+
+  it('cuts a long name in the list, and keeps it whole on the marker', () => {
+    const long = 'A very long segment name that goes on and on past thirty characters';
+    localStorage.setItem(KEY, `Intro\n${long}`);
+    render(taking);
+    fireEvent.click(showButton());
+    expect(picker().options[1]!.textContent).toBe(`2. ${long.slice(0, 29)}…`);
+    fireEvent.change(picker(), { target: { value: '1' } });
+    fireEvent.click(within(strip()).getByRole('button'));
+    expect(onMark).toHaveBeenLastCalledWith(long);
+  });
+
+  it('cuts a name only when it is longer than thirty characters', () => {
+    localStorage.setItem(KEY, `${'a'.repeat(30)}\n${'b'.repeat(31)}`);
+    render(taking);
+    fireEvent.click(showButton());
+    expect(picker().options[0]!.textContent).toBe(`1. ${'a'.repeat(30)}`);
+    expect(picker().options[1]!.textContent).toBe(`2. ${'b'.repeat(29)}…`);
+  });
+
+  it('gives the list a tooltip with the same words as its name', () => {
+    localStorage.setItem(KEY, 'Intro');
+    render(taking);
+    fireEvent.click(showButton());
+    expect(picker()).toHaveAttribute('title', 'Segment to start next');
+  });
+
+  it('lists the end of the rundown as a row that cannot be chosen', () => {
+    localStorage.setItem(KEY, 'Intro');
+    render(taking);
+    fireEvent.click(showButton());
+    fireEvent.click(within(strip()).getByRole('button'));
+    expect(within(picker()).getByRole('option', { name: 'End of the rundown' })).toBeDisabled();
+  });
+
+  it('is as tall as a phone button and takes the row the button leaves', () => {
+    localStorage.setItem(KEY, 'Intro');
+    render(taking);
+    fireEvent.click(showButton());
+    expect(picker()).toHaveClass('h-11', 'min-w-0', 'flex-1');
+  });
+
+  it('sits in the row the button is in, so the running view keeps its height', () => {
+    localStorage.setItem(KEY, 'Intro');
+    render(taking);
+    fireEvent.click(showButton());
+    expect(picker().parentElement).toBe(within(strip()).getByRole('button').parentElement);
+  });
+
+  it('comes before the button in the tab order', () => {
+    localStorage.setItem(KEY, 'Intro');
+    render(taking);
+    fireEvent.click(showButton());
+    const button = within(strip()).getByRole('button');
+    expect(picker().compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
