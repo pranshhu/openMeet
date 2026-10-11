@@ -357,6 +357,20 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   person's own tile the same mark. The names of the people who have a tile and a raised
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
+- **Reactions** (`components/ReactionMenu.tsx`, `components/ReactionBadge.tsx`,
+  `lib/reactions.ts`) — the arrow in one pill with Raise hand opens a row of four (`REACTIONS`
+  in the protocol: thumbs up, applause, laugh, heart). `ReactionMenu` keeps its own open
+  state, as `RoleLinks` does; its pill has no `data-picker-container`, so it and the device
+  menus close each other. The arrow and the row are hidden below the `sm` width by their own
+  classes, also while a raised hand keeps the pill there: the row would leave a narrow
+  screen. `useRoom().sendReaction` puts the choice in `state.reactions` under
+  `OWN_REACTION` and sends `reaction`; one that arrives is put there under its sender's peer
+  id. `takeReaction` is the one gate for both: a code this build knows, one a second from one
+  sender, the rest dropped before any state changes. `CallStage` draws an entry on that
+  person's tile as `ReactionBadge` (`key` = the time it was taken), which removes itself
+  `REACTION_SHOWN_MS` (3 s) after that time with a timer of its own, so a tile drawn again
+  shows what is left of a reaction or nothing. The pictures are elements of the page: no
+  recorder, file or crash copy holds one.
 - **`components/MarkerNote.tsx`** — a chapter marker with a typed note. `useMarkerNote` holds
   whether the field is open for the take that is running and listens for **N** (ignored while
   typing, as **M** is); the pencil button beside the marker button opens it too. `MarkerNote` is
@@ -1025,3 +1039,14 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **While a screen is presented in a window narrower than 768 px only the first other
   person has a tile,** so another person's raised hand is not on screen there. A screen
   reader still reads it out.
+- **A reaction is not read out by a screen reader,** and it is drawn only on a tile. A
+  producer and a Present-only device have no tile and no reactions menu, and a window
+  narrower than 640 px (a phone held upright) has no menu either; it still shows the others'
+  reactions. A person whose own tile is not on screen (a screen is presented in a window
+  narrower than 768 px) sees nothing of a reaction they send.
+- **A reaction sent while the sender's connection to the Room is down is lost.** It shows on
+  the sender's own tile and reaches nobody else (`SignalClient.send` drops it), and nothing
+  tells the sender. The same holds against a Worker deployed before reactions: it ignores
+  the message.
+- **The Room passes on every reaction it is sent.** The limit of one a second from one
+  sender is kept by each page that receives them, as the limits on chat and markers are.

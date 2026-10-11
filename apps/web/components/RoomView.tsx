@@ -88,7 +88,7 @@ export function RoomView({ slug }: { slug: string }) {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
-    resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised,
+    resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised, sendReaction,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -316,6 +316,8 @@ export function RoomView({ slug }: { slug: string }) {
       onSetIncomingVideoOff={setIncomingVideoOff}
       handRaised={state.handRaised}
       onSetHandRaised={setHandRaised}
+      reactions={state.reactions}
+      onReact={sendReaction}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}

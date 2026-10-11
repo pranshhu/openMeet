@@ -149,6 +149,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Raise hand**, in the call's control bar: a mark appears on your tile for everyone
   until you lower it, and someone who joins later sees it too. Nothing of it is
   recorded. A phone held upright shows the hands and has no button.
+- Quick reactions, from the arrow beside **Raise hand**: a thumbs up, applause, a laugh
+  or a heart shows on your tile on everyone's screen for about three seconds, without
+  a sound. Nothing of it is recorded.
 
 ### Changed
 
