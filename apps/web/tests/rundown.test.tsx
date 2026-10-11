@@ -479,3 +479,52 @@ describe('CallStage: the rundown, starting any segment next', () => {
     expect(picker().compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe('parseRundown: where a length is read', () => {
+  it('reads a length only at the end of a line, and of at most three digits of minutes', () => {
+    expect(
+      parseRundown('Recap of 2:00 interview\nNews at 9:30 with Ana 5:00\nMarathon 1000:00\nLong 999:59')
+    ).toEqual([
+      { name: 'Recap of 2:00 interview', plannedMs: null },
+      { name: 'News at 9:30 with Ana', plannedMs: 300_000 },
+      { name: 'Marathon 1000:00', plannedMs: null },
+      { name: 'Long', plannedMs: 59_999_000 },
+    ]);
+  });
+});
+
+describe('CallStage: the rundown, who has it and when it is an editor', () => {
+  it('is offered to a host who joined to present only', () => {
+    render(<CallStage {...props} companion />);
+    fireEvent.click(showButton());
+    expect(strip()).toBeInTheDocument();
+  });
+
+  it('describes the editor by its hint, which says that starting a segment adds a chapter marker', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(showButton());
+    expect(editor()).toHaveAccessibleDescription(
+      'One segment per line; end a line with its planned length, like 2:00. During a take, each segment you start adds a chapter marker.'
+    );
+  });
+
+  it('is an editor again once the take is saved, and starts nothing there', () => {
+    localStorage.setItem(KEY, 'Intro\nInterview');
+    const { rerender } = render(<CallStage {...props} phase="recording" />);
+    fireEvent.click(showButton());
+    fireEvent.click(within(strip()).getByRole('button'));
+    rerender(<CallStage {...props} phase="done" />);
+    expect(editor()).toHaveValue('Intro\nInterview');
+    expect(within(strip()).queryByRole('button')).toBeNull();
+    expect(onMark).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the running segment whole on the line above the list', () => {
+    const long = 'A very long segment name that goes on and on past thirty characters';
+    localStorage.setItem(KEY, long);
+    render(<CallStage {...props} phase="recording" />);
+    fireEvent.click(showButton());
+    fireEvent.click(within(strip()).getByRole('button'));
+    expect(running()).toHaveTextContent(`1 of 1 ${long}`);
+  });
+});
