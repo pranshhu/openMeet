@@ -64,7 +64,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (16 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -74,6 +74,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
+  `recording-capability` also carries the sender's lobby answer, `listening` (one of
+  `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
+  when it is one of those codes, and the page that receives it checks again.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
@@ -196,6 +199,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `recording-countdown` is **passed on only from the host**, and only with a finite
   `seconds`, to every other joined peer. Nothing is kept and `recording` does not change:
   the take starts with `recording-started`.
+- `script` (`text`, in both unions like `recording-countdown`) is the host's teleprompter
+  script. It is **passed on only from the host**, to every other joined peer and with no
+  `from`, and only when `text` is a string of at most `MAX_SCRIPT_LENGTH` (50,000) UTF-16
+  units. Nothing is kept, so a peer that joins later is not sent it.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -258,16 +265,44 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   holding those gets a `beforeunload` prompt, since Rejoin reloads), `error`; the terminal ones
   release camera/mic unless a take is live. `peer-left` (the mesh emptied, or `room-closed`) renders
   WaitingRoom ("Everyone else left"): the tab stays in the room, camera on, and resumes when someone
-  joins. `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
+  joins. A host whose browser can record gets **Continue alone** in the waiting room, alone or
+  after everyone left (never while connecting, never on a present-only device). `RoomView`
+  keeps that choice while the tab stays in the room (`alone`) and from then on renders
+  `CallStage` for `waiting`, `connecting` and `peer-left` too, drawn as `in-call`, so
+  Record, the countdown, the teleprompter and the media board are there with nobody else in
+  the room. The hook's phase is not changed by it.
+  `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
   (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
-  `deviceId`, new-stream-before-stop-old). A blocked/missing/busy camera or mic shows in the preview
+  `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
+  (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
+  `om_listening`). **Speakers, echo cancellation on** opens the microphone again with
+  `echoCancellation: true` (`micConstraints`); noise suppression and gain control stay off. For that one
+  change the microphone is stopped before it is asked for, because a browser can give a second capture of
+  an open microphone the processing of the first; the preview is taken down with it, so Join is off until
+  the new one is open, and stays down with Try again when it cannot be opened. The camera, microphone,
+  quality and frame-rate pickers are off for as long as the preview is down, so only Try again opens a
+  capture then. A change of camera, microphone, quality, frame rate or echo cancellation made while
+  another is being opened is not taken (`reopeningRef`), so no capture is asked for beside one on its
+  way. The select shows what the
+  microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
+  asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
+  host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
+  (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
+  microphone for five seconds, played back from an object URL that is revoked when the clip
+  ends. Leaving the lobby aborts it, so that recorder never runs into the call.
   Leftover backups are listed in the join panel, beside Join, and a guest whose backup is of this
   room can choose it with **Send to host**; the choice is handed to the hook on join.
   A host's interrupted takes of this room are listed there as **Unsaved recording**, with Save
   to folder and Delete; both are disabled while a save runs, and a save that left something out
   says so in an alert and keeps the row.
+  `?check=1` on the room link (`isCheckLink` in `RoomView`; the host's **Copy check link** in the
+  lobby builds it) renders the same `Lobby` with `checkOnly`: preview, pickers and readiness
+  panel, with the join form hidden and the backup and unsaved-recording lists left out, so a
+  guest can test a device ahead of the call. It never calls `join`. A link that also carries
+  `producer=1` or `present=1` is that link, and `check` is ignored.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
@@ -374,10 +409,16 @@ backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
+The lobby's answer to "headphones or speakers" reaches the hook through `chooseListening`
+(`lib/listening.ts`), the way the bitrate level does through `chooseBitrate`, and rides on
+every `recording-capability` this tab sends (`listeningField`); `capabilities` keeps each
+peer's, and the host's name tags show it (`LISTENING_TAG`).
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
-stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes a `backup` channel to
+stream); stop = `removeTrack` + renegotiate, idempotent. A host can present with nobody connected:
+its screen file is written to the folder, so only a guest needs the connection to the host.
+`onDataChannel` routes a `backup` channel to
 `BackupIntake` before the camera fall-through; accepting reuses or sets the session's recording folder.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
 unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
@@ -387,9 +428,22 @@ A take that took the room while it counted (a resume) keeps it, and `resumeRecor
 down. The host sends `recording-countdown` as its count starts; every other tab counts from the
 cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the count down on
 `recording-started`. A lost cue costs the count, never the take.
+`sendScript(text)` sends the host's teleprompter script as `script` and returns whether it went
+out. Every other tab keeps the newest one the Room passes on in `incomingScript`, when it is a
+non-blank string of at most `MAX_SCRIPT_LENGTH` units, until `dismissIncomingScript` (the
+person took it or turned it down); nothing else in the state changes.
+
+`CallStage` hands the three to `components/Teleprompter.tsx`, each person's own script overlay
+(not on a present-only device; its text is kept in `localStorage` per room and is in no file).
+A host's editor has **Send to everyone**, with a line saying whether it went out. Everyone
+else is offered what arrives: a dot on the teleprompter button while the panel is closed, and
+**Use it** / **Ignore** inside it; their own text changes only on **Use it**, and either
+answer clears the offer. The editor shows a script's reading time at 150 words a minute
+(`readingMinutes`).
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
+  It returns whether the message went out.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
@@ -523,10 +577,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as
   "Download sync.json" (downloaded as
-  `openmeet-<slug>-take<n>-sync.json`). After a take the host's summary is a column beside the stage
+  `openmeet-<slug>-take<n>-sync.json`). When someone's microphone ran with the browser's echo
+  cancellation on, the report has an `echoCancellation` section naming that person's camera and
+  WAV files, and the summary's rows for them read "echo cancellation on": the host's own from its
+  microphone's settings at End & save, a guest's from the `listening` it announced, kept by peer id
+  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
-  `recordWithCountdown` in one click (same folder, no second prompt). With nobody left to record, that
-  button copies the invite link instead and the summary stays. The summary's file list leaves out a
+  `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
+  in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
+  through the count. The summary's file list leaves out a
   guest WAV that was never opened, host files a host companion never opened, empty guest screen
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
@@ -655,6 +714,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A take needs no guest: with nobody connected `startRecording` records the host's own
+   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
    until they pass `STREAM_BACKLOG_CAP_BYTES` (256 MiB), after which the stream is abandoned and the
@@ -672,10 +734,13 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
    Room no longer lists is closed there the way `peer-left` closes one — a Room that restarted never
    sends `peer-left` for the sockets it lost — and every connection it lists is rebuilt, because the
    far end closed its side when this tab's socket dropped and waits for a fresh offer; only the
-   connections that message opened are negotiated on it. When sharing screen, a reconnect finishes
-   the old screen segment and starts a new numbered segment on the rebuilt connection, with each
-   segment backed up locally in OPFS. Host rebinds new channel to existing receiver, found by a
-   stable key (see below), not by the DO's fresh-per-socket peerId.
+   connections that message opened are negotiated on it. The Room drops its `recording` flag with
+   the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
+   runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
+   the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
+   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
+   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
+   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -802,6 +867,9 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    A switched-to microphone is asked for the echo cancellation the lobby microphone was asked
+    for (read once from that track's `getConstraints()`, or from its settings when the browser
+    gives no constraints back), so the lobby's answer holds for the whole call.
     When `SwitchableMedia` is given `onMicWarning` the mic source also feeds a `ChannelSplitterNode` and
     one `AnalyserNode` per channel, beside the path to the destination node and never in it; `watchMic`
     (`lib/mic-watch.ts`) polls them every 300 ms and reports `'silent'` once no channel has carried a
@@ -1002,6 +1070,61 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A check link works only while its room does, and it is the invite link.** The checks
+  run against the room, so an expired room shows "Room not found or expired"; opening a
+  check link joins nothing and so does not extend the room's 30 days. Without `?check=1`
+  it is the invite link, so it is exactly as private. The page starts on the browser's
+  default camera and microphone, like the lobby, and no device choice is remembered for
+  the day of the call.
+- **Echo cancellation can only be chosen in the lobby.** The call has no control for it, and
+  the host cannot switch it for a guest. A person who wants it on or off leaves and joins
+  again, which ends their part of a running take.
+- **Echo cancellation was checked with test microphones only.** No take from a person on real
+  speakers has been listened to (`MANUAL-TESTING.md`, the echo cancellation row in section 8).
+  Whether the browser still delivers two channels with it on is read from the microphone, not
+  assumed: Stereo is offered only when the microphone reports two.
+- **The lobby answer goes to every tab in the room.** Only the host's page shows it, on the
+  name tag; the Room relays `recording-capability` to everyone, as it does the browser notes.
+- **The answer on a name tag can be cut off.** A name tag truncates in a small tile; the whole
+  text is in its tooltip. A guest on speakers gets no line of their own.
+- **A take saved from its crash copy does not say whose audio was echo-cancelled.** The lobby's
+  Save to folder and the call's Save what was recorded rebuild the report from the crash copy,
+  which holds no such note. The files are the same; only the mark is missing.
+- **After a resume, files from before the reload can miss the echo-cancellation mark.** The
+  reloaded page knows only what was announced to it since: the host's own first file is never
+  marked, and neither are the files of a guest who left before the reload.
+- **The echo-cancellation mark does not reach a guest's own backup or the call-audio copy.**
+  Both hold the same processed audio; the note in `sync.json` says so in words, and a returned
+  backup's own `.json` does not mention it.
+- **A script is sent once, to the people in the room at that moment.** Someone who joins
+  afterwards is not sent it, and an offer nobody answered does not survive a reload of that
+  person's page. The host sends it again, and everyone else is offered it again, also those
+  who already used or ignored it. The host is not told who used it.
+- **Using the host's script replaces the person's own for that room, with no way back.** The
+  offer says so before the click, and shows the reading time but not the text. The reading
+  time counts words by spaces, so a script in a language written without them reads as about
+  a minute.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** The crash
+  copy holds guests' bytes and writes its notes only with them, so with no guest its
+  directory stays empty and the next lobby removes it. The host's own camera file and WAV
+  master are listed there under Backups on this device. After a reload the folder's own
+  `host…wav` keeps the placeholder header a closing page leaves, and nothing repairs it.
+- **A guest who joins a take that is already running sees no countdown,** only the notice
+  and the REC pill, and is recorded from that moment. The host cannot set that guest as
+  not recorded until the take ends.
+- **A host recording alone whose connection to the room drops is, for the Room, a room
+  that emptied.** The session ends there, so the guests the host had set as not recorded
+  are forgotten, as when everyone leaves.
+- **Continue alone is not remembered.** After a reload the host is in the waiting room
+  again, and the call screen is one press away.
+- **The done screen has no Copy invite link.** The summary's main button records the next
+  take whether or not anyone else is in the room; the address in the address bar is the
+  invite link.
+- **A guest who joined a running take a moment before the host's connection came back can
+  get two files.** It learns the take's id from the host's first acknowledgement; announced
+  again before that, the take looks new to it, so it ends its file and starts another.
+- **While the host's connection to the room is down, a guest who joins is not recorded.**
+  The Room has no host to ask; the guest is started when the host is back.
 - **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
   no **Add to calendar**, and a host in a browser without the room's host token is a guest
   there. The entry is one hour long with a fixed title and text; the calendar that opens it
