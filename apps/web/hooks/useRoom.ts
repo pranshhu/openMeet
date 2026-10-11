@@ -1199,6 +1199,14 @@ export function useRoom(slug: string) {
         // both guard against with phaseOnPeerLeft. This path had no guard, so a
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
         onFatalClose: (code) => {
+          if (code === WS_CLOSE_REMOVED) {
+            // Every other page closes its side of the connection to a removed
+            // tab, and this one has no socket to make a new one: nothing
+            // queued for the host can leave. It is not kept, and Stop and save
+            // does not wait for it. The backup has all of it.
+            const h = recordingRef.current;
+            for (const s of [h?.sender, h?.wavSender, h?.screenSender]) s?.giveUp();
+          }
           const settle = () =>
             setState((s) => {
               const next = phaseOnFatalClose(s.phase, code);

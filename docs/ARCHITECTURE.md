@@ -402,6 +402,10 @@ the "Recording" label follows this tab's own `phase` from there and a guest's sa
 backup links. A guest's capture that has started but not reached `recording` (its channel to the
 host has not opened) cannot be held, having no call screen: on any terminal close it is ended
 first through `endRecording({ internal: true })`, its backup kept, and the terminal screen follows.
+On a removal (`4007`) the close handler also tells the take's camera, WAV and screen senders to
+`giveUp()`: every other page closes its side of the connection on `peer-left` and this tab has no
+socket to make a new one, so nothing queued can reach the host. **Stop and save** therefore waits
+for no drain, and the track readout shows those tracks as stopped.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera
@@ -454,7 +458,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   Each chunk is split into ≤64 KiB fragments (`DC_MAX_MESSAGE_BYTES`), each with its
   own header `idx`/`offset`; `rawSend` = one fragment's two-frame header+payload. Ack truncates
   retransmit buffer. `rebind(channel)` moves the sender onto a new channel after a reconnect.
-  `drain()` polls 100ms until empty or 30s cap.
+  `drain()` polls 100ms until empty or 30s cap. `giveUp()` is for a far end that is gone for good
+  (the host removed this tab): the queue is emptied, later chunks are not kept, `drain()` answers
+  false at once and no finish signal follows; unlike the backlog cap it sends nothing and raises
+  no error.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once

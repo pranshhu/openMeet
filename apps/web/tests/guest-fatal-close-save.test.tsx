@@ -4,7 +4,7 @@ import { renderHook } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { CallStage } from '@/components/CallStage';
 import { BackupRecorder } from '@/lib/backup-recorder';
-import { endGuestRecording } from '@/hooks/recording-controller';
+import { endGuestRecording, startGuestRecording } from '@/hooks/recording-controller';
 import { PeerConnection } from '@/lib/peer';
 import { MediaManager } from '@/lib/media';
 
@@ -96,7 +96,13 @@ vi.mock('@/hooks/recording-controller', async () => {
     startGuestRecording: vi.fn().mockReturnValue({
       recordingId: 'rec-test-1',
       guestRecorder: { totalBytes: 100, stopAndFlush: vi.fn() },
-      sender: { lastAckedIdx: 5, drain: vi.fn().mockResolvedValue(true), rebind: vi.fn(), hold: vi.fn() },
+      sender: {
+        lastAckedIdx: 5,
+        drain: vi.fn().mockResolvedValue(true),
+        rebind: vi.fn(),
+        hold: vi.fn(),
+        giveUp: vi.fn(),
+      },
     }),
     endGuestRecording: vi.fn().mockImplementation(async () => {
       endGuestRecordingCalled = true;
@@ -414,6 +420,19 @@ describe('a guest the host removes during a take', () => {
     expect(result.current.state.phase).toBe('done');
     expect(result.current.state.backupBlobUrl).toBeTruthy();
   });
+
+  it('stops keeping anything for the host at the removal, on every stream of its take', async () => {
+    const gaveUp = () => ({ giveUp: vi.fn() });
+    const senders = { sender: gaveUp(), wavSender: gaveUp(), screenSender: gaveUp() };
+    vi.mocked(startGuestRecording).mockReturnValueOnce({ recordingId: 'rec-test-2', ...senders } as never);
+    await recordingGuest();
+    for (const s of Object.values(senders)) expect(s.giveUp).not.toHaveBeenCalled();
+
+    act(() => {
+      onFatalCloseCallback?.(4007, 'removed');
+    });
+    for (const s of Object.values(senders)) expect(s.giveUp).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('a guest the host removes while their capture is still starting', () => {
@@ -531,5 +550,19 @@ describe('a guest the room closes on for good during a take', () => {
     });
     expect(result.current.state.peerRecording).toBe(false);
     expect(result.current.state.backupBlobUrl).toBeTruthy();
+  });
+
+  // A room that expired closes every socket and leaves the connections between
+  // the pages up, so what is queued can still reach the host.
+  it('keeps its streams to the host when the close is not a removal', async () => {
+    const sender = { giveUp: vi.fn() };
+    vi.mocked(startGuestRecording).mockReturnValueOnce({ recordingId: 'rec-test-3', sender } as never);
+    const result = await recordingGuest();
+
+    act(() => {
+      onFatalCloseCallback?.(4003, '');
+    });
+    expect(result.current.state.phase).toBe('recording');
+    expect(sender.giveUp).not.toHaveBeenCalled();
   });
 });
