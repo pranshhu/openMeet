@@ -20,6 +20,7 @@ export type IconName =
   | 'board'
   | 'levels'
   | 'folder'
+  | 'list'
   | 'arrow_drop_up'
   | 'arrow_drop_down';
 
@@ -75,6 +76,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
   check: <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />,
   folder: <path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" />,
+  list: <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z" />,
   close: (
     <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
   ),

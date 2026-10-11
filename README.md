@@ -69,6 +69,8 @@ retention policy to trust, because there's nothing retained.
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
   press Enter, and the note is that marker's line in `chapters.txt`
+- A rundown for the host: list the show's segments, step through them during a take,
+  and each one becomes a chapter marker with its name
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt

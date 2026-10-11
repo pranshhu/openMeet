@@ -18,6 +18,7 @@ import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
 import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { MarkerNote, useMarkerNote } from './MarkerNote';
+import { Rundown } from './Rundown';
 import { BackupNotice } from './BackupNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
@@ -449,6 +450,8 @@ export function CallStage({
   }, [unread, isTakeActive]);
 
   const [prompterOpen, setPrompterOpen] = useState(false);
+  // The host's rundown strip, above the control bar.
+  const [rundownOpen, setRundownOpen] = useState(false);
   const [board, setBoard] = useState<MediaBoard | null>(null);
   const [boardOpen, setBoardOpen] = useState(false);
   // First opened mid-take: that take's recorder keeps the raw mic (a running
@@ -489,6 +492,9 @@ export function CallStage({
 
   const peerFallback = role === 'host' ? 'Guest' : 'Host';
   const isHost = role === 'host';
+  // A rundown is stepped through during a take, so it is offered only where
+  // one can be started: to a host who can record.
+  const hasRundown = isHost && canRecord;
   // Name tags truncate, so the one warning a host must not miss gets a line of its own.
   const unrecordable = isHost
     ? remotePeers
@@ -952,6 +958,11 @@ export function CallStage({
                 onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
               />
             )}
+            {/* Mounted while hidden too: its place in the show must survive
+                hiding the strip in the middle of a take. */}
+            {hasRundown && (
+              <Rundown slug={slug} open={rundownOpen} recording={phase === 'recording'} onMark={onMark} />
+            )}
             {/* Below 384 px the gaps and the side padding give up a few pixels: with
                 a take running the second row holds five buttons and Leave, 334 px
                 at this spacing, which fits a 360 px phone. At the wider spacing it
@@ -1275,6 +1286,14 @@ export function CallStage({
                     />
                   )}
                 </>
+              )}
+              {hasRundown && (
+                <ControlButton
+                  icon="list"
+                  label={rundownOpen ? 'Hide rundown' : 'Show rundown'}
+                  variant={rundownOpen ? 'active' : 'default'}
+                  onClick={() => setRundownOpen((o) => !o)}
+                />
               )}
               {((phase === 'in-call' && canRecord) || (phase === 'done' && canRecordNext)) && (
                 <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">

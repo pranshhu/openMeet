@@ -146,6 +146,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- A **rundown** for the host: write the show's segments in the call, one per line, and
+  step through them during a take, one press a segment. Each segment that starts is a
+  chapter marker with its name, so the take's chapters file is the rundown with the
+  real times. It is kept in the host's browser, one per room, and never sent to anyone.
 
 ### Changed
 
