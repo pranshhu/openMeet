@@ -384,6 +384,31 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   board pad's file name can be longer) and places the host's own note at `at`, the moment its
   field opened, because typing takes seconds; nothing of `at` is sent, so a guest's note is
   placed when it reaches the host, like every relayed marker.
+- **`components/Shortcuts.tsx`** is the call's keyboard and the list of its keys, mounted last in
+  `CallStage`'s status bar. A key is not wired to an action: a bare letter typed outside a field
+  presses the button that carries it in `aria-keyshortcuts` (`ControlButton`'s `shortcut`: **A**
+  microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not on
+  screen has no key; one that is in the document but not displayed is skipped (`checkVisibility`). A
+  held key, and a letter pressed with Shift, Ctrl or Cmd, is left alone. The **?** button (from `sm`
+  up) and the **?** key open the list. **M** (marker) keeps its own handler in `CallStage` and
+  **N** (marker with a note) its own in `useMarkerNote`; both are only listed.
+  **Alt+R** is carried by Record and **Alt+S** by the host's End & save: two chords, so
+  the key that starts a take can never end one, each under whatever keeps its button off or away.
+  With Alt held the letter is read from `keyCode`, because Option+R types ® on a Mac: `keyCode` is
+  the letter the layout has on that key, or the key's place on a layout without Latin letters.
+  `code` is the place alone, and Colemak has R where QWERTY has S.
+  The single keys (A, V, C, T, M, N and **?**) can be turned off, for a person whose speech input
+  types letters. `hooks/use-single-keys.ts` keeps one choice per browser in `localStorage` as
+  `om_single_keys`: `'0'` is off, and anything else, nothing stored or a storage that refuses is on.
+  Each of the three listeners (`Shortcuts`, the **M** effect in `CallStage`, `useMarkerNote`) asks
+  `singleKeysOn()` as a key arrives, so a change is in force for the next key. Escape closes the
+  list and, when the keyboard was in it, hands focus back to the **?** button. The list holds the
+  tick box (`useSingleKeys`, `setSingleKeys`), and `Lobby` has the same box last in the panel of
+  each of its three screens, because the **?** button is not shown below 640 px (the check
+  page, `checkOnly`, joins no call and leaves the box out). While the keys
+  are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
+  tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
+  rows and says they are off. Alt+R and Alt+S are chords and stay on.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1113,3 +1138,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   again before that, the take looks new to it, so it ends its file and starts another.
 - **While the host's connection to the room is down, a guest who joins is not recorded.**
   The Room has no host to ask; the guest is started when the host is back.
+- **The shortcut keys are fixed and exist only on the call screen.**
+  A bare letter is read as the keyboard layout types it, so a layout without Latin letters has
+  no A, V, C, T, M or N. A letter typed while no field has focus is a key press: text typed
+  after clicking outside the chat field switches the microphone and the camera. No key works
+  while any input has focus, a teleprompter slider included. The waiting room has no keys.
+  Below 640 px the **?** button and its list are not shown, and a key that presses a button
+  does nothing while chat or the summary covers the control bar.
+- **In a call on a window narrower than 640 px the single keys cannot be turned off or on.**
+  The list is not shown there; the other tick box is in the lobby, a Leave and a Rejoin away.
+  The list's tick box is an input, so right after it is ticked no key works until the keyboard
+  leaves it (Escape closes the list). Two tabs do not share a change while both are open: each
+  reads the stored choice when it loads. In a browser that blocks storage the choice lasts
+  until the page is reloaded, so one made in the lobby holds for that call.
+- **On a keyboard without Latin letters, Alt+R and Alt+S are the keys where QWERTY has R and
+  S.** A desktop or a browser that takes one of the chords for itself never passes it to the
+  page. A guest's "Stop and save" has no key.
+- **Alt+R and Alt+S have not been run on a Mac.** They rely on Option+R and Option+S reaching
+  the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.44 and 8.45).
