@@ -71,6 +71,7 @@ retention policy to trust, because there's nothing retained.
   press Enter, and the note is that marker's line in `chapters.txt`
 - A rundown for the host: list the show's segments, step through them during a take,
   and each one becomes a chapter marker with its name
+  (give a segment a planned length and its clock shows when it runs over)
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt

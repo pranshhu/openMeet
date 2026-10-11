@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { MAX_RUNDOWN_LENGTH, loadRundown, parseRundown, saveRundown } from '@/lib/rundown';
 
@@ -189,5 +189,181 @@ describe('CallStage: the rundown', () => {
     ).toBeInTheDocument();
     expect(within(strip()).queryByRole('button')).toBeNull();
     expect(onMark).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseRundown: planned lengths', () => {
+  it('takes a length in minutes and seconds off the end of a line', () => {
+    expect(
+      parseRundown(
+        'Intro 2:00\nInterview with Ana  20:30\nTop 10\nBreak 0:00\nLong one 120:00\n2:00\nOdd 1:75'
+      )
+    ).toEqual([
+      { name: 'Intro', plannedMs: 120_000 },
+      { name: 'Interview with Ana', plannedMs: 1_230_000 },
+      { name: 'Top 10', plannedMs: null },
+      { name: 'Break', plannedMs: null },
+      { name: 'Long one', plannedMs: 7_200_000 },
+      { name: '2:00', plannedMs: null },
+      { name: 'Odd 1:75', plannedMs: null },
+    ]);
+  });
+});
+
+describe('CallStage: the rundown’s timers', () => {
+  const clock = () => within(strip()).getByRole('timer');
+
+  it('says how many segments it read and how long they are planned to run', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(showButton());
+    const count = () => within(strip()).queryByText(/^\d+ segments?\b/);
+    expect(within(strip()).getByText(/end a line with its planned length, like 2:00/)).toBeInTheDocument();
+    expect(count()).toBeNull();
+
+    fireEvent.change(editor()!, { target: { value: 'Intro' } });
+    expect(count()).toHaveTextContent(/^1 segment$/);
+    fireEvent.change(editor()!, { target: { value: 'Intro 2:00\nInterview 20:00\nQuestions' } });
+    expect(count()).toHaveTextContent(/^3 segments, 22:00 planned$/);
+  });
+
+  it('counts the running segment against its planned length, and says by how much it is over', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem(KEY, 'Intro 0:30\nInterview');
+      render(<CallStage {...props} phase="recording" />);
+      fireEvent.click(showButton());
+      // Nothing is timed before a segment starts.
+      expect(within(strip()).queryByRole('timer')).toBeNull();
+      fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+      // The length is off the name, on the marker too.
+      expect(onMark).toHaveBeenLastCalledWith('Intro');
+      expect(running()).toHaveTextContent(/^1 of 2 Intro$/);
+      expect(clock()).toHaveTextContent(/^0:00 \/ 0:30$/);
+
+      act(() => {
+        vi.advanceTimersByTime(12_000);
+      });
+      expect(clock()).toHaveTextContent(/^0:12 \/ 0:30$/);
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(clock()).toHaveTextContent(/^0:42 \/ 0:30 0:12 over$/);
+
+      // The next segment starts its own count, and this one has no planned length.
+      fireEvent.click(within(strip()).getByRole('button'));
+      expect(clock()).toHaveTextContent(/^0:00$/);
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(clock()).toHaveTextContent(/^0:05$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps counting while the strip is hidden', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem(KEY, 'Intro 0:30\nInterview');
+      render(<CallStage {...props} phase="recording" />);
+      fireEvent.click(showButton());
+      fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+      fireEvent.click(hideButton());
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+      fireEvent.click(showButton());
+      expect(clock()).toHaveTextContent(/^0:20 \/ 0:30$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says a segment is over only once it is a whole second past its length', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem(KEY, 'Intro 0:30\nInterview');
+      render(<CallStage {...props} phase="recording" />);
+      fireEvent.click(showButton());
+      fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+      // Shown again part of the way through a second: the clock reads that moment.
+      fireEvent.click(hideButton());
+      act(() => {
+        vi.advanceTimersByTime(30_400);
+      });
+      fireEvent.click(showButton());
+      expect(clock()).toHaveTextContent(/^0:30 \/ 0:30$/);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(clock()).toHaveTextContent(/^0:31 \/ 0:30 0:01 over$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a length of an hour or more with hours, in the count and in the clock', () => {
+    localStorage.setItem(KEY, 'Long one 90:00');
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(showButton());
+    expect(within(strip()).getByText(/^1 segment, 1:30:00 planned$/)).toBeInTheDocument();
+
+    rerender(<CallStage {...props} phase="recording" />);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Long one' }));
+    expect(clock()).toHaveTextContent(/^0:00 \/ 1:30:00$/);
+  });
+
+  it('shows the placeholder example the way the editor reads it', () => {
+    render(<CallStage {...props} />);
+    fireEvent.click(showButton());
+    const example = parseRundown(editor()!.getAttribute('placeholder') ?? '');
+    expect(example.map((s) => s.plannedMs)).toEqual([120_000, 1_200_000, null]);
+  });
+
+  it('says the over part in words and in the warning colour', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem(KEY, 'Intro 0:30\nInterview');
+      render(<CallStage {...props} phase="recording" />);
+      fireEvent.click(showButton());
+      fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+      act(() => {
+        vi.advanceTimersByTime(35_000);
+      });
+      expect(within(clock()).getByText(/over$/)).toHaveClass('text-[#fdd663]');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is a timer that screen readers are not interrupted by every second', () => {
+    localStorage.setItem(KEY, 'Intro 0:30');
+    render(<CallStage {...props} phase="recording" />);
+    fireEvent.click(showButton());
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+    expect(clock()).toHaveAttribute('aria-live', 'off');
+  });
+
+  it('stops its timer while the strip is hidden', () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem(KEY, 'Intro 0:30');
+      render(<CallStage {...props} phase="recording" />);
+      fireEvent.click(showButton());
+      fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+      const shown = vi.getTimerCount();
+      fireEvent.click(hideButton());
+      expect(vi.getTimerCount()).toBe(shown - 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not shrink, so the clock stays whole when the name beside it is cut', () => {
+    localStorage.setItem(KEY, 'Intro 0:30');
+    render(<CallStage {...props} phase="recording" />);
+    fireEvent.click(showButton());
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Start: Intro' }));
+    expect(clock()).toHaveClass('shrink-0');
   });
 });

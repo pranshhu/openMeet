@@ -360,6 +360,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `sync_<id>.json`, the summary and the crash copy. Nothing starts by itself when a take
   does. `CallStage` keeps the component mounted while the strip is hidden, so the place in
   the show survives hiding it; the place is dropped when the take ends.
+  A line may end in a planned length in minutes and seconds (`Interview 20:00`), which
+  `parseRundown` takes off the name, so the marker carries the name alone and the length is
+  in no file. The running segment has a clock (`SegmentClock`: one render a second, and only
+  while the strip is shown) that counts from the segment's start, kept in `Rundown`, against
+  that length and says by how much the segment is over.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1017,3 +1022,10 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   except as chapter markers. Another browser starts empty, a second tab of the same room
   reads it once, when its call screen opens, and a room's rundown stays in the browser
   after the room has expired, until the site's data is cleared.
+- **The rundown times one segment at a time.** Nothing adds the segments up against the take's
+  own clock, and a segment that runs over is said only in the strip, while it is shown: there
+  is no sound and no notice. A length is written as minutes and seconds (`2:00`); written
+  another way (`2 min`) it stays part of the segment's name, and one of an hour or more is
+  shown with hours (`90:00` reads `1:30:00`). After a host reload the clock of the segment
+  the host goes on with counts from the press that started it again, not from where that
+  segment began.

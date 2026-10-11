@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { MAX_RUNDOWN_LENGTH, loadRundown, parseRundown, saveRundown } from '@/lib/rundown';
+import { formatTimecode } from '@/lib/sync-report';
 
 /**
  * The host's running order for a show: written between takes, stepped through
@@ -30,6 +31,9 @@ export function Rundown({
   const segments = useMemo(() => parseRundown(text), [text]);
   // The segment that is running; null until one is started in this take.
   const [index, setIndex] = useState<number | null>(null);
+  // When the running segment started, on this page's clock. Kept here and not
+  // in the clock, which is unmounted while the strip is hidden.
+  const [since, setSince] = useState(0);
   // Every take starts its rundown over.
   useEffect(() => {
     if (!recording) setIndex(null);
@@ -39,6 +43,7 @@ export function Rundown({
     const segment = segments[i];
     if (!segment) return;
     setIndex(i);
+    setSince(Date.now());
     onMark(segment.name);
   }
 
@@ -46,6 +51,7 @@ export function Rundown({
   const current = index === null ? undefined : segments[index];
   const target = index === null ? 0 : index + 1;
   const next = segments[target];
+  const planned = segments.reduce((sum, s) => sum + (s.plannedMs ?? 0), 0);
   return (
     <section
       aria-label="Rundown"
@@ -55,7 +61,7 @@ export function Rundown({
         <>
           <h2 className="text-sm font-medium">Rundown</h2>
           <p id="rundown-hint" className="text-xs text-white/70">
-            One segment per line. During a take, each segment you start adds a chapter marker.
+            One segment per line; end a line with its planned length, like 2:00. During a take, each segment you start adds a chapter marker.
           </p>
           <textarea
             aria-label="Rundown segments"
@@ -67,9 +73,17 @@ export function Rundown({
             }}
             maxLength={MAX_RUNDOWN_LENGTH}
             rows={4}
-            placeholder={'Intro\nInterview\nQuestions'}
+            placeholder={'Intro 2:00\nInterview 20:00\nQuestions'}
             className="mt-2 block w-full resize-none rounded-lg bg-black/30 p-2 text-base text-white ring-1 ring-white/10 placeholder:text-white/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:text-sm"
           />
+          {/* What was understood: a length typed another way is part of the name. */}
+          {segments.length > 0 && (
+            <p className="mt-1 text-xs text-white/70">
+              {`${segments.length} segment${segments.length === 1 ? '' : 's'}${
+                planned ? `, ${formatTimecode(planned)} planned` : ''
+              }`}
+            </p>
+          )}
         </>
       ) : segments.length === 0 ? (
         <p className="text-xs text-white/70">No rundown for this room. Write one before the next take.</p>
@@ -86,6 +100,7 @@ export function Rundown({
                 'Rundown not started'
               )}
             </p>
+            {current && <SegmentClock since={since} plannedMs={current.plannedMs} />}
           </div>
           <div className="mt-2 flex items-center justify-end gap-2">
             {/* Always here, so pressing it again and again never loses the
@@ -104,5 +119,31 @@ export function Rundown({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * How long the running segment has run, against its planned length when it has
+ * one. On screen only while the strip is shown, so nothing ticks for a hidden
+ * rundown; `since` comes from the strip's owner, which outlives it.
+ */
+function SegmentClock({ since, plannedMs }: { since: number; plannedMs: number | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = now - since;
+  // Whole seconds: a segment a few milliseconds past its length is not over yet.
+  const over = plannedMs !== null ? Math.floor((elapsed - plannedMs) / 1000) : 0;
+  // aria-live off, like the take's own clock: read out every second it would
+  // drown out the announcements that matter.
+  return (
+    <span role="timer" aria-live="off" className="shrink-0 text-sm tabular-nums text-white/80">
+      {formatTimecode(elapsed)}
+      {plannedMs !== null && ` / ${formatTimecode(plannedMs)}`}
+      {/* In words as well as in colour. */}
+      {over > 0 && <span className="text-[#fdd663]">{` ${formatTimecode(over * 1000)} over`}</span>}
+    </span>
   );
 }

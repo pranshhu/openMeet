@@ -150,6 +150,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   step through them during a take, one press a segment. Each segment that starts is a
   chapter marker with its name, so the take's chapters file is the rundown with the
   real times. It is kept in the host's browser, one per room, and never sent to anyone.
+  A line can end in a planned length (`Interview 20:00`): the running segment's clock
+  counts against it and says by how much the segment is over.
 
 ### Changed
 
