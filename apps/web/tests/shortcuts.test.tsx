@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { ControlButton } from '@/components/ControlButton';
 import { Shortcuts } from '@/components/Shortcuts';
+import { setSingleKeys, singleKeysOn } from '@/hooks/use-single-keys';
 
 const callProps = {
   role: 'host' as const,
@@ -433,5 +434,164 @@ describe('CallStage: Alt+R starts a take and Alt+S ends it', () => {
     expect(screen.getByText('Record (host)').previousElementSibling).toHaveTextContent('Alt+R');
     expect(screen.getByText('End & save (host)').previousElementSibling).toHaveTextContent('Alt+S');
     expect(screen.getByText(/On a Mac, Alt is the Option key/)).toBeInTheDocument();
+  });
+});
+
+describe('Shortcuts: the switch for the single keys', () => {
+  const off = () =>
+    act(() => {
+      setSingleKeys(false);
+    });
+  const on = () =>
+    act(() => {
+      setSingleKeys(true);
+    });
+
+  afterEach(() => {
+    // What is still on screen shows the choice, so the reset is an update.
+    on();
+    localStorage.removeItem('om_single_keys');
+  });
+
+  it('lists N, the marker with a note, after M', () => {
+    render(<Shortcuts />);
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    const does = screen.getByText('Marker with a note, while recording');
+    expect(does.previousElementSibling).toHaveTextContent('N');
+    expect(does.parentElement!.previousElementSibling).toHaveTextContent('Marker, while recording');
+  });
+
+  it('switched off, no single key presses a button or opens the list, and none is taken', () => {
+    const onClick = vi.fn();
+    render(
+      <>
+        <Shortcuts />
+        {/* A plain button, so the rule under test is the listener's own. */}
+        <button type="button" aria-keyshortcuts="A" onClick={onClick}>
+          Microphone
+        </button>
+      </>
+    );
+    off();
+    // true: not cancelled, so the letter is left to the browser.
+    expect(press('a')).toBe(true);
+    press('A');
+    press('?', { shiftKey: true });
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+
+    // In force for the very next key, both ways: nothing is mounted again.
+    on();
+    expect(press('a')).toBe(false);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    press('?', { shiftKey: true });
+    expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
+  });
+
+  it('switched off, Alt+R and Alt+S still press their buttons', () => {
+    const onRecord = vi.fn();
+    const onEnd = vi.fn();
+    off();
+    const { rerender } = render(<CallStage {...callProps} onRecord={onRecord} onEnd={onEnd} />);
+    expect(press('r', { code: 'KeyR', keyCode: 82, altKey: true })).toBe(false);
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    rerender(<CallStage {...callProps} phase="recording" roomRecording onRecord={onRecord} onEnd={onEnd} />);
+    press('s', { code: 'KeyS', keyCode: 83, altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('switched off, A, V, C, T, M and N do nothing in a take, and their buttons still work', () => {
+    const onToggleMic = vi.fn();
+    const onToggleCam = vi.fn();
+    const onMark = vi.fn();
+    off();
+    render(
+      <CallStage
+        {...callProps}
+        phase="recording"
+        roomRecording
+        onToggleMic={onToggleMic}
+        onToggleCam={onToggleCam}
+        onMark={onMark}
+      />
+    );
+    const note = () => screen.queryByLabelText('Note for this marker');
+    for (const key of ['a', 'v', 'c', 't', 'm', 'M', 'N']) press(key);
+    // true: not cancelled, so the letter is left to the browser.
+    expect(press('n')).toBe(true);
+    expect(onToggleMic).not.toHaveBeenCalled();
+    expect(onToggleCam).not.toHaveBeenCalled();
+    expect(onMark).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show teleprompter' })).toBeInTheDocument();
+    expect(note()).toBeNull();
+
+    // Only the keys are off.
+    fireEvent.click(screen.getByRole('button', { name: /^Mark this moment/ }));
+    expect(onMark).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /^Mark with a note/ }));
+    expect(note()).not.toBeNull();
+    fireEvent.keyDown(note()!, { key: 'Escape' });
+    expect(note()).toBeNull();
+
+    // Switched on in the middle of the take, M and N work for the very next key.
+    on();
+    press('m');
+    expect(onMark).toHaveBeenCalledTimes(2);
+    expect(press('n')).toBe(false);
+    expect(note()).not.toBeNull();
+  });
+
+  it('offers the switch in the list: a ticked box in a row tall enough for a thumb', () => {
+    render(<Shortcuts />);
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    const box = screen.getByRole('checkbox', { name: 'Single-key shortcuts' });
+    expect(box).toBeChecked();
+    expect(box.closest('label')).toHaveClass('min-h-11');
+
+    fireEvent.click(box);
+    expect(box).not.toBeChecked();
+    expect(singleKeysOn()).toBe(false);
+    expect(localStorage.getItem('om_single_keys')).toBe('0');
+    // The list is still there to turn them on again.
+    expect(screen.getByText('Microphone on or off')).toBeInTheDocument();
+
+    fireEvent.click(box);
+    expect(box).toBeChecked();
+    expect(singleKeysOn()).toBe(true);
+  });
+
+  it('switched off, the list still opens from its button and Escape puts it away', () => {
+    off();
+    render(<Shortcuts />);
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(screen.getByRole('checkbox', { name: 'Single-key shortcuts' })).not.toBeChecked();
+    press('Escape');
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+  });
+
+  it('Escape on the box closes the list and hands focus back to the ? button, and takes focus from nothing else', () => {
+    render(
+      <>
+        <Shortcuts />
+        <input aria-label="Message" />
+      </>
+    );
+    const button = screen.getByRole('button', { name: 'Keyboard shortcuts' });
+    fireEvent.click(button);
+    const box = screen.getByRole('checkbox', { name: 'Single-key shortcuts' });
+    box.focus();
+    expect(box).toHaveFocus();
+    press('Escape', {}, box);
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+    expect(button).toHaveFocus();
+
+    // Escape pressed with the keyboard anywhere else leaves it where it is.
+    fireEvent.click(button);
+    const field = screen.getByLabelText('Message');
+    field.focus();
+    press('Escape', {}, field);
+    expect(screen.queryByText('Microphone on or off')).toBeNull();
+    expect(field).toHaveFocus();
   });
 });

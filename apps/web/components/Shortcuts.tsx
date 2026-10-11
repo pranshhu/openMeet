@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { setSingleKeys, singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
 
 // What the list shows, in the order of the control bar. M is handled by
-// CallStage; it is listed so the list is whole.
+// CallStage and N by useMarkerNote; they are listed so the list is whole.
 const ROWS: [keys: string, does: string][] = [
   ['A', 'Microphone on or off'],
   ['V', 'Camera on or off'],
@@ -12,6 +13,7 @@ const ROWS: [keys: string, does: string][] = [
   ['Alt+R', 'Record (host)'],
   ['Alt+S', 'End & save (host)'],
   ['M', 'Marker, while recording'],
+  ['N', 'Marker with a note, while recording'],
   ['?', 'This list'],
 ];
 
@@ -24,10 +26,16 @@ const ROWS: [keys: string, does: string][] = [
  */
 export function Shortcuts() {
   const [open, setOpen] = useState(false);
+  const singleKeys = useSingleKeys();
+  const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Escape unmounts the list, and the tick box in it can hold the keyboard:
+        // hand focus back to the button, otherwise it falls to <body>.
+        const wrap = root.current;
+        if (wrap?.contains(document.activeElement)) wrap.querySelector('button')?.focus();
         setOpen(false);
         return;
       }
@@ -36,6 +44,10 @@ export function Shortcuts() {
       // Typing is never a shortcut.
       const el = e.target as Element | null;
       if (el?.closest?.('input, textarea, select, [contenteditable]')) return;
+      // Speech input types letters, so a person who dictates turns the single
+      // keys off. Asked as the key arrives: this listener is added once. A
+      // chord with Alt is not a single key and stays.
+      if (!e.altKey && !singleKeysOn()) return;
       if (e.key === '?' && !e.altKey) {
         setOpen((o) => !o);
         return;
@@ -66,7 +78,7 @@ export function Shortcuts() {
 
   return (
     // Not below sm: a phone has no keyboard, and its top bar has no room.
-    <div className="relative -my-2 ml-auto hidden shrink-0 sm:block">
+    <div ref={root} className="relative -my-2 ml-auto hidden shrink-0 sm:block">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -94,6 +106,17 @@ export function Shortcuts() {
               </div>
             ))}
           </dl>
+          {/* A real checkbox with its words beside it, in a row 44px tall: it is
+              reached by Tab, by touch and by saying its name. */}
+          <label className="mt-2 flex min-h-11 cursor-pointer items-center gap-2.5">
+            <input
+              type="checkbox"
+              checked={singleKeys}
+              onChange={(e) => setSingleKeys(e.target.checked)}
+              className="h-4 w-4 shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+            />
+            Single-key shortcuts
+          </label>
           <p className="mt-2 text-xs text-white/70">
             {'A key presses its button, so it works while that button is shown. Keys do nothing while you type in a field. On a Mac, Alt is the Option key.'}
           </p>

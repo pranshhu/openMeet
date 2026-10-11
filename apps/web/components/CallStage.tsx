@@ -20,6 +20,7 @@ import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
 import { MarkerNote, useMarkerNote } from './MarkerNote';
 import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
+import { singleKeysOn } from '@/hooks/use-single-keys';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -465,6 +466,8 @@ export function CallStage({
     if (phase !== 'recording') return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'm' && e.key !== 'M') return;
+      // The single keys can be switched off; the choice is asked as the key arrives.
+      if (!singleKeysOn()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;

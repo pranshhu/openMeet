@@ -355,12 +355,20 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   microphone, **V** camera, **C** chat, **T** teleprompter), so a button that is disabled or not on
   screen has no key; one that is in the document but not displayed is skipped (`checkVisibility`). A
   held key, and a letter pressed with Shift, Ctrl or Cmd, is left alone. The **?** button (from `sm`
-  up) and the **?** key open the list. **M** (marker) keeps its own handler in `CallStage` and is
-  only listed. **Alt+R** is carried by Record and **Alt+S** by the host's End & save: two chords, so
+  up) and the **?** key open the list. **M** (marker) keeps its own handler in `CallStage` and
+  **N** (marker with a note) its own in `useMarkerNote`; both are only listed.
+  **Alt+R** is carried by Record and **Alt+S** by the host's End & save: two chords, so
   the key that starts a take can never end one, each under whatever keeps its button off or away.
   With Alt held the letter is read from `keyCode`, because Option+R types ® on a Mac: `keyCode` is
   the letter the layout has on that key, or the key's place on a layout without Latin letters.
   `code` is the place alone, and Colemak has R where QWERTY has S.
+  The single keys (A, V, C, T, M, N and **?**) can be turned off, for a person whose speech input
+  types letters. `hooks/use-single-keys.ts` keeps one choice per browser in `localStorage` as
+  `om_single_keys`: `'0'` is off, and anything else, nothing stored or a storage that refuses is on.
+  Each of the three listeners (`Shortcuts`, the **M** effect in `CallStage`, `useMarkerNote`) asks
+  `singleKeysOn()` as a key arrives, so a change is in force for the next key. Escape closes the
+  list and, when the keyboard was in it, hands focus back to the **?** button. The list holds the
+  tick box (`useSingleKeys`, `setSingleKeys`). Alt+R and Alt+S are chords and stay on.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1002,15 +1010,21 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
-- **The shortcut keys are fixed, cannot be switched off, and exist only on the call screen.**
+- **The shortcut keys are fixed and exist only on the call screen.**
   A bare letter is read as the keyboard layout types it, so a layout without Latin letters has
-  no A, V, C, T or M. A letter typed while no field has focus is a key press: text typed
+  no A, V, C, T, M or N. A letter typed while no field has focus is a key press: text typed
   after clicking outside the chat field switches the microphone and the camera. No key works
   while any input has focus, a teleprompter slider included. The waiting room has no keys.
   Below 640 px the **?** button and its list are not shown, and a key that presses a button
   does nothing while chat or the summary covers the control bar.
+- **The single keys can be turned off only from the call's list, which a window narrower than
+  640 px does not show.** While they are off the buttons still name them in their tooltips,
+  and the two marker buttons in their names. The tick box is an input, so right after it is
+  ticked no key works until the keyboard leaves it (Escape closes the list). Two tabs do not
+  share a change while both are open: each reads the stored choice when it loads. In a browser
+  that blocks storage the choice lasts until the page is reloaded.
 - **On a keyboard without Latin letters, Alt+R and Alt+S are the keys where QWERTY has R and
   S.** A desktop or a browser that takes one of the chords for itself never passes it to the
   page. A guest's "Stop and save" has no key.
 - **Alt+R and Alt+S have not been run on a Mac.** They rely on Option+R and Option+S reaching
-  the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.32 and 8.33).
+  the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.44 and 8.45).

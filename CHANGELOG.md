@@ -142,6 +142,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Alt+R** presses Record for the host and **Alt+S** presses End & save while a take
   runs (Option on a Mac). Neither does anything while its button is greyed out or
   not on screen.
+- The single-key shortcuts (**A**, **V**, **C**, **T**, **M**, **N** and **?**) can be
+  turned off, for people whose speech input types letters: untick **Single-key
+  shortcuts** in the list the **?** button opens. The browser remembers the choice,
+  and **Alt+R** and **Alt+S** stay on. The list names **N** as well.
 - A chapter marker can carry a typed note: during a take press **N**, or the pencil
   button beside the marker button, type and press Enter. The note is that marker's
   line in the chapters file and its label in `sync.json`, and a take that is resumed
