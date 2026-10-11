@@ -3,6 +3,7 @@ import {
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_SLUG,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   WS_HEARTBEAT_INTERVAL_MS,
   WS_HEARTBEAT_TIMEOUT_MS,
@@ -20,6 +21,7 @@ const FATAL_CLOSE_CODES = new Set<number>([
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_INVALID_SLUG,
   WS_CLOSE_EXPIRED_SLUG,
+  WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
 ]);
 
@@ -153,6 +155,10 @@ export class SignalClient {
    * Resets the backoff attempt counter and detaches handlers from the old socket.
    */
   reconnect(): void {
+    // A terminal close is final, and after close() nobody is listening:
+    // neither may open another socket. A tab closed as replaced would
+    // otherwise take its seat back from the tab that replaced it.
+    if (this.closed) return;
     this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

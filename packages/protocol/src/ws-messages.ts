@@ -127,6 +127,20 @@ export type ClientRecordingCapability = {
  */
 export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
 
+/**
+ * The host asks for one person's microphone to be turned off. Passed on only
+ * from the host, to that person alone, whose own page carries it out and can
+ * turn the microphone back on. Nobody's microphone is turned on this way.
+ */
+export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
+
+/**
+ * The host removes one person from the room. Acted on only from the host:
+ * the Room closes that socket with WS_CLOSE_REMOVED, tells everyone else
+ * with `peer-left`, and refuses the same tab until the session ends.
+ */
+export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
+
 export type ClientMessage =
   | ClientJoin
   | ClientWebrtcOffer
@@ -143,6 +157,8 @@ export type ClientMessage =
   | ClientLeave
   | ClientPing
   | ClientRecordingCapability
+  | ClientPeerMute
+  | ClientPeerRemove
   | ClientPeerRecorded;
 
 export interface PeerInfo {
@@ -296,6 +312,13 @@ export type ServerRecordingCapability = {
  */
 export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; recorded: boolean };
 
+/**
+ * A host's ClientPeerMute, handed to the one person it names. It carries
+ * nothing: only the host's is passed on, and whoever receives it is the
+ * person meant.
+ */
+export type ServerPeerMute = { type: 'peer-mute' };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -315,6 +338,7 @@ export type ServerMessage =
   | ServerPong
   | ServerError
   | ServerRecordingCapability
+  | ServerPeerMute
   | ServerPeerRecorded;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
@@ -333,6 +357,8 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'leave',
   'ping',
   'recording-capability',
+  'peer-mute',
+  'peer-remove',
   'peer-recorded',
 ]);
 
@@ -355,6 +381,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'pong',
   'error',
   'recording-capability',
+  'peer-mute',
   'peer-recorded',
 ]);
 
