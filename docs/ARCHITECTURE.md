@@ -64,7 +64,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (15 variants) ↔ `ServerMessage` (18).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (16 variants) ↔ `ServerMessage` (19).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -76,6 +76,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `type` discriminant**, not payload shape.
   `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
   when it is exactly `true`, and a page reads nothing else as a raised hand.
+  `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
+  stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
@@ -189,6 +191,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `leave`→broadcast `peer-left` + close 1000.
 - `presence` is relayed with `handRaised: true` only when the sender's field is exactly
   `true`; any other value is left out. Nothing is kept.
+- `reaction` is relayed to every other joined peer (`broadcastExcept`, stamped
+  `from`/`fromPeerId`) when its code is one of `REACTIONS`, and dropped otherwise; only
+  `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
+  page that receives reactions takes one a second from one sender (`takeReaction` in
+  `apps/web/lib/reactions.ts`), and `useRoom().sendReaction` sends no more than that.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
   except one the host set as not recorded), but **persisted to D1 only by the host**
   (`insertRecording`, capped at 256 rows per session).

@@ -73,6 +73,7 @@ import {
 import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { saveRecoveredTake } from '@/lib/take-recovery';
+import { OWN_REACTION, takeReaction, type Reaction, type ShownReactions } from '@/lib/reactions';
 import {
   attachBackupSends,
   BackupIntake,
@@ -233,6 +234,8 @@ export interface RoomState {
   incomingVideoOff: boolean;
   /** This person has a hand raised. Everyone in the call sees it on their tile. */
   handRaised: boolean;
+  /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
+  reactions: ShownReactions;
   /**
    * What each remote peer's browser can actually capture, keyed by peerId.
    * Lets the host see BEFORE pressing Record who won't be captured, and why,
@@ -607,6 +610,7 @@ export function useRoom(slug: string) {
     lowPower: false,
     incomingVideoOff: false,
     handRaised: false,
+    reactions: new Map(),
     capabilities: {},
     finalizingGuests: [],
     backupTransfers: [],
@@ -674,6 +678,9 @@ export function useRoom(slug: string) {
   // Written by setHandRaised itself: sendPresence reads it, and a join or a
   // reconnect may send presence before the next render.
   const handRaisedRef = useRef(false);
+  // What the tiles show, written where a reaction is taken: a burst of them
+  // is judged one by one against this, without waiting for a render.
+  const reactionsRef = useRef<ShownReactions>(new Map());
   const companionRef = useRef(false);
   // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
   // which read refs.
@@ -1794,6 +1801,15 @@ export function useRoom(slug: string) {
         })
       );
 
+      // Another participant's reaction. The sender's id must be a string, and
+      // takeReaction takes only a code this build knows, one a second from one
+      // sender. Anything else is dropped here, before any state changes.
+      signal.on('reaction', (m) => {
+        if (typeof m.fromPeerId !== 'string') return;
+        if (!takeReaction(reactionsRef, m.fromPeerId, m.reaction, Date.now())) return;
+        setState((s) => ({ ...s, reactions: reactionsRef.current }));
+      });
+
       // A peer socket closing must NEVER end an in-progress recording. The DO
       // broadcasts peer-left on any close — a wifi blip, a laptop sleeping, a
       // tab refresh — and moving to 'peer-left' unmounts CallStage, which
@@ -2253,6 +2269,14 @@ export function useRoom(slug: string) {
     },
     [sendPresence]
   );
+
+  /** React: drawn on this person's own tile at once, and sent for everyone else's. */
+  const sendReaction = useCallback((reaction: Reaction) => {
+    // Everyone else takes one a second from a sender, so no more than that is sent.
+    if (!takeReaction(reactionsRef, OWN_REACTION, reaction, Date.now())) return;
+    setState((s) => ({ ...s, reactions: reactionsRef.current }));
+    signalRef.current?.send({ type: 'reaction', reaction });
+  }, []);
 
   /**
    * Build the soundboard on first use and route its mix to every peer.
@@ -2914,5 +2938,6 @@ export function useRoom(slug: string) {
     setLowPower,
     setIncomingVideoOff,
     setHandRaised,
+    sendReaction,
   };
 }

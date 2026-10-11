@@ -55,6 +55,7 @@ Treat an invite link as a live secret, not a one-time ticket.
 **Chat and presence pass through the server in plaintext.** Only recording bytes
 and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
 persisted, but it is not end-to-end encrypted either.
+Reactions are relayed the same way and are not persisted either.
 
 **The signaling socket accepts only the site's own origin.** A WebSocket handshake
 whose `Origin` isn't the deployment's `PAGES_ORIGIN` gets a 403, so another website

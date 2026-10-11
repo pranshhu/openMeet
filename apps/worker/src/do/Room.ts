@@ -7,6 +7,7 @@ import {
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
   WS_CLOSE_REPLACED,
+  isReaction,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -497,6 +498,19 @@ export class Room implements DurableObject {
           from: p.role,
           fromPeerId: p.peerId,
           ...(p.displayName ? { fromName: p.displayName } : {}),
+        });
+        break;
+      case 'reaction':
+        // Relay only, like presence: a picture on the sender's tile for a
+        // moment. Nothing is kept, and a code that is not on the list goes
+        // nowhere, so no page is handed one it cannot draw. Only the code
+        // travels, whatever else the message carried.
+        if (!isReaction(parsed.reaction)) break;
+        this.broadcastExcept(ws, {
+          type: 'reaction',
+          reaction: parsed.reaction,
+          from: p.role,
+          fromPeerId: p.peerId,
         });
         break;
       case 'marker':

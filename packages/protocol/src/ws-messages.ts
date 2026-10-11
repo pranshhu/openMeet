@@ -72,6 +72,19 @@ export type ClientPresence = {
   handRaised?: boolean;
 };
 /**
+ * A quick reaction, drawn for a moment on its sender's tile. A code, not a
+ * picture: each page draws its own, and the Room drops anything not on this
+ * list. It is relayed and never kept, and no recording holds it.
+ */
+export const REACTIONS = ['thumbs-up', 'clap', 'laugh', 'heart'] as const;
+export type Reaction = (typeof REACTIONS)[number];
+
+export function isReaction(v: unknown): v is Reaction {
+  return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+export type ClientReaction = { type: 'reaction'; reaction: Reaction };
+/**
  * Chapter marker dropped during a recording.
  *
  * `label` is optional; the HOST stamps the position on receipt rather than
@@ -119,6 +132,7 @@ export type ClientMessage =
   | ClientRecordingCountdown
   | ClientChat
   | ClientPresence
+  | ClientReaction
   | ClientMarker
   | ClientLeave
   | ClientPing
@@ -229,6 +243,8 @@ export type ServerPresence = {
   fromPeerId?: string;
   fromName?: string;
 };
+/** Relay of ClientReaction, stamped like presence. Never kept. */
+export type ServerReaction = { type: 'reaction'; reaction: Reaction; from: Role; fromPeerId: string };
 /**
  * Relayed so every peer learns the room is being recorded — consent notice for
  * guests, and the trigger that starts their own capture. The `recordingId` is
@@ -280,6 +296,7 @@ export type ServerMessage =
   | ServerIceCandidate
   | ServerChat
   | ServerPresence
+  | ServerReaction
   | ServerMarker
   | ServerRecordingStarted
   | ServerRecordingStop
@@ -302,6 +319,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-countdown',
   'chat',
   'presence',
+  'reaction',
   'marker',
   'leave',
   'ping',
@@ -318,6 +336,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'ice-candidate',
   'chat',
   'presence',
+  'reaction',
   'marker',
   'recording-started',
   'recording-stop',
