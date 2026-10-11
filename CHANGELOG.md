@@ -152,6 +152,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   sound, the speaker you chose, Levels and every recording are unchanged. The
   window closes by itself when that person leaves or reconnects and while
   incoming video is stopped.
+- **Framing guide**, on the lobby's camera preview on a computer: a
+  rule-of-thirds grid to frame yourself by. It is drawn on your own screen only
+  and is never in a recording.
 
 ### Changed
 

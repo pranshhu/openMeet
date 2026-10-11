@@ -366,6 +366,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   a person whose stream has not arrived; a producer and a present-only device have no camera
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
+- **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
+  guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
+  The page draws the lines over the tile and the component is given no stream, so nothing of
+  them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
+  where the preview shows a band of a tall picture.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1020,3 +1025,7 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   holds that connection's stream, a rebuilt connection has a new one, and the browser
   opens such a window only on a click. The line about a window that did not open stays
   until the next pop out or the next camera or microphone switch.
+- **The framing guide divides the preview, which is not always the whole picture.** The
+  lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
+  the recording has a little more above and below than the lines show. The guide is not
+  offered on a phone, is not remembered from one visit to the next, and the call has none.

@@ -31,6 +31,7 @@ import {
 } from '@/lib/quality';
 import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
+import { FramingGuide } from './FramingGuide';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
@@ -641,6 +642,8 @@ export function Lobby({
               // instead of running under it.
               tagClassName="max-w-[calc(50%-4.5rem)]"
             />
+            {/* Only over a picture: with the camera off there is nothing to frame. */}
+            {stream && camOn && <FramingGuide />}
             {stream ? (
               /* Overlaid mic / cam controls */
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center gap-4 sm:bottom-4">

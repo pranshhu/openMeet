@@ -73,6 +73,8 @@ retention policy to trust, because there's nothing retained.
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- A framing guide in the lobby: a rule-of-thirds grid over your preview, on your own
+  screen only and never in a recording (computers)
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
