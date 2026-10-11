@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CalendarInvite } from '@/components/CalendarInvite';
 import { Lobby } from '@/components/Lobby';
@@ -11,6 +11,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getRoom: vi.fn(),
 }));
+
+// The picker's value is read on the computer's clock. These tests run in a zone
+// that is not UTC, so reading it as UTC gives another moment wherever they run.
+vi.stubEnv('TZ', 'Asia/Kolkata');
+afterAll(() => vi.unstubAllEnvs());
 
 const LINK = 'https://meet.example.org/r/xyz-abcd-pqr/';
 // 20 October 2026, 15:00 UTC, in a file made on the 11th.
@@ -33,7 +38,9 @@ describe('calendar entry', () => {
         '- Sit in a quiet room.',
       ])
     );
-    expect(lines.at(-1)).toMatch(/^The host can record this session\. If they do, your camera, microphone and chat/);
+    expect(lines.at(-1)).toBe(
+      "The host can record this session. If they do, your camera, microphone and chat are saved on the host's computer. Nothing is uploaded to a server, and you are told on screen when recording starts."
+    );
     // One octet to a character is what lets the file's lines be cut by length.
     expect(inviteText(LINK)).toMatch(/^[\n\x20-\x7e]*$/);
   });
@@ -73,6 +80,11 @@ describe('calendar entry', () => {
   it('escapes what a calendar would read as a separator', () => {
     const lines = read(buildIcs('https://meet.example.org/r/a,b;c\\d/', START, MADE));
     expect(lines).toContain('LOCATION:https://meet.example.org/r/a\\,b\\;c\\\\d/');
+    expect(lines).toContain('UID:https://meet.example.org/r/a\\,b\\;c\\\\d/#20261020T150000Z');
+    const description = lines.find((l) => l.startsWith('DESCRIPTION:'))!;
+    expect(description).toContain('start time:\\nhttps://meet.example.org/r/a\\,b\\;c\\\\d/\\n');
+    // The fixed text has commas of its own.
+    expect(description).toContain('your camera\\, microphone and chat');
   });
 
   it('fills in the Google Calendar form with the same hour, link and text', () => {
@@ -175,9 +187,11 @@ describe('CalendarInvite', () => {
     const prefix = 'data:text/calendar;charset=utf-8,';
     const href = file.getAttribute('href')!;
     expect(href.startsWith(prefix)).toBe(true);
-    // The line that says when the file was made is the only one that differs.
-    const made = (ics: string) => ics.replace(/DTSTAMP:.*\r\n/, '');
-    expect(made(decodeURIComponent(href.slice(prefix.length)))).toBe(made(buildIcs(link, startMs)));
+    // An address ends at a raw '#' and drops a raw line break: every octet of
+    // the file that is not a plain character is written as an escape.
+    expect(href.slice(prefix.length)).toMatch(/^[\w.!~*'()%-]+$/);
+    // The clock is held still, so the file says it was made at this moment.
+    expect(decodeURIComponent(href.slice(prefix.length))).toBe(buildIcs(link, startMs, Date.now()));
 
     const google = screen.getByRole('link', { name: 'Open in Google Calendar' });
     expect(google).toHaveAttribute('href', googleCalendarUrl(link, startMs));
@@ -270,6 +284,7 @@ describe('Lobby: calendar entry', () => {
 
   afterEach(() => {
     localStorage.removeItem('om_host_xyz-abcd-pqr');
+    vi.mocked(getRoom).mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -280,6 +295,12 @@ describe('Lobby: calendar entry', () => {
     const panel = screen.getByRole('heading', { name: 'Ready to join?' }).parentElement!;
     // Last in the join panel: the backups and an unsaved recording stay above it.
     expect(panel.lastElementChild).toBe(button.parentElement);
+
+    // The panel asks about the room this lobby is for.
+    vi.mocked(getRoom).mockResolvedValue(null);
+    fireEvent.click(button);
+    expect(getRoom).toHaveBeenCalledWith('xyz-abcd-pqr');
+    await screen.findByText(/Couldn’t check how long this room stays open/);
   });
 
   it('does not offer it to a guest', async () => {
