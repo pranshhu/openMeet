@@ -161,6 +161,19 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   own browser's backup beyond it. The screen that tells them they were removed offers the
   backups their tab holds as downloads. Removed during a take, their **Stop and save**
   saves the recording at once. Their page then becomes that screen, with the backup links.
+- Keyboard shortcuts in the call: **A** switches the microphone, **V** the camera,
+  **C** opens chat and **T** the teleprompter. The **?** button in the top bar, or
+  the **?** key, lists them. No key does anything while you type in a field.
+- **Alt+R** presses Record for the host and **Alt+S** presses End & save while a take
+  runs (Option on a Mac). Neither does anything while its button is greyed out or
+  not on screen.
+- The single-key shortcuts (**A**, **V**, **C**, **T**, **M**, **N** and **?**) can be
+  turned off, for people whose speech input types letters: untick **Single-key
+  shortcuts** in the list the **?** button opens. The browser remembers the choice,
+  and **Alt+R** and **Alt+S** stay on. The list names **N** as well.
+- While the single-key shortcuts are turned off, no button names one in its tooltip or
+  its name, and the list says they are off. The lobby has the same tick box, so it can
+  be reached on a window too narrow to show the **?** button.
 - Record alone: a host with nobody else in the room presses **Continue alone** in the
   waiting room and records from the call screen. Anyone who joins during the take is
   recorded from then on.

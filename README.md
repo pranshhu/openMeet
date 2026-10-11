@@ -74,6 +74,11 @@ retention policy to trust, because there's nothing retained.
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
   press Enter, and the note is that marker's line in `chapters.txt`
+- Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
+  **M** marker, **N** marker with a note, and for the host **Alt+R** to record and
+  **Alt+S** to end and save; the **?** button in the call lists them, and a tick box
+  in that list and in the lobby turns the single keys off for people who use speech
+  input
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
