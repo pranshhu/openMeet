@@ -756,6 +756,26 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+- `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
+  recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
+  it through). `useRoom` makes one as `startRecording` announces the take, with everyone
+  in `remotePeersRef`; an effect on `state.remotePeers` gives whoever is listed later a
+  line (`listed`); and `onDataChannel` calls `confirmed` where a camera recording channel
+  is bound, beside `setToldPeers`, and where a screen channel is. `endRecording` takes
+  the log out of the ref as it starts, so a save that fails leaves none for a take
+  resumed later in the same page. A line holds the name, the role, `presentOnly`,
+  `setAsNotRecorded`, `listedAtMs` and `confirmedAtMs`, as offsets from `hostStartMs` on
+  the host's clock. It holds only what the host's page can know: `SignalClient.send`
+  drops a message while the socket is down, so `announcedAtMs` is not proof of delivery,
+  and only a channel that arrived shows that a page was told. A guest set as not
+  recorded is listed without a name, as its chat and markers are left out. A take keeps
+  at most `MAX_NOTICE_PEOPLE` (64) lines and says `capped` past that. Nothing is sent to
+  the Room, and nothing is added to D1 or to the crash copy.
+  After an interruption the crash copy is read, never written: `peopleFromNotes` lists
+  one guest per camera note that carries a channel key. `resumeRecording` starts a new
+  log at its re-announcement with that list (`resumed`, `fromCrashCopy`) and confirms the
+  connections in `told` that the room still lists, and `saveRecoveredTake` writes the
+  list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
@@ -1434,3 +1454,20 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the message.
 - **The Room passes on every reaction it is sent.** The limit of one a second from one
   sender is kept by each page that receives them, as the limits on chat and markers are.
+- **After an interruption the record of who was told keeps no times from before it.** The
+  log is held in memory. A resumed take's `recordingNotice` starts at the resume and
+  lists, under `fromCrashCopy`, the guests whose camera note in the crash copy carries a
+  channel key; a take saved from its crash copy has only that list. A producer, a
+  Present-only device or a guest set as not recorded who was there before the
+  interruption and gone by the resume is in neither, and a guest whose camera file has
+  parts but no note is not listed. A guest whose note had no key yet when the take was
+  interrupted (the last seconds before it) is not listed either, and a resume does not
+  take up that guest's waiting channel, so their line reads `confirmedAtMs: null`.
+- **Only a recording channel shows that a page was told.** A producer, a Present-only
+  device that is not presenting, a guest set as not recorded and a guest whose browser
+  cannot record open none, so their lines in `recordingNotice` never get a
+  `confirmedAtMs`. No acknowledgement is sent for them, and nothing shows that a person
+  read the notice.
+- **A person who reconnects has one line per connection in `recordingNotice`.** The Room
+  gives a returning connection a new id and the record does not join the two. A take
+  keeps 64 lines; past that it says `capped` and later connections have none.

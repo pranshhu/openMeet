@@ -80,6 +80,7 @@ import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { saveRecoveredTake } from '@/lib/take-recovery';
 import { OWN_REACTION, takeReaction, type Reaction, type ShownReactions } from '@/lib/reactions';
+import { NoticeLog, peopleFromNotes } from '@/lib/notice-log';
 import {
   attachBackupSends,
   BackupIntake,
@@ -768,6 +769,9 @@ export function useRoom(slug: string) {
   const startingRef = useRef(false);
   // The countdown's timer, so a page that goes away takes it along.
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The host's record of who was told that the take in progress was being
+  // recorded. Made when a take is announced, so no other tab ever has one.
+  const noticeLogRef = useRef<NoticeLog | null>(null);
 
   const sendPresence = useCallback(() => {
     signalRef.current?.send({
@@ -846,6 +850,13 @@ export function useRoom(slug: string) {
   useEffect(() => {
     capabilitiesRef.current = state.capabilities;
   }, [state.capabilities]);
+
+  // While a take runs, everyone the room holds gets a line in that record,
+  // from the render that first lists them. A line is written once, so a pass
+  // over people it already has changes nothing.
+  useEffect(() => {
+    for (const p of state.remotePeers) noticeLogRef.current?.listed(p, Date.now());
+  }, [state.remotePeers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1397,6 +1408,13 @@ export function useRoom(slug: string) {
           },
           onDataChannel: (channel) => {
             const peerName = remotePeersRef.current.find((p) => p.peerId === remotePeerId)?.name ?? undefined;
+            // A recording channel that arrives during a take is this connection's
+            // proof, in the record of who was told, that its page was told.
+            const confirmTold = () =>
+              noticeLogRef.current?.confirmed(
+                { peerId: remotePeerId, name: peerName, role: remoteRole, companion: remoteCompanion },
+                Date.now()
+              );
             if (recordingChannelKind(channel.label).base === DATA_CHANNEL_BACKUP) {
               // Only a host that can write to a folder has anywhere to put it. Anyone
               // else says so, or the sender would wait for an answer that never comes.
@@ -1479,6 +1497,7 @@ export function useRoom(slug: string) {
                     );
                   }
                 }
+                confirmTold();
                 void bindHostScreenChannel(
                   channel,
                   recNow,
@@ -1524,6 +1543,7 @@ export function useRoom(slug: string) {
                     // told without a camera channel of its own.
                     [...p.filter((id) => peersRef.current.has(id)), remotePeerId]
               );
+              confirmTold();
               void bindHostGuestChannel(channel, recNow, remotePeerId, fail, peerName).catch(fail);
             } else keepPending();
           },
@@ -2165,6 +2185,21 @@ export function useRoom(slug: string) {
         kind: 'camera',
         filename: resumedName(h.recordingId, 'mp4'),
       });
+      // The record of who was told starts again with that announcement. A guest
+      // whose channel the resume took up was told before the interruption, so
+      // it is confirmed from here, and the guests the crash copy names go
+      // beside it.
+      const resumedAt = Date.now();
+      const notice = (noticeLogRef.current = new NoticeLog(
+        remotePeersRef.current,
+        resumedAt,
+        peopleFromNotes(journal.notes.files)
+      ));
+      // By the room's list and not by `told` alone: a connection that left
+      // while its channel waited is still in `told`, and is not in the room.
+      for (const p of remotePeersRef.current) {
+        if (told.has(p.peerId)) notice.confirmed(p, resumedAt);
+      }
       phaseRef.current = 'recording';
       setState((s) => ({
         ...s,
@@ -2677,6 +2712,8 @@ export function useRoom(slug: string) {
       kind: 'camera',
       filename: `host_${recordingId}.mp4`,
     });
+    // Who that announcement went to, as this page lists the room.
+    noticeLogRef.current = new NoticeLog(remotePeersRef.current, Date.now());
     phaseRef.current = 'recording';
     setState((s) => ({
       ...s,
@@ -2735,6 +2772,11 @@ export function useRoom(slug: string) {
       if (roleRef.current === 'guest' && !isInternal && !fatalCloseRef.current) return;
       const h = recordingRef.current;
       if (!h) return;
+      // The record of who was told is the ending take's and no other's. It
+      // leaves the ref here, before anything below can throw, so a take this
+      // page does not announce cannot inherit it after a save that failed.
+      const noticeLog = noticeLogRef.current;
+      noticeLogRef.current = null;
       phaseRef.current = 'finalizing';
       setState((s) => ({ ...s, phase: 'finalizing' }));
       try {
@@ -2837,6 +2879,8 @@ export function useRoom(slug: string) {
             },
             ...(h.resumed ? { resumed: true } : {}),
             ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),
+            // Undefined on a page that announced no take; the report then has no such section.
+            recordingNotice: noticeLog?.record(h.hostStartMs ?? Date.now()),
           };
           let report: SyncReport;
           try {
