@@ -70,6 +70,9 @@ EOF
 | 1.7 | Chat pop-up | Close the chat panel on one side, send from the other | A pop-up with the sender and message for a few seconds; the Chat button shows an unread dot (its tooltip reads 'Chat, N unread'); opening chat clears both | ☐ | |
 | 1.8 | Blocked camera in the lobby | Block camera and mic for the site, reload the room | The preview says "Camera and mic are blocked", with **Try again**. Allow both again, click **Try again**: the preview comes back without a reload | ☐ | |
 | 1.9 | 404 page | Open `/no-such-page` | "Page not found" with a link home — not a blank page | ☐ | |
+| 1.10 | Mic test | In the lobby, press **Test your mic** and say a few words. Then turn the mic off in the preview and press it again. Repeat on a phone | The line under the button reads "Recording 5 seconds. Say a few words.", then a player appears and you hear yourself; when it ends the player is gone and the line reads "Test deleted. It never left this browser." With the mic off it reads "Your microphone is off. Turn it on, then test again." and nothing is played. On the phone the button and the player stay inside the panel | ☐ | |
+| 1.11 | Check link | As host, press **Copy check link** in the lobby, then join and wait. Open the copied link in another profile. Repeat on a phone | The address ends `?check=1`. The page is headed "Check your setup", with the camera preview, the device pickers and the readiness panel, and no name field, no **Join now** and no **Present only**. **See your checks ↓** jumps to the panel. The host's tab still waits alone. **Go to the room** opens the ordinary lobby. On the phone nothing runs off the side | ☐ | |
+| 1.12 | Copy result | In the lobby, wait for the checks, press **Copy result** under them and paste into a text editor. Repeat on a phone | The first line is "openMeet setup check", then one line per check on screen (not the headphones advice), each starting OK, Warning or Problem, then Microphone and Camera with the names of the devices in use. The line under the button says what was copied. On the phone the button and its line stay inside the panel | ☐ | |
 
 ## 2 — Recording, the happy path
 
@@ -89,6 +92,8 @@ EOF
 | 2.12 | Folder access taken back | After a take, use the browser's site settings (the icon in the address bar) to remove openMeet's access to the recording folder, then press **Record another take**, and after the message press **Record** again | The first press says permission to write to that folder was denied; the second opens the folder picker, and the take records into the folder chosen there | ☐ | |
 | 2.13 | Countdown | On a fresh browser profile, host clicks **Record** and chooses a folder | The folder prompt comes first; then the host's screen reads "Recording starts in 3", 2, 1 with Record greyed out, and only then the Recording pill appears; nothing else is asked when the take starts | ☐ | |
 | 2.14 | Countdown for everyone | With a guest and a producer in the call, host clicks **Record** | All three screens read "Recording starts in 3", 2, 1; then the guest sees the red notice and the REC pill. A guest who joins during the count sees no count and is recorded from the start of the take | ☐ | |
+| 2.15 | Record alone | Host joins a new room alone, presses **Continue alone**, then **Record**, chooses a folder, records ~20 s, **End & save** | The waiting room gives way to the call screen with **Record** and **Copy invite link**; the count reads 3, 2, 1; the summary says Take 1 saved and lists `host-<your name>_*.mp4` and `host-<your name>_*.wav`, both complete; the folder holds no `guest_*` file | ☐ | |
+| 2.16 | A guest joins a take recorded alone | While the host records alone, a guest opens the invite link and joins | The guest sees the red notice and the REC pill at once, and no countdown; the host's take keeps running and its track panel lists the guest as Receiving; after **End & save** the folder holds `guest_*.mp4`, `guest_*.wav` and `call1_*.m4a` | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -112,6 +117,9 @@ kept saying "Recording".
 | 3.13 | Save to a folder that is too small | After a host crash (as in the row *Save from the lobby after a host crash*), press **Save to folder** and pick a folder on a drive with less free space than the row's size | The lobby names the files that were not saved and the **Unsaved recording** row stays; a second **Save to folder** into a folder with room puts every file there and the row goes | ☐ | |
 | 3.14 | Save instead of resuming | With a guest still connected, reload the host tab mid-take, join again and press **Save what was recorded** | The files land in the folder and the notice goes; the guest's page leaves **Recording** by itself. Pressing **Resume recording** or **Save what was recorded** twice does nothing the second time | ☐ | |
 | 3.15 | Screen share across a resume | A guest is sharing a screen when the host tab is reloaded; the host joins again and presses **Resume recording** | The host is told that person's screen is not recorded until they stop and share again; after they do, and after **End & save**, the screen file from before the reload and the new one are both in the folder and in the summary | ☐ | |
+| 3.16 | Reload during a take recorded alone | Record alone for 30 s, then reload the host tab | The lobby lists **Backups on this device** with a recording backup (MP4) and one (WAV) for this room, and no **Unsaved recording**; both downloads play; the folder's own `host-…` files are not empty | ☐ | |
+| 3.17 | Leave while the count runs, alone | Alone on the call screen press **Record**, choose a folder, and press **Leave call** before the count ends | "You left the call"; no take starts and no file appears in the folder | ☐ | |
+| 3.18 | Interrupted take, host back alone | Record with a guest for 30 s, close the host tab, let the guest leave; reopen the room, join without pressing **Save to folder**, press **Continue alone** | The call screen reads "Recording was interrupted. This browser still has the take." with **Save what was recorded** and no **Resume recording**; **Save what was recorded** puts the files in the chosen folder and the notice gives way to a line that starts "Saved" | ☐ | |
 
 ## 4 — Multiple takes
 
@@ -122,7 +130,7 @@ kept saying "Recording".
 | 4.3 | Guest is in take 2 | Check `guest_*_take2.mp4` | Exists and plays. *(This silently failed once — the guest sat out every take after the first)* | ☐ | |
 | 4.4 | Summary survives | After ending take 2 | Summary still lists both takes with durations | ☐ | |
 | 4.5 | Summary beside the stage | After **End & save**, look at the host's screen | The summary opens as a column beside the call (a sheet on a phone); the call stays visible; closing it and reopening from the Summary button works; **Download sync.json** and **Download chapters** save files | ☐ | |
-| 4.6 | Nobody left to record | Guest leaves, then look at the summary | Its main button reads **Copy invite link** instead of Record another take, and the summary stays open | ☐ | |
+| 4.6 | Another take with nobody left | Guest leaves, then press **Record another take** in the summary | The call screen stays; the count reads 3, 2, 1 and take 2 records the host alone, with no folder prompt; `host-<your name>_*_take2.mp4` and `.wav` are in the folder and there is no `guest_*_take2` file | ☐ | |
 
 ## 5 — Screen share
 
@@ -140,6 +148,7 @@ Not covered by the automated test at all.
 | 5.8 | Present only, laptop + phone | Phone joins as a guest. A laptop in another profile opens the invite link, chooses **Present only** and picks a screen. Host records ~30 s | The laptop has no camera tile; its screen shows as "*name* (Presenting)". The folder has the phone's files plus a `guest_screen_*.mp4` from the laptop, and no camera or WAV file from the laptop | ☐ | |
 | 5.9 | Computer presents a photo or video | On a computer, click the arrow beside **Present**, pick **A photo or video** and choose a video with sound; then do the same with a photo during a recording | Everyone else sees it in the spotlight and hears the video; the presenter sees it labelled "What you're presenting"; **Stop presenting** ends it. The photo shown during the recording lands as a `*_screen_*.mp4` | ☐ | |
 | 5.10 | Presenter hears a presented video | With headphones on, present a video with sound from a computer; then from a phone; then from a laptop joined with **Present only** | The computer hears the video; the phone and the Present-only laptop show it in silence. Everyone else hears it each time | ☐ | |
+| 5.11 | Present alone | Recording alone, host clicks **Present**, picks a tab for ~15 s, stops presenting, **End & save** | The stage reads "You’re presenting" while it lasts; `host-<your name>_screen_*.mp4` is in the folder, plays and is listed in the summary as complete | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 
@@ -173,6 +182,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 7.9 | Host opens a second tab mid-take (Present only) | Recording, second tab of the host's profile, **Present only**, pick a tab | A dialog asks; **Cancel** stops the share | ☐ | |
 | 7.10 | Signalling restart with a call running | With a take running, restart `wrangler dev` | Both pages reconnect by themselves and the call comes back with one tile per person | ☐ | |
 | 7.11 | One side reconnects | With a call running, move the guest's computer from Wi-Fi to a phone hotspot (or back) | The call is back within a few seconds on both sides, one tile per person, and no "Negotiation failed" message | ☐ | |
+| 7.12 | A guest joins after the host's connection dropped mid-take | In the host's lobby, before joining, run in the DevTools console: `const W = WebSocket; window.WebSocket = class extends W { constructor(...a) { super(...a); if (String(a[0]).includes('/ws/r/')) window.__ws = this; } };` Join, start a take, then run `__ws.close()` in the console. A few seconds later a guest opens the invite link and joins | The host's take never stops. The guest gets the red notice and the REC pill and is recorded: after **End & save** the guest's files are in the folder and read complete | ☐ | |
 
 ## 8 — Extras
 
@@ -223,6 +233,13 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.43 | Raise hand on a phone | Join as a guest from a phone about 360 px wide while someone on a computer has a hand raised; get recorded. After the take, turn the phone on its side, tap **Raise hand**, turn it back upright, tap **Lower hand** | Upright, the phone shows the mark on that person's tile and has no **Raise hand** button; its control bar has two rows during the take. On its side it has the button; turned back with the hand up it still has **Lower hand**, and the button goes once the hand is down | ☐ | |
 | 8.44 | Reactions | Three people in a call on computers. One clicks the arrow beside **Raise hand** and picks the thumbs up, then at once opens it again and picks the heart; another picks applause; press Escape with the row open. Repeat during a take, then End & save | The picture shows at the top left of the sender's tile on every screen, their own included, and is gone after about three seconds; the heart picked within a second shows nothing; the row closes on a pick and on Escape. Every file of the take reads complete and no file mentions a reaction | ☐ | |
 | 8.45 | Reactions in a narrow window | Two people in a call, one in a window about 900 px wide and then about 700 px wide. That person opens the arrow beside **Raise hand**, then opens the camera menu | The four reactions are one row above the bar, inside the window and not behind the small corner tile; opening the camera menu closes the row | ☐ | |
+| 8.42 | Headphones or speakers | In the lobby, under the name, open **Headphones or speakers?** and pick **Listening on: speakers**; reload. Repeat on a phone about 390 px wide | The preview does not restart when it is picked; the answer is still chosen after the reload; on the phone the control is above **Join now** with its text on one line | ☐ | |
+| 8.43 | Echo cancellation | On a computer with speakers and no headphones, pick **Speakers, echo cancellation on**, join, and have a second person talk; record 30 s, End & save. Then join again with **Listening on: speakers** and repeat | With it on: the lobby line ends "· echo cancellation on", the second person does not hear themselves back, the first person's MP4 and WAV hold their own voice with little of the other, and no "microphone is silent" note appears while they only listen. Without it: the second person hears an echo and the first person's files hold both voices | ☐ | |
+| 8.44 | Host sees the answer | Three people join: one picks **Listening on: headphones**, one **Speakers, echo cancellation on**, and the host leaves the question unanswered | On the host's screen the two name tags read "<name> — headphones" and "<name> — on speakers, echo cancelled"; hovering a cut-off tag shows all of it. On the two guests' screens no tag says anything about headphones or speakers | ☐ | |
+| 8.45 | Echo cancellation in the notes | A guest joins with **Speakers, echo cancellation on**; record 20 s, switch the guest's microphone from the call's microphone menu, record 10 s more; the guest leaves; End & save | The summary's Camera and Audio master rows for that guest read "(echo cancellation on)", the host's rows do not, and `sync_*.json` in the folder has `echoCancellation.files` with those two names. The guest's echo stayed cancelled after the switch | ☐ | |
+| 8.46 | Teleprompter reading time | Open the teleprompter, press **Edit** if a script is saved, paste about 400 words, then clear the script. Repeat on a phone | Under the script: "About 3 min to read"; with the script cleared the line is gone. The header and its controls are as before | ☐ | |
+| 8.47 | Send the script | Host and one guest in a call. The guest types a script of their own in the teleprompter and closes it. The host opens the teleprompter, presses **Edit** if a script is saved, types a script and presses **Send to everyone**. The guest opens the teleprompter from the button with the dot and presses **Use it**. The host changes a word and sends again; the guest presses **Ignore**. Repeat with the guest on a phone | The host reads "Sent. The others can use it or ignore it." each time. The guest's teleprompter button shows a dot; the offer names the reading time and says it replaces the guest's own script, which is still on screen until **Use it**; after **Use it** the host's script is in the guest's teleprompter and is still there after a reload; **Ignore** leaves it as it was. The dot goes either way. On the phone the offer and its two buttons fit inside the panel | ☐ | |
+| 8.48 | Send the script during a take | Host and one guest record. The host presses **Send to everyone** about 5 s in, the guest presses **Use it** about 5 s later; End & save. Then paste more than 50,000 characters into the host's teleprompter | The take never stops and no banner appears; every file reads complete in the summary, and no file in the folder holds the script. With the long text **Send to everyone** is disabled and the line reads "Too long to send: 50,000 characters at most." | ☐ | |
 
 ## 9 — Deploy
 
@@ -278,6 +295,12 @@ Also not covered automatically. Needs 3 browser profiles.
   size. It plays in full; the header just cannot express the real number
   without RF64.
 - **No TURN configured** means two people behind strict NATs cannot connect.
+- **A take recorded alone is not listed as Unsaved recording after a crash.** Its
+  copies are in the lobby under **Backups on this device**.
+- **A teleprompter script is sent once.** Someone who joins or reloads afterwards
+  asks the host to send it again.
+- **Echo cancellation is chosen in the lobby.** To turn it on or off, leave the call
+  and join again.
 
 ## When something fails
 

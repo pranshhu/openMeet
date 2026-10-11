@@ -21,10 +21,13 @@ import { DEFAULT_QUALITY_ID, presetById } from './quality';
 // file to contain some bleed of the other person. Echo cancellation removes the
 // far-end signal by design, so the fallback was structurally impossible.
 //
-// The cost is that guests on speakers will hear echo: headphones are required,
-// and documented as such in the README. That is the same trade every serious
-// remote-recording tool makes. Deliberately NOT a toggle — an option here just
-// moves the wrong default one click away.
+// The cost is that someone on speakers echoes the others back to them, and
+// into their own file. Headphones are the fix, and documented as such in the
+// README. That is the same trade every serious remote-recording tool makes.
+// The one exception is a person's own choice in the lobby: on speakers they
+// may ask for echo cancellation on their own microphone (micConstraints). It
+// stays off for everyone else. Noise suppression and gain control have no
+// switch.
 export const RECORDING_CONSTRAINTS: MediaStreamConstraints = {
   video: {
     width: { ideal: RECORDING_VIDEO_WIDTH },
@@ -44,14 +47,18 @@ export function deviceConstraints(
   micId?: string,
   camId?: string,
   qualityId: string = DEFAULT_QUALITY_ID,
-  frameRate: number = RECORDING_FRAME_RATE
+  frameRate: number = RECORDING_FRAME_RATE,
+  echoCancellation = false
 ): MediaStreamConstraints {
-  return { audio: micConstraints(micId), video: cameraConstraints(camId, qualityId, frameRate) };
+  return {
+    audio: micConstraints(micId, echoCancellation),
+    video: cameraConstraints(camId, qualityId, frameRate),
+  };
 }
 
-export function micConstraints(micId?: string): MediaTrackConstraints {
-  const a = RECORDING_CONSTRAINTS.audio as MediaTrackConstraints;
-  return micId ? { ...a, deviceId: { exact: micId } } : { ...a };
+export function micConstraints(micId?: string, echoCancellation = false): MediaTrackConstraints {
+  const a = { ...(RECORDING_CONSTRAINTS.audio as MediaTrackConstraints), echoCancellation };
+  return micId ? { ...a, deviceId: { exact: micId } } : a;
 }
 
 /**
