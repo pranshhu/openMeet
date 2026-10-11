@@ -146,6 +146,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Add to calendar**, in the host's lobby: pick a start time and download a
+  calendar file (.ics) or open Google Calendar with the entry filled in. The entry
+  is one hour long and carries the room link and a short checklist for the guest
+  (browser, headphones, a quiet room). It is made in the browser: nothing about it
+  is stored or sent to the server.
 
 ### Changed
 

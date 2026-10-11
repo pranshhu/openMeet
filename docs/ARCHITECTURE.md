@@ -349,6 +349,15 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   board pad's file name can be longer) and places the host's own note at `at`, the moment its
   field opened, because typing takes seconds; nothing of `at` is sent, so a guest's note is
   placed when it reaches the host, like every relayed marker.
+- **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
+  panel, in the browser that holds the room's host token (`Lobby`'s `isHost`). The host picks a
+  start (`<input type="datetime-local">`, read on that computer's clock) and gets two links,
+  both built in the page by `lib/calendar-invite.ts`: a `data:` address that downloads
+  `openmeet-<slug>.ics` (`buildIcs`: one event of `SESSION_MS`, one hour, in UTC, its lines
+  folded at 75 octets) and Google Calendar's form filled in (`googleCalendarUrl`). Both hold
+  the plain invite link and `inviteText`: a short checklist for the guest and a line about
+  recording. Nothing is stored and nothing about the entry is sent to the Worker: the room
+  knows no date.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -990,3 +999,12 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
+  no **Add to calendar**, and a host in a browser without the room's host token is a guest
+  there. The entry is one hour long with a fixed title and text; the calendar that opens it
+  can change them. A start in the past is accepted.
+- **The room knows nothing of a calendar entry.** It shows no countdown and sends no reminder.
+  The entry holds the invite link, so whoever can read the calendar can join the room, and
+  **Open in Google Calendar** hands that link to Google. Opened from a calendar in another
+  browser on the day, the link makes the host a guest with no Record button: the host token
+  is only in the browser that made the room, which the panel says.

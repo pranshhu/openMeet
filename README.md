@@ -73,6 +73,8 @@ retention policy to trust, because there's nothing retained.
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
+  entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)

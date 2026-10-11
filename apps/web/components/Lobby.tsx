@@ -33,6 +33,7 @@ import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
+import { CalendarInvite } from './CalendarInvite';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
@@ -915,6 +916,9 @@ export function Lobby({
               {saveNote.text}
             </p>
           )}
+          {/* Last in the panel: nothing a guest or a host needs after a crash
+              moves down for it. */}
+          {isHost && <CalendarInvite slug={slug} />}
         </div>
 
         {/* Devices + preflight. After the Join panel in the DOM, so a phone's
