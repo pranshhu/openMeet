@@ -74,7 +74,22 @@ export type ClientPresence = {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** This person has a hand raised: they are waiting to speak. Sent only while true. */
+  handRaised?: boolean;
 };
+/**
+ * A quick reaction, drawn for a moment on its sender's tile. A code, not a
+ * picture: each page draws its own, and the Room drops anything not on this
+ * list. It is relayed and never kept, and no recording holds it.
+ */
+export const REACTIONS = ['thumbs-up', 'clap', 'laugh', 'heart'] as const;
+export type Reaction = (typeof REACTIONS)[number];
+
+export function isReaction(v: unknown): v is Reaction {
+  return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+export type ClientReaction = { type: 'reaction'; reaction: Reaction };
 /**
  * Chapter marker dropped during a recording.
  *
@@ -153,6 +168,7 @@ export type ClientMessage =
   | ClientScript
   | ClientChat
   | ClientPresence
+  | ClientReaction
   | ClientMarker
   | ClientLeave
   | ClientPing
@@ -259,10 +275,14 @@ export type ServerPresence = {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** The sender has a hand raised. The Room passes it on only when it is exactly true. */
+  handRaised?: boolean;
   from: Role;
   fromPeerId?: string;
   fromName?: string;
 };
+/** Relay of ClientReaction, stamped like presence. Never kept. */
+export type ServerReaction = { type: 'reaction'; reaction: Reaction; from: Role; fromPeerId: string };
 /**
  * Relayed so every peer learns the room is being recorded — consent notice for
  * guests, and the trigger that starts their own capture. The `recordingId` is
@@ -328,6 +348,7 @@ export type ServerMessage =
   | ServerIceCandidate
   | ServerChat
   | ServerPresence
+  | ServerReaction
   | ServerMarker
   | ServerRecordingStarted
   | ServerRecordingStop
@@ -353,6 +374,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'script',
   'chat',
   'presence',
+  'reaction',
   'marker',
   'leave',
   'ping',
@@ -371,6 +393,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'ice-candidate',
   'chat',
   'presence',
+  'reaction',
   'marker',
   'recording-started',
   'recording-stop',

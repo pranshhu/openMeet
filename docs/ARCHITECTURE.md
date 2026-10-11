@@ -64,7 +64,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (18 variants) ↔ `ServerMessage` (20).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (19 variants) ↔ `ServerMessage` (21).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (17 variants) ↔ `ServerMessage` (20).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -80,6 +81,10 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `recording-capability` also carries the sender's lobby answer, `listening` (one of
   `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
   when it is one of those codes, and the page that receives it checks again.
+  `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
+  when it is exactly `true`, and a page reads nothing else as a raised hand.
+  `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
+  stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
   `resume_query` | `resume_offset` | `recording-finalized` | `clock_ping` | `clock_pong` |
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
@@ -193,6 +198,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `to` is absent), and `chat`, `presence`, `marker`, `recording-capability` via `broadcastExcept`
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
+- `presence` is relayed with `handRaised: true` only when the sender's field is exactly
+  `true`; any other value is left out. Nothing is kept.
+- `reaction` is relayed to every other joined peer (`broadcastExcept`, stamped
+  `from`/`fromPeerId`) when its code is one of `REACTIONS`, and dropped otherwise; only
+  `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
+  page that receives reactions takes one a second from one sender (`takeReaction` in
+  `apps/web/lib/reactions.ts`), and `useRoom().sendReaction` sends no more than that.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
   except one the host set as not recorded), but **persisted to D1 only by the host**
   (`insertRecording`, capped at 256 rows per session).
@@ -400,6 +412,31 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   panel is on screen one `AudioContext` of its own holds a `MediaStreamAudioSourceNode` and an
   `AnalyserNode` per stream, connected to nothing else, and a 100 ms timer writes each bar
   straight to the DOM. Hiding the panel closes the context.
+- **Raise hand** — a button in the call's control bar (`CallStage`; not for a producer or a
+  present-only device, which have no tile; below the `sm` width, where a phone's bar is full
+  while a take runs, it is shown only while the hand is up, so that a hand can always be
+  lowered). `useRoom().setHandRaised` keeps the choice in a ref and in
+  `state.handRaised` and sends it with `presence` as `handRaised: true`; the field is left
+  out while the hand is down. Presence is sent again to everyone who joins and after a
+  reconnect, so a late joiner sees a hand that is already up. `PresenceBadge` draws the
+  mark on that person's tile, first and in the accent colour, and `CallStage` gives the
+  person's own tile the same mark. The names of the people who have a tile and a raised
+  hand are put in the status bar's live region for screen readers ("Hand raised: …").
+  Nothing of it reaches a recorder, a file or the crash copy.
+- **Reactions** (`components/ReactionMenu.tsx`, `components/ReactionBadge.tsx`,
+  `lib/reactions.ts`) — the arrow in one pill with Raise hand opens a row of four (`REACTIONS`
+  in the protocol: thumbs up, applause, laugh, heart). `ReactionMenu` keeps its own open
+  state, as `RoleLinks` does; its pill has no `data-picker-container`, so it and the device
+  menus close each other. The arrow and the row are hidden below the `sm` width by their own
+  classes, also while a raised hand keeps the pill there: the row would leave a narrow
+  screen. `useRoom().sendReaction` puts the choice in `state.reactions` under
+  `OWN_REACTION` and sends `reaction`; one that arrives is put there under its sender's peer
+  id. `takeReaction` is the one gate for both: a code this build knows, one a second from one
+  sender, the rest dropped before any state changes. `CallStage` draws an entry on that
+  person's tile as `ReactionBadge` (`key` = the time it was taken), which removes itself
+  `REACTION_SHOWN_MS` (3 s) after that time with a timer of its own, so a tile drawn again
+  shows what is left of a reaction or nothing. The pictures are elements of the page: no
+  recorder, file or crash copy holds one.
 - **`components/MarkerNote.tsx`** — a chapter marker with a typed note. `useMarkerNote` holds
   whether the field is open for the take that is running and listens for **N** (ignored while
   typing, as **M** is); the pencil button beside the marker button opens it too. `MarkerNote` is
@@ -1373,3 +1410,27 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is refused by the room's closing time as it stands, and a join only moves that to 30 days
   from the join. The host makes the entry within 30 days of the session, after joining the
   room once if it was last used longer ago than that.
+- **A phone held upright has no Raise hand button.** With a take running, a recorded
+  person's control bar there has no room for one more button without a third row, so the
+  button is shown from 640 px of width up: on a computer and on a phone turned on its side.
+  A narrower window still shows every raised hand. A hand raised in a wide window keeps its
+  button when the window gets narrower, so that it can be lowered; during a take Leave is
+  then on a third row until it is. A producer and a Present-only device have no button at
+  any width: they have no tile to show it on.
+- **A raised hand stays up until its owner lowers it.** Nobody else can lower it, speaking
+  does not, and it is still up when the call comes back after everyone else left. A reload
+  lowers it. Hands are not kept in order: the tiles show who, not who was first.
+- **While a screen is presented in a window narrower than 768 px only the first other
+  person has a tile,** so another person's raised hand is not on screen there. A screen
+  reader still reads it out.
+- **A reaction is not read out by a screen reader,** and it is drawn only on a tile. A
+  producer and a Present-only device have no tile and no reactions menu, and a window
+  narrower than 640 px (a phone held upright) has no menu either; it still shows the others'
+  reactions. A person whose own tile is not on screen (a screen is presented in a window
+  narrower than 768 px) sees nothing of a reaction they send.
+- **A reaction sent while the sender's connection to the Room is down is lost.** It shows on
+  the sender's own tile and reaches nobody else (`SignalClient.send` drops it), and nothing
+  tells the sender. The same holds against a Worker deployed before reactions: it ignores
+  the message.
+- **The Room passes on every reaction it is sent.** The limit of one a second from one
+  sender is kept by each page that receives them, as the limits on chat and markers are.

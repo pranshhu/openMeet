@@ -37,6 +37,9 @@ import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 import { SpeakerRow } from './SpeakerRow';
 import { canPopOut, usePopOut } from '@/hooks/use-pop-out';
+import { ReactionBadge } from './ReactionBadge';
+import { ReactionMenu } from './ReactionMenu';
+import { OWN_REACTION, type Reaction, type ShownReactions } from '@/lib/reactions';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -140,6 +143,10 @@ export function CallStage({
   onSetLowPower,
   incomingVideoOff = false,
   onSetIncomingVideoOff,
+  handRaised = false,
+  onSetHandRaised,
+  reactions,
+  onReact,
   unprotectedRecording,
   backupTransfers,
   onAcceptBackups,
@@ -236,6 +243,12 @@ export function CallStage({
   /** This device has stopped taking everyone else's video; it still hears the call. */
   incomingVideoOff?: boolean;
   onSetIncomingVideoOff?: (off: boolean) => void;
+  /** This person has a hand raised, which everyone in the call sees on their tile. */
+  handRaised?: boolean;
+  onSetHandRaised?: (raised: boolean) => void;
+  /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
+  reactions?: ShownReactions;
+  onReact?: (reaction: Reaction) => void;
   /** The running take has no crash copy in this browser, so say so. */
   unprotectedRecording?: boolean;
   /** Returned backups: what the guests are sending back, and the host's answer. */
@@ -553,6 +566,13 @@ export function CallStage({
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
 
+  // A reaction is drawn on its sender's tile. Keyed by the time it was taken,
+  // so a second one from the same person is a new element and shows again.
+  const reactionOn = (key: string | undefined) => {
+    const r = key === undefined ? undefined : reactions?.get(key);
+    return r ? <ReactionBadge key={r.at} reaction={r.reaction} at={r.at} /> : null;
+  };
+
   const local: StageFeed = {
     stream: localStream,
     name: localName ? `${localName} (You)` : 'You',
@@ -560,8 +580,19 @@ export function CallStage({
     camOff: !camOn || rearCameraEndsFace,
     // A self-view reads mirrored, as in the lobby; a rear camera shows the world.
     mirror: currentFacingMode !== 'environment',
+    // The mark the others see on this tile, so a raised hand is not forgotten,
+    // and this person's own reaction, so they see that it went out.
+    presence: (
+      <>
+        {handRaised && <PresenceBadge micOn camOn screenSharing={false} handRaised />}
+        {reactionOn(OWN_REACTION)}
+      </>
+    ),
   };
   const stagePeers = remotePeers.filter(isStagePeer);
+  // Who has a hand raised, in tile order. Only people with a tile: a mark
+  // nobody can see is not read out either.
+  const raisedNames = stagePeers.filter((p) => p.presence?.handRaised).map((p) => p.name || 'A guest');
   // Levels: how loud this tab plays each other person, 0 to 1 by peerId. The
   // value goes to that person's <video> elements only, so nobody else hears
   // it and no recorder, backup or call-audio copy reads it.
@@ -590,7 +621,12 @@ export function CallStage({
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
-        ...(firstRemotePresence ? { presence: <PresenceBadge {...firstRemotePresence} /> } : {}),
+        presence: (
+          <>
+            {firstRemotePresence && <PresenceBadge {...firstRemotePresence} />}
+            {reactionOn(firstRemote?.peerId)}
+          </>
+        ),
       }
     : null;
 
@@ -686,6 +722,8 @@ export function CallStage({
           <span role="status" className="text-[#fdd663]">This take isn’t protected if the browser crashes.</span>
         )}
         {phase === 'recording' && readTrackHealth && <RecordingHealth read={readTrackHealth} />}
+        {/* A mark on a tile is silent, so the names are said from this live region. */}
+        {raisedNames.length > 0 && <span className="sr-only">{`Hand raised: ${raisedNames.join(', ')}`}</span>}
         {/* The host's downloads live in the summary; here is only the verdict.
             A guest has no summary, so its backups stay on this line. */}
         {phase === 'done' && !roomRecording && (
@@ -975,7 +1013,12 @@ export function CallStage({
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
-                  ...(presence ? { presence: <PresenceBadge {...presence} /> } : {}),
+                  presence: (
+                    <>
+                      {presence && <PresenceBadge {...presence} />}
+                      {reactionOn(r.peerId)}
+                    </>
+                  ),
                 };
               })}
               remoteScreen={remoteScreenStream}
@@ -1417,6 +1460,21 @@ export function CallStage({
                   variant={rundownOpen ? 'active' : 'default'}
                   onClick={() => setRundownOpen((o) => !o)}
                 />
+              )}
+              {/* Not for a producer or a present-only device: they have no tile for
+                  the mark. Below sm only while the hand is up, so that it can
+                  always be lowered: with a take running a phone's second row is
+                  full, and one more button puts Leave on a third. */}
+              {onSetHandRaised && !companion && role !== 'producer' && (
+                <div className={`relative items-center rounded-full bg-[#3c4043] ${handRaised ? 'inline-flex' : 'hidden sm:inline-flex'}`}>
+                  <ControlButton
+                    icon="hand"
+                    label={handRaised ? 'Lower hand' : 'Raise hand'}
+                    variant={handRaised ? 'active' : 'default'}
+                    onClick={() => onSetHandRaised(!handRaised)}
+                  />
+                  {onReact && <ReactionMenu onReact={onReact} />}
+                </div>
               )}
               {((phase === 'in-call' && canRecord) || (phase === 'done' && canRecordNext)) && (
                 <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">

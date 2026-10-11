@@ -79,6 +79,7 @@ import {
 import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { saveRecoveredTake } from '@/lib/take-recovery';
+import { OWN_REACTION, takeReaction, type Reaction, type ShownReactions } from '@/lib/reactions';
 import {
   attachBackupSends,
   BackupIntake,
@@ -118,6 +119,8 @@ export interface PeerPresence {
   micOn: boolean;
   camOn: boolean;
   screenSharing: boolean;
+  /** A hand is raised: this person is waiting to speak. Absent while it is down. */
+  handRaised?: boolean;
 }
 
 export interface RemotePeer {
@@ -133,12 +136,14 @@ export interface RemotePeer {
 
 export function applyRemotePeerPresence(
   remotePeers: RemotePeer[],
-  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean }
+  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean }
 ): RemotePeer[] {
   const presence: PeerPresence = {
     micOn: m.micOn,
     camOn: m.camOn,
     screenSharing: m.screenSharing,
+    // Another participant's field, so only a real `true` is a raised hand.
+    ...(m.handRaised === true ? { handRaised: true } : {}),
   };
   const targetPeerId = m.fromPeerId ?? remotePeers[0]?.peerId;
   if (!targetPeerId) return remotePeers;
@@ -238,6 +243,10 @@ export interface RoomState {
    * no recording is affected.
    */
   incomingVideoOff: boolean;
+  /** This person has a hand raised. Everyone in the call sees it on their tile. */
+  handRaised: boolean;
+  /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
+  reactions: ShownReactions;
   /**
    * What each remote peer's browser can actually capture, keyed by peerId.
    * Lets the host see BEFORE pressing Record who won't be captured, and why,
@@ -636,6 +645,8 @@ export function useRoom(slug: string) {
     notRecorded: false,
     lowPower: false,
     incomingVideoOff: false,
+    handRaised: false,
+    reactions: new Map(),
     capabilities: {},
     finalizingGuests: [],
     backupTransfers: [],
@@ -705,6 +716,12 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
+  // Written by setHandRaised itself: sendPresence reads it, and a join or a
+  // reconnect may send presence before the next render.
+  const handRaisedRef = useRef(false);
+  // What the tiles show, written where a reaction is taken: a burst of them
+  // is judged one by one against this, without waiting for a render.
+  const reactionsRef = useRef<ShownReactions>(new Map());
   const companionRef = useRef(false);
   // Mirrors `state.notRecorded` for the socket handlers and beginGuestRecording,
   // which read refs.
@@ -758,6 +775,8 @@ export function useRoom(slug: string) {
       micOn: micOnRef.current,
       camOn: camOnRef.current,
       screenSharing: screenSharingRef.current,
+      // Absent while the hand is down, like every optional field on the wire.
+      ...(handRaisedRef.current ? { handRaised: true } : {}),
     });
   }, []);
 
@@ -1903,6 +1922,15 @@ export function useRoom(slug: string) {
         })
       );
 
+      // Another participant's reaction. The sender's id must be a string, and
+      // takeReaction takes only a code this build knows, one a second from one
+      // sender. Anything else is dropped here, before any state changes.
+      signal.on('reaction', (m) => {
+        if (typeof m.fromPeerId !== 'string') return;
+        if (!takeReaction(reactionsRef, m.fromPeerId, m.reaction, Date.now())) return;
+        setState((s) => ({ ...s, reactions: reactionsRef.current }));
+      });
+
       // A peer socket closing must NEVER end an in-progress recording. The DO
       // broadcasts peer-left on any close — a wifi blip, a laptop sleeping, a
       // tab refresh — and moving to 'peer-left' unmounts CallStage, which
@@ -2350,6 +2378,27 @@ export function useRoom(slug: string) {
     incomingVideoOffRef.current = off;
     for (const p of peersRef.current.values()) p.setIncomingVideoOff(off);
     setState((s) => ({ ...s, incomingVideoOff: off }));
+  }, []);
+
+  /**
+   * Raise or lower this person's hand. It travels with presence, which is sent
+   * again to everyone who joins and after a reconnect, so nobody misses it.
+   */
+  const setHandRaised = useCallback(
+    (raised: boolean) => {
+      handRaisedRef.current = raised;
+      sendPresence();
+      setState((s) => ({ ...s, handRaised: raised }));
+    },
+    [sendPresence]
+  );
+
+  /** React: drawn on this person's own tile at once, and sent for everyone else's. */
+  const sendReaction = useCallback((reaction: Reaction) => {
+    // Everyone else takes one a second from a sender, so no more than that is sent.
+    if (!takeReaction(reactionsRef, OWN_REACTION, reaction, Date.now())) return;
+    setState((s) => ({ ...s, reactions: reactionsRef.current }));
+    signalRef.current?.send({ type: 'reaction', reaction });
   }, []);
 
   /**
@@ -3057,5 +3106,7 @@ export function useRoom(slug: string) {
     readLoad,
     setLowPower,
     setIncomingVideoOff,
+    setHandRaised,
+    sendReaction,
   };
 }

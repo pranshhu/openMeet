@@ -191,6 +191,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Raise hand**, in the call's control bar: a mark appears on your tile for everyone
+  until you lower it, and someone who joins later sees it too. Nothing of it is
+  recorded. A phone held upright shows the hands and has no button.
+- Quick reactions, from the arrow beside **Raise hand**: a thumbs up, applause, a laugh
+  or a heart shows on your tile on everyone's screen for about three seconds, without
+  a sound. Nothing of it is recorded.
 - **Add to calendar**, in the host's lobby: pick a start time and download a
   calendar file (.ics) or open Google Calendar with the entry filled in. The entry
   is one hour long and carries the room link and a short checklist for the guest

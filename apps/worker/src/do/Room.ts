@@ -10,6 +10,7 @@ import {
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   isListening,
+  isReaction,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -513,9 +514,25 @@ export class Room implements DurableObject {
           micOn: parsed.micOn,
           camOn: parsed.camOn,
           screenSharing: parsed.screenSharing,
+          // A raised hand travels only as a real `true`: the field is the
+          // sender's, and every other screen draws what is passed on here.
+          ...(parsed.handRaised === true ? { handRaised: true } : {}),
           from: p.role,
           fromPeerId: p.peerId,
           ...(p.displayName ? { fromName: p.displayName } : {}),
+        });
+        break;
+      case 'reaction':
+        // Relay only, like presence: a picture on the sender's tile for a
+        // moment. Nothing is kept, and a code that is not on the list goes
+        // nowhere, so no page is handed one it cannot draw. Only the code
+        // travels, whatever else the message carried.
+        if (!isReaction(parsed.reaction)) break;
+        this.broadcastExcept(ws, {
+          type: 'reaction',
+          reaction: parsed.reaction,
+          from: p.role,
+          fromPeerId: p.peerId,
         });
         break;
       case 'marker':
