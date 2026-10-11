@@ -313,6 +313,92 @@ describe('the record of who was told, in a take', () => {
       await result.current.endRecording();
     });
 
-    expect(lastNotice()).toBeUndefined();
+    // The resumed take has a record of its own, with nothing from before the
+    // resume: Bob's channel of 400 ms is not in it.
+    const resumed = lastNotice();
+    expect(resumed.resumed).toBe(true);
+    expect(resumed.announcedAtMs).toBe(200_000);
+    expect(resumed.people).toEqual([{ name: 'Bob', role: 'guest', listedAtMs: 200_000, confirmedAtMs: null }]);
+  });
+});
+
+describe('the record of who was told, after an interrupted take is resumed', () => {
+  let nowSpy: { mockRestore(): void };
+
+  beforeEach(() => {
+    signalHandlers = {};
+    clock = 999_000;
+    nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    vi.stubGlobal('MediaStream', FakeStream);
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    // The next test's join must find no crash copy again.
+    vi.mocked(findTakeJournals).mockResolvedValue([]);
+    vi.mocked(resumeHostRecording).mockReset();
+  });
+
+  it('starts again at the resume, confirms a guest whose channel the resume took up and names the guests the crash copy holds', async () => {
+    const journal = {
+      dirName: 'openmeet-take-1',
+      notes: {
+        room: 'abc-defg-hij',
+        recordingId: 'rec-1',
+        take: 1,
+        hostStartMs: 1_000_000,
+        files: [
+          { file: 'guest_rec-1.mp4', kind: 'camera', key: 'K1', slot: 0, who: 'Bob' },
+          { file: 'guest2_rec-1.mp4', kind: 'camera', key: 'K2', slot: 1, who: 'Gail' },
+        ],
+        backups: [],
+        markers: [],
+      },
+      notesOk: true,
+      dead: false,
+      bytes: 0,
+    } as unknown as TakeJournal;
+    vi.mocked(findTakeJournals).mockResolvedValue([journal]);
+    // What the resume bound: Bob's camera, from the channel that was waiting,
+    // and the channel of a connection that left while it waited.
+    vi.mocked(resumeHostRecording).mockResolvedValue({
+      recordingId: 'rec-1',
+      take: 1,
+      hostStartMs: 1_000_000,
+      slotPeerIds: new Map([
+        [0, 'p-bob'],
+        [1, 'p-gone'],
+      ]),
+    } as never);
+    const result = await hostIn([ROOM[0]!, ROOM[1]!]);
+    expect(result.current.state.resumeOffer).not.toBeNull();
+
+    clock = 1_095_000;
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+
+    clock = 1_120_000;
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    const notice = lastNotice();
+    expect(notice.resumed).toBe(true);
+    expect(notice.announcedAtMs).toBe(95_000);
+    // Two lines: the connection that left has none.
+    expect(notice.people).toEqual([
+      { name: 'Bob', role: 'guest', listedAtMs: 95_000, confirmedAtMs: 95_000 },
+      { name: 'Pat', role: 'producer', listedAtMs: 95_000, confirmedAtMs: null },
+    ]);
+    expect(notice.fromCrashCopy).toEqual([
+      { name: 'Bob', file: 'guest_rec-1.mp4' },
+      { name: 'Gail', file: 'guest2_rec-1.mp4' },
+    ]);
   });
 });

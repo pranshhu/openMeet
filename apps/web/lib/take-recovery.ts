@@ -3,6 +3,7 @@ import { assembleBackupFromDir } from './backup-recorder';
 import { patchWavHeader, WAV_HEADER_BYTES } from './wav';
 import { isJournalFileName, type JournalFileNote, type TakeJournal } from './take-journal';
 import { buildSyncReport, type GuestSyncInput, type ScreenSegmentInput } from './sync-report';
+import { crashCopyNotice } from './notice-log';
 import { takeName, writeTakeSidecars } from '../hooks/recording-controller';
 
 export interface RecoveredFile {
@@ -300,6 +301,7 @@ export async function saveRecoveredTake(journal: TakeJournal, folder: FsDirector
       screenSegments,
       checks,
       interrupted: true,
+      recordingNotice: crashCopyNotice(noted),
     });
 
     // A take whose record could not be read has no id: its start time names the sidecars.

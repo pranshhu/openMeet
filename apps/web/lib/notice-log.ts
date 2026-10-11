@@ -1,5 +1,6 @@
 import type { Role } from '@openmeet/protocol';
 import { sanitizeText } from './sync-report';
+import type { JournalFileNote } from './take-journal';
 
 /**
  * Lines one take keeps. A room holds five other connections at most; the rest
@@ -30,16 +31,32 @@ export interface NoticePerson {
   confirmedAtMs: number | null;
 }
 
+/** A guest the crash copy shows was recording before a take was interrupted. */
+export interface CrashCopyPerson {
+  name: string | null;
+  file: string;
+}
+
 /** The sync file's `recordingNotice` section. */
 export interface NoticeRecord {
   note: string;
-  announcedAtMs: number;
+  /** Absent for a take rebuilt from its crash copy: no page announced it again. */
+  announcedAtMs?: number;
   people: NoticePerson[];
   capped?: true;
+  /** The take was resumed from its crash copy, and `people` starts at the resume. */
+  resumed?: true;
+  fromCrashCopy?: CrashCopyPerson[];
 }
 
 const NOTE =
   "What the host's browser knew about who was told that this take was being recorded. One line per connection, so a person who reconnected has more than one, and the host has none. Times are milliseconds after the host's recording start (timeline.hostStartUnixMs), on the host's clock. announcedAtMs: the host's browser issued the take's announcement to the room; this does not show that it arrived anywhere. listedAtMs: the host's browser had this connection in its list of the room. Equal to announcedAtMs, the connection was in that list as the announcement went out; later, it joined while the take was running, and this record cannot show whether the room told it. confirmedAtMs: a recording channel from this connection reached the host. openMeet's page opens one only after it was told that a take is running, and being told is what puts the recording notice on its screen, so this shows the page was told. null means none arrived: a producer, a present-only device that is not presenting, a guest set as not recorded and a browser that cannot record never open one, so for them this record shows only that they were listed. A guest set as not recorded is listed without a name. capped means the take had more connections than this record keeps. Nothing here shows that a person read the notice, that their tab was in front, or that their browser ran an unmodified page.";
+
+const RESUMED_NOTE =
+  "This take was interrupted and then resumed from the host's crash copy. The lines under people start at the resume and hold nothing from before it: announcedAtMs is the moment the take was announced again, and a connection whose waiting recording channel the resume took up is confirmed at that moment. A guest whose waiting channel the resume could not match to a file reads null there although it had been told. fromCrashCopy lists the guests the crash copy shows had a camera recording channel reach the host before the interruption, by the file it went to; when each was told is not known, a guest whose recording began in the last seconds before the interruption can be missing, and anyone who was listed then without sending a camera recording is not in it.";
+
+const CRASH_COPY_NOTE =
+  "This take was interrupted, and its files and this file were rebuilt from the host's crash copy, which keeps no record of who was told. fromCrashCopy lists the guests the crash copy shows had a camera recording channel reach the host before the interruption, by the file it went to. openMeet's page opens that channel only after it was told that a take is running, and being told is what puts the recording notice on its screen, so each of them was told; when is not known. A guest whose recording began in the last seconds before the interruption can be missing, and anyone who was in the room without sending a camera recording (a producer, a present-only device, a guest set as not recorded, a browser that cannot record) is not listed. Nothing here shows that a person read the notice, that their tab was in front, or that their browser ran an unmodified page.";
 
 interface Line {
   name: string | null;
@@ -68,7 +85,9 @@ export class NoticeLog {
   /** `peers` is everyone the page lists as the take's announcement goes out, at `announcedAt`. */
   constructor(
     peers: readonly NoticePeer[],
-    private readonly announcedAt: number
+    private readonly announcedAt: number,
+    /** For a take resumed from its crash copy: the guests that copy names. */
+    private readonly before?: readonly CrashCopyPerson[]
   ) {
     for (const peer of peers) this.listed(peer, announcedAt);
   }
@@ -88,7 +107,7 @@ export class NoticeLog {
   record(hostStartMs: number): NoticeRecord {
     const at = (ms: number) => Math.max(0, Math.round(ms - hostStartMs));
     return {
-      note: NOTE,
+      note: this.before ? `${NOTE} ${RESUMED_NOTE}` : NOTE,
       announcedAtMs: at(this.announcedAt),
       people: [...this.lines.values()].map((line) => ({
         // Nothing of a guest set as not recorded is saved with a take: not
@@ -101,6 +120,7 @@ export class NoticeLog {
         confirmedAtMs: line.confirmedAt === null ? null : at(line.confirmedAt),
       })),
       ...(this.capped ? { capped: true as const } : {}),
+      ...(this.before ? { resumed: true as const, fromCrashCopy: [...this.before] } : {}),
     };
   }
 
@@ -128,4 +148,21 @@ export class NoticeLog {
     }
     return line;
   }
+}
+
+/**
+ * The guests a crash copy shows were recording: one for each camera file
+ * whose note carries a channel key, which a note gets only when a guest's
+ * recording channel was bound to that file.
+ */
+export function peopleFromNotes(files: readonly JournalFileNote[]): CrashCopyPerson[] {
+  return files
+    .filter((f) => f.kind === 'camera' && f.key !== undefined)
+    .slice(0, MAX_NOTICE_PEOPLE)
+    .map((f) => ({ name: sanitizeText((f.who ?? '').slice(0, 200)).trim() || null, file: f.file }));
+}
+
+/** The section for a take rebuilt from its crash copy, which keeps no record of who was told. */
+export function crashCopyNotice(files: readonly JournalFileNote[]): NoticeRecord {
+  return { note: CRASH_COPY_NOTE, people: [], fromCrashCopy: peopleFromNotes(files) };
 }

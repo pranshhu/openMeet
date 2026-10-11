@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_NOTICE_PEOPLE, NoticeLog } from '@/lib/notice-log';
+import { MAX_NOTICE_PEOPLE, NoticeLog, crashCopyNotice, peopleFromNotes } from '@/lib/notice-log';
 import { buildSyncReport } from '@/lib/sync-report';
+import type { JournalFileNote } from '@/lib/take-journal';
 
 const START = 1_000_000;
 
@@ -124,5 +125,60 @@ describe('the sync file and the record of who was told', () => {
   it('has no such section for a take that has no record', () => {
     expect('recordingNotice' in JSON.parse(buildSyncReport(base).json)).toBe(false);
     expect('recordingNotice' in JSON.parse(buildSyncReport({ ...base, recordingNotice: undefined }).json)).toBe(false);
+  });
+});
+
+describe('the record of who was told, after an interrupted take', () => {
+  const files: JournalFileNote[] = [
+    // Opened at Record and never bound: no guest's channel reached it.
+    { file: 'guest_r.mp4', kind: 'camera', slot: 0 },
+    { file: 'guest2_r.mp4', kind: 'camera', slot: 1, key: 'K2', who: ' Bob\u0000 ' },
+    { file: 'guest2_r.wav', kind: 'wav', slot: 1, key: 'K2', who: 'Bob' },
+    { file: 'guest3_r.mp4', kind: 'camera', slot: 2, key: 'K3' },
+    { file: 'guest_screen_r.mp4', kind: 'screen', segment: 1, who: 'Cam' },
+  ];
+
+  it('names a guest for each camera file a channel was bound to, and nobody else', () => {
+    expect(peopleFromNotes(files)).toEqual([
+      { name: 'Bob', file: 'guest2_r.mp4' },
+      { name: null, file: 'guest3_r.mp4' },
+    ]);
+  });
+
+  it('names no more guests than the record keeps lines for, and no more than 200 characters of a name', () => {
+    const many: JournalFileNote[] = Array.from({ length: MAX_NOTICE_PEOPLE + 6 }, (_, i) => ({
+      file: `guest${i + 1}_r.mp4`,
+      kind: 'camera' as const,
+      slot: i,
+      key: `K${i}`,
+    }));
+    expect(peopleFromNotes(many)).toHaveLength(MAX_NOTICE_PEOPLE);
+    const [long] = peopleFromNotes([{ file: 'guest_r.mp4', kind: 'camera', slot: 0, key: 'K1', who: 'x'.repeat(500) }]);
+    expect(long!.name).toHaveLength(200);
+  });
+
+  it('gives a take saved from its crash copy that list and no times', () => {
+    const notice = crashCopyNotice(files);
+    expect(notice.people).toEqual([]);
+    expect('announcedAtMs' in notice).toBe(false);
+    expect(notice.fromCrashCopy).toEqual(peopleFromNotes(files));
+    expect(notice.note).toContain('keeps no record of who was told');
+  });
+
+  it('marks a resumed take and keeps that list beside the lines written after the resume', () => {
+    const before = peopleFromNotes(files);
+    const record = new NoticeLog([{ peerId: 'p-bob', name: 'Bob', role: 'guest' }], START + 95_000, before).record(START);
+    expect(record.resumed).toBe(true);
+    expect(record.fromCrashCopy).toEqual(before);
+    expect(record.announcedAtMs).toBe(95_000);
+    expect(record.people).toEqual([{ name: 'Bob', role: 'guest', listedAtMs: 95_000, confirmedAtMs: null }]);
+    expect(record.note).toContain('Nothing here shows that a person read the notice');
+    expect(record.note).toContain('then resumed from');
+
+    // A take that was never interrupted says none of it.
+    const plain = new NoticeLog([], START).record(START);
+    expect('resumed' in plain).toBe(false);
+    expect('fromCrashCopy' in plain).toBe(false);
+    expect(plain.note).not.toContain('then resumed from');
   });
 });

@@ -151,6 +151,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   one's own recording channel reached the host, which shows their browser had been
   told. A note in it says what each line proves and what it does not. Nothing more
   is kept on the server.
+- After an interrupted take the `recordingNotice` record starts again when the take
+  is resumed and names the guests whose recordings had reached the host before the
+  interruption; a take saved from the crash copy lists those guests only.
 
 ### Changed
 

@@ -73,7 +73,7 @@ import {
 import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { saveRecoveredTake } from '@/lib/take-recovery';
-import { NoticeLog } from '@/lib/notice-log';
+import { NoticeLog, peopleFromNotes } from '@/lib/notice-log';
 import {
   attachBackupSends,
   BackupIntake,
@@ -2034,6 +2034,21 @@ export function useRoom(slug: string) {
         kind: 'camera',
         filename: resumedName(h.recordingId, 'mp4'),
       });
+      // The record of who was told starts again with that announcement. A guest
+      // whose channel the resume took up was told before the interruption, so
+      // it is confirmed from here, and the guests the crash copy names go
+      // beside it.
+      const resumedAt = Date.now();
+      const notice = (noticeLogRef.current = new NoticeLog(
+        remotePeersRef.current,
+        resumedAt,
+        peopleFromNotes(journal.notes.files)
+      ));
+      // By the room's list and not by `told` alone: a connection that left
+      // while its channel waited is still in `told`, and is not in the room.
+      for (const p of remotePeersRef.current) {
+        if (told.has(p.peerId)) notice.confirmed(p, resumedAt);
+      }
       phaseRef.current = 'recording';
       setState((s) => ({
         ...s,

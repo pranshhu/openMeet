@@ -430,8 +430,9 @@ recorded and a browser that cannot record open no such channel: for them the rec
 shows only that they were listed, and a guest set as not recorded is listed without a
 name. It does not show that anyone read the notice, and nothing more is kept on the
 server.
-The record lives in the host's page while the take runs, so a take resumed after a
-reload, or saved from the crash copy, has none.
+After an interruption the record starts again when the take is resumed, and names the
+guests whose recordings had reached the host before it; a take saved from the crash
+copy lists those guests only, without times.
 
 ---
 

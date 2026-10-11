@@ -536,6 +536,11 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
   recorded is listed without a name, as its chat and markers are left out. A take keeps
   at most `MAX_NOTICE_PEOPLE` (64) lines and says `capped` past that. Nothing is sent to
   the Room, and nothing is added to D1 or to the crash copy.
+  After an interruption the crash copy is read, never written: `peopleFromNotes` lists
+  one guest per camera note that carries a channel key. `resumeRecording` starts a new
+  log at its re-announcement with that list (`resumed`, `fromCrashCopy`) and confirms the
+  connections in `told` that the room still lists, and `saveRecoveredTake` writes the
+  list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
@@ -1005,9 +1010,15 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
-- **The record of who was told does not survive the host's page.** `recordingNotice` is
-  built from a log held in memory, so the sync file of a take resumed after a reload, or
-  saved from its crash copy, has no such section.
+- **After an interruption the record of who was told keeps no times from before it.** The
+  log is held in memory. A resumed take's `recordingNotice` starts at the resume and
+  lists, under `fromCrashCopy`, the guests whose camera note in the crash copy carries a
+  channel key; a take saved from its crash copy has only that list. A producer, a
+  Present-only device or a guest set as not recorded who was there before the
+  interruption and gone by the resume is in neither, and a guest whose camera file has
+  parts but no note is not listed. A guest whose note had no key yet when the take was
+  interrupted (the last seconds before it) is not listed either, and a resume does not
+  take up that guest's waiting channel, so their line reads `confirmedAtMs: null`.
 - **Only a recording channel shows that a page was told.** A producer, a Present-only
   device that is not presenting, a guest set as not recorded and a guest whose browser
   cannot record open none, so their lines in `recordingNotice` never get a
