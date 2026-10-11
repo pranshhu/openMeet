@@ -39,3 +39,20 @@ export function sharedFileName(raw: unknown, from: unknown): string | null {
   const stem = safeNamePart(raw.slice(0, dot)) || 'file';
   return `shared_${safeNamePart(from) || 'guest'}_${stem}.${ext}`;
 }
+
+/** The `accept` of the input that picks a file, so the system's picker offers these types. */
+export const SHARED_FILE_ACCEPT = SHARED_FILE_TYPES.map((t) => `.${t}`).join(',');
+
+/**
+ * Why this page will not offer a file, in words for the person who picked it;
+ * null when it can go. The host's page decides for itself when the offer
+ * arrives, so this only spares an offer that would be turned away.
+ */
+export function sharedFileProblem(file: { name: string; size: number }): string | null {
+  if (sharedFileName(file.name, null) === null) {
+    return 'Only photos, documents, slides, audio and video can be sent.';
+  }
+  if (file.size <= 0) return 'That file is empty.';
+  if (file.size > MAX_SHARED_FILE_BYTES) return 'That file is over 100 MB, the most that can be sent.';
+  return null;
+}

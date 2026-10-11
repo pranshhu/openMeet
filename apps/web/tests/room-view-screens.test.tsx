@@ -823,3 +823,35 @@ describe('picked files', () => {
     expect(dismissBackup.mock.calls).toEqual([[stalled.id]]);
   });
 });
+
+describe('sending the host a file', () => {
+  it('lets anyone but the host send one from chat, through the hook', () => {
+    const sendFile = vi.fn();
+    hook.sendFile = sendFile;
+    Object.assign(state, inCall);
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    const file = new File(['x'], 'bio.txt');
+    fireEvent.change(screen.getByLabelText('Send a file to the host'), { target: { files: [file] } });
+    expect(sendFile.mock.calls).toEqual([[file]]);
+    unmount();
+
+    Object.assign(state, { role: 'host' });
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    expect(screen.getByLabelText('Message')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Send a file to the host')).toBeNull();
+  });
+
+  // The waiting screen's line is about a backup from an earlier take.
+  it('does not call an offered file a backup on the waiting screen', () => {
+    const offered = [
+      { id: 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f', kind: 'file', size: 1, status: 'offered', percent: 0, name: 'bio.txt' },
+    ];
+    Object.assign(state, { phase: 'waiting', role: 'guest', localStream: empty, backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+    expect(screen.getByText('Hang tight — the call starts as soon as the host arrives.')).toBeInTheDocument();
+  });
+});

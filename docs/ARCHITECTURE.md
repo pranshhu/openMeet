@@ -314,6 +314,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   it will be called in the folder and the total size, and its Save to folder and Not now
   answer only the files that row shows; the sender's rows say waiting, sending, paused while
   its own take records, saved or not saved. `BackupNotice` skips those items.
+  `components/SendFile.tsx` is **Send a file to the host**, above the message box in
+  `ChatPanel` on every page but the host's: it picks one file and refuses, with the reason
+  under the button, a type that is not on the list, an empty file and one over 100 MB
+  (`sharedFileProblem` in `lib/shared-file.ts`). The host's page makes the same checks again
+  when the offer arrives.
 - **Speaker** (`lib/speaker.ts`, `hooks/use-speaker.ts`): one output device per browser plays
   the call, kept in `localStorage` as `om_speaker`; `''` is the system default. The call's
   microphone menu starts with a **Speaker** `<select>` (`components/SpeakerRow.tsx`) of the
@@ -378,7 +383,11 @@ stream); stop = `removeTrack` + renegotiate, idempotent. `onDataChannel` routes 
 files; `declineBackups` turns down the backups and `declineFiles` the files it is handed, so
 one answer never covers the other kind.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
-unfinished send to each new connection to the host. `recordWithCountdown` is the Record click: it
+unfinished send to each new connection to the host.
+`sendFile` queues one for a file picked in chat (`shared`), on the same list and held by the
+same `hold`, but with no `after`: a picked file does not wait behind a backup the host has not
+answered. It does nothing on the host's own page.
+`recordWithCountdown` is the Record click: it
 asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
 draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.
 A take that took the room while it counted (a resume) keeps it, and `resumeRecording` never counts
@@ -1010,3 +1019,25 @@ cue's arrival on its own clock, for at most `RECORD_COUNTDOWN_S`, and takes the 
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A file sent from chat is judged by its name.** `lib/shared-file.ts` lists the extensions
+  that may be sent and the host's page writes no other, but the bytes are not looked at: a
+  file of a listed type can still be harmful to the program that opens it.
+- **Only the host can be sent a file.** There is no way to send one to a guest, or from the
+  host to anyone.
+- **A file's sender cannot take the offer back,** and the host cannot stop one participant
+  from offering again after **Not now**. The file's name and size are all that leaves the
+  sender's device before **Save to folder**, and at most eight offers from one participant
+  wait at a time.
+- **The host is not asked about a file while its take records or saves.** The question
+  appears when the take has ended. A file accepted before Record goes on arriving during the
+  take when its sender's page records nothing (a producer, a guest set as not recorded, a
+  guest whose browser cannot record), 100 MB at most; a sender whose page records, a guest's
+  Present-only device included, waits for the take to end.
+- **A file that was arriving when the host reloads is lost.** Its sender reads that the host
+  did not save it, and sends it again. If the browser was killed before the page could end
+  the file, an empty file of that name can stay in the folder.
+- **A file sent from chat is in no take.** It is not listed in the session summary, the sync
+  file or the chat log, and the crash copy holds none of it.
+- **A sender who waits alone is told nothing of a file that is still offered.** Neither
+  "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
+  reaches the host when the host is back.

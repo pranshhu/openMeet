@@ -1030,3 +1030,115 @@ describe('a host answering picked files and backups apart', () => {
     expect(again.readyState).toBe('open');
   });
 });
+
+describe('a participant sending the host a picked file', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    delete (globalThis as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const picked = (name = 'Headshot.JPG') => new File([new Uint8Array([1, 2, 3, 4])], name);
+  const fileChannel = () => backupChannels().find((c) => c.label.startsWith('backup#file-'))!;
+  const bytesSent = (channel: FakeChannel) => channel.sent.filter((d) => d instanceof ArrayBuffer);
+  const goAhead = JSON.stringify({ type: 'resume_offset', recordingId: 'x', lastByte: 0, lastIdx: -1 });
+
+  it('offers the host a picked file under an id of its own, with its name', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+
+    const channels = backupChannels();
+    expect(channels).toHaveLength(1);
+    expect(channels[0]!.label).toMatch(/^backup#file-[0-9a-f-]{36}$/);
+    expect(JSON.parse(channels[0]!.sent[0] as string)).toEqual({
+      type: 'backup_offer',
+      size: 4,
+      key: expect.any(String),
+      name: 'Headshot.JPG',
+    });
+    expect(result.current.state.backupTransfers).toEqual([
+      expect.objectContaining({ kind: 'file', name: 'Headshot.JPG', status: 'offered', size: 4 }),
+    ]);
+  });
+
+  it('sends it once the host accepts, with a backup of this page still unanswered', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      result.current.sendBackups([backupFile()]);
+      result.current.sendFile(picked('bio.txt'));
+      await flush();
+    });
+    const channel = fileChannel();
+    act(() => {
+      channel.deliver(goAhead);
+    });
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          expect(bytesSent(channel)).toHaveLength(1);
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  it('holds a picked file while a take records here, then sends it', async () => {
+    const { result } = await joined('guest', [HOST]);
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-x',
+        kind: 'camera',
+        filename: 'host_rec-x.mp4',
+      });
+    });
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    const channel = fileChannel();
+    act(() => {
+      channel.deliver(goAhead);
+    });
+    await act(async () => {
+      await flush();
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(bytesSent(channel)).toHaveLength(0);
+
+    await act(async () => {
+      emitSignal('recording-stop', {
+        type: 'recording-stop',
+        from: 'host',
+        recordingId: 'rec-x',
+      });
+      await flush();
+    });
+    await act(async () => {
+      await vi.waitFor(
+        () => {
+          expect(bytesSent(channel)).toHaveLength(1);
+        },
+        { timeout: 3000 }
+      );
+    });
+  });
+
+  it('does nothing on the host’s own page', async () => {
+    const { result } = await joined('host', [GUEST]);
+    await act(async () => {
+      result.current.sendFile(picked());
+      await flush();
+    });
+    expect(backupChannels()).toEqual([]);
+    expect(result.current.state.backupTransfers).toEqual([]);
+  });
+});

@@ -138,6 +138,7 @@ export function CallStage({
   onStopBackup,
   onAcceptFiles,
   onDeclineFiles,
+  onSendFile,
   resumeOffer,
   onResumeRecording,
   onSaveRecording,
@@ -232,6 +233,8 @@ export function CallStage({
   /** Picked files: the host's two answers, each for the files its row showed. */
   onAcceptFiles?: (shown: BackupTransfer[]) => void;
   onDeclineFiles?: (shown: BackupTransfer[]) => void;
+  /** Offer the host one file from this device. Left out on the host's own page. */
+  onSendFile?: ((file: File) => void) | undefined;
   /** A take in this room ended without its files and its crash copy is here. */
   resumeOffer?: { take: number; canResume: boolean } | null;
   onResumeRecording?: () => void;
@@ -1403,7 +1406,7 @@ export function CallStage({
             data-testid="chat-column"
             className="absolute inset-0 z-20 sm:static sm:z-0 sm:w-80 sm:shrink-0 sm:pb-5 sm:pr-2 sm:pt-2"
           >
-            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} />
+            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} onSendFile={onSendFile} />
           </div>
         )}
 

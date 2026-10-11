@@ -146,6 +146,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   everyone's voice, a presented screen, the media board's pads and a video you
   present play through the output chosen. The choice is remembered per browser,
   and a chosen speaker that is unplugged falls back to the system default.
+- **Send a file to the host**, in the call's chat: anyone but the host picks a photo, a
+  document, slides, an audio or a video file of up to 100 MB, and the host is asked
+  before any of it is sent. A file the host accepts goes peer-to-peer into the recording
+  folder as `shared_<name>_<file name>`, checked against what was sent; one that is
+  stopped, cut off or fails the check is not kept. Other file types are refused on both
+  sides.
 
 ### Changed
 

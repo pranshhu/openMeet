@@ -2195,6 +2195,31 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * Anyone but the host: offer the host one picked file for its recording
+   * folder. Only its name and size leave this device before the host accepts.
+   */
+  const sendFile = useCallback((file: File) => {
+    // The host takes files and sends none; its page is offered no control.
+    if (roleRef.current === 'host') return;
+    const report = () =>
+      setState((s) => ({ ...s, backupTransfers: backupSendsRef.current.map((b) => b.item) }));
+    // No `after`: the host answers backups and files apart, and a file behind
+    // a backup the host has not answered would never start.
+    const send = new BackupSend({
+      file,
+      shared: true,
+      // A take being recorded here always goes first.
+      hold: () => recordingRef.current !== null,
+      onChange: report,
+    });
+    backupSendsRef.current.push(send);
+    report();
+    const hostId = remotePeersRef.current.find((r) => r.role === 'host')?.peerId;
+    const host = hostId ? peersRef.current.get(hostId) : undefined;
+    if (host) void attachBackupSends(host, [send]).catch(() => {});
+  }, []);
+
+  /**
    * What each file of the running take has recorded or received so far. The
    * track panel calls this on its own timer, so a chunk arriving never
    * renders React.
@@ -2895,6 +2920,7 @@ export function useRoom(slug: string) {
     stopBackup,
     declineFiles,
     sendBackups,
+    sendFile,
     addMarker,
     openMediaBoard,
     newTake,

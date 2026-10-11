@@ -89,7 +89,7 @@ export function RoomView({ slug }: { slug: string }) {
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
-    declineFiles,
+    declineFiles, sendFile,
   } = useRoom(slug);
   const producer = isProducerLink();
   const present = isPresentLink();
@@ -174,7 +174,8 @@ export function RoomView({ slug }: { slug: string }) {
   // A guest waiting alone has nothing else to do but keep the tab open; say so
   // while the backup is still only offered.
   const offeredNote =
-    state.role !== 'host' && (state.backupTransfers ?? []).some((t) => t.status === 'offered')
+    state.role !== 'host' &&
+    (state.backupTransfers ?? []).some((t) => t.kind !== 'file' && t.status === 'offered')
       ? 'Your backup is offered to the host as soon as they join. Keep this tab open.'
       : undefined;
   if (state.phase === 'waiting') {
@@ -343,6 +344,7 @@ export function RoomView({ slug }: { slug: string }) {
       onStopBackup={stopBackup}
       onAcceptFiles={(shown) => void acceptBackups(shown)}
       onDeclineFiles={declineFiles}
+      onSendFile={state.role !== 'host' ? sendFile : undefined}
       {...(state.isFallbackMedia !== undefined ? { isFallbackMedia: state.isFallbackMedia } : {})}
     />
   );
