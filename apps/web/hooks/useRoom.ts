@@ -36,6 +36,7 @@ import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
 import { listeningField } from '@/lib/listening';
+import { isStagePeer } from '@/lib/stage-peers';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
   buildSyncReport,
@@ -181,7 +182,7 @@ export interface RoomState {
   isFallbackMedia?: boolean;
   activeMicId?: string | undefined;
   activeCamId?: string | undefined;
-  /** Primary remote — the first peer. Kept so the 1:1 stage path is unchanged. */
+  /** The camera stream of the first person `isStagePeer` finds, and of nobody else; null until it arrives. */
   remoteStream: MediaStream | null;
   /** Everyone else in the room. Length > 1 means a mesh call. */
   remotePeers: RemotePeer[];
@@ -1362,7 +1363,7 @@ export function useRoom(slug: string) {
                 ...s,
                 phase: phaseOnRemoteStream(s.phase),
                 remotePeers,
-                remoteStream: remotePeers.find((p) => p.role !== 'producer' && !p.companion)?.stream ?? remoteStream,
+                remoteStream: remotePeers.find(isStagePeer)?.stream ?? null,
               };
             }),
           onRemoteScreen: (remoteScreenStream) =>
@@ -1612,6 +1613,9 @@ export function useRoom(slug: string) {
             companion: pp.companion,
             notRecorded: pp.notRecorded === true,
           })),
+          // Every connection listed here is new and no camera has arrived on it:
+          // a stream still held belongs to a connection that is closed.
+          remoteStream: null,
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
@@ -1927,7 +1931,7 @@ export function useRoom(slug: string) {
           if (m.peerId) delete capabilities[m.peerId];
           // Others still present → the call continues; only an empty mesh ends it.
           if (remotePeers.length > 0) {
-            return { ...s, remotePeers, capabilities, remoteStream: remotePeers.find((p) => p.role !== 'producer')?.stream ?? null };
+            return { ...s, remotePeers, capabilities, remoteStream: remotePeers.find(isStagePeer)?.stream ?? null };
           }
           return {
             ...s,
@@ -2220,7 +2224,7 @@ export function useRoom(slug: string) {
     }
     setState((s) => ({
       ...s,
-      phase: s.remoteStream ? 'in-call' : 'waiting',
+      phase: s.remotePeers.some(isStagePeer) ? 'in-call' : 'waiting',
       markers: [],
       summary: null,
       backupBlobUrl: null,

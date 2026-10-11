@@ -347,7 +347,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
   feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
-  (role fallback). Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area, mobile chat is a
+  (role fallback). While one other person is on the stage, their tile is drawn once their own camera
+  stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
+  initial until their stream arrives. Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area,
+  mobile chat is a
   full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
   `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
@@ -473,6 +476,10 @@ for no drain, and the track readout shows those tracks as stopped. The handler a
 `removedRef` itself, and the guest branch of `endRecording` reads it to end on `removed`
 instead of `done`: the removed screen shows with the backup links, and the effect that lets
 go on a terminal screen closes the connections and releases camera and microphone.
+`remoteStream` is the camera stream of the first other person who has a tile (`isStagePeer` in `lib/stage-peers.ts`:
+not a producer and not a Present-only device, which send no camera) and of nobody else: null until that stream arrives,
+and null again from this tab's reconnect until a camera arrives on a rebuilt connection. `newTake` goes back to
+`in-call` while such a person is listed and to `waiting` otherwise.
 Holds all subsystem singletons in refs. `join`: `getTurnCred` → `buildIceServers` → `SignalClient` →
 register handlers → `connect`. Wires signal→`peer.handleSignal`, chat/presence/peer-left, host
 channel rebind. `toggleScreenShare`: adds the screen track on its **own** stream id (not the camera

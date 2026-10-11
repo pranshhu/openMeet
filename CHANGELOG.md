@@ -335,6 +335,22 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A media board pad whose file name is longer than 200 characters keeps its chapter
   marker in a take that is resumed or recovered after a reload, and keeps its label
   when a guest fires it. The label is cut to 200 characters.
+- In a call of three or more, the first other person's tile shows that person:
+  their own camera and their own sound. When a later person's camera arrived
+  before the first person's, the tile showed that later person, who was then
+  seen in two tiles and heard twice, until the first person's own camera
+  arrived, or for good if it never did. In a call of any size, after this tab
+  reconnected, that tile kept the picture of a connection that had closed
+  until a camera arrived again.
+- When someone leaves a call, everyone still in it keeps their tile. With a
+  Present-only device listed ahead of the people still on camera, the first of
+  them was not drawn at all, and so neither seen nor heard in that tab, until
+  any person's camera reached that tab again. No file was affected.
+- In a call of three or more, a person whose camera has not reached this tab
+  yet has a tile with their initial under their own name, wherever the room
+  lists them. The first tile takes its name and its microphone and camera
+  badges only from the person it shows: for a moment after a join it could
+  show those of a Present-only device listed before that person.
 - A tab the room has closed for good (the host removed it, another tab took its
   place, the room was full or is gone) does not connect to the room again in the
   background. A host tab that was taken over during a take stays out instead of
