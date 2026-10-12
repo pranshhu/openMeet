@@ -1788,6 +1788,11 @@ export async function endGuestRecording(
     h.sender ? h.sender.drain() : Promise.resolve(true),
     h.wavSender ? h.wavSender.drain() : Promise.resolve(true),
   ]);
+  // One more clock estimate, taken once the camera channel is empty, so a
+  // ping waits behind nothing. Skipped when that channel is closed or still
+  // holds data: the round would only run out its three seconds before the
+  // host is told the file is final.
+  if (drained && h.channel?.readyState === 'open') await h.clockSync?.again();
   const sha256 = (await h.sender?.digestHex()) ?? '';
   // Finalize EACH channel it owns, not just the camera. The host waits per file
   // now, because separate SCTP streams give no ordering guarantee between them:

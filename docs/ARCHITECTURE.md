@@ -787,6 +787,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   The section compares the system clocks (`Date.now()` on both sides) and says so; a guest with
   no estimate is not listed, and nothing about movement is written without two estimates that
   each carry a round trip.
+  The second estimate is the guest's: `endGuestRecording` runs `ClockSync.again` (one round
+  of three pings, three seconds at most, a fresh minimum) after the camera sender has drained
+  and before `recording-finalized`, and skips it when that sender did not drain or its channel
+  is not open. A take that is ended because the host started another one takes none:
+  `handleGuestRecordingStarted` (`useRoom`) stops its clock sync first, so the new capture
+  does not wait for an answer that cannot come.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -939,6 +945,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A guest's stop ends with one more clock-sync round, three seconds at most, before its
+   `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
    tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.

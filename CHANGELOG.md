@@ -237,6 +237,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   resumed after a reload goes on with its rundown.
 - `sync.json` gains a `clock` section: for each guest, the clock estimate its start
   offset comes from, the round trip that bounds its error and when the host received it.
+- A guest's browser measures the clock difference to the host again as its recording
+  stops. `sync.json` (`clock`) then gives a start and an end offset for that guest, how
+  far the two computers' clocks moved in between and within what error. It compares
+  the computers' clocks, not how the audio or video in a file keeps time.
 
 ### Changed
 

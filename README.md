@@ -518,6 +518,11 @@ the screen that follows offers them too.
    `clock` in `sync.json` says, for each guest, when the estimate behind its offset was
    taken and the round trip of the exchange it came from; the offset can be wrong by up to
    half of that plus 2 ms.
+   When a take ends normally each guest's browser takes a second estimate, and `clock`
+   then also gives an end offset, how far the two computers' clocks moved in between
+   (`movedMs` over `spanMs`) and how far off that figure can be (`errorMs`). It compares
+   the computers' clocks only: it is not a measurement of how the audio or video inside
+   the files keeps time.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses

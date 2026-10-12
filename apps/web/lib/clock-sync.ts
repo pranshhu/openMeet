@@ -83,6 +83,23 @@ export class ClockSync {
     this.finish();
   }
 
+  /**
+   * One more round as the recording stops, reported like the first. The host
+   * keeps it beside the first report, and the two say how far the clocks moved
+   * in between. Resolves when the round is over, answered or not; never rejects.
+   */
+  again(samples = 3, timeoutMs = 3000): Promise<void> {
+    this.stop();
+    return new Promise((resolve) => {
+      // A fresh estimate: the smallest round trip of this round, not of the take.
+      this.best = null;
+      this.resolveRun = () => resolve();
+      this.samples = samples;
+      this.timeoutMs = timeoutMs;
+      this.startRound();
+    });
+  }
+
   handlePong(msg: ClockPong): void {
     if (msg.recordingId !== this.recordingId) return;
     if (!this.pending || msg.seq !== this.pending.seq) return;
