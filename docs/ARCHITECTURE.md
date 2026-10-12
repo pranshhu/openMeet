@@ -676,8 +676,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   handed to `CallStage`, which is unmounted while the page shows "Everyone else left"), so
   no one else is given it when someone leaves or reconnects; a person who reconnects arrives under
   a new id and gets a new number. The name sits in a `<bdi>` element wherever other words follow
-  it. The choice lives in `CallStage` (`chatTo`), because the panel unmounts when chat closes, and
-  stays until it
+  it. The choice lives in `RoomView` (`chatTo`, handed to `CallStage` with `onChatTo`), because
+  the panel unmounts when chat closes and the call screen while the page shows "Everyone else left",
+  and stays until it
   is changed. `openChat` moves it only from Everyone: to the sender of the newest private message
   among those that arrived while chat was closed, once per message, if that person is still in the
   call. A person already chosen is never replaced, and a message for everyone that arrived after it

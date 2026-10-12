@@ -118,6 +118,8 @@ export function CallStage({
   onLeave,
   onSendChat,
   chatNumbers: roomNumbers,
+  chatTo: roomTo,
+  onChatTo,
   slug,
   onMark,
   markerCount,
@@ -215,6 +217,9 @@ export function CallStage({
   onSendChat: (text: string, to?: string) => void;
   /** The numbers this page gave people under To, kept by whoever outlives this screen. */
   chatNumbers?: Map<string, number>;
+  /** Who the next chat message is for, and how it is changed, kept by whoever outlives this screen. */
+  chatTo?: string;
+  onChatTo?: (to: string) => void;
   slug: string;
   /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
   onMark: (label: string, at?: number) => void;
@@ -418,10 +423,14 @@ export function CallStage({
 
   const [chatOpen, setChatOpen] = useState(false);
   // Who the next chat message is for: '' is everyone, otherwise a peerId. Kept
-  // here because the panel unmounts when chat closes: a person chosen for one
-  // message must still be chosen when chat opens again, or the next message
-  // meant for them goes to everyone.
-  const [chatTo, setChatTo] = useState('');
+  // outside the panel, which unmounts when chat closes: a person chosen for
+  // one message must still be chosen when chat opens again, or the next
+  // message meant for them goes to everyone. The caller keeps it, because
+  // this screen is unmounted too while everyone else is away; without a
+  // caller it lasts as long as this screen.
+  const [ownTo, setOwnTo] = useState('');
+  const chatTo = roomTo ?? ownTo;
+  const setChatTo = onChatTo ?? setOwnTo;
   // The numbers this page gave people under To: a number is never handed to
   // another person when someone leaves or reconnects. The caller keeps
   // them, because this screen is unmounted while everyone else is away;

@@ -983,4 +983,39 @@ describe('chat', () => {
     expect(options()).toEqual(['Everyone', 'Guest 3: Ana', 'Guest 4: Ned']);
     expect(mark()).toBe('Private · to Guest 1');
   });
+
+  it('keeps the person chosen under To after everyone else left, and sends nothing to everyone in their place', () => {
+    const guests = (ids: [string, string][]) =>
+      ids.map(([peerId, name]) => ({ peerId, name, stream: null, role: 'guest' }));
+    Object.assign(state, inCall, {
+      role: 'host',
+      localStream: empty,
+      remotePeers: guests([['p-ana', 'Ana'], ['p-bob', 'Bob']]),
+    });
+    hook.sendChat = vi.fn();
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'p-ana' } });
+
+    Object.assign(state, { phase: 'peer-left', remotePeers: [] });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Everyone else left')).toBeInTheDocument();
+
+    Object.assign(state, { phase: 'in-call', remotePeers: guests([['p-bob-2', 'Bob']]) });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    const to = screen.getByLabelText('To') as HTMLSelectElement;
+    expect(to.selectedOptions[0]?.textContent).toBe('Not available');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That person left the call or reconnected. Choose who to send to.'
+    );
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'the number is 4411' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+    expect(hook.sendChat).not.toHaveBeenCalled();
+
+    fireEvent.change(to, { target: { value: '' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+    expect(hook.sendChat).toHaveBeenCalledTimes(1);
+    expect(hook.sendChat).toHaveBeenCalledWith('the number is 4411');
+  });
 });
