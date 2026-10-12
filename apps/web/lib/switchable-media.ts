@@ -150,7 +150,10 @@ export class SwitchableMedia {
     }
 
     const tracks: MediaStreamTrack[] = [];
-    tracks.push(generator);
+    // Joined with no camera: the stream gets no video track. One that never
+    // carries a frame keeps the other side's player silent while it waits for
+    // a picture.
+    if (rawCamTrack) tracks.push(generator);
     if (stableAudioTrack) tracks.push(stableAudioTrack);
     this.stream = new MediaStream(tracks);
   }
@@ -202,6 +205,8 @@ export class SwitchableMedia {
   }
 
   async switchCamera(target: string): Promise<void> {
+    // Joined with no camera: the stream has no track that would show one, so none is opened.
+    if (this.stream.getVideoTracks().length === 0) return;
     const oldTrack = this._currentCameraTrack;
     const qualityId = oldTrack ? presetForTrack(oldTrack).id : this.qualityId;
     this.qualityId = qualityId;

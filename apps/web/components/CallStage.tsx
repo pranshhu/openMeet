@@ -390,6 +390,8 @@ export function CallStage({
 
   const takeActive = phase === 'recording' || roomRecording;
   const showFallbackNotice = Boolean(isFallbackMedia && takeActive);
+  // Joined with no camera: there is none to turn on or to pick until this person rejoins.
+  const noCamera = !!localStream && localStream.getVideoTracks().length === 0;
 
   async function handleSwitchMic(deviceId: string) {
     if (!onSwitchMic) return;
@@ -1189,9 +1191,10 @@ export function CallStage({
                   <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">
                     <ControlButton
                       icon={camOn ? 'videocam' : 'videocam_off'}
-                      label={camOn ? 'Turn off camera' : 'Turn on camera'}
+                      label={noCamera ? 'No camera in this call' : camOn ? 'Turn off camera' : 'Turn on camera'}
                       shortcut="V"
-                      variant={camOn ? 'default' : 'danger'}
+                      variant={camOn || noCamera ? 'default' : 'danger'}
+                      disabled={noCamera}
                       onClick={() => {
                         const next = !camOn;
                         setCamOn(next);
@@ -1257,7 +1260,11 @@ export function CallStage({
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>
-                        {showFallbackNotice ? (
+                        {noCamera ? (
+                          <div className="px-3 py-2 text-xs text-white/70">
+                            You joined without a camera. To use one, leave and join again.
+                          </div>
+                        ) : showFallbackNotice ? (
                           <div className="px-3 py-2 text-xs font-medium text-[#fdd663]">
                             Switch after this take
                           </div>

@@ -1076,7 +1076,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   To solve this, `useRoom.join` constructs `SwitchableMedia` which wraps the lobby stream into ONE stable
   output stream handed to everything (preview, PeerConnection, ChunkRecorder, BackupRecorder, and WAV).
   It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
-  stream would conjure a blank video track and a silent audio track).
+  stream would conjure a silent audio track). A lobby stream with a microphone and no camera is
+  wrapped, and its stable stream holds the audio track alone: the video generator is left out,
+  because a video track that never carries a frame would keep the other side's player silent.
+  That person has no camera for the whole call, so `switchCamera` opens nothing while the
+  stream has no video track and `CallStage` disables their camera button (`noCamera`).
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
@@ -1533,3 +1537,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   file, so they overstate what that person's recording needs. A person whose camera
   never started gets no Speaker row in the lobby after pressing it; the call's microphone
   menu has one.
+- **A person who joined with the microphone only cannot turn a camera on in that call.**
+  A running recorder cannot be given a video track, so the stream keeps the shape it was
+  joined with. They leave and join again with a camera. The host is not told before a take
+  that such a person has no camera: their tile shows an initial, as it does for a camera
+  that is turned off. On a computer the others' camera menu still lists **Pop out** for
+  that person; choosing it opens no window and shows the line about a window that did not
+  open.
