@@ -6274,3 +6274,144 @@ describe('marker labels and positions where they enter', () => {
     expect(result.current.state.summary?.markers.map((m) => m.label)).toEqual(['started earlier', '']);
   });
 });
+
+describe('private messages in useRoom', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    vi.mocked(findTakeJournals).mockResolvedValue([]);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  const hostStream = Object.assign(new EventTarget(), {
+    getTracks: () => [],
+    getAudioTracks: () => [{ kind: 'audio' }],
+    getVideoTracks: () => [{ kind: 'video' }],
+  }) as unknown as MediaStream;
+
+  /** Joins as host with Bob, a guest, already in the room. */
+  async function hostWithBob() {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(hostStream, 'Host Hana');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-bob', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+    return result;
+  }
+
+  const fromBob = (text: unknown, over: Record<string, unknown> = {}) => ({
+    type: 'private-message',
+    from: 'guest',
+    fromPeerId: 'p-bob',
+    fromName: 'Bob',
+    text,
+    ...over,
+  });
+
+  it('sends a message for one person as its own type, and keeps who it went to on the sender’s line', async () => {
+    const result = await hostWithBob();
+    act(() => {
+      result.current.sendChat('to everyone');
+      result.current.sendChat('for Bob', 'p-bob');
+      result.current.sendChat('for someone gone', 'p-gone');
+    });
+
+    expect(signalSent.filter((m) => m.type === 'chat' || m.type === 'private-message')).toEqual([
+      { type: 'chat', text: 'to everyone', ts: expect.any(Number) },
+      { type: 'private-message', to: 'p-bob', text: 'for Bob' },
+      { type: 'private-message', to: 'p-gone', text: 'for someone gone' },
+    ]);
+    const own = { from: 'host', ts: expect.any(Number), self: true, fromName: 'Host Hana' };
+    expect(result.current.state.messages).toEqual([
+      { ...own, text: 'to everyone' },
+      { ...own, text: 'for Bob', private: true, toPeerId: 'p-bob', toRole: 'guest' },
+      { ...own, text: 'for someone gone', private: true, toPeerId: 'p-gone', toRole: 'guest' },
+    ]);
+  });
+
+  it('marks a private message that arrives, and takes only text of a sane size from a sender it can read', async () => {
+    const result = await hostWithBob();
+    act(() => {
+      for (const text of [undefined, null, 7, {}, 'x'.repeat(4001)]) emitSignal('private-message', fromBob(text));
+      emitSignal('private-message', fromBob('hello'));
+      emitSignal('private-message', fromBob('odd sender', { from: 7, fromPeerId: 9, fromName: {} }));
+    });
+
+    expect(result.current.state.messages).toEqual([
+      { from: 'guest', text: 'hello', ts: expect.any(Number), private: true, fromPeerId: 'p-bob', fromName: 'Bob' },
+      { from: 'guest', text: 'odd sender', ts: expect.any(Number), private: true },
+    ]);
+  });
+
+  it('takes a private message as long as the message box allows', async () => {
+    const result = await hostWithBob();
+    const longest = 'x'.repeat(4000);
+    act(() => emitSignal('private-message', fromBob(longest)));
+    expect(result.current.state.messages.map((m) => m.text)).toEqual([longest]);
+  });
+
+  it('keeps a private message out of the take’s chat file, whichever side the host was on', async () => {
+    const { dir: fakeDir, writtenFiles } = fakeDirectory();
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-private-chat',
+      take: 1,
+      dir: fakeDir as never,
+      hostStartMs: 10_000,
+      hostWriter: { fileName: 'host_rec-private-chat.mp4' },
+      guestWriter: { fileName: 'guest_rec-private-chat.mp4' },
+      slotPeerIds: new Map([[0, 'p-bob']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: 10_500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const result = await hostWithBob();
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    act(() => {
+      emitSignal('chat', {
+        type: 'chat',
+        from: 'guest',
+        fromPeerId: 'p-bob',
+        fromName: 'Bob',
+        text: 'for the room',
+        ts: 1,
+      });
+      emitSignal('private-message', fromBob('for the host only'));
+      result.current.sendChat('from the host to Bob only', 'p-bob');
+    });
+
+    // All three are on the host's screen, two of them marked.
+    expect(result.current.state.messages.map((m) => [m.text, m.private === true])).toEqual([
+      ['for the room', false],
+      ['for the host only', true],
+      ['from the host to Bob only', true],
+    ]);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+
+    const chatContent = new TextDecoder().decode(writtenFiles.get('chat_rec-private-chat.txt')?.data);
+    expect(chatContent).toContain('for the room');
+    expect(chatContent).not.toContain('for the host only');
+    expect(chatContent).not.toContain('from the host to Bob only');
+  });
+});

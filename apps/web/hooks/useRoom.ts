@@ -1954,6 +1954,23 @@ export function useRoom(slug: string) {
           messages: messagesRef.current,
         }));
       });
+      // A message the Room delivered to this tab alone. Its text is checked as
+      // a `chat` line's is. The sender's role and name are read with care
+      // because both are drawn straight into the chat list.
+      signal.on('private-message', (m) => {
+        if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
+        const msg: ChatMessage = {
+          from: m.from === 'host' || m.from === 'producer' ? m.from : 'guest',
+          text: m.text,
+          // This tab's clock, as for `chat`.
+          ts: Date.now(),
+          private: true,
+          ...(typeof m.fromPeerId === 'string' ? { fromPeerId: m.fromPeerId } : {}),
+          ...(typeof m.fromName === 'string' && m.fromName ? { fromName: m.fromName } : {}),
+        };
+        messagesRef.current = [...messagesRef.current, msg];
+        setState((s) => ({ ...s, messages: messagesRef.current }));
+      });
       signal.on('presence', (m) =>
         setState((s) => {
           const remotePeers = applyRemotePeerPresence(s.remotePeers, m);
@@ -2550,9 +2567,13 @@ export function useRoom(slug: string) {
     return board;
   }, []);
 
-  const sendChat = useCallback((text: string) => {
+  const sendChat = useCallback((text: string, to?: string) => {
     const ts = Date.now();
-    signalRef.current?.send({ type: 'chat', text, ts });
+    // A message for one person is a type of its own: a Room that does not
+    // know it drops it, where it would send a `chat` with one more field
+    // to everyone.
+    signalRef.current?.send(to ? { type: 'private-message', to, text } : { type: 'chat', text, ts });
+    const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
       from,
@@ -2560,6 +2581,7 @@ export function useRoom(slug: string) {
       ts,
       self: true,
       ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
+      ...(to ? { private: true, toPeerId: to, toRole } : {}),
     };
     messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({

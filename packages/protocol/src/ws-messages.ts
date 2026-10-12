@@ -69,6 +69,12 @@ export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: n
  */
 export type ClientScript = { type: 'script'; text: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
+/**
+ * A chat line for one person. `to` is that person's peerId. A type of its
+ * own rather than a `chat` with a `to`: a Room that does not know the type
+ * drops it, where it would pass a `chat` with one more field on to everyone.
+ */
+export type ClientPrivateMessage = { type: 'private-message'; to: string; text: string };
 export type ClientPresence = {
   type: 'presence';
   micOn: boolean;
@@ -167,6 +173,7 @@ export type ClientMessage =
   | ClientRecordingCountdown
   | ClientScript
   | ClientChat
+  | ClientPrivateMessage
   | ClientPresence
   | ClientReaction
   | ClientMarker
@@ -270,6 +277,18 @@ export type ServerChat = {
   fromPeerId?: string;
   fromName?: string;
 };
+/**
+ * A ClientPrivateMessage as the Room hands it to the one peer it named, and
+ * to no other. Stamped like a chat line. It carries no `to`: whoever
+ * receives it is the person it was for.
+ */
+export type ServerPrivateMessage = {
+  type: 'private-message';
+  text: string;
+  from: Role;
+  fromPeerId: string;
+  fromName?: string;
+};
 export type ServerPresence = {
   type: 'presence';
   micOn: boolean;
@@ -347,6 +366,7 @@ export type ServerMessage =
   | ServerWebrtcAnswer
   | ServerIceCandidate
   | ServerChat
+  | ServerPrivateMessage
   | ServerPresence
   | ServerReaction
   | ServerMarker
@@ -373,6 +393,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-countdown',
   'script',
   'chat',
+  'private-message',
   'presence',
   'reaction',
   'marker',
@@ -392,6 +413,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'webrtc-answer',
   'ice-candidate',
   'chat',
+  'private-message',
   'presence',
   'reaction',
   'marker',
