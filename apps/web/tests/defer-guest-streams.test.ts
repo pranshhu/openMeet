@@ -5,13 +5,20 @@ import {
   stopScreenRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
+import { FakeDirectoryHandle } from './fake-opfs';
 
 const ON_DISK = 'openmeet-backup-1700000000000-abc-defg-hij';
 
 /** A guest's take as the controller holds it, with senders that only count. */
 function take(dirName: string | null, streams: ('sender' | 'wavSender' | 'screenSender')[]) {
   const senders = Object.fromEntries(streams.map((name) => [name, { defer: vi.fn() }]));
-  const h = { recordingId: 'rec', backup: { dirName }, ...senders } as unknown as RecordingHandles;
+  const h = {
+    recordingId: 'rec',
+    backup: { dirName },
+    wavBackup: { dirName },
+    screenBackup: { dirName },
+    ...senders,
+  } as unknown as RecordingHandles;
   return { h, senders };
 }
 
@@ -81,6 +88,24 @@ describe('deferGuestStreams', () => {
     expect(h.deferred).toBeUndefined();
     for (const s of Object.values(senders)) expect(s.defer).not.toHaveBeenCalled();
   });
+
+  it('keeps streaming the WAV when the WAV’s own backup is not kept on disk', () => {
+    const { h, senders } = take(ON_DISK, ['sender', 'wavSender', 'screenSender']);
+    (h as unknown as { wavBackup: { dirName: string | null } }).wavBackup = { dirName: null };
+    expect(deferGuestStreams(h)).toBe(true);
+    expect(senders.sender!.defer).toHaveBeenCalledTimes(1);
+    expect(senders.screenSender!.defer).toHaveBeenCalledTimes(1);
+    expect(senders.wavSender!.defer).not.toHaveBeenCalled();
+  });
+
+  it('keeps streaming the running screen share when its own backup is not kept on disk', () => {
+    const { h, senders } = take(ON_DISK, ['sender', 'wavSender', 'screenSender']);
+    (h as unknown as { screenBackup: { dirName: string | null } }).screenBackup = { dirName: null };
+    expect(deferGuestStreams(h)).toBe(true);
+    expect(senders.sender!.defer).toHaveBeenCalledTimes(1);
+    expect(senders.wavSender!.defer).toHaveBeenCalledTimes(1);
+    expect(senders.screenSender!.defer).not.toHaveBeenCalled();
+  });
 });
 
 describe('a screen share that starts during a take', () => {
@@ -89,14 +114,26 @@ describe('a screen share that starts during a take', () => {
     const { channel, sent } = screenChannel();
     const h: RecordingHandles = { recordingId: 'rec-later', deferred: true };
 
-    await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
-    expect(h.screenRecorder).toBeDefined();
-    expect(h.screenBackup).toBeDefined();
-    expect(h.screenSender?.isAbandoned).toBe(true);
-    expect(sent.map((m) => JSON.parse(m as string))).toEqual([
-      { type: 'stream-abandoned', recordingId: 'rec-later', lastIdx: -1 },
-    ]);
-    await stopScreenRecording(h);
+    const root = new FakeDirectoryHandle();
+    Object.defineProperty(globalThis.navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => root },
+    });
+    try {
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+      await h.screenBackup!.whenOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(h.screenBackup!.dirName).not.toBeNull();
+      expect(h.screenRecorder).toBeDefined();
+      expect(h.screenBackup).toBeDefined();
+      expect(h.screenSender?.isAbandoned).toBe(true);
+      expect(sent.map((m) => JSON.parse(m as string))).toEqual([
+        { type: 'stream-abandoned', recordingId: 'rec-later', lastIdx: -1 },
+      ]);
+      await stopScreenRecording(h);
+    } finally {
+      delete (globalThis.navigator as { storage?: unknown }).storage;
+    }
   });
 
   it('is streamed when the take is', async () => {
@@ -105,6 +142,20 @@ describe('a screen share that starts during a take', () => {
     const h: RecordingHandles = { recordingId: 'rec-live' };
 
     await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+    expect(h.screenSender?.isAbandoned).toBe(false);
+    expect(sent).toEqual([]);
+    await stopScreenRecording(h);
+  });
+
+  it('is streamed when the take is being sent afterwards and the share’s backup is not kept on disk', async () => {
+    installMediaRecorder();
+    const { channel, sent } = screenChannel();
+    const h: RecordingHandles = { recordingId: 'rec-memory', deferred: true };
+
+    await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+    await h.screenBackup!.whenOpen();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.screenBackup!.dirName).toBeNull();
     expect(h.screenSender?.isAbandoned).toBe(false);
     expect(sent).toEqual([]);
     await stopScreenRecording(h);

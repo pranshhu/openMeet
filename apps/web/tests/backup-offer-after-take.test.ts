@@ -280,4 +280,33 @@ describe('a guest whose take did not all reach the host', () => {
     expect(result.current.state.drained).toBe(false);
     expect(result.current.state.backupQueued).toBe(false);
   });
+
+  it('offers nothing when the guest leaves during the take', async () => {
+    ended = { drained: false, backup: backupFile(CAMERA), wavBackup: backupFile(WAV) };
+    const result = await recordingGuest();
+    await act(async () => {
+      await result.current.leave();
+      await flush();
+    });
+    expect(result.current.state.phase).toBe('left');
+    expect(result.current.state.backupQueued).toBe(false);
+    expect(backupChannels()).toEqual([]);
+  });
+
+  it('ends the take all the same when the offer cannot be made', async () => {
+    ended = { drained: false, backup: backupFile(CAMERA), wavBackup: backupFile(WAV) };
+    const result = await recordingGuest();
+    const ids = vi.spyOn(crypto, 'randomUUID').mockImplementation(() => {
+      throw new Error('no ids');
+    });
+    try {
+      await hostStops('rec-host-1');
+    } finally {
+      ids.mockRestore();
+    }
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.drained).toBe(false);
+    expect(result.current.state.backupQueued).toBe(false);
+    expect(result.current.state.recordingError ?? '').not.toContain('finish');
+  });
 });

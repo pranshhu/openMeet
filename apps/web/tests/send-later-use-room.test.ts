@@ -8,8 +8,10 @@ import { useRoom } from '@/hooks/useRoom';
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 /** Where the take's camera backup says it is kept: null is a browser that could not keep it on disk. */
 let backupDir: string | null = null;
+let wavBackupDir: string | null = null;
 /** Settles when the backup's storage has answered. */
 let storageOpen: Promise<void> = Promise.resolve();
+let wavStorageOpen: Promise<void> = Promise.resolve();
 /** Every stream sender a take was given, oldest first: two a take. */
 let senders: { defer: ReturnType<typeof vi.fn> }[] = [];
 
@@ -91,15 +93,18 @@ vi.mock('@/lib/backup-recorder', async () => {
   const actual = await vi.importActual<typeof import('@/lib/backup-recorder')>('@/lib/backup-recorder');
   return {
     ...actual,
-    BackupRecorder: vi.fn().mockImplementation(() => ({
-      start: vi.fn(),
-      stop: vi.fn().mockResolvedValue(null),
-      markFinalized: vi.fn().mockResolvedValue(undefined),
-      whenOpen: vi.fn(() => storageOpen),
-      get dirName() {
-        return backupDir;
-      },
-    })),
+    BackupRecorder: vi.fn().mockImplementation((opts: { mimeType?: string }) => {
+      const wav = opts?.mimeType === 'audio/wav';
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(null),
+        markFinalized: vi.fn().mockResolvedValue(undefined),
+        whenOpen: vi.fn(() => (wav ? wavStorageOpen : storageOpen)),
+        get dirName() {
+          return wav ? wavBackupDir : backupDir;
+        },
+      };
+    }),
   };
 });
 
@@ -123,9 +128,10 @@ vi.mock('@/hooks/recording-controller', async () => {
   return {
     ...actual,
     // The take's handles carry the backup the hook made, as the real one does.
-    startGuestRecording: vi.fn().mockImplementation((args: { backup: unknown }) => ({
+    startGuestRecording: vi.fn().mockImplementation((args: { backup: unknown; wavBackup?: unknown }) => ({
       recordingId: 'rec-guest-1',
       backup: args.backup,
+      wavBackup: args.wavBackup ?? args.backup,
       guestRecorder: { totalBytes: 0, stopAndFlush: vi.fn() },
       sender: sender(),
       wavSender: sender(),
@@ -198,7 +204,9 @@ describe('a guest sending its recording later', () => {
     signalHandlers = {};
     senders = [];
     backupDir = ON_DISK;
+    wavBackupDir = ON_DISK;
     storageOpen = Promise.resolve();
+    wavStorageOpen = Promise.resolve();
     globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
     globalThis.URL.revokeObjectURL = vi.fn();
   });
@@ -369,5 +377,79 @@ describe('a guest sending its recording later', () => {
     });
     expect(result.current.state.phase).toBe('done');
     for (const s of senders) expect(s.defer).not.toHaveBeenCalled();
+  });
+
+  it('waits for the WAV backup’s storage as well before it decides', async () => {
+    const result = await joined('guest');
+    // With PCM capture the hook keeps a WAV backup of its own.
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor = class {};
+    try {
+      let answer!: () => void;
+      wavStorageOpen = new Promise<void>((r) => {
+        answer = r;
+      });
+      wavBackupDir = null;
+      act(() => result.current.setSendLater(true));
+      await hostStarts('rec-host-1');
+      for (const s of senders) expect(s.defer).not.toHaveBeenCalled();
+
+      wavBackupDir = ON_DISK;
+      await act(async () => {
+        answer();
+        await flush();
+        await flush();
+      });
+      expect(result.current.state.phase).toBe('recording');
+      expect(senders).toHaveLength(2);
+      for (const s of senders) expect(s.defer).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+    }
+  });
+
+  it('turned off while the backup’s storage is still answering, the take is streamed', async () => {
+    let answer!: () => void;
+    storageOpen = new Promise<void>((r) => {
+      answer = r;
+    });
+    const result = await joined('guest');
+    act(() => result.current.setSendLater(true));
+    await hostStarts('rec-host-1');
+    act(() => result.current.setSendLater(false));
+    expect(result.current.state.sendLater).toBe(false);
+
+    await act(async () => {
+      answer();
+      await flush();
+      await flush();
+    });
+    expect(result.current.state.phase).toBe('recording');
+    expect(result.current.state.sendLater).toBe(false);
+    for (const s of senders) expect(s.defer).not.toHaveBeenCalled();
+    expect(result.current.state.recordingError).not.toBe(REFUSED);
+  });
+
+  it('ticked while a take is starting, before its streams exist, defers that take once they do', async () => {
+    const result = await joined('guest');
+    await act(async () => {
+      emitSignal('recording-started', {
+        type: 'recording-started',
+        from: 'host',
+        recordingId: 'rec-host-1',
+        kind: 'camera',
+        filename: 'host_rec-host-1.mp4',
+      });
+      // The take has its backups and no streams yet, and storage has not answered.
+      backupDir = null;
+      result.current.setSendLater(true);
+      backupDir = ON_DISK;
+      await flush();
+      await flush();
+    });
+    expect(result.current.state.sendLater).toBe(true);
+    expect(result.current.state.recordingError).not.toBe(REFUSED);
+    expect(result.current.state.phase).toBe('recording');
+    expect(senders).toHaveLength(2);
+    for (const s of senders) expect(s.defer).toHaveBeenCalledTimes(1);
   });
 });

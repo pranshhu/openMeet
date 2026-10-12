@@ -625,7 +625,7 @@ same `hold`, but with no `after`: a picked file does not wait behind a backup th
 answered. It does nothing on the host's own page.
 `setSendLater(on)` is a guest's choice to defer its takes (`state.sendLater`, and
 `sendLaterRef`, which the callback writes itself). A take that starts while it is on is
-deferred as soon as its streams exist (`deferGuestStreams`, after the camera backup's
+deferred as soon as its streams exist (`deferGuestStreams`, after the camera and WAV backups'
 `whenOpen()`); turned on during a take it defers that take at once. It cannot be turned off
 while a take it deferred still records, and a host or a present-only device is not given
 it. When the camera backup has no directory in browser storage the take is streamed, the
@@ -730,7 +730,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `deferGuestStreams` (`recording-controller.ts`) calls `defer()` on a guest's camera, WAV
   and screen senders and marks the handles `deferred`, which `startScreenRecording` reads
   for a share that starts later; it refuses when the camera backup has no directory in
-  browser storage.
+  browser storage. The WAV and a screen stretch are each deferred only when their own
+  backup has a directory there; one whose backup lives in memory goes on being streamed.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once
@@ -1657,9 +1658,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A take sent later is still encoded twice.** The recorder that feeds the stream keeps
   running with its output dropped, so the switch spares the connection, not the processor.
 - **The host's track panel can misread a screen share of a take sent later.** The share's
-  stop is said the moment its channel opens, before the host may be reading it, and is not
-  said again: the row then reads "Not receiving for …" instead of "Stopped. Their backup
-  has the rest." No file is affected.
+  stop is said once, as soon as its backup's storage has answered, which can be before
+  the host is reading its channel, and is not said again: the row then reads "Not
+  receiving for …" instead of "Stopped. Their backup has the rest." No file is affected.
 - **The summary does not say that a guest chose to send later.** That guest's rows read as
   for a stream that fell behind or never arrived.
 - **While a take sent later ends, the guest's notice reads "Sending your last few seconds

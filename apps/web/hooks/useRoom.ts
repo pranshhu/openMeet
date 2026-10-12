@@ -1082,10 +1082,11 @@ export function useRoom(slug: string) {
       });
       recordingRef.current = handles;
       // Chosen before this take, so none of it is streamed. Only a backup
-      // kept on disk can be sent afterwards, so its storage is asked first;
-      // without one the take is streamed and the choice is taken back.
+      // kept on disk can be sent afterwards, so the camera's and the WAV's
+      // storage are asked first; without the camera's the take is streamed
+      // and the choice is taken back.
       if (sendLaterRef.current) {
-        await backup.whenOpen();
+        await Promise.all([backup.whenOpen(), wavBackup?.whenOpen()]);
         // A take that ended while storage answered must start nothing more.
         if (recordingRef.current !== handles) return;
         if (sendLaterRef.current && !deferGuestStreams(handles)) {
