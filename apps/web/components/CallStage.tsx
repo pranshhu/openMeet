@@ -145,6 +145,8 @@ export function CallStage({
   onSetLowPower,
   incomingVideoOff = false,
   onSetIncomingVideoOff,
+  sendLater = false,
+  onSetSendLater,
   handRaised = false,
   onSetHandRaised,
   reactions,
@@ -250,6 +252,9 @@ export function CallStage({
   /** This device has stopped taking everyone else's video; it still hears the call. */
   incomingVideoOff?: boolean;
   onSetIncomingVideoOff?: (off: boolean) => void;
+  /** Guest: takes stay on this device while they record and are sent to the host afterwards. */
+  sendLater?: boolean;
+  onSetSendLater?: (on: boolean) => void;
   /** This person has a hand raised, which everyone in the call sees on their tile. */
   handRaised?: boolean;
   onSetHandRaised?: (raised: boolean) => void;
@@ -937,6 +942,16 @@ export function CallStage({
         </div>
       )}
 
+      {sendLater && role === 'guest' && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
+        >
+          Your recording stays on this device during a take and goes to the host after it. Keep
+          this tab open until the host has saved it. You can turn this off between takes.
+        </p>
+      )}
+
       <BackupNotice
         role={role}
         transfers={backupTransfers ?? []}
@@ -1241,6 +1256,23 @@ export function CallStage({
                           >
                             <span>Stop incoming video</span>
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                          </button>
+                        )}
+                        {onSetSendLater && role === 'guest' && (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={sendLater}
+                            // A take that was deferred cannot be streamed again.
+                            disabled={sendLater && phase === 'recording'}
+                            onClick={() => {
+                              setCamMenuOpen(false);
+                              onSetSendLater(!sendLater);
+                            }}
+                            className="mb-1 flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border-b border-white/10 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <span>Send my recording later</span>
+                            {sendLater && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
                         {!phone && !incomingVideoOff && canPopOut() &&

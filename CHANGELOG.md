@@ -238,6 +238,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - When part of a guest's recording did not reach the host during a take, the guest's
   page offers its backup to the host as soon as the host ends the take, with no
   rejoin; the host gets the usual **Save to folder** question.
+- **Send my recording later**, in a guest's camera menu, for a weak connection: the
+  take stays on the guest's device while it records, so it does not compete with the
+  call, and is offered to the host when the take ends.
 
 ### Changed
 

@@ -434,6 +434,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   person's own tile the same mark. The names of the people who have a tile and a raised
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
+- **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
+  incoming video** (`CallStage`; not for the host, whose files are written directly). It
+  calls `useRoom().setSendLater`; while `state.sendLater` is on a `role="status"` row above
+  the stage says that the recording stays on this device during a take and goes to the host
+  after it. The item is disabled while a take it deferred records, because that take cannot
+  be streamed again. What a deferred take does is under `setSendLater` in "Call
+  orchestration" and under `defer()` in the `chunk-sender.ts` bullet; it reaches the host
+  afterwards as a returned backup, offered by the guest's page when the host ends the take.
 - **Reactions** (`components/ReactionMenu.tsx`, `components/ReactionBadge.tsx`,
   `lib/reactions.ts`) — the arrow in one pill with Raise hand opens a row of four (`REACTIONS`
   in the protocol: thumbs up, applause, laugh, heart). `ReactionMenu` keeps its own open
@@ -1558,3 +1566,40 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A guest with more than eight offers waiting is turned away.** After several takes the
   host has not answered, the next take's backups are refused and the guest reads that the
   backup was not saved on the host's computer; they stay listed in that guest's lobby.
+- **A take sent later leaves the host with nothing of that guest until the backup is
+  saved.** The host's `guest…mp4` and `.wav` for that guest stay in the folder empty (or end
+  where the switch was turned on) and read Empty or Incomplete in the summary and the sync
+  file, with the advice to ask for the backup. The whole take is the returned backup,
+  `backup_<name>_…`, which the sync file does not list and whose own `.json` says to align
+  it by waveform; the call-audio copy of that guest is on the host's timeline. If the guest
+  leaves or closes the tab before the host has saved it, or the host answers **Not now**,
+  the backup is only in that guest's lobby. If browser storage fails during such a take,
+  the backup goes on in memory under the existing warning, and from there on that guest's
+  camera and WAV are held nowhere else.
+- **When every guest sends later, a host reload leaves no take to resume.** The crash copy
+  writes its notes with the guests' bytes, and none arrived, so the host is offered neither
+  **Unsaved recording** nor **Resume recording**. When the host is back the guests' pages
+  stop by themselves and offer their backups, and the host's own camera and WAV from before
+  the reload are in its lobby under **Backups on this device**. With one streamed guest, or
+  a switch turned on during the take, the take resumes as usual.
+- **Turned on during a take, Send my recording later does not call back what the browser
+  already holds.** Up to 16 MiB a channel was handed to the browser before the switch and
+  still goes out, and the host writes it.
+- **Send my recording later is the guest's alone and is not remembered.** The host is not
+  asked, and is told only by its track panel ("Stopped. Their backup has the rest."). A
+  reload or a rejoin starts with it off, and a guest who reloads during a take is streamed
+  again from there. A present-only device has no camera menu and so no switch, and neither
+  has the waiting room: the choice is kept while a guest waits alone and its line is back
+  with the call.
+- **A take sent later is still encoded twice.** The recorder that feeds the stream keeps
+  running with its output dropped, so the switch spares the connection, not the processor.
+- **The host's track panel can misread a screen share of a take sent later.** The share's
+  stop is said the moment its channel opens, before the host may be reading it, and is not
+  said again: the row then reads "Not receiving for …" instead of "Stopped. Their backup
+  has the rest." No file is affected.
+- **The summary does not say that a guest chose to send later.** That guest's rows read as
+  for a stream that fell behind or never arrived.
+- **While a take sent later ends, the guest's notice reads "Sending your last few seconds
+  to the host."** Nothing is sent then: the recorders and the backups stop, and the line
+  about the backup follows. For as long as such a take records, the track panel's button
+  reads "Check tracks", on the guest's page and on the host's.

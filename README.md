@@ -100,6 +100,8 @@ retention policy to trust, because there's nothing retained.
   the rear camera)
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
+- **Send my recording later**, in a guest's camera menu, for a weak connection: the take
+  stays on the guest's device while it records and is offered to the host when it ends
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - Choose the speaker or headphones the call plays through, in the lobby or from the arrow
