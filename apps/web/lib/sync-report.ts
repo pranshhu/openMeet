@@ -66,6 +66,8 @@ export interface FileCheck {
   bytes: number;
   /** Rebuilt from the crash journal, so no digest of what the sender sent can exist. */
   recovered?: boolean | undefined;
+  /** The file in the camera's place holds sound and no picture: its recorder had no camera. */
+  audioOnly?: boolean | undefined;
   /** Only for a file that arrived from another participant. */
   received?:
     | {
@@ -122,7 +124,7 @@ export interface SyncReportInput {
 
 export interface SummaryFile {
   name: string;
-  kind: 'video' | 'audio' | 'screen' | 'call';
+  kind: 'video' | 'audio-only' | 'audio' | 'screen' | 'call';
   detail?: string | undefined;
   participant?: string | undefined;
   bytes?: number | undefined;
@@ -287,6 +289,9 @@ const ALIGNED_HINT =
   'Video copies are not re-encoded: the delay is stored in the file, and an editor that ignores it needs ' +
   'the clip moved by the time shown with its command.';
 
+const AUDIO_ONLY_NOTE =
+  'These files were recorded with no camera. Each is an MP4 that holds compressed audio and no picture, so it has no pairing command and no frame-rate entry. Edit from the WAV master of the same person.';
+
 const FRAME_RATE_NOTE =
   "MediaRecorder has no constant-frame-rate setting, so the frame rate inside these files can vary. requestedFps is the rate a camera is asked for by default. trackFps is what the browser reported that camera running at when its recording started, or null when that was not reported; a screen is only captured when it changes, so screen files have none. Neither is a count of the frames in a file. For that, run the file's measure command: it decodes the file with your own ffmpeg, and its last VFR line reads 0.000000 when every frame interval is the same.";
 
@@ -416,6 +421,9 @@ export function fileVerdict(
  */
 export function buildSyncReport(input: SyncReportInput): SyncReport {
   const { recordingId, hostFile, hostStartMs, guests } = input;
+  // A file recorded with no camera. Without its check a file reads as a camera file.
+  const audioOnly = (file: string | undefined) =>
+    file !== undefined && input.checks?.get(file)?.audioOnly === true;
   const markers = input.markers ?? [];
   const screenSegments = input.screenSegments ?? [];
   const screenFiles = screenSegments.map((s) => s.file);
@@ -442,9 +450,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ? { remuxHost: remuxCmd(hostFile) }
     : {};
   const combineMap: Record<string, string> = {
-    ...(input.hostWavFile && hostFile ? { host: muxWavCmd(hostFile, input.hostWavFile) } : {}),
+    ...(input.hostWavFile && hostFile && !audioOnly(hostFile) ? { host: muxWavCmd(hostFile, input.hostWavFile) } : {}),
   };
-  const combineCommands: { label: string; cmd: string }[] = input.hostWavFile && hostFile
+  const combineCommands: { label: string; cmd: string }[] = input.hostWavFile && hostFile && !audioOnly(hostFile)
     ? [{ label: 'Host: pair video with the uncompressed audio master', cmd: muxWavCmd(hostFile, input.hostWavFile) }]
     : [];
 
@@ -511,7 +519,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       cmd: remuxCmd(g.file),
     });
 
-    if (g.wavFile) {
+    if (g.wavFile && !audioOnly(g.file)) {
       combineMap[key] = muxWavCmd(g.file, g.wavFile);
       combineCommands.push({
         label: `${slot === 0 && !cleanName ? 'Guest' : displayName}: pair video with the uncompressed audio master`,
@@ -609,7 +617,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       ? [
           {
             name: hostFile,
-            kind: 'video' as const,
+            kind: audioOnly(hostFile) ? ('audio-only' as const) : ('video' as const),
             ...(hostFilePart && hostFilePart.offsetMs > 0
               ? { detail: `continues from ${seconds(hostFilePart.offsetMs)} s` }
               : {}),
@@ -620,7 +628,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       const participant = cleanNameOf(g.name);
       return {
         name: g.file,
-        kind: 'video' as const,
+        kind: audioOnly(g.file) ? ('audio-only' as const) : ('video' as const),
         ...(participant ? { participant } : {}),
       };
     }),
@@ -712,6 +720,10 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ...alignCommands,
   ];
 
+  const audioOnlyFiles = [hostFile, ...guests.map((g) => g.file)].filter(
+    (f): f is string => audioOnly(f)
+  );
+
   const report = {
     recordingId,
     files: filesRecord,
@@ -746,6 +758,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         `Uncompressed ${WAV_BIT_DEPTH}-bit PCM at ${WAV_SAMPLE_RATE / 1000} kHz, whatever rate the ` +
         'microphone ran at. Edit from these; the MP4 audio track is the convenience copy.',
     },
+    ...(audioOnlyFiles.length > 0 ? { audioOnly: { note: AUDIO_ONLY_NOTE, files: audioOnlyFiles } } : {}),
     screenFiles,
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
@@ -794,8 +807,8 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       requestedFps: RECORDING_FRAME_RATE,
       conformNote: CONFORM_NOTE,
       files: [
-        ...(hostFile ? [frameRateEntry(hostFile, 'camera', input.hostTrackFps)] : []),
-        ...guests.map((g) => frameRateEntry(g.file, 'camera', g.trackFps)),
+        ...(hostFile && !audioOnly(hostFile) ? [frameRateEntry(hostFile, 'camera', input.hostTrackFps)] : []),
+        ...guests.filter((g) => !audioOnly(g.file)).map((g) => frameRateEntry(g.file, 'camera', g.trackFps)),
         ...screenFiles.map((f) => frameRateEntry(f, 'screen')),
       ],
     },

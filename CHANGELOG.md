@@ -244,6 +244,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A person who joined with the microphone only is recorded like everyone else: the WAV
   master, and an MP4 under the usual name that holds their compressed audio and no
   picture. Their in-browser backup is the same pair.
+- The session summary lists a host's own file recorded with no camera as "Audio only,
+  no camera", and `sync.json` names such files under `audioOnly` and prints no pairing
+  or frame-rate command for them.
 
 ### Changed
 

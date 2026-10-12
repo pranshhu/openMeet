@@ -105,6 +105,8 @@ export interface RecordingHandles {
   hostStartMs?: number;
   /** The frame rate the camera track reported when this side's recorder started, as the browser gave it. */
   videoFps?: number | undefined;
+  /** This side's recorder had a microphone and no camera: the file in the camera's place holds sound only. */
+  audioOnly?: boolean;
   /** Room slug, carried so backups know which room they came from. */
   room?: string;
   /** The host's display name as typed; roleWithName cleans it wherever it reaches a file name. */
@@ -711,6 +713,7 @@ export async function startHostRecording(args: StartHostArgs): Promise<Recording
     ...(args.channel ? { channel: args.channel } : {}),
     hostStartMs,
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
+    ...(hostRecorder && args.localStream.getVideoTracks().length === 0 ? { audioOnly: true } : {}),
     ...(args.room ? { room: args.room } : {}),
     ...(args.hostName ? { hostName: args.hostName } : {}),
     ...(journal ? { journal } : { unprotected: true }),
@@ -862,6 +865,7 @@ async function startResumedHostTracks(
     ...(args.onError ? { onError: args.onError } : {}),
   });
   h.videoFps = args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate;
+  if (args.localStream.getVideoTracks().length === 0) h.audioOnly = true;
 
   if (isPcmCaptureSupported() && args.localStream.getAudioTracks().length > 0) {
     const hostWavWriter = new FileWriter();
@@ -2308,6 +2312,7 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
     const recovered = finished && !holed;
     out.set(w.fileName, {
       bytes: w.size,
+      ...(w === h.hostWriter && h.audioOnly ? { audioOnly: true } : {}),
       ...(recovered
         ? { recovered: true }
         : r

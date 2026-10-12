@@ -68,6 +68,7 @@ export function SessionSummary({
 
   const KIND: Record<SummaryFile['kind'], string> = {
     video: 'Camera',
+    'audio-only': 'Audio only, no camera',
     audio: 'Audio master (uncompressed)',
     screen: 'Screen',
     call: 'Call audio copy, lower quality',

@@ -786,7 +786,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
-  any file is not complete. Clock-sync needs the host to be
+  any file is not complete. A file recorded with no camera carries `audioOnly` in its file check
+  (`collectFileChecks`: the host's own from `RecordingHandles.audioOnly`, set when its
+  recorder is built with a microphone and no video track). `buildSyncReport` lists it as
+  kind `audio-only` ("Audio only, no camera" in the summary), names it under `audioOnly`
+  in the sync file, and leaves it out of `combine` and `frameRate`; its remux and aligned
+  commands stay, since both copy streams as they are. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
@@ -1558,3 +1563,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A guest with no camera whose browser cannot record a WAV master** (Safari) is recorded
   as that MP4 alone, plus the host's call-audio copy. Not tested: recording is
   Chromium-only.
+- **A take saved from the lobby after a crash, and the host's own part from before a
+  reload, list a file recorded with no camera as a camera file.** Neither has the file
+  check that says otherwise, so the sync file of a take saved from the lobby still prints
+  a pairing command for such a file, which `ffmpeg` refuses (the file has no video
+  stream). The aligned-copy command for such a file is labelled "aligned copy of the
+  video"; the command itself works on it.
