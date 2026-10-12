@@ -403,6 +403,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   background. A host tab that was taken over during a take stays out instead of
   taking the call back, and a guest in that state who presses **Stop and save** gets
   their backup links instead of a "Recording" label that never cleared.
+- After the host reloads and resumes a take, **End & save** does not wait for a guest
+  whose stream had stopped because it fell too far behind: the guest's page says so
+  again when the host's page asks, and the file reads as stopped, not as missing its end.
 
 ### Security
 

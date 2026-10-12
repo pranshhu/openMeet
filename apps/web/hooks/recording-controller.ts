@@ -194,6 +194,8 @@ export interface RecordingHandles {
   guestPcm?: PcmRecorder;
   wavSender?: ChunkSender;
   wavChannel?: RTCDataChannel;
+  /** Guest: this take is not streamed to the host. Its backups hold all of it and are sent after it ends. */
+  deferred?: boolean;
 
   // --- Screen capture, recorded as its own track ---
   // A screen share can start and stop several times in one recording, so each
@@ -1830,6 +1832,19 @@ function finalizeChannel(
   }
 }
 
+/**
+ * Stop streaming this guest's take to the host: the person chose to send it
+ * after the take. The backups go on recording and hold all of it. Refused,
+ * and the take goes on being streamed, when the camera backup is not kept
+ * on disk: a copy held in memory has no name to be returned under.
+ */
+export function deferGuestStreams(h: RecordingHandles): boolean {
+  if (!h.backup?.dirName) return false;
+  h.deferred = true;
+  for (const s of [h.sender, h.wavSender, h.screenSender]) s?.defer();
+  return true;
+}
+
 export function rolePicker(role: Role | null): 'host' | 'guest' {
   return role === 'guest' ? 'guest' : 'host';
 }
@@ -1977,6 +1992,8 @@ export async function startScreenRecording(
       ...(onError ? { onError } : {}),
     });
     h.screenSender = sender;
+    // The take is being sent after it ends, and so is this stretch of it.
+    if (h.deferred) sender.defer();
     bindGuestChannel(channel, sender);
     const rec = new ChunkRecorder({
       mimeType,

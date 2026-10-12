@@ -668,6 +668,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (the host removed this tab): the queue is emptied, later chunks are not kept, `drain()` answers
   false at once and no finish signal follows; unlike the backlog cap it sends nothing and raises
   no error.
+  `defer()` is for a person who chose to send the take afterwards: the queue and the
+  retransmit buffer are emptied, later chunks are not kept, the far end is sent
+  `stream-abandoned` and no error is raised. A stream that stopped at the backlog cap or by
+  `defer()` sends `stream-abandoned` again for every `resume_offset` it is sent, because the
+  receiver that says where its file stands can be a new one, in a host page that reloaded.
+  `deferGuestStreams` (`recording-controller.ts`) calls `defer()` on a guest's camera, WAV
+  and screen senders and marks the handles `deferred`, which `startScreenRecording` reads
+  for a share that starts later; it refuses when the camera backup has no directory in
+  browser storage.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once
