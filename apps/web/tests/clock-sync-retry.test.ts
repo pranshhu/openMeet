@@ -176,6 +176,28 @@ describe('ClockSync: a round nobody answers is tried again', () => {
     expect(pings(sent)).toHaveLength(1);
     expect(metas(sent)).toHaveLength(0);
   });
+
+  it('ends the round on an answer that reads one millisecond before its question', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    let got: unknown = 'not over';
+    void sync.run(3, 500).then((r) => {
+      got = r;
+    });
+    const p0 = pings(sent)[0]!;
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p0.seq!, t0: p0.t0!, t1: start + 250 });
+    const p1 = pings(sent)[1]!;
+    // The smallest step back a clock read in whole milliseconds can show.
+    vi.setSystemTime(start - 1);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p1.seq!, t0: p1.t0!, t1: start + 250 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(got).toEqual({ offsetMs: 250, rttMs: 0 });
+    expect(pings(sent)).toHaveLength(2);
+    expect(metas(sent)).toEqual([
+      { type: 'recording_meta', recordingId: 'r', guestStartHostMs: start + 250, rttMs: 0 },
+    ]);
+  });
 });
 
 class FakeChannel {

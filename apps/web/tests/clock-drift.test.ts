@@ -459,4 +459,15 @@ describe('a computer clock that is set during the take, as the clock section sho
     expect(note).toContain("moves that guest's offsets by up to the size of the change, and nothing here shows it");
     expect(note).not.toContain('shows as a large movedMs');
   });
+
+  it('the note keeps a clock set between two estimates to the camera file and WAV, and says what to do', () => {
+    const note = clockSection(HOST_START, [guest])!.note;
+    expect(note).toContain(
+      "does not move the offset of that guest's camera file and WAV, which comes from the start estimate"
+    );
+    expect(note).toContain(
+      'A guest with no end has no usable second estimate, and a guest that is not listed has no usable estimate at all'
+    );
+    expect(note).toContain('Align by waveform a clip that sits wrong by a second or more.');
+  });
 });
