@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { NO_CAMERA, cameraConstraints, deviceConstraints } from '@/lib/media';
 
@@ -279,5 +279,149 @@ describe('Lobby: microphone only, the rest of its behaviour', () => {
     expect(cam!.enabled).toBe(false);
     expect(screen.getByRole('button', { name: 'Turn on camera' })).toBeInTheDocument();
     expect(container.querySelector('video')).toHaveClass('opacity-0');
+  });
+
+  it('is off while the first preview is still being opened, so no second capture is asked for', async () => {
+    const first = streamOf(micTrack(), camTrack());
+    let open!: (s: MediaStream) => void;
+    const getUserMedia = vi.fn().mockImplementation(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          open = resolve;
+        })
+    );
+    stubMedia(getUserMedia);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    expect(micOnlyButton()).toBeDisabled();
+    fireEvent.click(micOnlyButton());
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      open(first);
+    });
+    await screen.findByLabelText('Camera');
+    expect(micOnlyButton()).toBeEnabled();
+    expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Try again asks for nothing while the microphone is being opened alone', async () => {
+    let open!: (s: MediaStream) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      c.video === false
+        ? new Promise<MediaStream>((resolve) => {
+            open = resolve;
+          })
+        : Promise.reject(Object.assign(new Error('busy'), { name: 'NotReadableError' }))
+    );
+    stubMedia(getUserMedia);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('alert');
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      open(streamOf(micTrack()));
+    });
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+  });
+
+  it('stays microphone only when another microphone is picked and when the headphones question is answered', async () => {
+    const getUserMedia = vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+      c.video === false ? streamOf(micTrack()) : streamOf(micTrack(), camTrack())
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia,
+        enumerateDevices: vi
+          .fn()
+          .mockResolvedValue([...DEVICES, { kind: 'audioinput', deviceId: 'mic2', label: 'Second mic' }]),
+      },
+    });
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    const before = getUserMedia.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Microphone'), { target: { value: 'mic2' } });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(before + 1));
+    expect(getUserMedia.mock.calls.at(-1)![0]).toMatchObject({
+      audio: { deviceId: { exact: 'mic2' } },
+      video: false,
+    });
+    await waitFor(() => expect(screen.getByLabelText('Microphone')).toHaveValue('mic2'));
+
+    fireEvent.change(screen.getByLabelText('Headphones or speakers'), { target: { value: 'speakers-ec' } });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(before + 2));
+    expect(getUserMedia.mock.calls.at(-1)![0]).toMatchObject({
+      audio: { echoCancellation: true },
+      video: false,
+    });
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+  });
+
+  it('asks for any camera on the second press when none is listed', async () => {
+    const getUserMedia = vi.fn().mockImplementation(async (c: MediaStreamConstraints) => {
+      if (c.video === false) return streamOf(micTrack());
+      throw Object.assign(new Error('no camera'), { name: 'NotFoundError' });
+    });
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([DEVICES[1]]) },
+    });
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('alert');
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    const before = getUserMedia.mock.calls.length;
+
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(before + 1));
+    const video = getUserMedia.mock.calls.at(-1)![0].video as MediaTrackConstraints;
+    expect(video).not.toBe(false);
+    expect(video.deviceId).toBeUndefined();
+    // No camera answered, so the microphone stays as it was.
+    expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('reads as off while it cannot be pressed', async () => {
+    stubMedia(vi.fn().mockReturnValue(new Promise<MediaStream>(() => {})));
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(micOnlyButton()).toBeDisabled();
+    expect(micOnlyButton()).toHaveClass(
+      'enabled:hover:bg-[#0b57d0]/10',
+      'disabled:cursor-not-allowed',
+      'disabled:opacity-50'
+    );
+  });
+
+  it('is off while the microphone is opened again for the echo-cancellation answer', async () => {
+    let reopen!: (s: MediaStream) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      (c.audio as MediaTrackConstraints | undefined)?.echoCancellation === true
+        ? new Promise<MediaStream>((resolve) => {
+            reopen = resolve;
+          })
+        : Promise.resolve(streamOf(micTrack(), camTrack()))
+    );
+    stubMedia(getUserMedia);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    await screen.findByLabelText('Camera');
+
+    fireEvent.change(screen.getByLabelText('Headphones or speakers'), { target: { value: 'speakers-ec' } });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    expect(micOnlyButton()).toBeDisabled();
+
+    await act(async () => {
+      reopen(streamOf(micTrack(), camTrack()));
+    });
+    await waitFor(() => expect(micOnlyButton()).toBeEnabled());
   });
 });

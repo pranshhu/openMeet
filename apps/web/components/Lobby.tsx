@@ -825,7 +825,8 @@ export function Lobby({
                     <button
                       type="button"
                       onClick={() => {
-                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
+                        // Not beside a capture that is still being opened.
+                        if (mmRef.current && !reopeningRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -849,8 +850,12 @@ export function Lobby({
               type="button"
               aria-pressed={micOnly}
               aria-describedby="mic-only-hint"
+              // Off while a preview is being opened and none has failed: a press
+              // then would ask for a second capture beside it, and whichever of
+              // the two the preview did not keep would stay open.
+              disabled={!stream && !previewError}
               onClick={() => void chooseMicOnly(!micOnly)}
-              className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
+              className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
             >
               Microphone only
             </button>

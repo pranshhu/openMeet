@@ -101,6 +101,17 @@ describe('mimeForStream', () => {
   it('leaves the mime alone where nothing can be asked', () => {
     expect(mimeForStream(micOnly(), VIDEO_AAC)).toBe(VIDEO_AAC);
   });
+
+  it('keeps the video mime for a camera that is only turned off', () => {
+    install(() => true);
+    const off = { ...cam, enabled: false };
+    const stream = Object.assign(new EventTarget(), {
+      getTracks: () => [mic, off],
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => [off],
+    }) as unknown as MediaStream;
+    expect(mimeForStream(stream, VIDEO_OPUS)).toBe(VIDEO_OPUS);
+  });
 });
 
 describe('recorders started on a stream with no camera', () => {

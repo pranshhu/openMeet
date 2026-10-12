@@ -126,4 +126,14 @@ describe('SwitchableMedia for a person who joined without a camera', () => {
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(sm.stream.getVideoTracks().map((t) => t.id)).toEqual(['cam-2']);
   });
+
+  it('keeps the stable video track, and switches cameras, when the camera was turned off in the lobby', async () => {
+    const cam = track('video', 'cam-1');
+    cam.enabled = false;
+    const sm = new SwitchableMedia(lobby(track('audio', 'mic-1'), cam));
+    expect(sm.stream.getVideoTracks().map((t) => t.id)).toEqual(['stable-video']);
+    await sm.switchCamera('cam-2');
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(sm.activeCamId).toBe('cam-2');
+  });
 });

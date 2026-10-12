@@ -238,6 +238,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Microphone only**, under the lobby's preview: join with your microphone and no
   camera. For a person who has no camera, whose camera is blocked or busy, or whose
   computer struggles with video. Pressing it again opens the camera as well.
+  It is off while the camera and microphone are still being opened.
 - A person who joined with the microphone only is heard by everyone and shown by their
   initial. Their camera button is off for that call, and its menu says how to get a
   camera: leave and join again.

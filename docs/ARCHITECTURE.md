@@ -310,10 +310,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   change the microphone is stopped before it is asked for, because a browser can give a second capture of
   an open microphone the processing of the first; the preview is taken down with it, so Join is off until
   the new one is open, and stays down with Try again when it cannot be opened. The camera, microphone,
-  quality and frame-rate pickers are off for as long as the preview is down, so only Try again opens a
-  capture then. A change of camera, microphone, quality, frame rate or echo cancellation made while
-  another is being opened is not taken (`reopeningRef`), so no capture is asked for beside one on its
-  way. The select shows what the
+  quality and frame-rate pickers are off for as long as the preview is down, so only Try again and
+  **Microphone only** open a capture then. **Microphone only** is off while a preview is being
+  opened and none has failed (`!stream && !previewError`), and Try again does nothing while
+  `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
+  microphone, quality, frame rate or echo cancellation made while another is being opened is not
+  taken (`reopeningRef`), so no capture is asked for beside one on its way. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview

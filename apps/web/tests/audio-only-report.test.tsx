@@ -94,6 +94,20 @@ describe('buildSyncReport: a file recorded with no camera', () => {
       expect(json.frameRate.files.map((f: { file: string }) => f.file)).toEqual(['host_r.mp4', 'guest_r.mp4']);
     }
   });
+
+  it('keeps the aligned copy and the remux of a host file with no picture', () => {
+    const report = buildSyncReport({
+      recordingId: 'rec',
+      hostFile: 'host_rec.mp4',
+      hostWavFile: 'host_rec.wav',
+      hostStartMs: 0,
+      guests: [],
+      checks: new Map([['host_rec.mp4', { bytes: 10, audioOnly: true }]]),
+    });
+    const json = JSON.parse(report.json);
+    expect(JSON.stringify(json.aligned)).toContain('host_rec.mp4');
+    expect(json.seekability.remuxHost).toContain('host_rec.mp4');
+  });
 });
 
 describe('SessionSummary: a file recorded with no camera', () => {
@@ -247,6 +261,59 @@ describe('the host’s own file', () => {
     try {
       expect(handles.audioOnly).toBe(true);
       expect((await collectFileChecks(handles)).get('host_rec_resumed.mp4')?.audioOnly).toBe(true);
+    } finally {
+      await endHostRecording(handles);
+    }
+  });
+
+  it('is a camera file when the host’s camera is only turned off', async () => {
+    const off = { ...cam, enabled: false };
+    const cameraOff = Object.assign(new EventTarget(), {
+      getTracks: () => [mic, off],
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => [off],
+    }) as unknown as MediaStream;
+    const handles = await startHostRecording({
+      recordingId: 'r4',
+      localStream: cameraOff,
+      dir: folder() as never,
+      journal: false,
+    });
+    try {
+      expect(handles.audioOnly).toBeUndefined();
+      expect((await collectFileChecks(handles)).get('host_r4.mp4')?.audioOnly).toBeUndefined();
+    } finally {
+      await endHostRecording(handles);
+    }
+  });
+
+  it('is a camera file for the part recorded after a reload when the host has a camera', async () => {
+    const notes: TakeNotes = {
+      room: 'abc-defg-hij',
+      recordingId: 'rec',
+      take: 1,
+      hostStartMs: Date.now() - 90_000,
+      files: [],
+      backups: [],
+      markers: [],
+    };
+    const journal = {
+      dirName: 'openmeet-take-1-abc-defg-hij',
+      notes,
+      finish: vi.fn().mockResolvedValue(undefined),
+      note: (change: (n: TakeNotes) => void) => change(notes),
+      file: () => ({ append: () => {}, commit: async () => {}, dead: false }),
+    } as unknown as TakeJournal;
+
+    const handles = await resumeHostRecording({
+      journal,
+      dir: folder() as never,
+      localStream: withCamera(),
+      channels: [],
+    });
+    try {
+      expect(handles.audioOnly).toBeUndefined();
+      expect((await collectFileChecks(handles)).get('host_rec_resumed.mp4')?.audioOnly).toBeUndefined();
     } finally {
       await endHostRecording(handles);
     }

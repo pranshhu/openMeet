@@ -222,4 +222,36 @@ describe('the host, told that a guest file has no picture', () => {
     expect(checks.get('guest_rec.mp4')?.audioOnly).toBe(true);
     expect(checks.get('guest2_rec.mp4')?.audioOnly).toBeUndefined();
   });
+
+  it('keeps the label on a file continued after a host reload', async () => {
+    const guestWriter = fakeWriter('guest_rec.mp4');
+    const h: RecordingHandles = {
+      recordingId: 'rec',
+      take: 1,
+      channelRef: { current: null },
+      guestWriter: guestWriter as never,
+    };
+    h.receiver = new ChunkReceiver({
+      recordingId: 'rec',
+      writer: guestWriter as never,
+      sendControl: () => {},
+      resumeFrom: { nextIdx: 1, end: 10 },
+    });
+    await h.receiver.handleMessage(encodeChunkHeader({ idx: 1, offset: 10, size: 3, ts: 1 }));
+    await h.receiver.handleMessage(new Uint8Array([97, 98, 99]).buffer);
+    await h.receiver.handleMessage(finalize({ audioOnly: true }));
+    expect((await collectFileChecks(h)).get('guest_rec.mp4')).toEqual({
+      bytes: 10,
+      audioOnly: true,
+      recovered: true,
+    });
+  });
+
+  it('takes it from the finish message alone', async () => {
+    const r = receiverFor('guest_rec.mp4');
+    for (const type of ['resume_query', 'clock_ping', 'recording_meta', 'stream-abandoned', 'ack']) {
+      await r.handleMessage(JSON.stringify({ type, audioOnly: true }));
+    }
+    expect(r.senderAudioOnly).toBe(false);
+  });
 });
