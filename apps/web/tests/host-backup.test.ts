@@ -1280,4 +1280,52 @@ describe("the crash copy keeps when a guest's clock estimate arrived", () => {
       vi.useRealTimers();
     }
   });
+
+  it('dates the estimate at the report that carried its start, and reads back no time that is not a number', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-clock-late',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => root as never,
+      });
+      const receiver = handles.receiver!;
+      const at = Date.now();
+      await receiver.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'g', rttMs: 15 }));
+      expect(handles.journal!.notes.files[0]!.clockAtMs).toBeUndefined();
+
+      vi.setSystemTime(at + 60_000);
+      await receiver.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: at - 100, rttMs: 12 })
+      );
+      expect(handles.journal!.notes.files[0]).toMatchObject({ guestStartHostMs: at - 100, clockAtMs: at + 60_000 });
+
+      await receiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await receiver.handleMessage(JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      await vi.waitFor(async () => {
+        const [found] = await findTakeJournals(async () => root as never);
+        expect(found?.notes.files[0]).toMatchObject({ clockAtMs: at + 60_000 });
+      });
+
+      // Storage is read back as data: a time that is not a number is no time.
+      const take = [...root.entries.values()][0] as FakeDirectoryHandle;
+      const notesFile = take.entries.get('take.json') as FakeFileHandle;
+      const stored = JSON.parse(new TextDecoder().decode(notesFile.content));
+      stored.files[0].clockAtMs = String(at);
+      notesFile.content = new TextEncoder().encode(JSON.stringify(stored));
+      const [found] = await findTakeJournals(async () => root as never);
+      expect(found?.notes.files[0]).toMatchObject({ guestStartHostMs: at - 100 });
+      expect(found?.notes.files[0]?.clockAtMs).toBeUndefined();
+
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

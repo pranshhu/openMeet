@@ -61,6 +61,28 @@ describe('ClockSync.again: one more estimate as the recording stops', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(pings(sent)).toHaveLength(2);
   });
+
+  it('ends at its three seconds when every answer comes late', async () => {
+    const sent: Sent[] = [];
+    const sync = new ClockSync({
+      recordingId: 'r',
+      guestStartMs: Date.now(),
+      send: (j) => sent.push(JSON.parse(j) as Sent),
+    });
+    const start = Date.now();
+    let took = -1;
+    void sync.again().then(() => {
+      took = Date.now() - start;
+    });
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(1400);
+      const ping = pings(sent).at(-1)!;
+      sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: ping.seq!, t0: ping.t0!, t1: Date.now() });
+    }
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(took).toBe(3000);
+    expect(metas(sent)).toHaveLength(1);
+  });
 });
 
 describe('endGuestRecording: one more clock estimate before the file is called final', () => {

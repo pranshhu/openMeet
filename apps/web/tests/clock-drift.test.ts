@@ -65,6 +65,23 @@ describe('clockSection', () => {
     expect(clockSection(HOST_START, [])).toBeNull();
     expect(clockSection(HOST_START, [none, guest])!.guests.map((g) => g.slot)).toEqual([0]);
   });
+
+  it('writes nothing about movement when the first round trip is below zero', () => {
+    const entry = clockSection(HOST_START, [{ ...guest, rttMs: -1000, clockEnd: end }])!.guests[0]!;
+    expect(entry).toEqual({ slot: 0, file: 'guest_r.mp4', start: { ...START, rttMs: null } });
+  });
+
+  it('writes nothing about movement when the second time is a number in a string', () => {
+    const late = { ...end, atMs: String(end.atMs) };
+    const entry = clockSection(HOST_START, [{ ...guest, clockEnd: late } as never])!.guests[0]!;
+    expect('end' in entry).toBe(false);
+    expect('movedMs' in entry).toBe(false);
+  });
+
+  it('does not list a guest whose start is not a number', () => {
+    expect(clockSection(HOST_START, [{ ...guest, startHostMs: NaN }])).toBeNull();
+    expect(clockSection(HOST_START, [{ ...guest, startHostMs: undefined } as never])).toBeNull();
+  });
 });
 
 describe('buildSyncReport: the clock section', () => {
@@ -157,6 +174,20 @@ describe('ChunkReceiver: the first clock report stands, a later one is kept besi
     await meta(r, { guestStartHostMs: t - 400, rttMs: 20 });
     expect(onMeta).toHaveBeenCalledTimes(1);
     expect(onMeta).toHaveBeenLastCalledWith({ guestStartHostMs: t - 500, rttMs: 30 });
+  });
+
+  it('keeps no later report whose round trip is not a number, and lets it replace none', async () => {
+    const r = receiver();
+    const t = Date.now();
+    await meta(r, { guestStartHostMs: t - 500, rttMs: 30 });
+    await meta(r, { guestStartHostMs: t - 400, rttMs: '20' });
+    await meta(r, { guestStartHostMs: t - 400, rttMs: null });
+    await meta(r, { guestStartHostMs: t - 400, rttMs: true });
+    expect(r.clockEnd).toBeNull();
+
+    await meta(r, { guestStartHostMs: t - 498, rttMs: 20 });
+    await meta(r, { guestStartHostMs: t - 400, rttMs: '9' });
+    expect(r.clockEnd).toMatchObject({ startHostMs: t - 498, rttMs: 20 });
   });
 });
 
