@@ -54,8 +54,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ```
 
 - Worker = stateless REST. `Room` DO = per-slug WS hub; **dumb relay** (never inspects SDP/ICE;
-  relays each msg to every other peer — SDP/ICE carrying `to` go to that one peer only — stamped
-  with `from: Role`, `fromPeerId`, and `fromName` on chat/presence/marker).
+  relays each msg to every other peer — SDP/ICE carrying `to`, and every `private-message`, go to
+  that one peer only — stamped with `from: Role`, `fromPeerId`, and `fromName` on
+  chat/presence/marker/private-message).
 - D1 holds **metadata only** (rooms, sessions, participants, recordings) — never bytes.
 - TURN bytes (symmetric NAT) are SRTP/SCTP-encrypted, opaque to operators.
 
@@ -64,7 +65,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (19 variants) ↔ `ServerMessage` (21).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (20 variants) ↔ `ServerMessage` (22).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -74,6 +75,10 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
+  `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
+  the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
+  `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
+  that does not know it drops it instead of sending it to everyone.
   SDP/ICE take an optional `to` (peerId) so
   the DO can address one peer in a mesh. Type guards `isClientMessage`/`isServerMessage` validate **only the
   `type` discriminant**, not payload shape.
@@ -206,6 +211,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
   page that receives reactions takes one a second from one sender (`takeReaction` in
   `apps/web/lib/reactions.ts`), and `useRoom().sendReaction` sends no more than that.
+- `private-message` goes to **one socket**: the joined peer whose id is `to`, never the sender and
+  never the room. A `to` that names nobody else in the room (someone who left, the sender itself,
+  a socket that has not joined, a value that is not an id) matches no peer and the message is
+  dropped; it never falls back to `broadcastExcept`. Any joined peer may write to any other. The
+  text is passed on as sent, like `chat`; nothing is stored and the sender is not answered.
 - `recording-started` is **relayed from every joined peer** (it is what starts every guest's capture,
   except one the host set as not recorded), but **persisted to D1 only by the host**
   (`insertRecording`, capped at 256 rows per session).
@@ -655,6 +665,35 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   rebuilt connection, from a ref the switch writes itself.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
+- Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
+  `private-message` to one person, and adds the sender's own line to `state.messages` at once.
+  A private line carries `private` (plus `toPeerId` and `toRole` on the sender's side: who it went
+  to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
+  pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
+  guest" by the Room's role when the sender's id is not known, "from Guest 1" or "from Producer 2"
+  by the number this page gave that id, or "to Guest 1" on the sender's own line. A line for
+  everyone starts with `PublicMark`, the words "To everyone:" read out and not drawn, in the list
+  and in the pop-up: the mark is told from a name by its box, which a screen reader does not read,
+  so the first words of every line are the page's.
+  `chatSenderLabel` is the name alone. `buildChatLog` leaves the line out of
+  `chat_<id>.txt`, whichever side the host was on. Its text is checked on arrival like `chat`: a
+  string of at most `MAX_CHAT_MESSAGE_LENGTH`.
+  `ChatPanel` offers the choice under **To** when there are two or more other people
+  (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as the
+  page's own words first, `Host: Ana`, `Guest 1: Bob` or `Producer 2: Pat`, then the name the
+  person chose, cut to 16 characters. A number is given the first time the page meets a person
+  and stays with that id for as long as the page is in the room (`chatNumbers` in `RoomView`,
+  handed to `CallStage`, which is unmounted while the page shows "Everyone else left"), so
+  no one else is given it when someone leaves or reconnects; a person who reconnects arrives under
+  a new id and gets a new number. The name sits in a `<bdi>` element wherever other words follow
+  it. The choice lives in `RoomView` (`chatTo`, handed to `CallStage` with `onChatTo`), because
+  the panel unmounts when chat closes and the call screen while the page shows "Everyone else left",
+  and stays until it
+  is changed. `openChat` moves it only from Everyone: to the sender of the newest private message
+  among those that arrived while chat was closed, once per message, if that person is still in the
+  call. A person already chosen is never replaced, and a message for everyone that arrived after it
+  changes nothing. When the chosen id is gone from the list (they left, or reconnected under a new
+  id) the panel sends nothing until the sender chooses again; it never falls back to everyone.
 
 ### Recording engine (`lib/*`, `hooks/recording-controller.ts`)
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
@@ -1187,8 +1226,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   kept by `peerId` in the call screen, and the Room gives a returning connection a new id, so
   that person plays at full volume again. A fader only turns a person down from full volume,
   and the sound of a shared screen or a presented video has no fader.
-- **M does not mark a moment while a fader has the keyboard.** The marker key skips every
-  `<input>`, as it does for the teleprompter's sliders; the bookmark button still marks.
+- **M does not mark a moment while a fader or a list has the keyboard.** The marker keys skip
+  every `<input>` and every `<select>`, as they do the teleprompter's sliders; a list takes a
+  typed letter to choose an option. The bookmark button still marks.
 - **A level meter is drawn only while Levels is open.** It shows what arrives, so it does not
   move with the fader, and it has one colour: nothing marks a person who is clipping.
 - **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
@@ -1531,6 +1571,29 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A sender who waits alone is told nothing of a file that is still offered.** Neither
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
+- **A private message is not confirmed as delivered.** The sender's line appears the moment it
+  is sent. If the other person left in that instant, if this tab's socket was down, or if the
+  Worker or the other page is older than private messages, nobody receives it and nothing says
+  so.
+- **A private message is kept from the other people in the call, not from the signalling
+  server or from a shared screen.** It passes through the Worker like every chat line, relayed
+  and never stored. Its pop-up shows its text, so someone who shares their whole screen, or the
+  window the call is in, shows it to the call, and a recording of that screen holds it. The
+  chat file never does.
+- **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
+  id, so the chat panel says the person left or reconnected and sends nothing until someone is
+  chosen. Under **To** a person reads as the page's own words and a number, `Guest 2`; someone who
+  comes back gets a number nobody had, never another person's number, and a present-only device
+  is not listed.
+- **A private message that arrives while chat is open does not move To.** An answer goes where
+  **To** says, to everyone if nobody is chosen. And chat opened on Everyone is addressed to the
+  sender of the newest private message that arrived while chat was closed, if that person is
+  still in the call; a person already chosen is not replaced. That also holds when a message for
+  everyone arrived after the private one: an answer goes to that person alone until **To** is
+  changed.
+- **A number under To is this page's own.** `Guest 2` on one person's screen is not `Guest 2` on
+  another's, and a person who reconnects gets a new number. A display name is still its owner's
+  text and can say anything; the words before it are the page's, and they are the ones to trust.
 - **A pause is a take boundary, not a gap in a file.** Pause takes the few seconds End &
   save takes, and Continue starts take n+1 after the countdown: one set of files and one
   sync file per part. `timeline.hostStartUnixMs` in each sync file places the parts on
