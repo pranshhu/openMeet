@@ -736,6 +736,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is left untouched (`keptFiles`) and never reopened in that take. A replay that stops short marks
   the file (`shortFiles`): it gets no stored hash state and reads incomplete. A guest's clock-sync
   numbers reach its note through the receiver's `onMeta` and are read back at a resume or a save.
+  The note also keeps when the estimate arrived (`clockAtMs`, stamped once by `noteClock`), a
+  resumed receiver is seeded with the three numbers (`clockFrom`), so a report that arrives
+  after the reload is the later one, and a save hands the time to the sync file.
   Guest screen notes are rebuilt from the crash copy and listed (`resumedScreens`); a call-audio
   copy opened after a resume asks the folder for a free number (`freeNumber`, shared with the screen
   files), and each number is claimed before it is asked about.
@@ -1544,3 +1547,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A sender who waits alone is told nothing of a file that is still offered.** Neither
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
+- **A guest whose first clock estimate arrives after a resume loses it if the host's
+  browser closes again.** The receivers a resume builds do not write to the crash copy's
+  notes, so a save after that second crash says to align that guest by waveform. A crash
+  copy never holds a second estimate either: a take saved from one has no `end` in `clock`.

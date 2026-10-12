@@ -1219,3 +1219,65 @@ describe('camera bitrate level', () => {
     await stopScreenRecording(h);
   });
 });
+
+describe("the crash copy keeps when a guest's clock estimate arrived", () => {
+  beforeEach(() => {
+    FakeMediaRecorder.instances = [];
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+  });
+
+  it('stamps the note once, and a later session reads the stamp back', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const root = new FakeDirectoryHandle();
+      const handles = await startHostRecording({
+        recordingId: 'test-rec-clock-at',
+        localStream: fakeStream(),
+        dir: fakeDir() as never,
+        room: 'abc-defg-hij',
+        journalRoot: async () => root as never,
+      });
+      const receiver = handles.receiver!;
+      const at = Date.now();
+      await receiver.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: at - 100, rttMs: 12 })
+      );
+      expect(handles.journal!.notes.files[0]).toMatchObject({
+        guestStartHostMs: at - 100,
+        rttMs: 12,
+        clockAtMs: at,
+      });
+
+      // A minute later a round trip alone arrives: the estimate's time does not move.
+      vi.setSystemTime(at + 60_000);
+      await receiver.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'g', rttMs: 15 }));
+      expect(handles.journal!.notes.files[0]).toMatchObject({
+        guestStartHostMs: at - 100,
+        rttMs: 15,
+        clockAtMs: at,
+      });
+
+      // The notes reach storage with the next commit, and a later session reads them back.
+      await receiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
+      await receiver.handleMessage(JSON.stringify({ idx: 1, offset: 4, size: 4, ts: 0 }));
+      await receiver.handleMessage(new ArrayBuffer(4));
+      await vi.waitFor(async () => {
+        const [found] = await findTakeJournals(async () => root as never);
+        expect(found?.notes.files[0]).toMatchObject({
+          file: 'guest_test-rec-clock-at.mp4',
+          clockAtMs: at,
+        });
+      });
+
+      await endHostRecording(handles);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

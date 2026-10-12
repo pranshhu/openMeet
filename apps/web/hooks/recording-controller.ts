@@ -491,6 +491,9 @@ function noteClock(
     if (!note) return;
     note.guestStartHostMs = meta.guestStartHostMs;
     note.rttMs = meta.rttMs;
+    // onMeta runs as a report is accepted, so the first call that carries a
+    // start is when that estimate arrived.
+    if (meta.guestStartHostMs !== null && note.clockAtMs === undefined) note.clockAtMs = Date.now();
   });
 }
 
@@ -1010,6 +1013,9 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),
+      // The estimate the crashed session accepted stays the first one, so the
+      // guest's report at the stop is read as the later one.
+      clockFrom: { guestStartHostMs: note.guestStartHostMs, rttMs: note.rttMs, atMs: note.clockAtMs },
     });
 
     const ext = note.kind === 'camera' ? 'mp4' : 'wav';

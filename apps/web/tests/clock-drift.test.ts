@@ -212,3 +212,33 @@ describe('collectGuestReports: the clock readings reach the report', () => {
     }
   });
 });
+
+describe('ChunkReceiver: seeded with the estimate a crash copy holds', () => {
+  const seeded = (clockFrom: object) =>
+    new ChunkReceiver({
+      recordingId: 'r',
+      writer: { write: vi.fn().mockResolvedValue(undefined), fileName: 'guest_r.mp4' } as never,
+      sendControl: vi.fn(),
+      clockFrom: clockFrom as never,
+    });
+  const held = (r: ChunkReceiver) => [r.guestStartHostMs, r.syncRttMs, r.clockAtMs];
+
+  it('holds the seeded estimate as the first, so a report that arrives is the later one', async () => {
+    const t = Date.now();
+    const r = seeded({ guestStartHostMs: t - 5000, rttMs: 12, atMs: t - 4800 });
+    expect(held(r)).toEqual([t - 5000, 12, t - 4800]);
+
+    await r.handleMessage(
+      JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: t - 4997, rttMs: 20 })
+    );
+    expect(held(r)).toEqual([t - 5000, 12, t - 4800]);
+    expect(r.clockEnd).toMatchObject({ startHostMs: t - 4997, rttMs: 20 });
+  });
+
+  it('seeds nothing without a start that is a number, and no round trip or time that is not one', () => {
+    for (const bad of [{}, { guestStartHostMs: null, rttMs: 12, atMs: 5 }, { guestStartHostMs: 'x' }, { guestStartHostMs: NaN }]) {
+      expect(held(seeded(bad))).toEqual([null, null, null]);
+    }
+    expect(held(seeded({ guestStartHostMs: 1000, rttMs: 'fast', atMs: Infinity }))).toEqual([1000, null, null]);
+  });
+});

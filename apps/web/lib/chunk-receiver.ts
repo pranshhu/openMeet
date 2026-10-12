@@ -40,6 +40,16 @@ export interface ChunkReceiverOpts {
   onMeta?: (meta: { guestStartHostMs: number | null; rttMs: number | null }) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
   resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
+  /**
+   * The clock-sync numbers the crash copy holds for this file, for a take
+   * reopened after a crash: that estimate stays the first, and a report that
+   * arrives from here on is a later one.
+   */
+  clockFrom?: {
+    guestStartHostMs?: number | null | undefined;
+    rttMs?: number | null | undefined;
+    atMs?: number | undefined;
+  };
 }
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
@@ -124,6 +134,14 @@ export class ChunkReceiver {
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
     this.onMeta = opts.onMeta;
+    // Read from storage, so each number is checked again. Without a start
+    // nothing is seeded: a round trip or a time alone describes no estimate.
+    const clock = opts.clockFrom;
+    if (clock && typeof clock.guestStartHostMs === 'number' && Number.isFinite(clock.guestStartHostMs)) {
+      this._guestStartHostMs = clock.guestStartHostMs;
+      if (typeof clock.rttMs === 'number' && Number.isFinite(clock.rttMs)) this._syncRttMs = clock.rttMs;
+      if (typeof clock.atMs === 'number' && Number.isFinite(clock.atMs)) this._clockAtMs = clock.atMs;
+    }
     const from = opts.resumeFrom;
     // A position the journal could not have produced is no position: the take
     // then starts this file where it would have without one.
