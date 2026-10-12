@@ -65,7 +65,6 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 
 **Two transports, two ack mechanisms — do not conflate:**
 - **WS signaling** (`ws-messages.ts`): `ClientMessage` (19 variants) ↔ `ServerMessage` (21).
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (17 variants) ↔ `ServerMessage` (20).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
