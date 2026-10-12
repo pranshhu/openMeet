@@ -239,6 +239,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   and the session summary give an `ffmpeg` command per WAV that writes a FLAC beside
   it, and one that checks the copy against the WAV (two equal MD5 lines) before the
   WAV is deleted. openMeet still records WAV, and converts and deletes nothing itself.
+- The `.json` note beside a returned WAV backup holds the same two `ffmpeg` commands for
+  that file: one writes a lossless FLAC copy, one checks it before the WAV is deleted.
 
 ### Changed
 

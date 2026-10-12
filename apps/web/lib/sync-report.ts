@@ -283,7 +283,7 @@ function alignWavCmd(file: string, padMs: number): string {
 
 // A FLAC beside the master: the same samples in a smaller file. Nothing names a
 // depth or a channel count, because ffmpeg's FLAC encoder keeps the input's.
-function flacCmd(file: string): string {
+export function flacCmd(file: string): string {
   const out = file.replace(/\.[^.]+$/, '') + '.flac';
   return `ffmpeg -i "${file}" -c:a flac "${out}"`;
 }
@@ -291,7 +291,7 @@ function flacCmd(file: string): string {
 // Decodes the master and its FLAC copy and prints one MD5 line for each. Both are
 // hashed as PCM at the master's depth: ffmpeg's md5 output is 16-bit unless told
 // otherwise, which would leave the low byte of every sample out of the comparison.
-function flacCheckCmd(file: string): string {
+export function flacCheckCmd(file: string): string {
   const flac = file.replace(/\.[^.]+$/, '') + '.flac';
   const pcm = `-c:a pcm_s${WAV_BIT_DEPTH}le -f md5 -`;
   return `ffmpeg -v error -i "${file}" -i "${flac}" -map 0:a ${pcm} -map 1:a ${pcm}`;

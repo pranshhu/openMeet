@@ -5,7 +5,7 @@ import {
   recordingChannelKind,
   type ChunkAck,
 } from '@openmeet/protocol';
-import { integrityVerdict, sanitizeText } from '@/lib/sync-report';
+import { flacCheckCmd, flacCmd, integrityVerdict, sanitizeText } from '@/lib/sync-report';
 import { parseBackupName, type BackupName } from '@/lib/backup-recorder';
 import { MAX_SHARED_FILE_BYTES, SHARED_FILE_ID, sharedFileName } from '@/lib/shared-file';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
@@ -46,6 +46,12 @@ export function returnedBackupName(backup: BackupName, from: string | null): str
   return `backup_${who}_${backup.kind}_${stamp}.${backup.ext}`;
 }
 
+const FLAC_BACKUP_NOTE =
+  'Optional. encode writes a FLAC beside this WAV: the same samples in a smaller file. check decodes both ' +
+  'and prints two MD5 lines. When the two lines are the same the FLAC holds every sample of the WAV, and ' +
+  'only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, keep the WAV and ' +
+  'encode again.';
+
 /** The JSON note written beside a verified returned backup. */
 export function buildBackupNote(note: {
   file: string; // its name in the host's folder
@@ -75,6 +81,10 @@ export function buildBackupNote(note: {
     startedUnixMsNote:
       "Read from the sender's device clock, not measured against the host's. Compare it with timeline.hostStartUnixMs in a take's sync file to tell which take this belongs to.",
     alignment,
+    // Only a WAV has a lossless copy to make: a camera or a screen backup is an MP4.
+    ...(note.backup.kind === 'audio'
+      ? { flac: { note: FLAC_BACKUP_NOTE, encode: flacCmd(note.file), check: flacCheckCmd(note.file) } }
+      : {}),
     generatedBy: 'openMeet',
   };
 

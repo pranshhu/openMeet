@@ -908,6 +908,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   shown that name, never the one the sender gave. It gets no note, and one that is stopped, cut
   off or fails its check is removed from the folder whole. `decline` takes the offers to turn
   down, so backups and picked files can be answered apart.
+  The note beside a returned WAV backup also holds a `flac` entry: the `encode` and `check`
+  commands of `lib/sync-report.ts` (`flacCmd`, `flacCheckCmd`) for the file's name in the
+  host's folder. A camera or a screen backup's note has none.
 
 ---
 

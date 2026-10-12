@@ -537,6 +537,7 @@ the screen that follows offers them too.
    an error, keep it and encode again. Run the pairing and aligned-copy commands first:
    they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
    WAV backup you downloaded included.
+   A returned WAV backup's own `.json` holds the two commands for that file, under `flac`.
 
 ### If the host's browser crashes
 
