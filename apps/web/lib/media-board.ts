@@ -11,9 +11,10 @@
  * full quality — so recording them again would be strictly worse than recording
  * *when* each one fired. Each trigger drops a chapter marker instead.
  *
- * A take that is already recording when the board is made holds the microphone's
- * own track and cannot be handed this mix, so the pads alone are also offered to
- * `mixIn`, which puts them on that track.
+ * A take that is already recording when the board is made holds the call's stable
+ * audio track and cannot be handed this mix, so the pads alone are also offered to
+ * `mixIn`, which puts them on that track. The microphone-only track the audio master
+ * records is another one, and no pad reaches it.
  *
  * Files are read locally and never uploaded, consistent with the rest of openMeet.
  */

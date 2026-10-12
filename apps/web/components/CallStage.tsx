@@ -515,7 +515,7 @@ export function CallStage({
     setPeopleOpen(false);
     setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="People"]')?.focus());
   }
-  // First opened mid-take: that take's recorder keeps the raw mic (a running
+  // First opened mid-take: that take's recorder keeps the track it has (a running
   // MediaRecorder can't swap tracks). Its pads reach the file only where the
   // board could mix them into that track, and only while the mic is on. Only
   // that take: the next one starts with the board already in the mix.
