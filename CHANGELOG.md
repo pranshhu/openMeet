@@ -403,6 +403,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   background. A host tab that was taken over during a take stays out instead of
   taking the call back, and a guest in that state who presses **Stop and save** gets
   their backup links instead of a "Recording" label that never cleared.
+- **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
+  list, the chat's **To** list among them, used to add a chapter marker or open the note
+  field as well.
 
 ### Security
 

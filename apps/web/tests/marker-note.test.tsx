@@ -218,6 +218,20 @@ describe('CallStage: the keys while typing elsewhere, and where the field sits',
     }
   });
 
+  it('ignores N and M typed on a list, which takes the letter to choose an option', () => {
+    render(<CallStage {...props} />);
+    const list = document.body.appendChild(document.createElement('select'));
+    try {
+      // true: not cancelled, so the letter reaches the list.
+      expect(fireEvent.keyDown(list, { key: 'n' })).toBe(true);
+      expect(fireEvent.keyDown(list, { key: 'm' })).toBe(true);
+      expect(field()).toBeNull();
+      expect(onMark).not.toHaveBeenCalled();
+    } finally {
+      list.remove();
+    }
+  });
+
   it('opens on a capital N, and not with the Meta or Alt key held', () => {
     render(<CallStage {...props} />);
     fireEvent.keyDown(document.body, { key: 'n', metaKey: true });

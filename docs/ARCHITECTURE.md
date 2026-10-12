@@ -1216,8 +1216,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   kept by `peerId` in the call screen, and the Room gives a returning connection a new id, so
   that person plays at full volume again. A fader only turns a person down from full volume,
   and the sound of a shared screen or a presented video has no fader.
-- **M does not mark a moment while a fader has the keyboard.** The marker key skips every
-  `<input>`, as it does for the teleprompter's sliders; the bookmark button still marks.
+- **M does not mark a moment while a fader or a list has the keyboard.** The marker keys skip
+  every `<input>` and every `<select>`, as they do the teleprompter's sliders; a list takes a
+  typed letter to choose an option. The bookmark button still marks.
 - **A level meter is drawn only while Levels is open.** It shows what arrives, so it does not
   move with the fader, and it has one colour: nothing marks a person who is clipping.
 - **A ready sound plays at the level it was made at.** A pad has no volume of its own: Chime
