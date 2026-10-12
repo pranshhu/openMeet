@@ -524,6 +524,8 @@ the screen that follows offers them too.
    to align it. A returned backup with no `.json` beside it did not finish. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.
    The host's own backup is cleared at their next lobby visit after a take that ended cleanly.
+   When part of a guest's take did not reach the host while it recorded, that guest's page offers its backup
+   by itself as soon as the host ends the take: the host gets the same **Save to folder** question, with no rejoin.
 4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for by default and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
 
 ### If the host's browser crashes

@@ -235,6 +235,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- When part of a guest's recording did not reach the host during a take, the guest's
+  page offers its backup to the host as soon as the host ends the take, with no
+  rejoin; the host gets the usual **Save to folder** question.
 
 ### Changed
 

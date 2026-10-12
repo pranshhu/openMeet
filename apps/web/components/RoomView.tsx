@@ -368,6 +368,7 @@ export function RoomView({ slug }: { slug: string }) {
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
+      backupQueued={state.backupQueued}
       readLoad={readLoad}
       readTrackHealth={readTrackHealth}
       lowPower={state.lowPower}

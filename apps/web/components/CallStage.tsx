@@ -111,6 +111,7 @@ export function CallStage({
   syncReportUrl,
   sidecarsSaved,
   drained = true,
+  backupQueued = false,
   onToggleMic,
   onToggleCam,
   onRecord,
@@ -199,6 +200,8 @@ export function CallStage({
   sidecarsSaved?: boolean;
   /** Guest: every chunk of the last take reached the host before the drain cap. */
   drained?: boolean;
+  /** Guest: the last take's backups were offered to the host, because not all of it arrived while it recorded. */
+  backupQueued?: boolean;
   // Non-fatal: shown as a banner without ending the call.
   recordingError: string | null;
   micWarning?: MicWarning | null;
@@ -746,6 +749,12 @@ export function CallStage({
               <span className="text-[#fdd663]">Saving didn’t finish.</span>
             ) : drained ? (
               <span className="text-[#81c995]">Sent to the host.</span>
+            ) : backupQueued ? (
+              // Not all of it arrived while the take ran. The backup that
+              // holds all of it has its own rows below, which say where it is.
+              <span className="text-[#fdd663]">
+                Your backup of this take holds all of it and was offered to the host.
+              </span>
             ) : (
               // The drain hit its cap or the sender gave up: the host's copy may
               // be short, and only this guest's backup has the rest.

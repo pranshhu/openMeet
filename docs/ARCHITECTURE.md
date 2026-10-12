@@ -595,6 +595,13 @@ files; `declineBackups` turns down the backups and `declineFiles` the files it i
 one answer never covers the other kind.
 `sendBackups` queues one `BackupSend` per leftover backup file and `startPeer` attaches every
 unfinished send to each new connection to the host.
+A guest's `endRecording` calls it too, with the backups of the take that just ended
+(`takeBackupFiles` in `hooks/backup-return.ts`: the camera's, the WAV master's and each screen
+stretch's, only those kept in browser storage, eight at most), when the host's
+`recording-stop` ended a take whose streams did not all drain and the host has not set this
+guest as not recorded. `state.backupQueued` says so,
+and the guest's done line reads "Your backup of this take holds all of it and was offered to
+the host." in place of the advice to rejoin.
 `sendFile` queues one for a file picked in chat (`shared`), on the same list and held by the
 same `hold`, but with no `after`: a picked file does not wait behind a backup the host has not
 answered. It does nothing on the host's own page.
@@ -1521,3 +1528,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A sender who waits alone is told nothing of a file that is still offered.** Neither
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
+- **A backup is offered by itself only after the host's stop.** A guest who leaves during a
+  take, whose tab the room closed, or whose take a new take ended, keeps the backup in its
+  lobby, with **Send to host**. A backup that was kept in memory only (browser
+  storage unavailable) has no name to travel under: the done line keeps the advice to
+  rejoin and the download link. The end of a take says only whether the camera and the
+  WAV arrived: a screen recording that fell behind while those two arrived is not
+  offered, and neither is a present-only device's. A guest the host set as not recorded
+  offers nothing.
+- **A backup offered after a take travels on the uplink the call is on.** It starts when
+  the host presses **Save to folder**, waits while this guest's next take records, and is
+  the whole take again, also when only its last seconds were missing on the host.
+- **A guest with more than eight offers waiting is turned away.** After several takes the
+  host has not answered, the next take's backups are refused and the guest reads that the
+  backup was not saved on the host's computer; they stay listed in that guest's lobby.

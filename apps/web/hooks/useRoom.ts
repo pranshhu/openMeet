@@ -86,6 +86,7 @@ import {
   BackupIntake,
   BackupSend,
   refuseBackup,
+  takeBackupFiles,
   type BackupTransfer,
 } from './backup-return';
 
@@ -214,6 +215,8 @@ export interface RoomState {
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
   drained: boolean;
+  /** Guest: the last take did not all reach the host, and this page offered its backups to the host. */
+  backupQueued: boolean;
   // Host-only: editor alignment + seekability companion for the finished pair.
   syncReportUrl: string | null;
   sidecarsSaved: boolean;
@@ -636,6 +639,7 @@ export function useRoom(slug: string) {
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
     drained: true,
+    backupQueued: false,
     syncReportUrl: null,
     sidecarsSaved: false,
     markers: [],
@@ -2844,6 +2848,28 @@ export function useRoom(slug: string) {
           // forever, and the guest silently sat out take 2 and every take after it.
           // The channels and recorders in here are already stopped and drained.
           recordingRef.current = null;
+          // The host's stop ended a take that did not all reach it, and
+          // both are still in the call. The backup holds all of it, so it
+          // is offered from here: nothing is written until the host
+          // accepts. Not for a guest the host set as not recorded, whose
+          // page must send nothing of them by itself. A failure must not
+          // keep the take from ending; the backup stays on this device
+          // and in its lobby either way.
+          let backupQueued = false;
+          if (
+            !drained &&
+            !notRecordedRef.current &&
+            typeof opts === 'object' &&
+            opts.from === 'recording-stop'
+          ) {
+            try {
+              const files = await takeBackupFiles(backup, wavBackup, h.screenBackups);
+              sendBackups(files);
+              backupQueued = files.length > 0;
+            } catch {
+              // Send to host in the lobby does the same by hand.
+            }
+          }
           setState((s) => ({
             ...s,
             // A removed tab has no call to go back to. Its take is saved, so
@@ -2854,6 +2880,7 @@ export function useRoom(slug: string) {
               ? { recordingError: null }
               : {}),
             drained,
+            backupQueued,
             backupBlobUrl,
             wavBackupBlobUrl,
           }));
@@ -3028,14 +3055,14 @@ export function useRoom(slug: string) {
           finalizingGuests: [],
           backupBlobUrl,
           wavBackupBlobUrl,
-          ...(guest ? { drained: false } : {}),
+          ...(guest ? { drained: false, backupQueued: false } : {}),
           recordingError: guest
             ? `Sending your recording didn’t finish (${reason}).`
             : `Saving didn’t finish (${reason}). Some files in your recording folder may be incomplete.`,
         }));
       }
     },
-    [slug]
+    [slug, sendBackups]
   );
 
   // Close the seam the signal handlers registered in join() reach through.
