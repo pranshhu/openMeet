@@ -778,6 +778,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   live (`ClockSync.sendOn`, called from `bindGuestChannel`), until one is answered or the
   guest's recording ends (`stop`, called from `endGuestRecording`); a guest with no answer by
   then has a null offset ("align by waveform").
+  `ChunkReceiver` keeps the first start it accepts, with the time it arrived (`clockAtMs`), and
+  a later report of the same start beside it (`clockEnd`), never in its place.
+  `collectGuestReports` hands both on, and `lib/clock-drift.ts` `clockSection` writes the sync
+  file's `clock` section from them: per guest the estimate its offsets come from (`start`), and,
+  when a second one exists (`end`), how far the two computers' clocks moved in between
+  (`movedMs` over `spanMs`, within `errorMs`: half the sum of the two round trips plus 4 ms).
+  The section compares the system clocks (`Date.now()` on both sides) and says so; a guest with
+  no estimate is not listed, and nothing about movement is written without two estimates that
+  each carry a round trip.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone

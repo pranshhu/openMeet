@@ -515,6 +515,9 @@ the screen that follows offers them too.
    ignores it still needs the offset. Call-audio copies are listed under
    `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
    no clock sync applies.
+   `clock` in `sync.json` says, for each guest, when the estimate behind its offset was
+   taken and the round trip of the exchange it came from; the offset can be wrong by up to
+   half of that plus 2 ms.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses

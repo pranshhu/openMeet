@@ -235,6 +235,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- `sync.json` gains a `clock` section: for each guest, the clock estimate its start
+  offset comes from, the round trip that bounds its error and when the host received it.
 
 ### Changed
 
