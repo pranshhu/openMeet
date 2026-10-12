@@ -247,6 +247,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The session summary lists a host's own file recorded with no camera as "Audio only,
   no camera", and `sync.json` names such files under `audioOnly` and prints no pairing
   or frame-rate command for them.
+- The session summary and `sync.json` name a guest's file recorded with no camera as
+  audio only too, once that guest's recording has finished cleanly.
 
 ### Changed
 

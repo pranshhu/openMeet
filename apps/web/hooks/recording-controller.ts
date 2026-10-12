@@ -1297,6 +1297,9 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
     ...(args.room ? { room: args.room } : {}),
     ...(args.onHostTakeId ? { onHostTakeId: args.onHostTakeId } : {}),
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
+    ...(args.localStream.getAudioTracks().length > 0 && args.localStream.getVideoTracks().length === 0
+      ? { audioOnly: true }
+      : {}),
   };
 }
 
@@ -1792,7 +1795,7 @@ export async function endGuestRecording(
   // chunk had landed on the audio channel.
   const canFinalizeMain = h.sender ? (!h.sender.isAbandoned && !h.sender.hasQueuedChunks) : true;
   if (canFinalizeMain) {
-    finalizeChannel(h.channel, h.recordingId, h.sender?.lastAckedIdx ?? 0, sha256, h.videoFps);
+    finalizeChannel(h.channel, h.recordingId, h.sender?.lastAckedIdx ?? 0, sha256, h.videoFps, h.audioOnly);
   }
   const canFinalizeWav = h.wavSender ? (!h.wavSender.isAbandoned && !h.wavSender.hasQueuedChunks) : true;
   if (canFinalizeWav) {
@@ -1815,7 +1818,8 @@ function finalizeChannel(
   recordingId: string,
   totalBytes: number,
   sha256: string,
-  frameRate?: number
+  frameRate?: number,
+  audioOnly?: boolean
 ): void {
   if (channel?.readyState !== 'open') return;
   try {
@@ -1826,6 +1830,7 @@ function finalizeChannel(
         totalBytes,
         sha256,
         ...(frameRate ? { frameRate } : {}),
+        ...(audioOnly ? { audioOnly: true } : {}),
       })
     );
   } catch {
@@ -2312,7 +2317,7 @@ export async function collectFileChecks(h: RecordingHandles): Promise<Map<string
     const recovered = finished && !holed;
     out.set(w.fileName, {
       bytes: w.size,
-      ...(w === h.hostWriter && h.audioOnly ? { audioOnly: true } : {}),
+      ...((w === h.hostWriter && h.audioOnly) || r?.senderAudioOnly ? { audioOnly: true } : {}),
       ...(recovered
         ? { recovered: true }
         : r

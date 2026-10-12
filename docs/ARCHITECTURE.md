@@ -788,7 +788,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. A file recorded with no camera carries `audioOnly` in its file check
   (`collectFileChecks`: the host's own from `RecordingHandles.audioOnly`, set when its
-  recorder is built with a microphone and no video track). `buildSyncReport` lists it as
+  recorder is built with a microphone and no video track; a guest's from `audioOnly: true`
+  in that guest's `recording-finalized` on the camera channel, which the receiver keeps as
+  `senderAudioOnly` and takes only as the boolean `true`). `buildSyncReport` lists it as
   kind `audio-only` ("Audio only, no camera" in the summary), names it under `audioOnly`
   in the sync file, and leaves it out of `combine` and `frameRate`; its remux and aligned
   commands stay, since both copy streams as they are. Clock-sync needs the host to be
@@ -1569,3 +1571,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   a pairing command for such a file, which `ffmpeg` refuses (the file has no video
   stream). The aligned-copy command for such a file is labelled "aligned copy of the
   video"; the command itself works on it.
+- **A guest's file recorded with no camera is named as audio only only when that guest's
+  take finished cleanly.** The guest says so in its finish message. A guest that left
+  early, that the host removed, whose stream was abandoned, or whose take was saved from
+  the lobby after a crash never sent it, and its file is listed as a camera file. It is
+  the guest's own word: a guest that says it for a file with a picture gets that one file
+  listed as audio only.
