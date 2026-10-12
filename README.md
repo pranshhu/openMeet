@@ -439,6 +439,10 @@ screen file is. The host's files carry the host's name after the role, cut down 
 and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
 the convenience copy; the WAV is the master.
 
+A person who joined with **Microphone only** has the same two files under the same
+names. Their `.mp4` holds the compressed audio and no picture; the WAV is the master,
+as for everyone.
+
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
 recorded as `avc3` (in-band parameter sets, so a resolution change mid-recording — a

@@ -657,6 +657,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
   **synchronously** in `ondataavailable`, serializes `blob.arrayBuffer()` via a `tail` promise
   chain to preserve order; skips empty blobs.
+  `mimeForStream(stream, mime)` is what both `ChunkRecorder` and `BackupRecorder` start
+  their `MediaRecorder` with: for a stream with no video track (a person who joined with no
+  camera) it is the first `audio/mp4` entry of the call-audio list this browser supports, so
+  that person's `host_<id>.mp4` / `guest_<id>.mp4` and its backup are MP4 files with one audio
+  track, under the names, channel and verdict a camera file has. Nothing that reads a take's
+  files by name (the crash copy, a resume, the lobby's save, a returned backup) tells them
+  apart.
 - `chunk-sender.ts` (guest egress): `sendChunk` → `hash.update` → `buffer.add` → `enqueueOrSend`.
   Backpressure: `bufferedAmount>16MiB` → queue, drains at ≤8MiB (hysteresis). The pause half exists
   (`setPaused`, `onBackpressure`) but no take-time caller passes the hook — the three `new
@@ -1544,3 +1551,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   that is turned off. On a computer the others' camera menu still lists **Pop out** for
   that person; choosing it opens no window and shows the line about a window that did not
   open.
+- **A file recorded with no camera sits in the camera file's place.** The health panel
+  lists it as "Camera", a returned backup of it is named `…_camera_…`, the page shown after
+  leaving calls its backup "Backup video", and a take saved from the lobby after a crash
+  lists it as a camera file. Each is an MP4 that holds sound and no picture.
+- **A guest with no camera whose browser cannot record a WAV master** (Safari) is recorded
+  as that MP4 alone, plus the host's call-audio copy. Not tested: recording is
+  Chromium-only.

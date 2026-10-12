@@ -74,6 +74,21 @@ export function pickCallAudioMime(): string | null {
 }
 
 /**
+ * The mime a recorder is started with. A stream with no video track (a person
+ * who joined with no camera) is recorded in the same container with no video
+ * codec named, the form the call-audio copies record in, so the file is an
+ * MP4 that holds one audio track, under the name the camera file has. Never
+ * WebM: the bytes go behind an `.mp4` name. Anything else keeps its mime.
+ */
+export function mimeForStream(stream: MediaStream, mimeType: string): string {
+  // A stream that cannot say is taken to have a camera.
+  if (!mimeType.startsWith('video/mp4') || stream.getVideoTracks?.().length !== 0) return mimeType;
+  return (
+    CALL_AUDIO_MIME_CANDIDATES.find((m) => m.startsWith('audio/mp4') && isRecordingSupported(m)) ?? mimeType
+  );
+}
+
+/**
  * Whether this browser can record at all. With no argument it asks the real
  * question — "is ANY supported codec available?" — rather than testing one
  * hardcoded string that happens to fail on Linux.
@@ -114,7 +129,7 @@ export class ChunkRecorder {
       // Callers should pass an explicitly probed mime; fall back to probing here so
       // a caller that forgets still gets something this browser can encode rather
       // than a hardcoded string that throws NotSupportedError on Linux.
-      mimeType: this.opts.mimeType ?? pickRecordingMime() ?? RECORDING_MIME,
+      mimeType: mimeForStream(this.opts.stream, this.opts.mimeType ?? pickRecordingMime() ?? RECORDING_MIME),
       videoBitsPerSecond: this.opts.videoBitsPerSecond ?? RECORDING_VIDEO_BPS,
       audioBitsPerSecond: this.opts.audioBitsPerSecond ?? RECORDING_AUDIO_BPS,
     });

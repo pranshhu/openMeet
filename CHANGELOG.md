@@ -241,6 +241,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A person who joined with the microphone only is heard by everyone and shown by their
   initial. Their camera button is off for that call, and its menu says how to get a
   camera: leave and join again.
+- A person who joined with the microphone only is recorded like everyone else: the WAV
+  master, and an MP4 under the usual name that holds their compressed audio and no
+  picture. Their in-browser backup is the same pair.
 
 ### Changed
 
