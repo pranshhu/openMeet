@@ -133,9 +133,17 @@ export const WAV_SAMPLE_RATE = 48_000; // requested; the actual rate is read fro
  */
 export const MAX_RECORDED_PEERS = 4;
 
+/**
+ * The longest teleprompter script one participant can send to the others, in
+ * UTF-16 units (`String.length`): about 55 minutes of speech, and about
+ * 300 KB as JSON at the very worst.
+ */
+export const MAX_SCRIPT_LENGTH = 50_000;
+
 export const WS_CLOSE_CAPACITY_FULL = 4001;
 export const WS_CLOSE_INVALID_SLUG = 4002;
 export const WS_CLOSE_EXPIRED_SLUG = 4003;
 export const WS_CLOSE_INVALID_MESSAGE = 4005;
 export const WS_CLOSE_REPLACED = 4006;
-
+// The host removed this participant. The same tab is refused until the session ends.
+export const WS_CLOSE_REMOVED = 4007;

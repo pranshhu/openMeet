@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { followSpeaker } from '@/lib/speaker';
 
 function initial(label: string): string {
   const m = label.trim().match(/[a-z0-9]/i);
@@ -24,6 +25,10 @@ export function VideoTile({
   // Flip the picture like a mirror, as a self-view should be. Display only: the
   // stream (and so the recording) is untouched.
   mirror = false,
+  // How loud this tile plays in this tab, 0 to 1. It is the element's own
+  // volume: nobody else hears it, and a recorder reads the stream, never
+  // this element.
+  volume = 1,
 }: {
   stream: MediaStream | null;
   muted: boolean;
@@ -34,6 +39,7 @@ export function VideoTile({
   className?: string;
   tagClassName?: string;
   mirror?: boolean;
+  volume?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
 
@@ -57,7 +63,19 @@ export function VideoTile({
     return () => stream.removeEventListener('removetrack', reload);
   }, [stream]);
 
+  // A tile that sounds plays through the speaker the person chose. A muted one
+  // (their own camera, the lobby preview) plays nothing, so it is left alone.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || muted) return;
+    return followSpeaker(el);
+  }, [muted]);
+
   const showVideo = !!stream && !camOff;
+
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
 
   return (
     <div

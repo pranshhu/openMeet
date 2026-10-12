@@ -199,7 +199,7 @@ export function SessionSummary({
             {markers.map((m, i) => {
               const by = m.name || m.from;
               return (
-                <li key={`${m.at}-${i}`}>
+                <li key={`${m.at}-${i}`} className="break-words">
                   <span className="text-white/60">{m.at}</span> {m.label || 'Marker'}
                   {by && <span className="ml-2 text-xs text-white/60">— {by}</span>}
                 </li>

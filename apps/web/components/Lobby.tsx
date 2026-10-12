@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { RECORDING_FRAME_RATE, WAV_SAMPLE_RATE } from '@openmeet/protocol';
+import {
+  LISTENING_CHOICES,
+  RECORDING_FRAME_RATE,
+  WAV_SAMPLE_RATE,
+  isListening,
+  type Listening,
+} from '@openmeet/protocol';
 import {
   MediaDeviceMissingError,
   MediaManager,
@@ -31,8 +37,10 @@ import {
 } from '@/lib/quality';
 import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
+import { FramingGuide } from './FramingGuide';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
+import { CalendarInvite } from './CalendarInvite';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
@@ -44,6 +52,10 @@ import type { CheckLevel } from '@/lib/preflight';
 import { isTakeLockHeld } from '@/lib/take-lock';
 import { MAX_BACKUP_OFFERS_PER_PEER } from '@/hooks/backup-return';
 import { formatBytes } from '@/lib/sync-report';
+import { listSpeakers, setSpeaker } from '@/lib/speaker';
+import { useSpeakerId } from '@/hooks/use-speaker';
+import { LISTENING_HINT, LISTENING_LABEL, chooseListening } from '@/lib/listening';
+import { setSingleKeys, useSingleKeys } from '@/hooks/use-single-keys';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
   return (
@@ -75,6 +87,7 @@ const QUALITY_KEY = 'om_quality';
 const FRAME_RATE_KEY = 'om_fps';
 const BITRATE_KEY = 'om_bitrate';
 const STEREO_KEY = 'om_stereo';
+const LISTENING_KEY = 'om_listening';
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -128,6 +141,7 @@ export function Lobby({
   onSendBackups,
   producer = false,
   present = false,
+  checkOnly = false,
 }: {
   slug: string;
   onJoin: (
@@ -143,6 +157,8 @@ export function Lobby({
   producer?: boolean;
   /** Join as a screen-sharing companion only: no camera/mic acquisition. */
   present?: boolean;
+  /** The check link: the lobby's preview and checks, with no way into the room. */
+  checkOnly?: boolean;
 }) {
   // A producer link that also carries ?present=1 is still a producer.
   const isPresent = present && !producer;
@@ -154,15 +170,23 @@ export function Lobby({
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [copied, setCopied] = useState(false);
+  const [checkCopied, setCheckCopied] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [devices, setDevices] = useState<DeviceList>(EMPTY_DEVICES);
   const [micId, setMicId] = useState('');
   const [camId, setCamId] = useState('');
+  // Read once, with the cameras and microphones. Empty where the browser cannot switch outputs.
+  const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
+  const speaker = useSpeakerId();
+  const singleKeys = useSingleKeys();
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
   const [stereo, setStereo] = useState(false);
+  // The answer to "headphones or speakers", '' until one is given. 'speakers-ec'
+  // is also how the microphone is opened, so it is set only once that worked.
+  const [listening, setListening] = useState<Listening | ''>('');
   // What the camera ACTUALLY produced. Constraints are `ideal`, so this can
   // differ from the request and the user should see the truth, not the ask.
   const [actual, setActual] = useState<string | null>(null);
@@ -186,6 +210,10 @@ export function Lobby({
   // Same shape as joiningRef: opening the folder prompt is awaited, so a second
   // press could otherwise start a second save over the same journal.
   const savingRef = useRef(false);
+  // A capture that has been asked for and not yet answered. A second one asked
+  // for beside it is never stopped by anyone, and whichever lands last decides
+  // the device and the headphones answer, so a change made meanwhile is not taken.
+  const reopeningRef = useRef(false);
   // From the chosen folder to the end of the rebuild, which can take minutes:
   // Save and Delete wait, so neither runs under it.
   const [saving, setSaving] = useState(false);
@@ -311,9 +339,9 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, quality: string, fps: number) {
+  function startPreview(mm: MediaManager, quality: string, fps: number, echo: boolean) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', '', quality, fps))
+    mm.acquire(deviceConstraints('', '', quality, fps, echo))
       .then(async (s) => {
         setStream(s);
         // Device labels are only populated after permission is granted.
@@ -324,6 +352,8 @@ export function Lobby({
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
         setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
         setActual(describeTrack(s.getVideoTracks()[0]));
+        const outputs = await listSpeakers();
+        if (outputs.length > 0) setSpeakers(outputs);
       })
       .catch((e: unknown) => setPreviewError(previewProblem(e)));
   }
@@ -335,32 +365,55 @@ export function Lobby({
     mmRef.current = mm;
     let saved = DEFAULT_QUALITY_ID;
     let savedFps = RECORDING_FRAME_RATE;
+    let savedListening: Listening | '' = '';
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
       setBitrateId(localStorage.getItem(BITRATE_KEY) ?? DEFAULT_BITRATE_ID);
       // Strictly '1': anything else, including a stored '0', is mono.
       setStereo(localStorage.getItem(STEREO_KEY) === '1');
+      const heard = localStorage.getItem(LISTENING_KEY);
+      // Anything but one of the three answers is "not said".
+      if (isListening(heard)) savedListening = heard;
     } catch {
       /* private mode — fall back to the default */
     }
     setQualityId(saved);
     setFrameRate(savedFps);
-    startPreview(mm, saved, savedFps);
+    setListening(savedListening);
+    startPreview(mm, saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
     };
   }, []);
 
-  async function reacquire(nextMic: string, nextCam: string, nextQuality: string, nextFrameRate: number) {
+  async function reacquire(
+    nextMic: string,
+    nextCam: string,
+    nextQuality: string,
+    nextFrameRate: number,
+    nextListening: Listening | '' = listening
+  ) {
     const mm = mmRef.current;
-    if (!mm) return;
+    if (!mm || reopeningRef.current) return;
+    reopeningRef.current = true;
     const old = stream;
+    const echo = nextListening === 'speakers-ec';
+    // Echo cancellation belongs to the open microphone, and a browser can give
+    // a second capture of it the processing of the first. So for this one
+    // change the microphone is let go before it is asked for; the camera stays.
+    const released = echo !== (listening === 'speakers-ec');
+    if (released) {
+      old?.getAudioTracks().forEach((t) => t.stop());
+      // A preview whose microphone is stopped must not be joined. Taking it
+      // down turns Join and the question off until the new one is open.
+      setStream(null);
+    }
     try {
       // Acquire FIRST; only stop the old stream once it succeeds, so a failed
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
-      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate));
+      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
       old?.getTracks().forEach((t) => t.stop());
       mm.setAudioEnabled(micOn);
       mm.setVideoEnabled(camOn);
@@ -371,15 +424,29 @@ export function Lobby({
       setCamId(nextCam);
       setQualityId(nextQuality);
       setFrameRate(nextFrameRate);
+      setListening(nextListening);
       setActual(describeTrack(s.getVideoTracks()[0]));
       try {
         localStorage.setItem(QUALITY_KEY, nextQuality);
         localStorage.setItem(FRAME_RATE_KEY, String(nextFrameRate));
+        localStorage.setItem(LISTENING_KEY, nextListening);
       } catch {
         /* private mode — the choice just doesn't persist */
       }
     } catch (e) {
+      if (released) {
+        // Its microphone is gone, so there is no preview to go back to. Try
+        // again opens both with their tracks on, so the two buttons are set
+        // to say so.
+        old?.getTracks().forEach((t) => t.stop());
+        setMicOn(true);
+        setCamOn(true);
+        setPreviewError(previewProblem(e));
+        return;
+      }
       setError(e instanceof Error ? e.message : 'Could not switch device.');
+    } finally {
+      reopeningRef.current = false;
     }
   }
 
@@ -410,6 +477,22 @@ export function Lobby({
     }
   }
 
+  function changeListening(value: string) {
+    const next: Listening | '' = isListening(value) ? value : '';
+    // Echo cancellation is a capture setting, so only that change opens the
+    // microphone again; the other answers change nothing that is captured.
+    if ((next === 'speakers-ec') !== (listening === 'speakers-ec')) {
+      void reacquire(micId, camId, qualityId, frameRate, next);
+      return;
+    }
+    setListening(next);
+    try {
+      localStorage.setItem(LISTENING_KEY, next);
+    } catch {
+      /* private mode — the choice just doesn't persist */
+    }
+  }
+
   function toggleMic() {
     const next = !micOn;
     setMicOn(next);
@@ -425,6 +508,13 @@ export function Lobby({
     void navigator.clipboard?.writeText(`${location.origin}${location.pathname}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  /** The room link with ?check=1: the lobby's checks, with no way into the room. */
+  function copyCheckLink() {
+    void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?check=1`);
+    setCheckCopied(true);
+    setTimeout(() => setCheckCopied(false), 1500);
   }
 
   /**
@@ -471,7 +561,8 @@ export function Lobby({
   // The selects drop their native outline, so the box around each shows focus.
   const picker =
     'flex min-w-0 items-center gap-2 rounded-lg border border-[#dadce0] px-3 py-2 text-base text-[#5f6368] focus-within:border-[#0b57d0] focus-within:ring-1 focus-within:ring-[#0b57d0] sm:text-sm';
-  const select = 'w-full min-w-0 bg-transparent text-[#202124] outline-none';
+  const select =
+    'w-full min-w-0 bg-transparent text-[#202124] outline-none disabled:cursor-not-allowed disabled:opacity-50';
 
   const nameField = (
     <>
@@ -500,8 +591,46 @@ export function Lobby({
         <Icon name={copied ? 'check' : 'copy'} size={18} />
         {copied ? 'Link copied' : 'Copy invite link'}
       </button>
+      {isHost && (
+        <div className="flex flex-col items-center">
+          <button
+            type="button"
+            onClick={copyCheckLink}
+            aria-describedby="check-link-hint"
+            className={`inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+          >
+            <Icon name={checkCopied ? 'check' : 'copy'} size={18} />
+            {checkCopied ? 'Link copied' : 'Copy check link'}
+          </button>
+          <span id="check-link-hint" className="text-xs text-[#5f6368]">
+            A guest opens it to test their camera and mic before the call, without joining.
+          </span>
+        </div>
+      )}
       <p className="text-xs text-[#5f6368]">Room: {slug}</p>
     </>
+  );
+
+  // The call's list of shortcuts has this box too, but its button is not shown
+  // on a window narrower than 640px. Everyone enters the call through one of
+  // the three screens below, so the box is on each of them. The check page
+  // joins no call and leaves it out.
+  const keysSwitch = (
+    <div className="flex flex-col items-center">
+      <label className="inline-flex min-h-11 cursor-pointer items-center gap-2.5 text-sm">
+        <input
+          type="checkbox"
+          checked={singleKeys}
+          onChange={(e) => setSingleKeys(e.target.checked)}
+          aria-describedby="single-keys-hint"
+          className={`h-4 w-4 shrink-0 ${focusRing}`}
+        />
+        Single-key shortcuts
+      </label>
+      <span id="single-keys-hint" className="text-xs text-[#5f6368]">
+        A, V, C, T, M, N and ? in the call. Turn off if you use voice control or dictation.
+      </span>
+    </div>
   );
 
   if (producer) {
@@ -531,6 +660,7 @@ export function Lobby({
             </button>
           </form>
           {invite}
+          {keysSwitch}
         </div>
       </main>
     );
@@ -580,6 +710,7 @@ export function Lobby({
           </form>
           <RecordingDisclosure isHost={isHost} presenting />
           {invite}
+          {keysSwitch}
         </div>
       </main>
     );
@@ -610,6 +741,12 @@ export function Lobby({
   const mic = stream?.getAudioTracks()[0];
   const canStereo = isPcmCaptureSupported() && recordedChannels(mic, true) === 2;
   const channels = recordedChannels(mic, stereo);
+  // What the microphone reports, not what was asked for: it is what the
+  // recording holds. Read as on unless it is false or missing, so a value
+  // this code does not know is never taken for raw audio.
+  const echoOn = Boolean(mic?.getSettings?.().echoCancellation);
+  const shownListening: Listening | '' =
+    listening === 'speakers-ec' && stream && !echoOn ? 'speakers' : listening;
   const recordingNotice = !isRecordingSupported()
     ? isHost
       ? 'Recording needs a Chromium browser (Chrome, Edge; Brave works as host only after enabling brave://flags/#file-system-access-api). The live call still works — switch browser to record.'
@@ -634,6 +771,8 @@ export function Lobby({
               // instead of running under it.
               tagClassName="max-w-[calc(50%-4.5rem)]"
             />
+            {/* Only over a picture: with the camera off there is nothing to frame. */}
+            {stream && camOn && <FramingGuide />}
             {stream ? (
               /* Overlaid mic / cam controls */
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center gap-4 sm:bottom-4">
@@ -670,7 +809,7 @@ export function Lobby({
                     <button
                       type="button"
                       onClick={() => {
-                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate);
+                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -701,20 +840,73 @@ export function Lobby({
         {/* Join panel. Top-aligned with the preview, so it stays put while the
             column under the preview fills in. */}
         <div className="flex w-full max-w-sm flex-col items-center gap-6 text-center lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start">
-          <h1 className="text-[28px] font-normal leading-tight tracking-tight">Ready to join?</h1>
+          <h1 className="text-[28px] font-normal leading-tight tracking-tight">
+            {checkOnly ? 'Check your setup' : 'Ready to join?'}
+          </h1>
+          {checkOnly && (
+            <div className="flex w-full flex-col items-center gap-2">
+              <p className="text-[15px] leading-relaxed text-[#5f6368]">
+                You’re not in the room. This page tests your camera, microphone and connection on
+                this device.
+              </p>
+              {stream && (
+                <a
+                  href="#preflight"
+                  className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+                >
+                  See your checks ↓
+                </a>
+              )}
+              <a
+                href={`/r/${encodeURIComponent(slug)}/`}
+                className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${focusRing}`}
+              >
+                Go to the room
+              </a>
+            </div>
+          )}
+          {/* The check link has no way in: the name field, Join and Present only are
+              hidden with the form. */}
           <form
             className="flex w-full flex-col gap-6"
+            hidden={checkOnly}
             onSubmit={async (e) => {
               e.preventDefault();
               if (!stream || !name.trim()) return;
               if (!(await okToTakeSeat())) return;
               chooseBitrate(shownBitrate);
+              chooseListening(shownListening);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               onJoin(stream, name.trim(), false, undefined, stereo);
             }}
           >
             {nameField}
+            {/* Asked above Join, where a phone still shows it. Off until the
+                preview is up: echo cancellation is a property of the open
+                microphone, and before that there is none to open again. */}
+            <div className="flex w-full flex-col gap-1.5 text-left">
+              <label className={`${picker} min-h-11`}>
+                <select
+                  aria-label="Headphones or speakers"
+                  aria-describedby="listening-hint"
+                  value={shownListening}
+                  disabled={!stream}
+                  onChange={(e) => changeListening(e.target.value)}
+                  className={select}
+                >
+                  {(['', ...LISTENING_CHOICES] as const).map((v) => (
+                    <option key={v} value={v}>
+                      {LISTENING_LABEL[v]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {/* A host is not told the host sees it: nobody is shown the host's own answer. */}
+              <p id="listening-hint" className="px-1 text-xs leading-relaxed text-[#5f6368]">
+                {[!isHost && 'The host sees your answer.', LISTENING_HINT[shownListening]].filter(Boolean).join(' ')}
+              </p>
+            </div>
             <div className="flex w-full flex-col gap-3">
               <button type="submit" disabled={!stream || !name.trim()} className={`w-full ${primaryBtn}`}>
                 Join now
@@ -758,7 +950,7 @@ export function Lobby({
           {invite}
           {/* Beside Join, not under the checklist: a guest back after a crash may
               hold the only copy of their part, and has to see it without scrolling. */}
-          {backups.length > 0 && (
+          {!checkOnly && backups.length > 0 && (
             <section
               aria-labelledby="backups-title"
               className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
@@ -849,7 +1041,7 @@ export function Lobby({
           {/* Beside Join, like the backups: a host back after a browser crash
               has to see the interrupted take without scrolling, and only when
               no tab here still records this room — a live take is not unsaved. */}
-          {journals.length > 0 && (
+          {!checkOnly && journals.length > 0 && (
             <section
               aria-labelledby="unsaved-title"
               className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
@@ -908,6 +1100,10 @@ export function Lobby({
               {saveNote.text}
             </p>
           )}
+          {!checkOnly && keysSwitch}
+          {/* Last in the panel: nothing a guest or a host needs after a crash
+              moves down for it. The check page joins no call and leaves it out. */}
+          {isHost && !checkOnly && <CalendarInvite slug={slug} />}
         </div>
 
         {/* Devices + preflight. After the Join panel in the DOM, so a phone's
@@ -923,6 +1119,7 @@ export function Lobby({
                     aria-label="Camera"
                     title={devices.videoInputs.find((d) => d.deviceId === camId)?.label}
                     value={camId}
+                    disabled={!stream}
                     onChange={(e) => void changeDevice('cam', e.target.value)}
                     className={select}
                   >
@@ -941,12 +1138,31 @@ export function Lobby({
                     aria-label="Microphone"
                     title={devices.audioInputs.find((d) => d.deviceId === micId)?.label}
                     value={micId}
+                    disabled={!stream}
                     onChange={(e) => void changeDevice('mic', e.target.value)}
                     className={select}
                   >
                     {devices.audioInputs.map((d) => (
                       <option key={d.deviceId} value={d.deviceId}>
                         {d.label || 'Microphone'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {speakers.length > 0 && (
+                <label className={`${picker} sm:col-span-2`}>
+                  <Icon name="settings" size={18} className="shrink-0" />
+                  <select
+                    aria-label="Speaker"
+                    value={speaker}
+                    onChange={(e) => setSpeaker(e.target.value)}
+                    className={select}
+                  >
+                    <option value="">Speaker: System default</option>
+                    {speakers.map((d, i) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {`Speaker: ${d.label || `Output ${i + 1}`}`}
                       </option>
                     ))}
                   </select>
@@ -971,6 +1187,7 @@ export function Lobby({
                 <select
                   aria-label="Recording quality"
                   value={shownQuality}
+                  disabled={!stream}
                   onChange={(e) => void reacquire(micId, camId, e.target.value, frameRate)}
                   className={select}
                 >
@@ -1001,6 +1218,7 @@ export function Lobby({
                 <select
                   aria-label="Frame rate"
                   value={shownFrameRate}
+                  disabled={!stream}
                   onChange={(e) => void reacquire(micId, camId, qualityId, Number(e.target.value))}
                   className={select}
                 >
@@ -1020,6 +1238,7 @@ export function Lobby({
               {isPcmCaptureSupported()
                 ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit ${channels === 2 ? 'stereo' : 'mono'} uncompressed`
                 : '(compressed)'}
+              {echoOn && ' · echo cancellation on'}
             </p>
           )}
           {otherFps !== null && (

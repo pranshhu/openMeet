@@ -325,6 +325,8 @@ describe('present presentation lifecycle with useRoom', () => {
     const videoFile = new File(['video-bytes'], 'demo.mp4', { type: 'video/mp4' });
 
     beforeEach(() => {
+      // A monitor an earlier test left behind must not count here.
+      document.querySelectorAll('audio').forEach((a) => a.remove());
       const track = { kind: 'audio', id: 'video-sound', stop: vi.fn() };
       const dest = { stream: { getAudioTracks: () => [track], getTracks: () => [track] } };
       mockSource = { connect: vi.fn() };
@@ -353,10 +355,13 @@ describe('present presentation lifecycle with useRoom', () => {
         await result.current.toggleScreenShare(videoFile);
       });
       expect(result.current.state.screenSharing).toBe(true);
-      expect(mockSource.connect).toHaveBeenCalledWith(speakers);
+      // Through an element, so it goes to the chosen speaker; never the graph's own output.
+      expect(mockSource.connect).not.toHaveBeenCalledWith(speakers);
+      expect(document.querySelector('audio')).not.toBeNull();
       await act(async () => {
         await result.current.toggleScreenShare();
       });
+      expect(document.querySelector('audio')).toBeNull();
     });
 
     it('a phone does not', async () => {
@@ -365,7 +370,7 @@ describe('present presentation lifecycle with useRoom', () => {
         await result.current.toggleScreenShare(videoFile);
       });
       expect(result.current.state.screenSharing).toBe(true);
-      expect(mockSource.connect).not.toHaveBeenCalledWith(speakers);
+      expect(document.querySelector('audio')).toBeNull();
       await act(async () => {
         await result.current.toggleScreenShare();
       });
@@ -391,7 +396,7 @@ describe('present presentation lifecycle with useRoom', () => {
         await result.current.toggleScreenShare(videoFile);
       });
       expect(result.current.state.screenSharing).toBe(true);
-      expect(mockSource.connect).not.toHaveBeenCalledWith(speakers);
+      expect(document.querySelector('audio')).toBeNull();
       await act(async () => {
         await result.current.toggleScreenShare();
       });

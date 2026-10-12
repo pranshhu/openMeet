@@ -52,6 +52,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   seconds (unplugged, muted on the device, wrong input) or keeps clipping.
   Turning the mic off in the app does not count, and the note can be
   dismissed.
+- **Levels**, in the call's control bar: a fader for each other person sets how
+  loud your browser plays them. Only you hear the difference; what the others
+  hear and every recording are unchanged.
+- **Levels** shows a meter beside each fader: how loud that person arrives,
+  whatever their fader is set to.
 - A live track panel during a take: beside the Recording pill, the host sees every
   participant's camera, WAV and screen file growing and which one has stopped getting
   data, and each guest sees whether their own tracks are reaching the host or how much
@@ -114,6 +119,22 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A presented video is sent to the call as video, at its own frame rate, instead
   of at the few frames a second a shared screen gets. A presented photo and a
   shared screen are unchanged.
+- The lobby asks whether you are on headphones or speakers. On speakers you can
+  turn echo cancellation on for your own microphone; your recording is then
+  processed audio, not raw. The answer is remembered in that browser.
+- The host sees on each person's name tag whether they said headphones or
+  speakers in the lobby, and whether their echo cancellation is on.
+- The session summary and `sync.json` say which files were recorded with echo
+  cancellation on, and a microphone switched during the call keeps that choice.
+- **Test your mic** in the lobby's readiness panel: five seconds of your own
+  microphone are recorded, played back to you and deleted. The clip never leaves
+  the browser.
+- A **check link** for a room (**Copy check link** in the host's lobby, or `?check=1`
+  on the invite link): a guest tests camera, microphone and connection ahead of the
+  call, on the lobby's own checks, without joining the room.
+- **Copy result** under the lobby's readiness checks: the checks as plain text, with
+  the names of your camera and microphone, to paste into a message to the host. It
+  goes to the clipboard and nowhere else.
 - Ready sounds on the media board: **Chime**, **Rimshot** and **Soft bed** go
   on the board as pads with one click. They are made in the browser, so no
   audio file is downloaded, and the bed arrives set to loop and fade.
@@ -134,6 +155,89 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Private messages: in the chat panel, choose one person under **To** and the
   message reaches only them. Both screens mark it as private, and it is left out
   of the take's chat file.
+- The host can turn a participant's microphone off, from **People** in the call's
+  control bar. That person is told at once and turns it back on with their own
+  microphone button; during a take their recording has no sound until they do.
+- The host can remove a participant, from **People** in the call's control bar,
+  after a confirmation. The room keeps that tab out until everyone has left; what
+  the person recorded stays in the host's folder up to the removal, and in their
+  own browser's backup beyond it. The screen that tells them they were removed offers the
+  backups their tab holds as downloads. Removed during a take, their **Stop and save**
+  saves the recording at once. Their page then becomes that screen, with the backup links.
+- Keyboard shortcuts in the call: **A** switches the microphone, **V** the camera,
+  **C** opens chat and **T** the teleprompter. The **?** button in the top bar, or
+  the **?** key, lists them. No key does anything while you type in a field.
+- **Alt+R** presses Record for the host and **Alt+S** presses End & save while a take
+  runs (Option on a Mac). Neither does anything while its button is greyed out or
+  not on screen.
+- The single-key shortcuts (**A**, **V**, **C**, **T**, **M**, **N** and **?**) can be
+  turned off, for people whose speech input types letters: untick **Single-key
+  shortcuts** in the list the **?** button opens. The browser remembers the choice,
+  and **Alt+R** and **Alt+S** stay on. The list names **N** as well.
+- While the single-key shortcuts are turned off, no button names one in its tooltip or
+  its name, and the list says they are off. The lobby has the same tick box, so it can
+  be reached on a window too narrow to show the **?** button.
+- Record alone: a host with nobody else in the room presses **Continue alone** in the
+  waiting room and records from the call screen. Anyone who joins during the take is
+  recorded from then on.
+- The teleprompter's editor shows how long the script takes to read aloud.
+- The host can send their teleprompter script to everyone else in the call, from
+  the teleprompter's editor. Each person uses it in their own teleprompter or
+  ignores it, and nobody's own script is replaced without their click.
+- A chapter marker can carry a typed note: during a take press **N**, or the pencil
+  button beside the marker button, type and press Enter. The note is that marker's
+  line in the chapters file and its label in `sync.json`, and a take that is resumed
+  or recovered after a reload keeps it. The host's own note is placed at the moment the
+  note field opened. A note with no space in it, such as a pasted link, wraps in the
+  summary's chapter list.
+- A speaker picker, in the lobby and in the call (the arrow beside the mic button):
+  everyone's voice, a presented screen, the media board's pads and a video you
+  present play through the output chosen. The choice is remembered per browser,
+  and a chosen speaker that is unplugged falls back to the system default.
+- **Send a file to the host**, in the call's chat: anyone but the host picks a photo, a
+  document, slides, an audio or a video file of up to 100 MB, and the host is asked
+  before any of it is sent. A file the host accepts goes peer-to-peer into the recording
+  folder as `shared_<name>_<file name>`, checked against what was sent; one that is
+  stopped, cut off or fails the check is not kept. Other file types are refused on both
+  sides.
+- `sync.json` gains a `recordingNotice` section: when the host's browser announced
+  the take, everyone the room listed then or who joined while it ran, and when each
+  one's own recording channel reached the host, which shows their browser had been
+  told. A note in it says what each line proves and what it does not. Nothing more
+  is kept on the server.
+- After an interrupted take the `recordingNotice` record starts again when the take
+  is resumed and names the guests whose recordings had reached the host before the
+  interruption; a take saved from the crash copy lists those guests only.
+- **Raise hand**, in the call's control bar: a mark appears on your tile for everyone
+  until you lower it, and someone who joins later sees it too. Nothing of it is
+  recorded. A phone held upright shows the hands and has no button.
+- Quick reactions, from the arrow beside **Raise hand**: a thumbs up, applause, a laugh
+  or a heart shows on your tile on everyone's screen for about three seconds, without
+  a sound. Nothing of it is recorded.
+- **Add to calendar**, in the host's lobby: pick a start time and download a
+  calendar file (.ics) or open Google Calendar with the entry filled in. The entry
+  is one hour long and carries the room link and a short checklist for the guest
+  (browser, headphones, a quiet room). It is made in the browser: nothing about it
+  is stored or sent to the server.
+- **Add to calendar** says until when the room stays open (30 days after its last
+  call) and makes no entry for a session that would end after that.
+- **Pop out**, in the call's camera menu on a computer: one other person's
+  picture floats in a small window that stays on top of your other windows. Put
+  it just under your webcam and looking at them is looking at the lens. Their
+  sound, the speaker you chose, Levels and every recording are unchanged. The
+  window closes by itself when that person leaves or reconnects and while
+  incoming video is stopped.
+- **Framing guide**, on the lobby's camera preview on a computer: a
+  rule-of-thirds grid to frame yourself by. It is drawn on your own screen only
+  and is never in a recording.
+- A **rundown** for the host: write the show's segments in the call, one per line, and
+  step through them during a take, one press a segment. Each segment that starts is a
+  chapter marker with its name, so the take's chapters file is the rundown with the
+  real times. It is kept in the host's browser, one per room, and never sent to anyone.
+  A line can end in a planned length (`Interview 20:00`): the running segment's clock
+  counts against it and says by how much the segment is over.
+  Any segment can be started next from the list beside the button, which is how a take
+  resumed after a reload goes on with its rundown.
 
 ### Changed
 
@@ -157,6 +261,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   later refuses to write to that folder, the next Record asks for a folder again.
 - After **Record** is pressed the take starts three seconds later, and Record
   cannot be pressed again meanwhile. The recording folder is asked for first.
+- **Record another take** is offered when everyone else has left too, and records the
+  host alone, in place of the Copy invite link the summary showed then. A host with
+  nobody else in the room can present, and the screen is recorded to its own file.
 
 ### Fixed
 
@@ -265,6 +372,37 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take in which no guest was recorded no longer leaves an empty
   `guest_<id>.mp4` in the recording folder, or warnings about it in the
   summary.
+- A guest whose recording had started in their own browser but had not yet reached
+  the host is no longer left with the camera on behind a screen that says the room
+  is gone, full, or that the host removed them. That recording is ended and its
+  backup kept.
+- A guest who joined after the host's connection to the room had dropped and come back
+  during a take was not recorded, and was not told the call was being recorded. The
+  host's page says the take is still running as soon as it is back.
+- A media board pad whose file name is longer than 200 characters keeps its chapter
+  marker in a take that is resumed or recovered after a reload, and keeps its label
+  when a guest fires it. The label is cut to 200 characters.
+- In a call of three or more, the first other person's tile shows that person:
+  their own camera and their own sound. When a later person's camera arrived
+  before the first person's, the tile showed that later person, who was then
+  seen in two tiles and heard twice, until the first person's own camera
+  arrived, or for good if it never did. In a call of any size, after this tab
+  reconnected, that tile kept the picture of a connection that had closed
+  until a camera arrived again.
+- When someone leaves a call, everyone still in it keeps their tile. With a
+  Present-only device listed ahead of the people still on camera, the first of
+  them was not drawn at all, and so neither seen nor heard in that tab, until
+  any person's camera reached that tab again. No file was affected.
+- In a call of three or more, a person whose camera has not reached this tab
+  yet has a tile with their initial under their own name, wherever the room
+  lists them. The first tile takes its name and its microphone and camera
+  badges only from the person it shows: for a moment after a join it could
+  show those of a Present-only device listed before that person.
+- A tab the room has closed for good (the host removed it, another tab took its
+  place, the room was full or is gone) does not connect to the room again in the
+  background. A host tab that was taken over during a take stays out instead of
+  taking the call back, and a guest in that state who presses **Stop and save** gets
+  their backup links instead of a "Recording" label that never cleared.
 
 ### Security
 

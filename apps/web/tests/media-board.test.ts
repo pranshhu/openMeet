@@ -130,7 +130,8 @@ describe('MediaBoard', () => {
     const gainNode = ctx.gains[0]!;
     expect(srcNode.connect).toHaveBeenCalledWith(gainNode);
     expect(gainNode.connect).toHaveBeenCalledWith(ctx.dest);
-    expect(gainNode.connect).toHaveBeenCalledWith(ctx.destination);
+    // Heard through an element (media-board-monitor.test.ts), never this graph's own output.
+    expect(gainNode.connect).not.toHaveBeenCalledWith(ctx.destination);
   });
 
   it('stop is a no-op for a pad that is not playing', async () => {

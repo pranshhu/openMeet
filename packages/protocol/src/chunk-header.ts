@@ -118,6 +118,13 @@ export interface BackupOffer {
   type: 'backup_offer';
   size: number;
   key: string;
+  /**
+   * Only on a `backup#file-<uuid>` channel, which carries a file a participant
+   * picked to send the host: the file's own name. Its sender chose it, so the
+   * host takes nothing from it but an extension it knows and letters, digits
+   * and hyphens.
+   */
+  name?: string;
 }
 
 export type DataChannelControlMessage =

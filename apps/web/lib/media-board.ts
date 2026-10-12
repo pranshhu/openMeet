@@ -15,6 +15,7 @@
  */
 
 import { WAV_SAMPLE_RATE } from '@openmeet/protocol';
+import { playLocally } from './speaker';
 
 /** Seconds a fading pad takes to come in when fired and to go out when stopped. */
 export const PAD_FADE_S = 1.5;
@@ -34,6 +35,8 @@ type Ctor = new (options?: AudioContextOptions) => AudioContext;
 export class MediaBoard {
   private ctx: AudioContext;
   private dest: MediaStreamAudioDestinationNode;
+  private monitor: MediaStreamAudioDestinationNode;
+  private stopMonitor: () => void;
   private buffers = new Map<string, AudioBuffer>();
   private playing = new Map<string, { src: AudioBufferSourceNode; gain: GainNode; fadingOut?: true }>();
   private endListeners = new Set<(id: string) => void>();
@@ -48,6 +51,12 @@ export class MediaBoard {
     this.dest = this.ctx.createMediaStreamDestination();
     // The mic always feeds the mix; pads are added on top when they fire.
     this.ctx.createMediaStreamSource(micStream).connect(this.dest);
+    // What the person who fires a pad hears: the pads alone, played by an element
+    // so they go to the speaker that person chose. Not this graph's own output:
+    // the browser suspends a graph whose output device goes away, and this graph
+    // is the microphone everyone hears and the MP4 records.
+    this.monitor = this.ctx.createMediaStreamDestination();
+    this.stopMonitor = playLocally(this.monitor.stream);
   }
 
   get pads(): Pad[] {
@@ -86,7 +95,7 @@ export class MediaBoard {
     src.connect(gain);
     gain.connect(this.dest);
     // Monitor locally too, or the host can't hear what they just fired.
-    gain.connect(this.ctx.destination);
+    gain.connect(this.monitor);
     src.onended = () => this.ended(id);
     src.start();
     this.playing.set(id, { src, gain });
@@ -150,6 +159,7 @@ export class MediaBoard {
 
   close(): void {
     for (const id of [...this.playing.keys()]) this.cut(id);
+    this.stopMonitor();
     void this.ctx.close();
   }
 }

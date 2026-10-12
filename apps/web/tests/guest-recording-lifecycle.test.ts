@@ -2813,6 +2813,158 @@ describe('host backup after a take in useRoom', () => {
     }
   });
 
+  describe('the first person’s stream', () => {
+    const remoteStreamFrom = (peerId: string) =>
+      vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+        .onRemoteStream;
+    const noTracks = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream;
+    const camera = (id: string) => ({ id }) as unknown as MediaStream;
+    const pia = { peerId: 'p-pia', ordinal: 2, role: 'producer', displayName: 'Pia' };
+    const bobInfo = { peerId: 'p-bob', ordinal: 3, role: 'guest', displayName: 'Bob' };
+    const deck = { peerId: 'p-deck', ordinal: 4, role: 'guest', displayName: 'Deck', companion: true };
+    const carolInfo = { peerId: 'p-carol', ordinal: 5, role: 'guest', displayName: 'Carol' };
+    const roomOf = (peers: unknown[]) => ({
+      type: 'role-assigned',
+      role: 'host',
+      peerCount: peers.length + 1,
+      peerId: 'p-host',
+      ordinal: 1,
+      peers,
+      recording: false,
+    });
+
+    /** A host in a call with the people the room lists. */
+    async function hostIn(peers: unknown[]) {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(noTracks, 'Host Hana');
+      });
+      act(() => {
+        emitSignal('role-assigned', roomOf(peers));
+      });
+      return result;
+    }
+
+    it('is kept when someone else leaves and a present-only device is listed first', async () => {
+      const { result } = renderHook(() => useRoom('xyz-test-room'));
+      await act(async () => {
+        await result.current.join(
+          { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+          'Host Hana'
+        );
+      });
+      act(() => {
+        emitSignal('role-assigned', {
+          type: 'role-assigned',
+          role: 'host',
+          peerId: 'p-host',
+          ordinal: 1,
+          peers: [
+            { peerId: 'p-deck', ordinal: 2, role: 'guest', displayName: 'Deck', companion: true },
+            { peerId: 'p-guest', ordinal: 3, role: 'guest', displayName: 'Bob' },
+            { peerId: 'p-carol', ordinal: 4, role: 'guest', displayName: 'Carol' },
+          ],
+          recording: false,
+        });
+      });
+      const bob = { id: 'bob' } as unknown as MediaStream;
+      act(() => {
+        remoteStreamFrom('p-guest')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-carol', role: 'guest' });
+      });
+
+      // A present-only device has no camera stream; taking it for the first
+      // person left that person's tile empty: not seen and not heard.
+      expect(result.current.state.remoteStream).toBe(bob);
+    });
+
+    it('is the first person’s own, whichever camera arrives first, and never a producer’s or a present-only device’s', async () => {
+      const result = await hostIn([pia, bobInfo, deck, carolInfo]);
+      act(() => {
+        remoteStreamFrom('p-pia')?.(camera('pia'));
+      });
+      act(() => {
+        remoteStreamFrom('p-deck')?.(camera('deck'));
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+      expect(result.current.state.remotePeers.find((p) => p.peerId === 'p-carol')?.stream).toBe(carol);
+
+      const bob = camera('bob');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+    });
+
+    it('is dropped when this tab reconnects, until a camera arrives on a rebuilt connection', async () => {
+      const result = await hostIn([bobInfo, carolInfo]);
+      const bob = camera('bob');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('role-assigned', roomOf([carolInfo]));
+      });
+      expect(result.current.state.remoteStream).toBeNull();
+      expect(result.current.state.remotePeers.map((p) => p.stream)).toEqual([null]);
+
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBe(carol);
+    });
+
+    it('passes to the next person when the first leaves and a present-only device is listed between them', async () => {
+      const result = await hostIn([bobInfo, deck, carolInfo]);
+      const bob = camera('bob');
+      const carol = camera('carol');
+      act(() => {
+        remoteStreamFrom('p-bob')?.(bob);
+      });
+      act(() => {
+        remoteStreamFrom('p-carol')?.(carol);
+      });
+      expect(result.current.state.remoteStream).toBe(bob);
+
+      act(() => {
+        emitSignal('peer-left', { type: 'peer-left', peerId: 'p-bob', role: 'guest', reason: 'disconnect' });
+      });
+      expect(result.current.state.remoteStream).toBe(carol);
+    });
+
+    it('a new take stays in the call while a person who can be on camera is listed', async () => {
+      const result = await hostIn([bobInfo, carolInfo]);
+      act(() => {
+        remoteStreamFrom('p-carol')?.(camera('carol'));
+      });
+      act(() => {
+        result.current.newTake();
+      });
+      expect(result.current.state.phase).toBe('in-call');
+    });
+
+    it('a new take waits when only a producer and a present-only device are listed', async () => {
+      const result = await hostIn([pia, deck]);
+      act(() => {
+        result.current.newTake();
+      });
+      expect(result.current.state.phase).toBe('waiting');
+    });
+  });
+
   describe('call-audio copies', () => {
     const stream = () => ({ id: 'remote' }) as unknown as MediaStream;
     const remoteStreamFrom = (peerId: string) =>
@@ -5860,7 +6012,7 @@ describe('the countdown before a take', () => {
     expect(vi.mocked(startHostRecording)).not.toHaveBeenCalled();
   });
 
-  // Pins what already holds: release() clears the peer, and a take needs one.
+  // release() lets go of the stream, and a take needs one.
   it('starts no take when the host leaves while it counts', async () => {
     const { result } = await hostInCall();
     vi.useFakeTimers();
@@ -5962,6 +6114,164 @@ describe('the countdown before a take', () => {
       emitSignal('recording-countdown', countdown(3));
     });
     expect(result.current.state.countdownEndsAt).toBeNull();
+  });
+});
+
+describe('marker labels and positions where they enter', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    vi.mocked(findTakeJournals).mockResolvedValue([]);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  /** A host whose take started `agoMs` ago, and the folder its sidecars are written to. */
+  async function hostRecording(agoMs: number) {
+    const { dir, writtenFiles } = fakeDirectory();
+    const start = Date.now() - agoMs;
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => ({
+      recordingId: 'rec-notes',
+      take: 1,
+      dir: dir as never,
+      hostStartMs: start,
+      hostWriter: { fileName: 'host_rec-notes.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      guestWriter: { fileName: 'guest_rec-notes.mp4', close: vi.fn().mockResolvedValue(undefined) },
+      slotPeerIds: new Map([[0, 'p-guest']]),
+      receiver: {
+        digestHex: async () => 'abc',
+        senderSha256: 'abc',
+        guestStartHostMs: start + 500,
+        syncRttMs: 10,
+        bytesWritten: 1,
+      },
+    } as never));
+
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    const stream = Object.assign(new EventTarget(), {
+      getTracks: () => [{ kind: 'video' }, { kind: 'audio' }],
+      getAudioTracks: () => [{ kind: 'audio' }],
+      getVideoTracks: () => [{ kind: 'video' }],
+    }) as unknown as MediaStream;
+    await act(async () => {
+      await result.current.join(stream, 'Host Ana');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers: [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Bob' }],
+        recording: false,
+      });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    expect(result.current.state.phase).toBe('recording');
+    return { result, start, writtenFiles };
+  }
+
+  it('places the host’s own note at the moment it was started, in the chapters file too', async () => {
+    const { result, start, writtenFiles } = await hostRecording(60_000);
+    act(() => {
+      result.current.addMarker('great answer', start + 52_000);
+      result.current.addMarker('');
+      result.current.addMarker('too early', start - 5_000);
+    });
+    const [noted, bare, early] = result.current.state.markers;
+    expect(noted).toMatchObject({ atMs: 52_000, label: 'great answer', from: 'host' });
+    // No moment given: the press itself, a minute into the take.
+    expect(bare!.atMs).toBeGreaterThanOrEqual(60_000);
+    expect(early!.atMs).toBe(0);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    const chapters = new TextDecoder().decode(writtenFiles.get('chapters_rec-notes.txt')?.data);
+    expect(chapters).toContain('0:52 great answer');
+  });
+
+  it('cuts the host’s own label to the limit the crash copy reads back', async () => {
+    const { result } = await hostRecording(1_000);
+    act(() => {
+      result.current.addMarker('n'.repeat(250));
+    });
+    expect(result.current.state.markers[0]!.label).toBe('n'.repeat(200));
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('cuts a guest’s label before it is sent, and sends nothing of the guest’s clock', async () => {
+    const result = await joinGuest();
+    await hostStartsTake();
+    act(() => {
+      result.current.addMarker('n'.repeat(250), Date.now() - 5_000);
+    });
+    expect(signalSent.filter((m) => m.type === 'marker')).toEqual([
+      { type: 'marker', label: 'n'.repeat(200) },
+    ]);
+    expect(result.current.state.markers.map((m) => m.label)).toEqual(['n'.repeat(200)]);
+    await stopTake();
+  });
+
+  it('keeps the host’s own note in this browser and sends none of it to the Room', async () => {
+    const { result } = await hostRecording(60_000);
+    act(() => {
+      result.current.addMarker('great answer', Date.now() - 8_000);
+      result.current.addMarker('');
+    });
+    expect(result.current.state.markers).toHaveLength(2);
+    expect(signalSent.filter((m) => m.type === 'marker')).toEqual([]);
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('places a relayed marker when it arrives, and takes neither a position nor a label that is not text from its sender', async () => {
+    const { result, start } = await hostRecording(60_000);
+    act(() => {
+      emitSignal('marker', {
+        type: 'marker',
+        label: 'from Bob',
+        from: 'guest',
+        fromPeerId: 'p-guest',
+        fromName: 'Bob',
+        at: start + 5_000,
+        atMs: 5_000,
+      } as never);
+      emitSignal('marker', { type: 'marker', label: ['x'], from: 'guest', fromPeerId: 'p-guest' } as never);
+      emitSignal('marker', { type: 'marker', label: { length: 1 }, from: 'guest', fromPeerId: 'p-guest' } as never);
+    });
+    const [relayed, list, lookalike] = result.current.state.markers;
+    expect(relayed).toMatchObject({ label: 'from Bob', from: 'guest', name: 'Bob' });
+    // A minute into the take, when it arrived: not the five seconds it names.
+    expect(relayed!.atMs).toBeGreaterThanOrEqual(60_000);
+    expect(list!.label).toBe('');
+    expect(lookalike!.label).toBe('');
+
+    await act(async () => {
+      await result.current.endRecording();
+    });
+  });
+
+  it('lists a note started before an earlier marker in time order, in sync.json and the summary', async () => {
+    const { result, start, writtenFiles } = await hostRecording(60_000);
+    act(() => {
+      result.current.addMarker('');
+      result.current.addMarker('started earlier', start + 10_000);
+    });
+    await act(async () => {
+      await result.current.endRecording();
+    });
+    const sync = JSON.parse(new TextDecoder().decode(writtenFiles.get('sync_rec-notes.json')?.data));
+    expect(sync.markers.map((m: { label: string }) => m.label)).toEqual(['started earlier', '']);
+    expect(result.current.state.summary?.markers.map((m) => m.label)).toEqual(['started earlier', '']);
   });
 });
 

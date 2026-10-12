@@ -183,6 +183,7 @@ describe('screen', () => {
         expect(mockCaptureStream).toHaveBeenCalledWith(30);
         expect(mockSource.connect).toHaveBeenCalledWith(mockDest);
         expect(mockSource.connect).not.toHaveBeenCalledWith(mockSpeakers);
+        expect(document.querySelector('audio')).toBeNull();
         // Video audio track must be added to the presented stream
         expect(stream.getAudioTracks()).toContain(mockAudioTrack);
         // A video is motion: marked here so it is not sent at a screen's frame rate.
@@ -225,11 +226,16 @@ describe('screen', () => {
         const file = new File(['fake-video-bytes'], 'clip.mp4', { type: 'video/mp4' });
         const { stream, stop } = await presentFile(file, true);
 
-        expect(mockSource.connect).toHaveBeenCalledWith(mockSpeakers);
+        // Through an element, so it goes to the chosen speaker; never the graph's own output.
+        expect(mockSource.connect).not.toHaveBeenCalledWith(mockSpeakers);
+        expect((document.querySelector('audio') as { srcObject?: unknown } | null)?.srcObject).toBe(
+          mockDest.stream
+        );
         // The call still gets the sound.
         expect(mockSource.connect).toHaveBeenCalledWith(mockDest);
         expect(stream.getAudioTracks()).toContain(mockAudioTrack);
         stop();
+        expect(document.querySelector('audio')).toBeNull();
       } finally {
         HTMLMediaElement.prototype.play = origPlay;
         HTMLMediaElement.prototype.pause = origPause;

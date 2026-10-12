@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import { SendFile } from './SendFile';
 import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage } from '@/lib/sync-report';
 
 export type { ChatMessage };
@@ -94,6 +95,7 @@ export function ChatPanel({
   numbers,
   onSend,
   onClose,
+  onSendFile,
 }: {
   messages: ChatMessage[];
   /** The people a message can be sent to on its own. */
@@ -111,6 +113,8 @@ export function ChatPanel({
   numbers?: Map<string, number>;
   onSend: (text: string, to?: string) => void;
   onClose: () => void;
+  /** Offer the host one file from this device. Left out on the host's own page. */
+  onSendFile?: ((file: File) => void) | undefined;
 }) {
   const [text, setText] = useState('');
   const [own] = useState(() => new Map<string, number>());
@@ -196,6 +200,7 @@ export function ChatPanel({
         })}
       </div>
 
+      {onSendFile && <SendFile onSend={onSendFile} />}
       <form
         data-testid="chat-form"
         onSubmit={(e) => {

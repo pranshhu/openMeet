@@ -131,6 +131,53 @@ describe('left', () => {
   });
 });
 
+describe('removed', () => {
+  it('offers the backups this tab holds, named for the room and the person', () => {
+    Object.assign(state, {
+      phase: 'removed',
+      role: 'guest',
+      localName: 'Sam Lee',
+      backupBlobUrl: 'blob:backup',
+      wavBackupBlobUrl: 'blob:wav',
+      // Left over from the call screen; none of it belongs on this one.
+      peerRecording: true,
+      connectionWarning: 'Connection unstable — reconnecting…',
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByRole('heading', { name: 'The host removed you from this call' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Your backup copies stay in this browser — download them now, or later from the lobby\./)
+    ).toBeInTheDocument();
+    const mp4 = screen.getByRole('link', { name: 'Download your backup' });
+    expect(mp4).toHaveAttribute('href', 'blob:backup');
+    expect(mp4).toHaveAttribute('download', 'openmeet-abc-defg-hij-backup-sam-lee.mp4');
+    expect(mp4.className).toMatch(/(^|\s)min-h-11(\s|$)/);
+    const wav = screen.getByRole('link', { name: 'Download your WAV backup' });
+    expect(wav).toHaveAttribute('href', 'blob:wav');
+    expect(wav).toHaveAttribute('download', 'openmeet-abc-defg-hij-backup-sam-lee.wav');
+    expect(screen.getByRole('button', { name: 'Back to the lobby' })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Recording|reconnecting|Can’t connect/);
+  });
+
+  it('offers only the copy there is', () => {
+    Object.assign(state, { phase: 'removed', role: 'guest', backupBlobUrl: 'blob:backup' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
+    expect(screen.queryByText('Download your WAV backup')).toBeNull();
+  });
+
+  it('with no backup in this tab, draws no link and says where one would be', () => {
+    Object.assign(state, { phase: 'removed', role: 'guest' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(
+      screen.getByText(/If you were being recorded, your backup copy stays in this browser — the lobby lists it\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/download them now/)).toBeNull();
+    expect(screen.queryByText(/^Download your/)).toBeNull();
+  });
+});
+
 describe('present-only device', () => {
   it('waiting: confirms its screen is being presented', () => {
     Object.assign(state, { phase: 'waiting', role: 'guest', companion: true, screenSharing: true, localStream: empty });
@@ -581,6 +628,32 @@ const inCall = {
 const copy =
   'No sound from your microphone for 10 seconds. Check it’s plugged in and not muted, or select another microphone.';
 
+describe('the first person’s tile', () => {
+  it('takes its name and badges from that person, not from a present-only device listed first', () => {
+    const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+    Object.assign(state, inCall, {
+      remoteStream: bob,
+      remotePeers: [
+        {
+          peerId: 'p-deck',
+          name: 'Deck',
+          stream: null,
+          role: 'guest',
+          companion: true,
+          presence: { micOn: false, camOn: false, screenSharing: false },
+        },
+        { peerId: 'p-bob', name: null, stream: bob, role: 'host' },
+      ],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByTitle('Host')).toBeInTheDocument();
+    expect(screen.queryByTitle('Deck')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Muted' })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Camera off' })).toBeNull();
+  });
+});
+
 describe('mic warning', () => {
   it('hands the warning to the call screen for guest and host', () => {
     Object.assign(state, inCall, { micWarning: 'silent' });
@@ -755,6 +828,104 @@ describe('countdown', () => {
     Object.assign(state, inCall, { role: 'guest', countdownEndsAt: Date.now() + 3000 });
     render(<RoomView slug="abc-defg-hij" />);
     expect(screen.getByText('Recording starts in 3')).toBeInTheDocument();
+  });
+});
+
+describe('picked files', () => {
+  const offered = [
+    {
+      id: 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f',
+      kind: 'file',
+      size: 1_200_000,
+      status: 'offered',
+      percent: 0,
+      from: 'Asha',
+      name: 'shared_asha_headshot.jpg',
+    },
+  ];
+
+  it('asks the host about an offered file and saves it through the hook, with the files on screen', () => {
+    const acceptBackups = vi.fn();
+    Object.assign(hook, { acceptBackups, declineBackups: vi.fn(), declineFiles: vi.fn() });
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(
+      screen.getByText('Asha wants to send you a file (1 MB): shared_asha_headshot.jpg.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
+    expect(acceptBackups.mock.calls).toEqual([[offered]]);
+  });
+
+  it('turns an offered file down through the hook, and leaves the backups’ answer alone', () => {
+    const declineFiles = vi.fn();
+    const declineBackups = vi.fn();
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups, declineFiles });
+    Object.assign(state, inCall, { role: 'host', backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(declineFiles.mock.calls).toEqual([[offered]]);
+    expect(declineBackups).not.toHaveBeenCalled();
+  });
+
+  it('does not ask the host while a take records, and asks once it has ended', () => {
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups: vi.fn(), declineFiles: vi.fn() });
+    Object.assign(state, inCall, { phase: 'recording', role: 'host', backupTransfers: offered });
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByRole('button', { name: 'Save to folder' })).toBeNull();
+    unmount();
+
+    Object.assign(state, { phase: 'in-call' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByRole('button', { name: 'Save to folder' })).toBeInTheDocument();
+  });
+
+  it('stops a picked file that is arriving, and dismisses one that stopped, through the hook', () => {
+    const stopBackup = vi.fn();
+    const dismissBackup = vi.fn();
+    Object.assign(hook, { acceptBackups: vi.fn(), declineBackups: vi.fn(), declineFiles: vi.fn(), stopBackup, dismissBackup });
+    const arriving = { ...offered[0]!, status: 'active', percent: 30 };
+    const stalled = { ...offered[0]!, id: 'file-9c1d0e2f-3a4b-4c5d-8e6f-7a8b9c0d1e2f', status: 'stalled', percent: 10 };
+    Object.assign(state, inCall, { role: 'host', backupTransfers: [arriving, stalled] });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(stopBackup.mock.calls).toEqual([[arriving.id]]);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(dismissBackup.mock.calls).toEqual([[stalled.id]]);
+  });
+});
+
+describe('sending the host a file', () => {
+  it('lets anyone but the host send one from chat, through the hook', () => {
+    const sendFile = vi.fn();
+    hook.sendFile = sendFile;
+    Object.assign(state, inCall);
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    const file = new File(['x'], 'bio.txt');
+    fireEvent.change(screen.getByLabelText('Send a file to the host'), { target: { files: [file] } });
+    expect(sendFile.mock.calls).toEqual([[file]]);
+    unmount();
+
+    Object.assign(state, { role: 'host' });
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    expect(screen.getByLabelText('Message')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Send a file to the host')).toBeNull();
+  });
+
+  // The waiting screen's line is about a backup from an earlier take.
+  it('does not call an offered file a backup on the waiting screen', () => {
+    const offered = [
+      { id: 'file-3f2b8c1e-9a4d-4c6b-8f1e-2d7a9b0c5e4f', kind: 'file', size: 1, status: 'offered', percent: 0, name: 'bio.txt' },
+    ];
+    Object.assign(state, { phase: 'waiting', role: 'guest', localStream: empty, backupTransfers: offered });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(/Your backup is offered/)).toBeNull();
+    expect(screen.getByText('Hang tight — the call starts as soon as the host arrives.')).toBeInTheDocument();
   });
 });
 

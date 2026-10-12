@@ -1,5 +1,6 @@
 import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
 import { cleanFps } from './quality';
+import type { NoticeRecord } from './notice-log';
 
 export interface ChapterMarker {
   /** Milliseconds from the host's recording start. */
@@ -115,6 +116,13 @@ export interface SyncReportInput {
   resumed?: boolean | undefined;
   /** The host's own files, each with its offset from hostStartMs; the take's first file first. */
   hostParts?: { name: string; offsetMs: number; kind: 'camera' | 'wav' }[] | undefined;
+  /**
+   * Whose microphone ran through the browser's echo cancellation: the host's
+   * own, and guest slots. Their camera and audio files hold processed audio.
+   */
+  echoCancelled?: { host?: boolean | undefined; slots?: readonly number[] | undefined } | undefined;
+  /** Who was told this take was being recorded, as far as the host's page could know. */
+  recordingNotice?: NoticeRecord | undefined;
 }
 
 export interface SummaryFile {
@@ -215,6 +223,13 @@ export function buildChapters(markers: ChapterMarker[]): string {
 
 export const MAX_CHAT_MESSAGE_LENGTH = 4000;
 
+/**
+ * The longest label a chapter marker carries: a typed note, or a media board
+ * pad's name. The host drops a longer label that another participant sends, and
+ * the crash copy's reader drops the whole marker, so nothing longer may enter.
+ */
+export const MAX_MARKER_LABEL_LENGTH = 200;
+
 /** Plain chat log of the take: [m:ss] role Name: text. */
 export function buildChatLog(
   messages: ChatMessage[],
@@ -282,6 +297,11 @@ const FRAME_RATE_NOTE =
 
 const CONFORM_NOTE =
   'Each conform command re-encodes the video to a constant frame rate: trackFps when it is known, requestedFps otherwise. That is not lossless and it is slow; the audio is copied untouched. Run it only when an editor drifts or refuses a file. The result is seekable, so it replaces the remux for that file; for every other file the lossless remux under seekability is still the one to run.';
+
+const ECHO_DETAIL = 'echo cancellation on';
+
+const ECHO_NOTE =
+  "These files were recorded with the browser's echo cancellation on, chosen in the lobby by the person they belong to because they were listening on speakers. Their audio is processed, not raw: the other voices are taken out of it, so it may not line up by waveform against the other files. That person's own backup and the host's call-audio copy of them hold the same processed audio.";
 
 /**
  * ffmpeg's spelling of a frame rate: the NTSC rates as the exact fractions
@@ -662,6 +682,18 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     return { ...f, ...(c ? { bytes: c.bytes } : {}), verdict: fileVerdict(c, who, f.kind) };
   });
 
+  // The host's own files of this session, and both files of each such guest. A
+  // host file from before a reload is left out: what its microphone was asked
+  // for is not known here.
+  const echoSlots = new Set(input.echoCancelled?.slots ?? []);
+  const echoFiles = [
+    ...(input.echoCancelled?.host ? [hostFile, input.hostWavFile] : []),
+    ...guests.filter((g) => echoSlots.has(g.slot)).flatMap((g) => [g.file, g.wavFile]),
+  ].filter((f): f is string => Boolean(f));
+  for (const f of fileList) {
+    if (echoFiles.includes(f.name)) f.detail = [f.detail, ECHO_DETAIL].filter(Boolean).join(', ');
+  }
+
   const flagged = fileList.filter((f) => f.verdict?.status !== 'complete').length;
   const overallIntegrity =
     flagged === 0
@@ -734,6 +766,8 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
           },
         }
       : {}),
+    ...(echoFiles.length > 0 ? { echoCancellation: { note: ECHO_NOTE, files: echoFiles } } : {}),
+    ...(input.recordingNotice ? { recordingNotice: input.recordingNotice } : {}),
     integrity: overallIntegrity.text,
     verification: fileList.map((f) => ({
       file: f.name,

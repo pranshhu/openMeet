@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { BrowserNote, Role } from '@openmeet/protocol';
+import type { BrowserNote, Listening, Role } from '@openmeet/protocol';
 import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
+import { LevelsPanel } from './LevelsPanel';
+import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -16,29 +18,42 @@ import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
 import { RecordingHealth } from './RecordingHealth';
 import { RecordingCountdown, RecordingNotice } from './RecordingNotice';
+import { MarkerNote, useMarkerNote } from './MarkerNote';
+import { Rundown } from './Rundown';
 import { BackupNotice } from './BackupNotice';
+import { Shortcuts } from './Shortcuts';
+import { singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
+import { FileNotice } from './FileNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
+import { LISTENING_TAG } from '@/lib/listening';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
+import { isStagePeer } from '@/lib/stage-peers';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
+import { SpeakerRow } from './SpeakerRow';
+import { canPopOut, usePopOut } from '@/hooks/use-pop-out';
+import { ReactionBadge } from './ReactionBadge';
+import { ReactionMenu } from './ReactionMenu';
+import { OWN_REACTION, type Reaction, type ShownReactions } from '@/lib/reactions';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
  * Shown only to the host, next to that participant's name tag, BEFORE Record
  * is pressed, not at playback.
  */
-function capabilityNote(cap: { mp4: boolean; wav: boolean; note?: BrowserNote } | undefined): string | null {
+function capabilityNote(cap: { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening } | undefined): string | null {
   if (!cap) return null;
   const parts: string[] = [];
   if (!cap.mp4) parts.push("won't be recorded (browser can't record MP4)");
   if (cap.note) parts.push(BROWSER_NOTE_TEXT[cap.note]);
   if (!cap.wav) parts.push('no WAV master');
+  if (cap.listening) parts.push(LISTENING_TAG[cap.listening]);
   return parts.length > 0 ? parts.join('; ') : null;
 }
 
@@ -46,7 +61,7 @@ function nameWithCapability(
   name: string,
   peerId: string | undefined,
   isHost: boolean,
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>
 ): string {
   if (!isHost || !peerId) return name;
   const note = capabilityNote(capabilities[peerId]);
@@ -112,6 +127,9 @@ export function CallStage({
   onNewTake,
   onDiscardTake,
   onOpenMediaBoard,
+  incomingScript = null,
+  onSendScript,
+  onDismissScript,
   onToggleScreen,
   capabilities,
   finalizingGuests,
@@ -127,12 +145,19 @@ export function CallStage({
   onSetLowPower,
   incomingVideoOff = false,
   onSetIncomingVideoOff,
+  handRaised = false,
+  onSetHandRaised,
+  reactions,
+  onReact,
   unprotectedRecording,
   backupTransfers,
   onAcceptBackups,
   onDeclineBackups,
   onDismissBackup,
   onStopBackup,
+  onAcceptFiles,
+  onDeclineFiles,
+  onSendFile,
   resumeOffer,
   onResumeRecording,
   onSaveRecording,
@@ -140,6 +165,9 @@ export function CallStage({
   recoveryBusy = false,
   notRecorded,
   onSetPeerRecorded,
+  hostMuted = false,
+  onMutePeer,
+  onRemovePeer,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -188,7 +216,8 @@ export function CallStage({
   /** The numbers this page gave people under To, kept by whoever outlives this screen. */
   chatNumbers?: Map<string, number>;
   slug: string;
-  onMark: (label: string) => void;
+  /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
+  onMark: (label: string, at?: number) => void;
   markerCount: number;
   chaptersUrl: string | null;
   summary: SyncReportData | null;
@@ -196,9 +225,15 @@ export function CallStage({
   onNewTake: () => void;
   onDiscardTake: (take: number) => void;
   onOpenMediaBoard: () => MediaBoard | null;
+  /** A script the host sent that this person has not answered; null when none. */
+  incomingScript?: string | null;
+  /** Host: offer the teleprompter script to everyone else. False when it did not go out. */
+  onSendScript?: (text: string) => boolean;
+  /** The person took the offered script or turned it down. */
+  onDismissScript?: () => void;
   onToggleScreen: (source?: File | 'rear-camera') => void;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
-  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote }>;
+  capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
   onSwitchCamera?: (deviceId: string) => Promise<void>;
   activeMicId?: string | undefined;
@@ -215,6 +250,12 @@ export function CallStage({
   /** This device has stopped taking everyone else's video; it still hears the call. */
   incomingVideoOff?: boolean;
   onSetIncomingVideoOff?: (off: boolean) => void;
+  /** This person has a hand raised, which everyone in the call sees on their tile. */
+  handRaised?: boolean;
+  onSetHandRaised?: (raised: boolean) => void;
+  /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
+  reactions?: ShownReactions;
+  onReact?: (reaction: Reaction) => void;
   /** The running take has no crash copy in this browser, so say so. */
   unprotectedRecording?: boolean;
   /** Returned backups: what the guests are sending back, and the host's answer. */
@@ -225,6 +266,11 @@ export function CallStage({
   onDismissBackup?: (id: string) => void;
   /** The host ended a returned backup that was still running. */
   onStopBackup?: (id: string) => void;
+  /** Picked files: the host's two answers, each for the files its row showed. */
+  onAcceptFiles?: (shown: BackupTransfer[]) => void;
+  onDeclineFiles?: (shown: BackupTransfer[]) => void;
+  /** Offer the host one file from this device. Left out on the host's own page. */
+  onSendFile?: ((file: File) => void) | undefined;
   /** A take in this room ended without its files and its crash copy is here. */
   resumeOffer?: { take: number; canResume: boolean } | null;
   onResumeRecording?: () => void;
@@ -237,6 +283,12 @@ export function CallStage({
   notRecorded?: boolean;
   /** Host: choose whether one guest is recorded in the takes that follow. */
   onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
+  /** The host turned this viewer's microphone off, and it is still off. */
+  hostMuted?: boolean;
+  /** Host: ask for one person's microphone to be turned off. */
+  onMutePeer?: (peerId: string) => void;
+  /** Host: remove one person from the room. */
+  onRemovePeer?: (peerId: string) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -246,6 +298,11 @@ export function CallStage({
   const [camOn, setCamOn] = useState(
     () => (localStream ? localStream.getVideoTracks().some((t) => t.enabled) : true)
   );
+  // The host turned this microphone off. The button has to show it: it is how
+  // the person sees what happened, and the switch they turn it back on with.
+  useEffect(() => {
+    if (hostMuted) setMicOn(false);
+  }, [hostMuted]);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [micMenuOpen, setMicMenuOpen] = useState(false);
   const [camMenuOpen, setCamMenuOpen] = useState(false);
@@ -470,8 +527,19 @@ export function CallStage({
   }, [unread, isTakeActive]);
 
   const [prompterOpen, setPrompterOpen] = useState(false);
+  // The host's script is offered inside the teleprompter. While that is
+  // closed its button carries the dot, as Chat's does for an unread message.
+  const scriptWaiting = incomingScript !== null && !prompterOpen;
+  // The host's rundown strip, above the control bar.
+  const [rundownOpen, setRundownOpen] = useState(false);
   const [board, setBoard] = useState<MediaBoard | null>(null);
   const [boardOpen, setBoardOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  // Hand focus back to the People button, as closing chat does for its own.
+  function closePeople() {
+    setPeopleOpen(false);
+    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="People"]')?.focus());
+  }
   // First opened mid-take: that take's recorder keeps the raw mic (a running
   // MediaRecorder can't swap tracks), so its pads aren't in the file. Only
   // that take: the next one starts with the board already in the mix.
@@ -485,6 +553,8 @@ export function CallStage({
     if (phase !== 'recording') return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'm' && e.key !== 'M') return;
+      // The single keys can be switched off; the choice is asked as the key arrives.
+      if (!singleKeysOn()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
@@ -493,6 +563,15 @@ export function CallStage({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, onMark]);
+  // N opens a field for a marker with a typed note; it closes with the take.
+  const [noteOpen, setNoteOpen] = useMarkerNote(phase === 'recording');
+  // The two marker buttons name their keys only while those keys work.
+  const singleKeys = useSingleKeys();
+  // Hand focus back to the note button, as closing chat does for its own.
+  function closeNote() {
+    setNoteOpen(false);
+    setTimeout(() => document.querySelector<HTMLElement>('button[aria-label^="Mark with a note"]')?.focus());
+  }
 
   useProblemAlert({
     active: phase === 'recording' || phase === 'finalizing',
@@ -503,6 +582,9 @@ export function CallStage({
 
   const peerFallback = role === 'host' ? 'Guest' : 'Host';
   const isHost = role === 'host';
+  // A rundown is stepped through during a take, so it is offered only where
+  // one can be started: to a host who can record.
+  const hasRundown = isHost && canRecord;
   // Name tags truncate, so the one warning a host must not miss gets a line of its own.
   const unrecordable = isHost
     ? remotePeers
@@ -527,6 +609,13 @@ export function CallStage({
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
 
+  // A reaction is drawn on its sender's tile. Keyed by the time it was taken,
+  // so a second one from the same person is a new element and shows again.
+  const reactionOn = (key: string | undefined) => {
+    const r = key === undefined ? undefined : reactions?.get(key);
+    return r ? <ReactionBadge key={r.at} reaction={r.reaction} at={r.at} /> : null;
+  };
+
   const local: StageFeed = {
     stream: localStream,
     name: localName ? `${localName} (You)` : 'You',
@@ -534,17 +623,53 @@ export function CallStage({
     camOff: !camOn || rearCameraEndsFace,
     // A self-view reads mirrored, as in the lobby; a rear camera shows the world.
     mirror: currentFacingMode !== 'environment',
+    // The mark the others see on this tile, so a raised hand is not forgotten,
+    // and this person's own reaction, so they see that it went out.
+    presence: (
+      <>
+        {handRaised && <PresenceBadge micOn camOn screenSharing={false} handRaised />}
+        {reactionOn(OWN_REACTION)}
+      </>
+    ),
   };
-  const stagePeers = remotePeers.filter((p) => p.role !== 'producer' && !p.companion);
+  const stagePeers = remotePeers.filter(isStagePeer);
+  // Who has a hand raised, in tile order. Only people with a tile: a mark
+  // nobody can see is not read out either.
+  const raisedNames = stagePeers.filter((p) => p.presence?.handRaised).map((p) => p.name || 'A guest');
+  // Levels: how loud this tab plays each other person, 0 to 1 by peerId. The
+  // value goes to that person's <video> elements only, so nobody else hears
+  // it and no recorder, backup or call-audio copy reads it.
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [volumes, setVolumes] = useState<Map<string, number>>(() => new Map());
+  const volumeOf = (peerId: string | undefined) => volumes.get(peerId ?? '') ?? 1;
+  // Said on the button, because the panel is usually hidden: a person turned
+  // down and forgotten looks like a dead microphone.
+  const turnedDown = stagePeers.some((p) => volumeOf(p.peerId) !== 1);
+  // Pop out: one other person's picture in the browser's floating window, to
+  // sit just under the webcam. `popped` is the stream that floats, or null.
+  const [popped, setPopped] = usePopOut(
+    // With incoming video stopped there is no picture to float.
+    incomingVideoOff ? [] : stagePeers.map((p) => p.stream),
+    () => setDeviceError('Could not open the pop-out window. Try again once you can see them.')
+  );
   const firstRemote = stagePeers[0];
   const firstRemotePresence = firstRemote?.presence ?? peerPresence ?? null;
-  const remote: StageFeed | null = stagePeers.length > 0 && remoteStream
+  // With one other person the stage stays on this camera until theirs arrives.
+  // With more, everyone listed has a tile, the first one too: their initial
+  // until their own camera arrives.
+  const remote: StageFeed | null = stagePeers.length > 0 && (remoteStream || stagePeers.length > 1)
     ? {
         stream: remoteStream,
+        volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
-        ...(firstRemotePresence ? { presence: <PresenceBadge {...firstRemotePresence} /> } : {}),
+        presence: (
+          <>
+            {firstRemotePresence && <PresenceBadge {...firstRemotePresence} />}
+            {reactionOn(firstRemote?.peerId)}
+          </>
+        ),
       }
     : null;
 
@@ -562,7 +687,7 @@ export function CallStage({
   // "Record another take" has to record. newTake only resets the refs, and
   // startRecording reads refs and reuses the folder, so both run inside the one
   // click: no second folder prompt, and the user activation still holds.
-  const canRecordNext = isHost && canRecord && !!remote;
+  const canRecordNext = isHost && canRecord;
   const handleRecord = () => {
     setRecordMenuOpen(false);
     requestProblemNotifications();
@@ -630,6 +755,10 @@ export function CallStage({
         {/* Announced from here, a live region that is always mounted: many
             screen readers skip one inserted along with its text, like the toast. */}
         {phase === 'finalizing' && <span className="sr-only">{finalizingCopy}</span>}
+        {/* A present-only device has no teleprompter to take it into. */}
+        {incomingScript !== null && !companion && (
+          <span className="sr-only">The host sent a script. Use it or ignore it in the teleprompter.</span>
+        )}
         {phase === 'recording' && markerCount > 0 && (
           <span className="text-white/70">
             {markerCount} marker{markerCount === 1 ? '' : 's'}
@@ -639,6 +768,8 @@ export function CallStage({
           <span role="status" className="text-[#fdd663]">This take isn’t protected if the browser crashes.</span>
         )}
         {phase === 'recording' && readTrackHealth && <RecordingHealth read={readTrackHealth} />}
+        {/* A mark on a tile is silent, so the names are said from this live region. */}
+        {raisedNames.length > 0 && <span className="sr-only">{`Hand raised: ${raisedNames.join(', ')}`}</span>}
         {/* The host's downloads live in the summary; here is only the verdict.
             A guest has no summary, so its backups stay on this line. */}
         {phase === 'done' && !roomRecording && (
@@ -695,6 +826,8 @@ export function CallStage({
         {!canRecord && recordUnavailableReason && phase === 'in-call' && !recordBlocked && (
           <span className="min-w-0 text-xs leading-snug text-white/70 sm:text-sm">{recordUnavailableReason}</span>
         )}
+        {/* Last in the bar and there in every phase, so nothing moves when a take starts. */}
+        <Shortcuts />
       </div>
 
       {/* Real capture problems live up here, in the flow, so they never cover
@@ -714,6 +847,16 @@ export function CallStage({
           {notRecorded && notRecordedNames.length > 0 && ' '}
           {notRecordedNames.length > 0 &&
             `${notRecordedNames.join(', ')} ${notRecordedNames.length === 1 ? 'is' : 'are'} not being recorded.`}
+        </p>
+      )}
+      {hostMuted && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]"
+        >
+          {phase === 'recording'
+            ? 'The host muted your microphone. Your recording has no sound until you turn it back on.'
+            : 'The host muted your microphone. Turn it back on when you want to speak.'}
         </p>
       )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
@@ -831,6 +974,15 @@ export function CallStage({
         onDismiss={onDismissBackup}
         onStop={onStopBackup}
       />
+      <FileNotice
+        role={role}
+        transfers={backupTransfers ?? []}
+        takeActive={isTakeActive}
+        onAccept={onAcceptFiles}
+        onDecline={onDeclineFiles}
+        onDismiss={onDismissBackup}
+        onStop={onStopBackup}
+      />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the
@@ -867,6 +1019,16 @@ export function CallStage({
       <div className="relative flex min-h-0 flex-1">
         <div data-testid="stage-column" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <main data-testid="stage-main" className="relative min-h-0 flex-1">
+            {/* Before the notices in the page, so the recording notice is drawn
+                over the field and never hidden by it. On a phone it leaves the
+                screen with the control bar, whose button opened it. */}
+            {noteOpen && (
+              <MarkerNote
+                onMark={onMark}
+                onClose={closeNote}
+                className={`${toastPlace} ${chatOpen ? 'hidden sm:flex' : 'flex'}`}
+              />
+            )}
             {/* The consent toast floats over the top of the stage: in the flow it
                 pushed the stage down when a take started and back up 7 s later.
                 With the teleprompter open (Record is its main moment) the top
@@ -902,10 +1064,16 @@ export function CallStage({
                 const presence = r.presence;
                 return {
                   stream: r.stream,
+                  volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
-                  ...(presence ? { presence: <PresenceBadge {...presence} /> } : {}),
+                  presence: (
+                    <>
+                      {presence && <PresenceBadge {...presence} />}
+                      {reactionOn(r.peerId)}
+                    </>
+                  ),
                 };
               })}
               remoteScreen={remoteScreenStream}
@@ -929,13 +1097,30 @@ export function CallStage({
               onStopPresenting={() => onToggleScreen()}
               onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
-            {prompterOpen && <Teleprompter slug={slug} onClose={() => setPrompterOpen(false)} />}
+            {prompterOpen && (
+              <Teleprompter
+                slug={slug}
+                onClose={() => setPrompterOpen(false)}
+                incoming={incomingScript}
+                onIncomingDone={onDismissScript}
+                onSend={isHost ? onSendScript : undefined}
+              />
+            )}
             {boardOpen && (
               <MediaBoardPanel
                 board={board}
                 midTake={boardMidTake}
                 onFire={(name) => onMark(name)}
                 onClose={() => setBoardOpen(false)}
+              />
+            )}
+            {peopleOpen && isHost && onMutePeer && remotePeers.length > 0 && (
+              <PeoplePanel
+                people={remotePeers}
+                recording={takeActive || Boolean(resumeOffer)}
+                onMute={onMutePeer}
+                onRemove={onRemovePeer}
+                onClose={closePeople}
               />
             )}
             {popupEl}
@@ -948,7 +1133,25 @@ export function CallStage({
           <div
             className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
-            <div className="flex max-w-full flex-wrap items-center justify-center gap-2 rounded-[32px] bg-[#2a2b2e]/80 px-3 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur sm:gap-3">
+            {/* In the flow above the bar, so it covers no face and no other
+                panel, and it hides with the bar while chat covers a phone. */}
+            {levelsOpen && (
+              <LevelsPanel
+                peers={stagePeers}
+                volumes={volumes}
+                onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
+              />
+            )}
+            {/* Mounted while hidden too: its place in the show must survive
+                hiding the strip in the middle of a take. */}
+            {hasRundown && (
+              <Rundown slug={slug} open={rundownOpen} recording={phase === 'recording'} onMark={onMark} />
+            )}
+            {/* Below 384 px the gaps and the side padding give up a few pixels: with
+                a take running the second row holds five buttons and Leave, 334 px
+                at this spacing, which fits a 360 px phone. At the wider spacing it
+                needs 344 px and Leave drops to a third row. */}
+            <div className="flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-[32px] bg-[#2a2b2e]/80 px-1 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur min-[384px]:gap-2 min-[384px]:px-3 sm:gap-3">
               {/* A producer joins with no camera or mic, so these would only
                   show red and do nothing. */}
               {!companion && role !== 'producer' && (
@@ -958,6 +1161,7 @@ export function CallStage({
                     <ControlButton
                       icon={micOn ? 'mic' : 'mic_off'}
                       label={micOn ? 'Turn off microphone' : 'Turn on microphone'}
+                      shortcut="A"
                       variant={micOn ? 'default' : 'danger'}
                       onClick={() => {
                         const next = !micOn;
@@ -986,6 +1190,7 @@ export function CallStage({
                         role="menu"
                         className="absolute bottom-full mb-2 left-0 z-30 min-w-64 max-w-[calc(100vw-2rem)] max-h-60 overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
                       >
+                        <SpeakerRow devices={devices} />
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Microphone
                         </div>
@@ -1022,6 +1227,7 @@ export function CallStage({
                     <ControlButton
                       icon={camOn ? 'videocam' : 'videocam_off'}
                       label={camOn ? 'Turn off camera' : 'Turn on camera'}
+                      shortcut="V"
                       variant={camOn ? 'default' : 'danger'}
                       onClick={() => {
                         const next = !camOn;
@@ -1065,6 +1271,26 @@ export function CallStage({
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
+                        {!phone && !incomingVideoOff && canPopOut() &&
+                          stagePeers.map((p) =>
+                            p.stream ? (
+                              <button
+                                key={p.peerId}
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={popped === p.stream}
+                                onClick={() => {
+                                  setCamMenuOpen(false);
+                                  setDeviceError(null);
+                                  setPopped(popped === p.stream ? null : p.stream);
+                                }}
+                                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                              >
+                                <span className="max-w-48 truncate">{`Pop out ${p.name || 'Guest'}`}</span>
+                                {popped === p.stream && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                              </button>
+                            ) : null
+                          )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>
@@ -1218,10 +1444,22 @@ export function CallStage({
               <ControlButton
                 icon="chat"
                 label={unread ? `Chat, ${unread} unread` : 'Chat'}
+                shortcut="C"
                 badge={unread > 0}
                 variant={chatOpen ? 'active' : 'default'}
                 onClick={() => openChat(!chatOpen)}
               />
+              {isHost && onMutePeer && remotePeers.length > 0 && (
+                <ControlButton
+                  icon="people"
+                  label={peopleOpen ? 'Hide people' : 'People'}
+                  variant={peopleOpen ? 'active' : 'default'}
+                  onClick={() => {
+                    setPeopleOpen((o) => !o);
+                    setBoardOpen(false);
+                  }}
+                />
+              )}
               {phase === 'done' && summary && (
                 <ControlButton
                   icon="folder"
@@ -1236,11 +1474,21 @@ export function CallStage({
               )}
               {!companion && (
                 <>
+                  {/* Not on a present-only device: it plays nobody. */}
+                  <ControlButton
+                    icon="levels"
+                    label={levelsOpen ? 'Hide levels' : turnedDown ? 'Levels (someone is turned down)' : 'Levels'}
+                    badge={turnedDown}
+                    variant={levelsOpen ? 'active' : 'default'}
+                    onClick={() => setLevelsOpen((o) => !o)}
+                  />
                   <ControlButton
                     icon="script"
                     label={prompterOpen ? 'Hide teleprompter' : 'Show teleprompter'}
+                    shortcut="T"
                     variant={prompterOpen ? 'active' : 'default'}
                     onClick={() => setPrompterOpen((o) => !o)}
+                    badge={scriptWaiting}
                   />
                   {/* The board mixes into your mic, and a producer has none. */}
                   {role !== 'producer' && (
@@ -1254,10 +1502,34 @@ export function CallStage({
                           setBoardMidTake(phase === 'recording');
                         }
                         setBoardOpen((o) => !o);
+                        setPeopleOpen(false);
                       }}
                     />
                   )}
                 </>
+              )}
+              {hasRundown && (
+                <ControlButton
+                  icon="list"
+                  label={rundownOpen ? 'Hide rundown' : 'Show rundown'}
+                  variant={rundownOpen ? 'active' : 'default'}
+                  onClick={() => setRundownOpen((o) => !o)}
+                />
+              )}
+              {/* Not for a producer or a present-only device: they have no tile for
+                  the mark. Below sm only while the hand is up, so that it can
+                  always be lowered: with a take running a phone's second row is
+                  full, and one more button puts Leave on a third. */}
+              {onSetHandRaised && !companion && role !== 'producer' && (
+                <div className={`relative items-center rounded-full bg-[#3c4043] ${handRaised ? 'inline-flex' : 'hidden sm:inline-flex'}`}>
+                  <ControlButton
+                    icon="hand"
+                    label={handRaised ? 'Lower hand' : 'Raise hand'}
+                    variant={handRaised ? 'active' : 'default'}
+                    onClick={() => onSetHandRaised(!handRaised)}
+                  />
+                  {onReact && <ReactionMenu onReact={onReact} />}
+                </div>
               )}
               {((phase === 'in-call' && canRecord) || (phase === 'done' && canRecordNext)) && (
                 <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">
@@ -1265,6 +1537,7 @@ export function CallStage({
                     icon="record"
                     text="Record"
                     label="Start recording"
+                    shortcut="Alt+R"
                     variant="record"
                     disabled={recoveryBusy || countdownEndsAt !== null}
                     onClick={phase === 'done' ? recordNextTake : handleRecord}
@@ -1323,11 +1596,17 @@ export function CallStage({
                 <>
                   <ControlButton
                     icon="bookmark"
-                    label={`Mark this moment (M)${markerCount ? ` — ${markerCount} so far` : ''}`}
+                    label={`Mark this moment${singleKeys ? ' (M)' : ''}${markerCount ? ` — ${markerCount} so far` : ''}`}
                     onClick={() => onMark('')}
                   />
+                  <ControlButton
+                    icon="edit"
+                    label={`Mark with a note${singleKeys ? ' (N)' : ''}`}
+                    variant={noteOpen ? 'active' : 'default'}
+                    onClick={() => setNoteOpen(!noteOpen)}
+                  />
                   {isHost ? (
-                    <ControlButton icon="stop" text="End & save" label="End & save recording" variant="active" onClick={onEnd} />
+                    <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={onEnd} />
                   ) : (
                     recordingError && recordingError.includes('Stop and save my recording') && (
                       <ControlButton
@@ -1373,6 +1652,7 @@ export function CallStage({
               numbers={chatNumbers}
               onSend={onSendChat}
               onClose={closeChat}
+              onSendFile={onSendFile}
             />
           </div>
         )}
@@ -1400,19 +1680,7 @@ export function CallStage({
                 downloadNames={downloadNames}
                 takes={takes}
                 sidecarsSaved={sidecarsSaved ?? false}
-                // Nobody left to record: invite someone and keep the summary.
-                // newTake would drop to the waiting room and lose it, sync.json
-                // with it. Once a guest is back, the button records again.
-                onNewTake={canRecordNext ? recordNextTake : copyInvite}
-                nextTakeLabel={
-                  canRecordNext
-                    ? 'Record another take'
-                    : copied === 'copied'
-                      ? 'Link copied'
-                      : copied === 'failed'
-                        ? 'Couldn’t copy — use the address bar'
-                        : 'Copy invite link'
-                }
+                onNewTake={recordNextTake}
                 onDiscardTake={onDiscardTake}
                 onClose={closeSummary}
               />

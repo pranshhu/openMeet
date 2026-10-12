@@ -55,39 +55,76 @@ retention policy to trust, because there's nothing retained.
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K, at 24, 25, 29.97 or
   30 fps, and 50 or 60 where the camera offers them
-- Raw audio — echo cancellation, noise suppression and AGC are all **off** (see
-  [Headphones](#headphones-really))
+- Raw audio — echo cancellation, noise suppression and AGC are all **off**, unless
+  someone on speakers turns echo cancellation on for their own microphone in the lobby
+  (see [Headphones](#headphones-really))
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- Record alone: a host with nobody else in the room presses **Continue alone** and
+  records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
 - Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
+- Host controls in **People**: turn a participant's microphone off for the call (they
+  are told, and turn it back on themselves), or remove someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
+- A typed note on a chapter marker: press **N** during a take, type a few words and
+  press Enter, and the note is that marker's line in `chapters.txt`
+- Keyboard shortcuts: **A** microphone, **V** camera, **C** chat, **T** teleprompter,
+  **M** marker, **N** marker with a note, and for the host **Alt+R** to record and
+  **Alt+S** to end and save; the **?** button in the call lists them, and a tick box
+  in that list and in the lobby turns the single keys off for people who use speech
+  input
+- A rundown for the host: list the show's segments, step through them during a take,
+  and each one becomes a chapter marker with its name
+  (give a segment a planned length and its clock shows when it runs over)
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- A **check link** for each room (**Copy check link** in the host's lobby): a guest
+  tests camera, microphone and connection days ahead, on the green room's own checks,
+  without joining
 - Green room: mic level, codec, free disk and TURN reachability checked before joining
+- **Test your mic** in the green room: five seconds of your own microphone, played
+  back to you and then deleted
+- A framing guide in the lobby: a rule-of-thirds grid over your preview, on your own
+  screen only and never in a recording (computers)
+- **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
+  entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera)
+- **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
+  first, and a file it accepts goes peer-to-peer into the recording folder
 - Private messages: with three or more in the call, a chat message can go to one
   person instead of everyone, and is left out of the take's chat file
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
+- Choose the speaker or headphones the call plays through, in the lobby or from the arrow
+  beside the mic button; remembered per browser
 - A sound when a recording problem appears during a take, and a system
   notification when the tab is in the background
 - A note in the call when your own microphone has sent no sound for 10 seconds
   (unplugged, muted on the device, wrong input) or keeps clipping
+- **Levels**: see how loud each person arrives and turn one down for your own ears;
+  what the others hear and what is recorded do not change
+- **Raise hand**: one click puts a mark on your tile for everyone, so a panel can take
+  turns without talking over the recording (a phone held upright shows the hands and
+  has no button)
+- Quick reactions (thumbs up, applause, laugh, heart) from the arrow beside **Raise
+  hand**: the picture shows on your tile for a few seconds, silently, for everyone
 - Screen kept awake during a take, REC badge when the tab is hidden, and
   warnings if the tab was in the background or the battery is low
 - A notice during a take when this device is struggling to keep up, with a low-power
   mode that sends the others a smaller live picture and leaves the recording alone
 - **Stop incoming video** on a weak connection: the others stop sending you their
   cameras and shared screens, you still hear everyone, and your recording goes on
+- **Pop out** one person into a small window that stays on top of everything else and
+  put it just under your webcam, so looking at them is looking at the lens (computers)
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 
@@ -350,6 +387,20 @@ exactly what a studio recorder exists to avoid. The trade is that anyone listeni
 speakers is echoed into the other person's file. Every serious remote-recording tool
 makes the same trade.
 
+The lobby asks each person whether they are on headphones or speakers. Someone on
+speakers can pick **Speakers, echo cancellation on**: the browser then takes the other
+voices out of that one person's microphone, for the call and for every recording of
+it, so their files hold processed audio, not raw. Noise suppression and gain control
+stay off. The answer is given before joining and remembered in that browser; to change
+it, leave the call and join again.
+
+The host sees each person's answer on their name tag in the call: "headphones", "on
+speakers" or "on speakers, echo cancelled". Nobody else's screen shows it.
+
+After a take, the session summary marks that person's camera and audio files with "echo
+cancellation on", and `sync.json` lists them under `echoCancellation`. A microphone
+switched during the call is opened the same way as the one chosen in the lobby.
+
 ### Producers and Present only
 
 A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are
@@ -378,6 +429,7 @@ All in the one folder the host picks, per take:
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
+| `shared_<name>_<file name>.<ext>` | A file a participant sent the host from chat (a photo, a document, slides, audio or video, 100 MB at most), saved after the host accepted it and its SHA-256 matched; `_2`, `_3` when that name is taken |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
 | `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out private messages and the messages of anyone set as not recorded |
 
@@ -402,11 +454,15 @@ set a guest as not recorded before a take: that guest stays in the call, and the
 camera, microphone, screen and chat messages are left out of every take until the
 host changes it or everyone has left the room — their browser records nothing and
 the host saves no file from them, from the next take on, though a backup of an
-earlier take that they send back is still offered to the host. Everyone in the
+earlier take that they send back, and a file they send from chat, are still offered
+to the host. Everyone in the
 call is told who is not recorded. A recorded participant who listens on speakers,
 or who shares a screen with its sound or with the call window on it, can still
 pick up that guest's voice or picture. Participants see a pre-join disclosure, a
-three-second countdown before each take, and an on-screen notice and REC pill.
+three-second countdown before each take, and an on-screen notice and REC pill. Someone
+who joins while a take is already running, for example after the host started recording
+alone, gets the notice and the REC pill as they join and no countdown, and is recorded
+from that moment.
 Files (including in-call chat) land only on the
 host's disk, plus a backup in each participant's own browser storage and a crash copy of
 each take's guest recordings in the host's browser storage, removed when the take ends
@@ -415,6 +471,31 @@ uploaded. During a take the host also records each recorded guest's live call au
 into the host's folder, a copy that starts only after that guest's browser has begun
 its own recording. **The host is responsible for getting consent where the law requires
 it** (all-party-consent jurisdictions, GDPR).
+
+The host can turn a participant's microphone off from **People** in the call. That
+person is told at once and turns it back on with their own microphone button. While
+it is off their recording has no sound from the microphone, exactly as when they turn
+it off themselves; nobody can turn another person's microphone on.
+
+The host can also remove a participant from **People**. That person is told the host
+removed them. What they recorded before the removal stays in the host's folder and
+ends there; the rest is in their own browser's backup, which is never deleted for
+them. If a take was running, their browser keeps recording into that backup until
+they press **Stop and save**; their page then offers the backup as a download, and
+the lobby in that browser lists it afterwards.
+Each take's `sync_<id>.json` holds a record of who was told (`recordingNotice`): when the
+host's browser announced the take, everyone the room listed then or who joined while it
+ran, and for each of them the moment their own recording channel reached the host. A
+participant's page opens that channel only after it was told that a take is running,
+which is also what puts the notice on its screen, so that moment shows the page was
+told. A producer, a Present-only device that is not presenting, a guest set as not
+recorded and a browser that cannot record open no such channel: for them the record
+shows only that they were listed, and a guest set as not recorded is listed without a
+name. It does not show that anyone read the notice, and nothing more is kept on the
+server.
+After an interruption the record starts again when the take is resumed, and names the
+guests whose recordings had reached the host before it; a take saved from the crash
+copy lists those guests only, without times.
 
 ---
 
@@ -487,6 +568,10 @@ An unsaved recording holds the guests' camera, microphone and screen recordings,
 names and the chapter markers, in this browser on the host's computer and nowhere else. It
 stays there until it is saved or deleted in the lobby of the room it was recorded in, or
 until the site's data is cleared in the browser.
+
+A take recorded with nobody else in the room has no guest files to rebuild, so after a
+crash it is not listed as **Unsaved recording**. The host's own camera file and WAV master
+are in the lobby under **Backups on this device**, with **Download**.
 
 ---
 
@@ -564,6 +649,9 @@ Known gaps, listed below:
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
+- **Removing a participant keeps out that tab, not that person.** The room refuses the
+  removed tab until everyone has left, but the invite link is the only credential: a new
+  tab or another browser joins again.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 

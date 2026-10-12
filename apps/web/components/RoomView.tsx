@@ -8,6 +8,7 @@ import { isRecordingSupported } from '@/lib/recorder';
 import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
 import { downloadNamesFor } from '@/lib/file-names';
+import { isStagePeer } from '@/lib/stage-peers';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -83,12 +84,39 @@ function isPresentLink(): boolean {
   return new URLSearchParams(window.location.search).get('present') === '1';
 }
 
+/** `?check=1` on the room link: the lobby's preview and checks, with no way into the room. */
+function isCheckLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('check') === '1';
+}
+
+/** Download links for files this tab holds only as links in memory. */
+function FileLinks({ files }: { files: readonly (readonly [string | null, string, string])[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap justify-center gap-x-5">
+      {files.map(([url, name, label]) => (
+        <a
+          key={name}
+          href={url ?? undefined}
+          download={name}
+          className="inline-flex min-h-11 items-center rounded-sm text-[15px] font-medium text-[#0b57d0] underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]"
+        >
+          {label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
+    mutePeer, removePeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
+    sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
-    resumeRecording, saveRecordingFromCall, setIncomingVideoOff,
+    resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised, sendReaction,
+    declineFiles, sendFile,
   } = useRoom(slug);
   // The numbers this page gave people under To. Held here because the call
   // screen is unmounted while everyone else is away and the chat lines are
@@ -96,7 +124,12 @@ export function RoomView({ slug }: { slug: string }) {
   const [chatNumbers] = useState(() => new Map<string, number>());
   const producer = isProducerLink();
   const present = isPresentLink();
+  const check = isCheckLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
+  // A host who went on without anyone else. Kept while this tab stays in the
+  // room: the call screen then stays up while they are alone, while someone
+  // connects and after everyone has left.
+  const [alone, setAlone] = useState(false);
   // After a host leaves mid-take, sync.json, the chapters and the backups are
   // in-memory links in this tab, and a finalized take's backups are deleted by
   // the next lobby. Rejoin reloads, so ask before any way out of the page.
@@ -149,6 +182,31 @@ export function RoomView({ slug }: { slug: string }) {
       </StatusScreen>
     );
   }
+  if (state.phase === 'removed') {
+    // The backup of a recording this tab saved is a link held in memory, and
+    // Back to the lobby reloads the page. Offered here first; the lobby lists
+    // the copy in browser storage afterwards.
+    const names = downloadNamesFor({ room: slug, localName: state.localName, role: state.role });
+    const files = (
+      [
+        [state.backupBlobUrl, names.backup, 'Download your backup'],
+        [state.wavBackupBlobUrl, names.wav, 'Download your WAV backup'],
+      ] as const
+    ).filter(([url]) => url);
+    return (
+      <StatusScreen
+        title="The host removed you from this call"
+        action="Back to the lobby"
+        secondary={{ label: 'Back to home', href: '/' }}
+      >
+        This tab can’t rejoin until the call has ended.{' '}
+        {files.length > 0
+          ? 'Your backup copies stay in this browser — download them now, or later from the lobby.'
+          : 'If you were being recorded, your backup copy stays in this browser — the lobby lists it.'}
+        {files.length > 0 && <FileLinks files={files} />}
+      </StatusScreen>
+    );
+  }
   if (state.phase === 'error') {
     return (
       <StatusScreen title="Can’t reach openMeet" action="Try again">
@@ -162,6 +220,7 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
+        checkOnly={check}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>
           void join(stream, name, producer, asCompanion, screenStream, stereo)
@@ -177,10 +236,15 @@ export function RoomView({ slug }: { slug: string }) {
   // A guest waiting alone has nothing else to do but keep the tab open; say so
   // while the backup is still only offered.
   const offeredNote =
-    state.role !== 'host' && (state.backupTransfers ?? []).some((t) => t.status === 'offered')
+    state.role !== 'host' &&
+    (state.backupTransfers ?? []).some((t) => t.kind !== 'file' && t.status === 'offered')
       ? 'Your backup is offered to the host as soon as they join. Keep this tab open.'
       : undefined;
-  if (state.phase === 'waiting') {
+  // A host in a browser that can record, and not on a present-only device, may
+  // go on to the call screen without waiting for anyone: Record is there.
+  const goAlone =
+    record.canRecord && !state.companion ? { onContinueAlone: () => setAlone(true) } : {};
+  if (state.phase === 'waiting' && !alone) {
     const note = companionNote ?? offeredNote;
     return (
       <WaitingRoom
@@ -191,10 +255,11 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleMic={setMic}
         onToggleCam={setCam}
         {...(note ? { note } : {})}
+        {...goAlone}
       />
     );
   }
-  if (state.phase === 'connecting') {
+  if (state.phase === 'connecting' && !alone) {
     // The same dark room as waiting, so a guest arriving doesn't flash a white
     // page; trouble connecting is said here, with Leave still in reach.
     return (
@@ -211,7 +276,7 @@ export function RoomView({ slug }: { slug: string }) {
       />
     );
   }
-  if (state.phase === 'peer-left') {
+  if (state.phase === 'peer-left' && !alone) {
     // Still in the room: the camera stays on (and on screen), and the call
     // picks up again by itself when someone joins. Only an empty mesh lands
     // here, so it is everyone, in a group call too.
@@ -225,6 +290,7 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleCam={setCam}
         title="Everyone else left"
         note="You’re still in the room. The call picks up again when someone joins."
+        {...goAlone}
       />
     );
   }
@@ -254,18 +320,7 @@ export function RoomView({ slug }: { slug: string }) {
               ? 'Download these before you close this tab — they exist only here.'
               : // A guest's backups are never deleted and are listed in every lobby.
                 'Your backup copies stay in this browser — download them now, or later from the lobby next time you open openMeet.'}
-            <div className="mt-2 flex flex-wrap justify-center gap-x-5">
-              {files.map(([url, name, label]) => (
-                <a
-                  key={name}
-                  href={url ?? undefined}
-                  download={name}
-                  className="inline-flex min-h-11 items-center rounded-sm text-[15px] font-medium text-[#0b57d0] underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]"
-                >
-                  {label}
-                </a>
-              ))}
-            </div>
+            <FileLinks files={files} />
           </>
         ) : (
           'Your camera and microphone are off. You can close this tab.'
@@ -274,19 +329,25 @@ export function RoomView({ slug }: { slug: string }) {
     );
   }
 
+  // Only a host who went on alone gets here without a call. The call screen
+  // then shows as it does before a take.
+  const callPhase =
+    state.phase === 'waiting' || state.phase === 'connecting' || state.phase === 'peer-left'
+      ? 'in-call'
+      : (state.phase as 'in-call' | 'recording' | 'finalizing' | 'done');
   return (
     <CallStage
       slug={slug}
       role={state.role}
       companion={state.companion}
-      phase={state.phase as 'in-call' | 'recording' | 'finalizing' | 'done'}
+      phase={callPhase}
       localStream={state.localStream}
       remoteStream={state.remoteStream}
       remotePeers={state.remotePeers}
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}
-      peerName={state.remotePeers.find((p) => p.role !== 'producer')?.name ?? null}
+      peerName={state.remotePeers.find(isStagePeer)?.name ?? null}
       screenSharing={state.screenSharing}
       canRecord={record.canRecord}
       roomRecording={state.peerRecording}
@@ -297,7 +358,7 @@ export function RoomView({ slug }: { slug: string }) {
       recordUnavailableReason={record.reason}
       messages={state.messages}
       chatNumbers={chatNumbers}
-      peerPresence={state.remotePeers.find((p) => p.role !== 'producer')?.presence ?? null}
+      peerPresence={state.remotePeers.find(isStagePeer)?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}
       wavBackupUrl={state.wavBackupBlobUrl}
@@ -319,6 +380,10 @@ export function RoomView({ slug }: { slug: string }) {
       onSetLowPower={setLowPower}
       incomingVideoOff={state.incomingVideoOff}
       onSetIncomingVideoOff={setIncomingVideoOff}
+      handRaised={state.handRaised}
+      onSetHandRaised={setHandRaised}
+      reactions={state.reactions}
+      onReact={sendReaction}
       onToggleMic={setMic}
       onToggleCam={setCam}
       onMark={addMarker}
@@ -326,14 +391,25 @@ export function RoomView({ slug }: { slug: string }) {
       chaptersUrl={state.chaptersUrl}
       summary={state.summary}
       takes={state.takes}
-      onNewTake={newTake}
+      onNewTake={() => {
+        // With nobody else here the next take is the host's alone, and it
+        // belongs on this screen, count included.
+        if (!state.remoteStream) setAlone(true);
+        newTake();
+      }}
       onDiscardTake={discardTake}
       onOpenMediaBoard={openMediaBoard}
       onRecord={() => void recordWithCountdown()}
       onEnd={() => void endRecording()}
       onLeave={leave}
       onSendChat={sendChat}
+      incomingScript={state.incomingScript}
+      onSendScript={sendScript}
+      onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
+      hostMuted={state.hostMuted}
+      onMutePeer={mutePeer}
+      onRemovePeer={removePeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}
@@ -345,6 +421,9 @@ export function RoomView({ slug }: { slug: string }) {
       onDeclineBackups={declineBackups}
       onDismissBackup={dismissBackup}
       onStopBackup={stopBackup}
+      onAcceptFiles={(shown) => void acceptBackups(shown)}
+      onDeclineFiles={declineFiles}
+      onSendFile={state.role !== 'host' ? sendFile : undefined}
       {...(state.isFallbackMedia !== undefined ? { isFallbackMedia: state.isFallbackMedia } : {})}
     />
   );
