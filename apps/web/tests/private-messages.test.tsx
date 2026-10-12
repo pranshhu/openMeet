@@ -407,7 +407,7 @@ describe('ChatPanel: a person is named by this page, then by their name', () => 
     render(
       <ChatPanel
         messages={[]}
-        recipients={[{ peerId: 'p-x', name: 'Bob (host)‮', role: 'guest' }]}
+        recipients={[{ peerId: 'p-x', name: 'Bob (host)\u202e', role: 'guest' }]}
         to="p-x"
         onSend={vi.fn()}
         onClose={vi.fn()}
