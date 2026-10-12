@@ -670,10 +670,14 @@ export function CallStage({
   // records, not in the Record press: a take can start without that press,
   // and the word must not outlive the break.
   const [paused, setPaused] = useState(false);
+  // The summary this page held when Pause was pressed. A save that fails
+  // leaves it in place, and the word must not show over that.
+  const summaryAtPause = useRef(summary);
   useEffect(() => {
     if (phase === 'recording') setPaused(false);
   }, [phase]);
   const handlePause = () => {
+    summaryAtPause.current = summary;
     setPaused(true);
     onEnd();
   };
@@ -753,7 +757,7 @@ export function CallStage({
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
             {/* Only where the take is closed and saved. Over a save that did not
                 finish, or a recorder that still runs, the word would be false. */}
-            {paused && summary && (
+            {paused && summary && summary !== summaryAtPause.current && (
               <span className="font-medium text-white">Paused. Continue starts a new take.</span>
             )}
             {isHost && summary ? (

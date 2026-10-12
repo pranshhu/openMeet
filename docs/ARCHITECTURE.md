@@ -1540,6 +1540,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   notice when the host continues. The word is kept in the call screen: after a reload the
   host's button reads Record, and the next take's files carry no `_take<n>`. When the
   next take does not start, Record goes on reading Continue until one records.
+  A guest whose page did not get the stop (its connection to the Room was down at that moment)
+  keeps capturing into its own backup and reads Recording until the next take starts, as after
+  End & save. In a tab that lost the host seat during its take, Pause saves that tab's files
+  and Continue would record that tab alone.
 - **Two buttons read Pause while a host's teleprompter scrolls.** The teleprompter's
   stops the script; the control bar's ends the take.
 - **The rundown starts over after a pause,** as after every take: the host chooses the

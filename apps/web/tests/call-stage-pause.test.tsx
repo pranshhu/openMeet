@@ -116,6 +116,29 @@ describe('CallStage: pause a take', () => {
     expect(fns.onNewTake.mock.invocationCallOrder[0]!).toBeLessThan(fns.onRecord.mock.invocationCallOrder[0]!);
   });
 
+  it('does not say Paused over a save that failed while an earlier take’s summary is still held', () => {
+    // A take resumed after a reload runs with the summary of the take saved before it.
+    const { rerender } = render(<CallStage {...recording} summary={summary} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause recording' }));
+
+    // The save threw: the page is done, and the summary is still the earlier take's.
+    rerender(<CallStage {...saved} recordingError="Could not save the recording." />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent('Paused');
+
+    // A save that worked hands the page a summary of its own.
+    rerender(<CallStage {...saved} summary={{ ...summary }} />);
+    expect(screen.getByTestId('status-bar')).toHaveTextContent('Paused. Continue starts a new take.');
+  });
+
+  it('updates summaryAtPause when Pause is pressed so a summary received after mount is remembered', () => {
+    const { rerender } = render(<CallStage {...recording} summary={null} />);
+    rerender(<CallStage {...recording} summary={summary} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause recording' }));
+
+    rerender(<CallStage {...saved} summary={summary} recordingError="Could not save the recording." />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent('Paused');
+  });
+
   it('drops the word when the next take records, so End & save reads Saved as before', () => {
     const { rerender } = render(<CallStage {...recording} />);
     fireEvent.click(screen.getByRole('button', { name: 'Pause recording' }));
