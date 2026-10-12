@@ -12,6 +12,7 @@ import {
   MediaDeviceMissingError,
   MediaManager,
   MediaPermissionError,
+  NO_CAMERA,
   RECORDING_CONSTRAINTS,
   deviceConstraints,
   recordedChannels,
@@ -107,7 +108,7 @@ function previewProblem(e: unknown): { title: string; body: string } {
   if (e instanceof MediaDeviceMissingError) {
     return {
       title: 'No camera or mic found',
-      body: 'openMeet needs both a camera and a microphone. Connect them, then try again.',
+      body: 'Connect a camera and a microphone, then try again. With a microphone and no camera, press Microphone only.',
     };
   }
   if (e instanceof Error && e.name === 'NotReadableError') {
@@ -504,6 +505,18 @@ export function Lobby({
     mmRef.current?.setVideoEnabled(next);
   }
 
+  /**
+   * Open the microphone alone, or the camera with it again. For a person with
+   * no camera, one that is blocked or busy, or a computer that struggles with
+   * video: they join as a recorded participant with their microphone.
+   */
+  async function chooseMicOnly(on: boolean) {
+    await reacquire(micId, on ? NO_CAMERA : (devices.videoInputs[0]?.deviceId ?? ''), qualityId, frameRate);
+    // The first preview may never have started, and device names come with permission.
+    const mm = mmRef.current;
+    if (mm) setDevices(await mm.listDevices().catch(() => EMPTY_DEVICES));
+  }
+
   function copyLink() {
     void navigator.clipboard?.writeText(`${location.origin}${location.pathname}`);
     setCopied(true);
@@ -727,6 +740,8 @@ export function Lobby({
   const shownBitrate = levels.some((l) => l.id === bitrateId) ? bitrateId : DEFAULT_BITRATE_ID;
   // A self-view reads naturally mirrored; a rear camera shows the world, not you.
   const rearCamera = stream?.getVideoTracks()[0]?.getSettings?.().facingMode === 'environment';
+  // The preview holds the microphone alone: there is no picture to show, pick or size.
+  const micOnly = !!stream && stream.getVideoTracks().length === 0;
   // What the camera reports, which can fall short of the ask at this resolution.
   // Half a frame of slack: 29.97 asked and 30 reported is the same camera mode.
   const deliveredFps = cleanFps(stream?.getVideoTracks()[0]?.getSettings?.().frameRate);
@@ -765,14 +780,14 @@ export function Lobby({
               stream={stream}
               muted
               label={name.trim() || 'You'}
-              camOff={!camOn}
+              camOff={!camOn || micOnly}
               mirror={!rearCamera}
               // Ends left of the centred mic/cam pair, so a long name truncates
               // instead of running under it.
               tagClassName="max-w-[calc(50%-4.5rem)]"
             />
             {/* Only over a picture: with the camera off there is nothing to frame. */}
-            {stream && camOn && <FramingGuide />}
+            {stream && camOn && !micOnly && <FramingGuide />}
             {stream ? (
               /* Overlaid mic / cam controls */
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center gap-4 sm:bottom-4">
@@ -787,6 +802,7 @@ export function Lobby({
                 </button>
                 <button
                   type="button"
+                  hidden={micOnly}
                   onClick={toggleCam}
                   aria-label={camOn ? 'Turn off camera' : 'Turn on camera'}
                   title={camOn ? 'Turn off camera' : 'Turn on camera'}
@@ -824,6 +840,25 @@ export function Lobby({
                 )}
               </div>
             )}
+          </div>
+          {/* Under the preview and outside the form, where a person whose camera
+              did not start is looking. One control for no camera, a blocked or
+              busy one, and a computer that struggles with video. */}
+          <div className="mt-3 flex flex-col items-center gap-1">
+            <button
+              type="button"
+              aria-pressed={micOnly}
+              aria-describedby="mic-only-hint"
+              onClick={() => void chooseMicOnly(!micOnly)}
+              className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
+            >
+              Microphone only
+            </button>
+            <span id="mic-only-hint" className="text-center text-xs text-[#5f6368]">
+              {micOnly
+                ? 'You’ll join with sound only: your audio is recorded, with no video. Press again to use your camera.'
+                : 'No camera, or a slow computer? Join with sound only.'}
+            </span>
           </div>
           {error && (
             <p role="alert" className="mt-4 text-center text-sm text-[#b3261e]">
@@ -1112,7 +1147,7 @@ export function Lobby({
         <div className="w-full max-w-2xl lg:col-start-1 lg:row-start-2">
           {(devices.videoInputs.length > 0 || devices.audioInputs.length > 0) && (
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {devices.videoInputs.length > 0 && (
+              {!micOnly && devices.videoInputs.length > 0 && (
                 <label className={picker}>
                   <Icon name="videocam" size={18} className="shrink-0" />
                   <select
@@ -1182,7 +1217,7 @@ export function Lobby({
                   </select>
                 </label>
               )}
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Recording quality"
@@ -1198,7 +1233,7 @@ export function Lobby({
                   ))}
                 </select>
               </label>
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Recording bitrate"
@@ -1213,7 +1248,7 @@ export function Lobby({
                   ))}
                 </select>
               </label>
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Frame rate"

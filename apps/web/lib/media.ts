@@ -70,11 +70,19 @@ export function recordedChannels(mic: MediaStreamTrack | null | undefined, stere
   return stereo && (mic?.getSettings?.().channelCount ?? 0) >= 2 ? 2 : 1;
 }
 
+/**
+ * The camera choice that means none: only the microphone is opened. For a
+ * person with no camera, one that is blocked or busy, or a computer that
+ * struggles with video.
+ */
+export const NO_CAMERA = 'none';
+
 export function cameraConstraints(
   camIdOrFacing?: string,
   qualityId: string = DEFAULT_QUALITY_ID,
   frameRate: number = RECORDING_FRAME_RATE
-): MediaTrackConstraints {
+): MediaTrackConstraints | false {
+  if (camIdOrFacing === NO_CAMERA) return false;
   const v = RECORDING_CONSTRAINTS.video as MediaTrackConstraints;
   const q = presetById(qualityId);
   return {

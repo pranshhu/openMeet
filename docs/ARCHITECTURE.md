@@ -318,6 +318,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  **Microphone only**, a button under the preview, opens the microphone alone
+  (`chooseMicOnly` calls `reacquire` with the camera choice `NO_CAMERA`, for which
+  `cameraConstraints` returns `false`), so a person with no camera, or with one that is
+  blocked or busy, joins as a recorded participant; pressed again it opens the first listed
+  camera as well. While the preview holds no video track it shows the person's initial, and
+  the camera toggle, the framing guide and the camera, quality, bitrate and frame-rate
+  pickers are hidden.
   The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
   (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
   microphone for five seconds, played back from an object URL that is revoked when the clip
@@ -1521,3 +1528,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A sender who waits alone is told nothing of a file that is still offered.** Neither
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
+- **Microphone only is not remembered.** A person with no camera presses it on every
+  visit. While it is pressed the lobby's storage and folder figures still count a camera
+  file, so they overstate what that person's recording needs. A person whose camera
+  never started gets no Speaker row in the lobby after pressing it; the call's microphone
+  menu has one.

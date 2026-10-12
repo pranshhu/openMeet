@@ -61,6 +61,8 @@ retention policy to trust, because there's nothing retained.
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- No camera needed: **Microphone only** in the lobby joins a person with their
+  microphone alone
 - Record alone: a host with nobody else in the room presses **Continue alone** and
   records from the call screen; anyone who joins during the take is recorded from then on
 

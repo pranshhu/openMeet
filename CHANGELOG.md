@@ -235,6 +235,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- **Microphone only**, under the lobby's preview: join with your microphone and no
+  camera. For a person who has no camera, whose camera is blocked or busy, or whose
+  computer struggles with video. Pressing it again opens the camera as well.
 
 ### Changed
 
