@@ -235,6 +235,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- **Pause** for the host during a take. The take is saved and closed exactly as with
+  End & save, so nothing is recorded during the break and the part so far is safe on
+  disk. The page reads "Paused", and **Continue** records the next part as a new take
+  in the same folder, after the usual countdown and with the recording notice shown
+  again. A paused session is one take per part, not one file with a gap in it.
 
 ### Changed
 

@@ -664,6 +664,20 @@ export function CallStage({
     handleRecord();
   };
 
+  // Pause is End & save by another name: the take is closed and saved, every
+  // guest is stopped, and what follows is a new take. Only the words on this
+  // page differ, so a host can tell a break from the end. Dropped when a take
+  // records, not in the Record press: a take can start without that press,
+  // and the word must not outlive the break.
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    if (phase === 'recording') setPaused(false);
+  }, [phase]);
+  const handlePause = () => {
+    setPaused(true);
+    onEnd();
+  };
+
   const toastPlace = prompterOpen ? 'top-3 sm:top-auto sm:bottom-3' : 'top-3';
   // 44px to tap on a phone, and underlined so they aren't told apart by colour alone.
   const guestLink = 'inline-flex min-h-11 items-center text-[#8ab4f8] underline underline-offset-2 sm:min-h-0';
@@ -737,6 +751,11 @@ export function CallStage({
             A guest has no summary, so its backups stay on this line. */}
         {phase === 'done' && !roomRecording && (
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+            {/* Only where the take is closed and saved. Over a save that did not
+                finish, or a recorder that still runs, the word would be false. */}
+            {paused && summary && (
+              <span className="font-medium text-white">Paused. Continue starts a new take.</span>
+            )}
             {isHost && summary ? (
               <span className={savedWithWarnings ? 'text-[#fdd663]' : 'text-[#81c995]'}>
                 {`${savedWithWarnings ? 'Saved with warnings' : 'Saved'} — ${fileCount} file${fileCount === 1 ? '' : 's'} in your recording folder.`}
@@ -1498,8 +1517,8 @@ export function CallStage({
                 <div data-picker-container className="relative inline-flex items-center rounded-full bg-[#3c4043]">
                   <ControlButton
                     icon="record"
-                    text="Record"
-                    label="Start recording"
+                    text={paused ? 'Continue' : 'Record'}
+                    label={paused ? 'Continue recording' : 'Start recording'}
                     shortcut="Alt+R"
                     variant="record"
                     disabled={recoveryBusy || countdownEndsAt !== null}
@@ -1568,6 +1587,9 @@ export function CallStage({
                     variant={noteOpen ? 'active' : 'default'}
                     onClick={() => setNoteOpen(!noteOpen)}
                   />
+                  {isHost && (
+                    <ControlButton icon="pause" text="Pause" label="Pause recording" onClick={handlePause} />
+                  )}
                   {isHost ? (
                     <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={onEnd} />
                   ) : (
@@ -1635,6 +1657,7 @@ export function CallStage({
                 takes={takes}
                 sidecarsSaved={sidecarsSaved ?? false}
                 onNewTake={recordNextTake}
+                {...(paused ? { nextTakeLabel: 'Continue recording' } : {})}
                 onDiscardTake={onDiscardTake}
                 onClose={closeSummary}
               />
