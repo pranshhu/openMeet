@@ -121,6 +121,61 @@ describe('ClockSync: a round nobody answers is tried again', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(pings(sent)).toHaveLength(1);
   });
+
+  it('ends the round on the estimate it has when an answer finds this clock set back', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    let got: unknown = 'not over';
+    void sync.run(3, 500).then((r) => {
+      got = r;
+    });
+    const p0 = pings(sent)[0]!;
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p0.seq!, t0: p0.t0!, t1: start + 250 });
+    const p1 = pings(sent)[1]!;
+    // This computer's clock is set back five seconds between the second ping and its answer.
+    vi.setSystemTime(start - 5000);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p1.seq!, t0: p1.t0!, t1: start + 250 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(got).toEqual({ offsetMs: 250, rttMs: 0 });
+    expect(metas(sent)).toEqual([
+      { type: 'recording_meta', recordingId: 'r', guestStartHostMs: start + 250, rttMs: 0 },
+    ]);
+
+    // The round was over at that answer: its third ping is never sent.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pings(sent)).toHaveLength(2);
+    expect(metas(sent)).toHaveLength(1);
+  });
+
+  it('reports nothing and asks no more when its first answer finds this clock set back', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    let got: unknown = 'not over';
+    void sync.run(2, 500).then((r) => {
+      got = r;
+    });
+    const ping = pings(sent)[0]!;
+    vi.setSystemTime(start - 5000);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: ping.seq!, t0: ping.t0!, t1: start + 20 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(got).toBeNull();
+
+    // No later round: its estimate would be measured after the clock was set.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pings(sent)).toHaveLength(1);
+
+    // Nor at the stop, which is over at once.
+    let over = false;
+    void sync.again().then(() => {
+      over = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(over).toBe(true);
+    expect(pings(sent)).toHaveLength(1);
+    expect(metas(sent)).toHaveLength(0);
+  });
 });
 
 class FakeChannel {

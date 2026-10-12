@@ -98,6 +98,7 @@ EOF
 | 2.18 | Alignment when the host answers late | Host and guest in a call. In the host tab's DevTools console paste `const send = RTCDataChannel.prototype.send, until = Date.now() + 30000; RTCDataChannel.prototype.send = function (d) { if (typeof d === 'string' && d.includes('clock_pong') && Date.now() < until) return; return send.call(this, d); };` then press **Record** within 10 s, record for a minute, **End & save** | The summary's Alignment line gives an offset in ms, not "align by waveform", and `sync_<id>.json` has a number in `timeline.guestMinusHostMs` | ☐ | |
 | 2.19 | Clock section | After a take with one guest, open `sync_<id>.json` in the recording folder | `clock.guests[0].start.offsetMs` equals `guests[0].offsetMs`; `rttMs` and `measuredAtMs` are numbers, and `measuredAtMs` is later than `offsetMs` by a few seconds at most; `clock.note` says what each figure measures | ☐ | |
 | 2.20 | Clock check at the end of a take | Host and guest (two tabs on one computer will do) record for two minutes, **End & save**; open `sync_<id>.json` | `clock.guests[0]` has `start`, `end`, `movedMs`, `errorMs` and `spanMs`; `spanMs` is about the length of the take in ms; on one computer `movedMs` is no further from 0 than `errorMs`; `guests[0].offsetMs` equals `clock.guests[0].start.offsetMs` | ☐ | |
+| 2.21 | A guest's clock set back while clock sync measures | Host and guest in a call (two tabs on one computer will do). Before the host presses **Record**, paste in the guest tab's DevTools console `const now = Date.now, send = RTCDataChannel.prototype.send; let back = 0; Date.now = () => now() - back; RTCDataChannel.prototype.send = function (d) { const r = send.call(this, d); if (typeof d === 'string' && d.includes('clock_ping')) back += 5000; return r; };` then record for a minute, **End & save**, open `sync_<id>.json` | The summary's Alignment line says to align by waveform, not an offset that is seconds off; in the file `timeline.guestMinusHostMs` is `null` and there is no `clock` section; the guest's files are complete as in any take | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -334,6 +335,8 @@ Also not covered automatically. Needs 3 browser profiles.
 - **Clock sync needs one answer from the host while the guest is recording.** The
   guest keeps asking; with no answer before its recording ends, `sync.json` has no
   offset for it and says to align by waveform.
+  A guest whose clock is seen set back before its first estimate stops asking,
+  with the same result.
 - **WAV past 4 GiB** (~4 h 08 m at 24-bit/48 kHz stereo) declares a clamped
   size. It plays in full; the header just cannot express the real number
   without RF64.

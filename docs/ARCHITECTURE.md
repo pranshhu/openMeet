@@ -820,6 +820,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   live (`ClockSync.sendOn`, called from `bindGuestChannel`), until one is answered or the
   guest's recording ends (`stop`, called from `endGuestRecording`); a guest with no answer by
   then has a null offset ("align by waveform").
+  A round trip that reads below zero (`handlePong`) shows that the guest's clock was set back
+  between a ping and its answer. The guest read its start before that, so no estimate measured
+  from then on places it: the round ends there and reports the sample it already holds. With
+  none it reports nothing, and that recording asks no more (`clockSetBack`): no later round,
+  and `again` sends nothing. A guest that had reported no estimate by then has a null offset.
   `ChunkReceiver` keeps the first start it accepts, with the time it arrived (`clockAtMs`), and
   a later report of the same start beside it (`clockEnd`), never in its place.
   `collectGuestReports` hands both on, and `lib/clock-drift.ts` `clockSection` writes the sync
@@ -1262,6 +1267,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   recording ended:** the host never recorded while that guest did, or no answer came back
   within 1.5 s (`perPingTimeoutMs`) on a slow link. `sync.json` then says to align by
   waveform. An estimate that was sent into a connection as it dropped is not sent again.
+- **A guest whose clock was seen set back before its first estimate has a null offset.**
+  Its browser takes no estimate for the rest of that recording, because none would place
+  the start it read earlier, and `sync.json` says to align by waveform. A new take
+  measures afresh.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials

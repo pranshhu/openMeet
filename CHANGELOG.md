@@ -418,6 +418,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- Clock sync takes no estimate from an exchange during which the guest's computer clock
+  was set back. A guest whose clock was corrected at such a moment, in the few seconds
+  of measurement, got an alignment offset in `sync.json` wrong by half the correction,
+  which can be seconds. That guest gets the estimate from before the correction, or
+  none, and the file then says to align by waveform.
 
 ### Security
 

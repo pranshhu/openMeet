@@ -657,6 +657,9 @@ Known gaps, listed below:
   ends (the host never recorded meanwhile, or the link is too slow for an answer within
   1.5 s), `sync.json` has no offset for that guest and says to align the tracks by
   waveform.
+  The same goes for a guest whose browser saw its computer's clock set back between a
+  question and its answer, before it had a first estimate: that browser asks no more
+  for that recording.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.

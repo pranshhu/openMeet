@@ -46,6 +46,8 @@ export class ClockSync {
   private stopped = false;
   private pending: { seq: number; t0: number } | null = null;
   private best: ClockSyncResult | null = null;
+  /** An answer showed this clock set back while the round held no sample: nothing is asked after it. */
+  private clockSetBack = false;
   private resolveRun: ((r: ClockSyncResult | null) => void) | null = null;
   private overallTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,6 +92,8 @@ export class ClockSync {
    */
   again(samples = 3, timeoutMs = 3000): Promise<void> {
     this.stop();
+    // An estimate taken after the clock was set back does not place the start.
+    if (this.clockSetBack) return Promise.resolve();
     return new Promise((resolve) => {
       // A fresh estimate: the smallest round trip of this round, not of the take.
       this.best = null;
@@ -109,6 +113,15 @@ export class ClockSync {
     const t2 = this.now();
     const t0 = this.pending.t0;
     const rtt = t2 - t0;
+    if (rtt < 0) {
+      // An answer cannot come before its question: this computer's clock was
+      // set back in between. guestStartMs was read before that, so an estimate
+      // measured from here on does not place it. The round ends on the sample
+      // it has; with none, this recording asks no more.
+      if (!this.best) this.clockSetBack = true;
+      this.finish();
+      return;
+    }
     const offset = msg.t1 - (t0 + t2) / 2;
     if (!this.best || rtt < this.best.rttMs) this.best = { offsetMs: offset, rttMs: rtt };
     this.clearPingTimer();
@@ -161,7 +174,7 @@ export class ClockSync {
         rttMs: Math.round(this.best.rttMs),
       };
       this.post(meta);
-    } else if (!this.stopped) {
+    } else if (!this.stopped && !this.clockSetBack) {
       this.retryTimer = setTimeout(() => this.startRound(), this.retryMs);
     }
     const resolve = this.resolveRun;

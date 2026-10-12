@@ -83,6 +83,65 @@ describe('ClockSync.again: one more estimate as the recording stops', () => {
     expect(took).toBe(3000);
     expect(metas(sent)).toHaveLength(1);
   });
+
+  it('measures at the stop when the first estimate was reported before the clock was seen set back', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    void sync.run(2, 500);
+    const p0 = pings(sent)[0]!;
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p0.seq!, t0: p0.t0!, t1: start + 250 });
+    const p1 = pings(sent)[1]!;
+    vi.setSystemTime(start - 5000);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p1.seq!, t0: p1.t0!, t1: start + 250 });
+    expect(metas(sent).map((m) => m.guestStartHostMs)).toEqual([start + 250]);
+
+    // The host's clock is 5250 ms ahead of this one by then, and the second estimate says so.
+    const done = sync.again(1, 500);
+    expect(pings(sent)).toHaveLength(3);
+    const p2 = pings(sent)[2]!;
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p2.seq!, t0: p2.t0!, t1: Date.now() + 5250 });
+    await done;
+    expect(metas(sent).map((m) => m.guestStartHostMs)).toEqual([start + 250, start + 5250]);
+  });
+
+  it('ends on the estimate it has when an answer finds the clock set back', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    let over = false;
+    void sync.again(3, 500).then(() => {
+      over = true;
+    });
+    const p0 = pings(sent)[0]!;
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p0.seq!, t0: p0.t0!, t1: start + 7 });
+    const p1 = pings(sent)[1]!;
+    vi.setSystemTime(start - 5000);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: p1.seq!, t0: p1.t0!, t1: start + 7 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(over).toBe(true);
+    expect(pings(sent)).toHaveLength(2);
+    expect(metas(sent).map((m) => m.guestStartHostMs)).toEqual([start + 7]);
+  });
+
+  it('reports nothing when its first answer finds the clock set back, and nothing follows it', async () => {
+    const sent: Sent[] = [];
+    const start = Date.now();
+    const sync = make(sent, start);
+    let over = false;
+    void sync.again(2, 500).then(() => {
+      over = true;
+    });
+    const ping = pings(sent)[0]!;
+    vi.setSystemTime(start - 5000);
+    sync.handlePong({ type: 'clock_pong', recordingId: 'r', seq: ping.seq!, t0: ping.t0!, t1: start + 20 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(over).toBe(true);
+    expect(metas(sent)).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pings(sent)).toHaveLength(1);
+  });
 });
 
 describe('endGuestRecording: one more clock estimate before the file is called final', () => {
