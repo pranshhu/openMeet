@@ -387,3 +387,141 @@ describe('a media board first opened during a take', () => {
     expect(peers[0].replaceAudioTrack.mock.calls[0][0]).toBe(graphs[0]!.dests[0]!.stream.getAudioTracks()[0]);
   });
 });
+
+describe('SwitchableMedia: the track a take records', () => {
+  it('is switched off with the microphone, and on again', () => {
+    const sm = new SwitchableMedia(lobby());
+    const stable = sm.stream.getAudioTracks()[0]!;
+    expect(stable.enabled).toBe(true);
+
+    sm.setAudioEnabled(false);
+    expect(stable.enabled).toBe(false);
+    sm.setAudioEnabled(true);
+    expect(stable.enabled).toBe(true);
+  });
+});
+
+describe('muting in a call', () => {
+  const guest = () => joinAs('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+  /** The stable track and the master's own, in the order the page made them. */
+  const tracks = () => graphs[0]!.dests.map((d) => d.stream.getAudioTracks()[0]!);
+
+  it("turns the master's track off with the microphone button, and on again", async () => {
+    const { result } = await guest();
+    const [stable, micOnly] = tracks();
+    expect(micOnly!.enabled).toBe(true);
+
+    act(() => result.current.setMic(false));
+    expect(micOnly!.enabled).toBe(false);
+    expect(stable!.enabled).toBe(false);
+
+    act(() => result.current.setMic(true));
+    expect(micOnly!.enabled).toBe(true);
+    expect(stable!.enabled).toBe(true);
+  });
+
+  it("turns the master's track off when the host mutes this person", async () => {
+    await guest();
+    const [stable, micOnly] = tracks();
+
+    act(() => emit('peer-mute', {}));
+
+    expect(micOnly!.enabled).toBe(false);
+    expect(stable!.enabled).toBe(false);
+  });
+
+  it('keeps a microphone that is switched to while muted off', async () => {
+    const { result } = await guest();
+    const [, micOnly] = tracks();
+    act(() => result.current.setMic(false));
+    const next = track('audio', 'mic-2');
+    vi.stubGlobal('navigator', {
+      userAgent: 'test-desktop',
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(new MediaStream([next])) },
+    });
+
+    await act(async () => {
+      await result.current.switchMic('mic-2');
+    });
+
+    expect(next.enabled).toBe(false);
+    expect(micOnly!.enabled).toBe(false);
+  });
+});
+
+describe('a present-only host, which has no stable stream', () => {
+  async function joinPresentOnly(stream: MediaStream) {
+    const hook = renderHook(() => useRoom('abc-defg-hij'));
+    await act(async () => {
+      await hook.result.current.join(stream, 'Me', false, true);
+    });
+    act(() => {
+      emit('role-assigned', {
+        role: 'host',
+        peerId: 'me',
+        ordinal: 1,
+        companion: true,
+        peers: [{ peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' }],
+        recording: false,
+      });
+    });
+    return hook;
+  }
+
+  it('starts a take with the stream it joined with', async () => {
+    const empty = new MediaStream();
+    const { result } = await joinPresentOnly(empty);
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    expect(graphs).toHaveLength(0);
+    const args = vi.mocked(startHostRecording).mock.calls[0]![0];
+    expect(args.localStream).toBe(empty);
+    expect(args.micStream).toBe(empty);
+  });
+
+  it('resumes a take with the stream it joined with', async () => {
+    const crashCopy = {
+      dirName: 'openmeet-take-1',
+      notes: { room: 'abc-defg-hij', recordingId: 'rec-1', take: 1, hostStartMs: 1_000, files: [], backups: [], markers: [] },
+      notesOk: true,
+      dead: false,
+      bytes: 0,
+    } as unknown as TakeJournal;
+    vi.mocked(findTakeJournals).mockResolvedValue([crashCopy]);
+    vi.mocked(resumeHostRecording).mockResolvedValue({ recordingId: 'rec-1', take: 1, hostStartMs: 1_000 });
+    const empty = new MediaStream();
+    const { result } = await joinPresentOnly(empty);
+    await vi.waitFor(() => expect(result.current.state.resumeOffer).not.toBeNull());
+
+    await act(async () => {
+      await result.current.resumeRecording();
+    });
+
+    const args = vi.mocked(resumeHostRecording).mock.calls[0]![0];
+    expect(args.localStream).toBe(empty);
+    expect(args.micStream).toBe(empty);
+  });
+});
+
+describe('a media board opened a second time', () => {
+  afterEach(() => {
+    document.querySelectorAll('audio').forEach((a) => a.remove());
+  });
+
+  it('is the board the page has, with its pads mixed in once', async () => {
+    const { result } = await joinAs('host', []);
+
+    const first = result.current.openMediaBoard();
+    const second = result.current.openMediaBoard();
+
+    expect(first).not.toBeNull();
+    expect(second).toBe(first);
+    // The call's own graph and one board's.
+    expect(graphs).toHaveLength(2);
+    // The microphone, and the pads once.
+    expect(graphs[0]!.sources).toHaveLength(2);
+  });
+});
