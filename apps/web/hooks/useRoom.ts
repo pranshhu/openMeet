@@ -957,6 +957,9 @@ export function useRoom(slug: string) {
     const mic = localStreamRef.current;
     if (!peerRef.current || !mic || recordingRef.current) return;
     const localStream = withBoardAudio(mic, boardRef.current);
+    // The uncompressed master reads the microphone's own track, which nothing
+    // else is mixed into.
+    const micOnly = switchableMediaRef.current?.micStream ?? mic;
     const recordingId = crypto.randomUUID();
     takeTroubleRef.current = false;
     fatalCloseRef.current = false;
@@ -975,7 +978,7 @@ export function useRoom(slug: string) {
     if (isPcmCaptureSupported() && localStream.getAudioTracks().length > 0) {
       wavBackup = new BackupRecorder({
         mimeType: 'audio/wav',
-        stream: mic,
+        stream: micOnly,
         room: slug,
         onWarn,
       });
@@ -1051,7 +1054,7 @@ export function useRoom(slug: string) {
       const handles = startGuestRecording({
         recordingId,
         localStream,
-        micStream: mic,
+        micStream: micOnly,
         channel,
         ...(audioReady && audioChannel ? { audioChannel } : {}),
         backup,
@@ -2121,7 +2124,7 @@ export function useRoom(slug: string) {
         // streams a fresh take passes: the MP4 stream (board mix included) and
         // the raw mic for the WAV master.
         localStream: withBoardAudio(localStreamRef.current!, boardRef.current),
-        micStream: localStreamRef.current ?? undefined,
+        micStream: switchableMediaRef.current?.micStream ?? localStreamRef.current ?? undefined,
         onError,
         onWarn: (msg) => {
           // A commit to the crash copy can give up some seconds after End &
@@ -2706,7 +2709,7 @@ export function useRoom(slug: string) {
       recordingRef.current = handles = await startHostRecording({
         recordingId,
         localStream: withBoardAudio(localStream, boardRef.current),
-        micStream: localStream,
+        micStream: switchableMediaRef.current?.micStream ?? localStream,
         take: takeRef.current,
         journal,
         room: slug,

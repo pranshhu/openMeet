@@ -1067,7 +1067,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (WAV master) lock their sample rate on the first frame, so switching directly to a mic with a different
   sample rate (e.g. 44.1 kHz, 24 kHz, or 16 kHz Bluetooth) would corrupt both files.
   To solve this, `useRoom.join` constructs `SwitchableMedia` which wraps the lobby stream into ONE stable
-  output stream handed to everything (preview, PeerConnection, ChunkRecorder, BackupRecorder, and WAV).
+  output stream handed to the preview, PeerConnection, ChunkRecorder and the camera BackupRecorder,
+  and a microphone-only stream (`micStream`) handed to the WAV master and its backup.
   It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
   stream would conjure a blank video track and a silent audio track).
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
@@ -1079,6 +1080,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    The same source feeds a second destination node with the same channel count, whose track is
+    `micStream`: it carries the microphone and nothing else, follows a change of microphone the
+    same way, and is switched off with the microphone. Without an audio graph (the fallback
+    below) `micStream` is the stream itself.
     A switched-to microphone is asked for the echo cancellation the lobby microphone was asked
     for (read once from that track's `getConstraints()`, or from its settings when the browser
     gives no constraints back), so the lobby's answer holds for the whole call.
