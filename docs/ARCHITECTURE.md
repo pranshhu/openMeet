@@ -846,7 +846,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   would carry every pad twice. While the microphone is off the stable track is off with it, so
   what a pad plays then is not in that take; where there is no stable stream (`isFallback`) no
   pad is (`MediaBoard.recordsInRunningTake` is false). The pads play live and drop chapter markers
-  either way. A pad set to loop (`setLoop`) repeats until it is stopped, and
+  either way, and the board panel says which case applies while it does: its "This take keeps
+  your mic only" line where no pad is in that take, and a `role="status"` line while the
+  microphone is off (`CallStage` passes `midTake` and `micOffInTake`). A pad set to loop
+  (`setLoop`) repeats until it is stopped, and
   the switch reaches a pad that is already playing. Each pad plays through a gain node of its
   own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
   when stopped, counts as playing until it is silent, and is cut by a second stop. The mix

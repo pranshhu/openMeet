@@ -265,7 +265,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   then on are in its camera MP4 and its backup, where they used to be recorded
   only from the next take. The WAV master still holds the microphone alone.
   What a pad plays while your microphone is off is not recorded in that one
-  take.
+  take, and the board says so while it is off.
 
 ### Fixed
 

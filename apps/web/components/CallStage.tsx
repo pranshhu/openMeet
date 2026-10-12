@@ -516,7 +516,8 @@ export function CallStage({
     setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="People"]')?.focus());
   }
   // First opened mid-take: that take's recorder keeps the raw mic (a running
-  // MediaRecorder can't swap tracks), so its pads aren't in the file. Only
+  // MediaRecorder can't swap tracks). Its pads reach the file only where the
+  // board could mix them into that track, and only while the mic is on. Only
   // that take: the next one starts with the board already in the mix.
   const [boardMidTake, setBoardMidTake] = useState(false);
   useEffect(() => {
@@ -1072,7 +1073,8 @@ export function CallStage({
             {boardOpen && (
               <MediaBoardPanel
                 board={board}
-                midTake={boardMidTake}
+                midTake={boardMidTake && !board?.recordsInRunningTake}
+                micOffInTake={boardMidTake && !!board?.recordsInRunningTake && !micOn}
                 onFire={(name) => onMark(name)}
                 onClose={() => setBoardOpen(false)}
               />
