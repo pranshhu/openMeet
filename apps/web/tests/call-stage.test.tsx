@@ -2626,3 +2626,323 @@ describe('CallStage: stop incoming video', () => {
     expect(within(line).getByRole('button', { name: 'Show video' })).toHaveClass('min-h-11');
   });
 });
+
+describe('CallStage: a private message arrives', () => {
+  it('says in the pop-up that it was sent privately', () => {
+    const { rerender } = render(<CallStage {...baseProps} />);
+    rerender(
+      <CallStage
+        {...baseProps}
+        messages={[{ from: 'producer' as const, text: 'two minutes', ts: 1, fromName: 'Pat', private: true }]}
+      />
+    );
+    const popup = screen.getByRole('status');
+    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from a producer');
+    expect(popup).toHaveTextContent('Private · from a producerPat');
+    expect(popup).toHaveTextContent('two minutes');
+  });
+});
+
+describe('CallStage: a chat message for one person', () => {
+  const bob = { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' as const };
+  const pat = { peerId: 'p-pat', name: 'Pat', stream: null, role: 'producer' as const };
+  const nameless = { peerId: 'p-anon', name: null, stream: null, role: 'host' as const };
+  const secondScreen = { peerId: 'p-screen', name: 'Bob', stream: null, role: 'guest' as const, companion: true };
+  const fromPat = {
+    from: 'producer' as const,
+    text: 'two minutes',
+    ts: 1,
+    fromName: 'Pat',
+    fromPeerId: 'p-pat',
+    private: true,
+  };
+  const toAll = { from: 'guest' as const, text: 'hello all', ts: 2, fromName: 'Bob', fromPeerId: 'p-bob' };
+  const to = () => screen.getByLabelText('To') as HTMLSelectElement;
+  const say = (text: string) => {
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+  };
+
+  it('lists the people in the call under To and hands the choice to the room', () => {
+    const onSendChat = vi.fn();
+    render(<CallStage {...baseProps} remotePeers={[bob, pat, nameless, secondScreen]} onSendChat={onSendChat} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    // A present-only device is someone's second screen, not a person to write to.
+    expect(Array.from(to().options).map((o) => [o.value, o.textContent])).toEqual([
+      ['', 'Everyone'],
+      ['p-bob', 'Guest 1: Bob'],
+      ['p-pat', 'Producer 2: Pat'],
+      ['p-anon', 'Host: Host'],
+    ]);
+
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    expect(to().value).toBe('p-pat');
+    say('two minutes');
+    expect(onSendChat).toHaveBeenLastCalledWith('two minutes', 'p-pat');
+  });
+
+  it('keeps the person chosen while chat is closed, also when a message for everyone arrives meanwhile', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+
+    rerender(<CallStage {...props} messages={[toAll]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-pat');
+    say('wrap up');
+    expect(onSendChat).toHaveBeenLastCalledWith('wrap up', 'p-pat');
+  });
+
+  it('opens chat addressed to the sender of a private message that arrived while it was closed', () => {
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+
+    // From the pop-up: the commonest way to answer.
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Producer 1\s*Pat/ }));
+    expect(to().value).toBe('p-pat');
+    expect(document.getElementById('chat-to-note')?.textContent).toBe(
+      'Only Producer 1 (Pat) gets it. It is left out of the recorded chat.'
+    );
+  });
+
+  it('does the same from the Chat button, once: a choice made after reading it is left alone', () => {
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-pat');
+
+    fireEvent.change(to(), { target: { value: '' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('');
+  });
+
+  const goneNote = 'That person left the call or reconnected. Choose who to send to.';
+
+  it('keeps the person chosen after a message is sent to them', () => {
+    const onSendChat = vi.fn();
+    render(<CallStage {...baseProps} remotePeers={[bob, pat]} onSendChat={onSendChat} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    say('one');
+    expect(to().value).toBe('p-pat');
+    say('two');
+    expect(onSendChat.mock.calls).toEqual([
+      ['one', 'p-pat'],
+      ['two', 'p-pat'],
+    ]);
+  });
+
+  it('keeps the person chosen when chat is closed from the panel, by its button or by Escape', () => {
+    render(<CallStage {...baseProps} remotePeers={[bob, pat]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close chat' }));
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Escape' });
+    expect(screen.queryByTestId('chat-column')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+  });
+
+  it('sends nothing once the person chosen has left, and never turns the choice into everyone', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, onSendChat };
+    const { rerender } = render(<CallStage {...props} remotePeers={[bob, pat, nameless]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-pat' } });
+
+    // Pat leaves, or comes back under a new id.
+    rerender(<CallStage {...props} remotePeers={[bob, nameless]} />);
+    expect(to().value).toBe('p-pat');
+    expect(screen.getByText(goneNote)).toBeInTheDocument();
+    say('for Pat only');
+    expect(onSendChat).not.toHaveBeenCalled();
+
+    // Closed and opened again, it is still held back.
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(to().value).toBe('p-pat');
+    say('for Pat only');
+    expect(onSendChat).not.toHaveBeenCalled();
+  });
+
+  it('addresses the sender of an unread private message when a message for everyone arrived after it', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    rerender(<CallStage {...props} messages={[fromPat, toAll]} />);
+
+    fireEvent.click(screen.getByLabelText('Chat, 2 unread'));
+    expect(to().value).toBe('p-pat');
+    say('on it');
+    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-pat');
+  });
+});
+
+describe('CallStage: a private mark no name can draw, and a recipient that stays', () => {
+  const bob = { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' as const };
+  const pat = { peerId: 'p-pat', name: 'Pat', stream: null, role: 'producer' as const };
+  const secondScreen = { peerId: 'p-screen', name: 'Bob', stream: null, role: 'guest' as const, companion: true };
+  const fromPat = {
+    from: 'producer' as const,
+    text: 'two minutes',
+    ts: 1,
+    fromName: 'Pat',
+    fromPeerId: 'p-pat',
+    private: true,
+  };
+  const to = () => screen.getByLabelText('To') as HTMLSelectElement;
+  const say = (text: string) => {
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+  };
+
+  it('keeps the person you chose when someone else writes privately', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('p-bob');
+    say('on it');
+    expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-bob');
+  });
+
+  it('keeps a chosen person who has left as the choice when someone else writes privately, and sends nothing', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} remotePeers={[pat]} messages={[fromPat]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().selectedOptions[0]?.textContent).toBe('Not available');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That person left the call or reconnected. Choose who to send to.'
+    );
+    say('on it');
+    expect(onSendChat).not.toHaveBeenCalled();
+  });
+
+  it('does not address a sender who has left, or a present-only device', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat, secondScreen], onSendChat };
+    const fromSomeoneGone = { ...fromPat, fromPeerId: 'p-left' };
+    const fromSecondScreen = { ...fromPat, fromPeerId: 'p-screen' };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromSomeoneGone]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('');
+    say('hello');
+    expect(onSendChat).toHaveBeenLastCalledWith('hello');
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    rerender(<CallStage {...props} messages={[fromSomeoneGone, fromSecondScreen]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().value).toBe('');
+  });
+
+  it('answers the newest of several people who wrote privately', () => {
+    const fromBob = { from: 'guest' as const, text: 'psst', ts: 3, fromName: 'Bob', fromPeerId: 'p-bob', private: true };
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat, fromBob]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 2 unread'));
+    expect(to().value).toBe('p-bob');
+  });
+
+  it('the pop-up marks a private message and not a name that claims it', () => {
+    const props = { ...baseProps, remotePeers: [bob, pat] };
+    const claim = { from: 'guest' as const, text: 'hi all', ts: 2, fromName: 'Hana, privately to you' };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromPat]} />);
+    expect(screen.getByRole('status').querySelector('[data-private-mark]')).toHaveTextContent(
+      'Private · from Producer 1'
+    );
+
+    rerender(<CallStage {...props} messages={[fromPat, claim]} />);
+    expect(screen.getByRole('status').querySelector('[data-private-mark]')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Hana, privately to you');
+  });
+
+  it('lists a person whose role the Room did not give as a guest under To', () => {
+    const dee = { peerId: 'p-dee', name: 'Dee', stream: null, role: undefined };
+    render(<CallStage {...baseProps} remotePeers={[bob, dee]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(Array.from(to().options).map((o) => o.textContent)).toEqual(['Everyone', 'Guest 1: Bob', 'Guest 2: Dee']);
+  });
+
+  it('keeps a label with its person when someone who reads the same reconnects', () => {
+    const other = { peerId: 'p-other', name: 'Bob', stream: null, role: 'guest' as const };
+    const bobAgain = { ...bob, peerId: 'p-bob-again' };
+    const options = () => Array.from(to().options).map((o) => o.textContent);
+    const { rerender } = render(<CallStage {...baseProps} remotePeers={[bob, other]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(options()).toEqual(['Everyone', 'Guest 1: Bob', 'Guest 2: Bob']);
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...baseProps} remotePeers={[other, bobAgain]} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    expect(options()).toEqual(['Everyone', 'Guest 2: Bob', 'Guest 3: Bob']);
+  });
+});
+
+describe('CallStage: the pop-up names a private sender in the page’s words', () => {
+  it('shows the number the chat list gives the same person, and sets the name apart', () => {
+    const bob = { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' as const };
+    const dee = { peerId: 'p-dee', name: 'Dee', stream: null, role: 'guest' as const };
+    const fromDee = { from: 'guest' as const, text: 'psst', ts: 1, fromName: 'Dee', fromPeerId: 'p-dee', private: true };
+    const props = { ...baseProps, remotePeers: [bob, dee] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[fromDee]} />);
+
+    const popup = screen.getByRole('status');
+    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from Guest 1');
+    expect(popup.querySelector('bdi')?.textContent).toBe('Dee');
+
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Guest 1\s*Dee/ }));
+    expect(Array.from((screen.getByLabelText('To') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
+      'Everyone',
+      'Guest 2: Bob',
+      'Guest 1: Dee',
+    ]);
+  });
+});
+
+describe('CallStage: the pop-up of a line for everyone starts with the page’s words', () => {
+  it('a name that types the private mark does not read as a private pop-up', () => {
+    const mal = { peerId: 'p-mal', name: 'Private · from HostAna', stream: null, role: 'guest' as const };
+    const toAll = {
+      from: 'guest' as const,
+      text: 'send it to me',
+      ts: 1,
+      fromName: 'Private · from HostAna',
+      fromPeerId: 'p-mal',
+    };
+    const props = { ...baseProps, remotePeers: [mal] };
+    const { rerender } = render(<CallStage {...props} />);
+    rerender(<CallStage {...props} messages={[toAll]} />);
+
+    const popup = screen.getByRole('status');
+    expect(popup.textContent).toBe('To everyone: Private · from HostAnasend it to me');
+    expect(popup.querySelector('[data-private-mark]')).toBeNull();
+  });
+});

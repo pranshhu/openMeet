@@ -928,3 +928,94 @@ describe('sending the host a file', () => {
     expect(screen.getByText('Hang tight — the call starts as soon as the host arrives.')).toBeInTheDocument();
   });
 });
+
+describe('chat', () => {
+  it('hands the hook the person a message was written to, with its text', () => {
+    Object.assign(state, inCall, {
+      remotePeers: [
+        { peerId: 'p-carol', name: 'Carol', stream: null, role: 'guest' },
+        { peerId: 'p-dan', name: 'Dan', stream: null, role: 'guest' },
+      ],
+    });
+    hook.sendChat = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'p-dan' } });
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'psst' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+
+    expect(hook.sendChat).toHaveBeenCalledTimes(1);
+    expect(hook.sendChat).toHaveBeenCalledWith('psst', 'p-dan');
+  });
+
+  it('keeps a number with its person after everyone else left and others joined', () => {
+    const options = () =>
+      Array.from((screen.getByLabelText('To') as HTMLSelectElement).options).map((o) => o.textContent);
+    const mark = () => document.querySelector('[data-private-mark]')?.textContent;
+    Object.assign(state, inCall, {
+      role: 'host',
+      localStream: empty,
+      remotePeers: [
+        { peerId: 'p-ana', name: 'Ana', stream: null, role: 'guest' },
+        { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest' },
+      ],
+      messages: [{ from: 'host', text: 'for Ana', ts: 1, self: true, private: true, toPeerId: 'p-ana', toRole: 'guest' }],
+    });
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    expect(options()).toEqual(['Everyone', 'Guest 1: Ana', 'Guest 2: Bob']);
+    expect(mark()).toBe('Private · to Guest 1');
+
+    Object.assign(state, { phase: 'peer-left', remotePeers: [] });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Everyone else left')).toBeInTheDocument();
+
+    Object.assign(state, {
+      phase: 'in-call',
+      remotePeers: [
+        { peerId: 'p-mal', name: 'Ana', stream: null, role: 'guest' },
+        { peerId: 'p-ned', name: 'Ned', stream: null, role: 'guest' },
+      ],
+    });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    expect(options()).toEqual(['Everyone', 'Guest 3: Ana', 'Guest 4: Ned']);
+    expect(mark()).toBe('Private · to Guest 1');
+  });
+
+  it('keeps the person chosen under To after everyone else left, and sends nothing to everyone in their place', () => {
+    const guests = (ids: [string, string][]) =>
+      ids.map(([peerId, name]) => ({ peerId, name, stream: null, role: 'guest' }));
+    Object.assign(state, inCall, {
+      role: 'host',
+      localStream: empty,
+      remotePeers: guests([['p-ana', 'Ana'], ['p-bob', 'Bob']]),
+    });
+    hook.sendChat = vi.fn();
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'p-ana' } });
+
+    Object.assign(state, { phase: 'peer-left', remotePeers: [] });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Everyone else left')).toBeInTheDocument();
+
+    Object.assign(state, { phase: 'in-call', remotePeers: guests([['p-bob-2', 'Bob']]) });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByLabelText(/^Chat/));
+    const to = screen.getByLabelText('To') as HTMLSelectElement;
+    expect(to.selectedOptions[0]?.textContent).toBe('Not available');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That person left the call or reconnected. Choose who to send to.'
+    );
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'the number is 4411' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+    expect(hook.sendChat).not.toHaveBeenCalled();
+
+    fireEvent.change(to, { target: { value: '' } });
+    fireEvent.submit(screen.getByTestId('chat-form'));
+    expect(hook.sendChat).toHaveBeenCalledTimes(1);
+    expect(hook.sendChat).toHaveBeenCalledWith('the number is 4411');
+  });
+});

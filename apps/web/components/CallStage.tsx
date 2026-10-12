@@ -12,7 +12,7 @@ import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
-import { ChatPanel, chatSenderLabel, type ChatMessage } from './ChatPanel';
+import { ChatPanel, chatSenderLabel, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
@@ -117,6 +117,9 @@ export function CallStage({
   onEnd,
   onLeave,
   onSendChat,
+  chatNumbers: roomNumbers,
+  chatTo: roomTo,
+  onChatTo,
   slug,
   onMark,
   markerCount,
@@ -211,7 +214,12 @@ export function CallStage({
   onRecord: () => void;
   onEnd: () => void;
   onLeave: () => void;
-  onSendChat: (text: string) => void;
+  onSendChat: (text: string, to?: string) => void;
+  /** The numbers this page gave people under To, kept by whoever outlives this screen. */
+  chatNumbers?: Map<string, number>;
+  /** Who the next chat message is for, and how it is changed, kept by whoever outlives this screen. */
+  chatTo?: string;
+  onChatTo?: (to: string) => void;
   slug: string;
   /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
   onMark: (label: string, at?: number) => void;
@@ -414,6 +422,21 @@ export function CallStage({
   }
 
   const [chatOpen, setChatOpen] = useState(false);
+  // Who the next chat message is for: '' is everyone, otherwise a peerId. Kept
+  // outside the panel, which unmounts when chat closes: a person chosen for
+  // one message must still be chosen when chat opens again, or the next
+  // message meant for them goes to everyone. The caller keeps it, because
+  // this screen is unmounted too while everyone else is away; without a
+  // caller it lasts as long as this screen.
+  const [ownTo, setOwnTo] = useState('');
+  const chatTo = roomTo ?? ownTo;
+  const setChatTo = onChatTo ?? setOwnTo;
+  // The numbers this page gave people under To: a number is never handed to
+  // another person when someone leaves or reconnects. The caller keeps
+  // them, because this screen is unmounted while everyone else is away;
+  // without a caller they last as long as this screen.
+  const [ownNumbers] = useState(() => new Map<string, number>());
+  const chatNumbers = roomNumbers ?? ownNumbers;
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {
@@ -435,6 +458,16 @@ export function CallStage({
   function openChat(open: boolean) {
     setChatOpen(open);
     if (open) setSummaryOpen(false);
+    // Opened on "Everyone" with a private message among those that arrived
+    // while chat was closed: address the sender of the newest one, so the
+    // answer does not go to everyone. A person the reader chose is never
+    // replaced, or whoever writes privately would decide where the reader's
+    // next message goes; and a sender who has left is not addressed.
+    const sender = messages
+      .slice(messages.length - unread)
+      .filter((m) => m.private && m.fromPeerId)
+      .pop()?.fromPeerId;
+    if (sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -447,7 +480,7 @@ export function CallStage({
   }, [chatOpen, messages.length]);
   const unread = chatOpen ? 0 : messages.length - seenCount;
 
-  const [popup, setPopup] = useState<{ sender: string; text: string } | null>(null);
+  const [popup, setPopup] = useState<{ sender: string; text: string; privateDetail?: string } | null>(null);
   const prevMessagesLengthRef = useRef(messages.length);
 
   useEffect(() => {
@@ -457,6 +490,7 @@ export function CallStage({
         const text = newest.text.length > 120 ? `${newest.text.slice(0, 120)}…` : newest.text;
         setPopup({
           sender: chatSenderLabel(newest),
+          ...(newest.private ? { privateDetail: privateDetail(newest, chatNumbers) } : {}),
           text,
         });
       }
@@ -532,7 +566,7 @@ export function CallStage({
       if (!singleKeysOn()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       onMark('');
     };
     window.addEventListener('keydown', onKey);
@@ -571,6 +605,15 @@ export function CallStage({
   // Guests the host can choose. A present-only device is listed only while it
   // is set, so a guest who was set and came back that way can be ticked again.
   const choosable = remotePeers.filter((p) => p.role === 'guest' && (!p.companion || p.notRecorded));
+  // Who a chat message can be sent to on its own. A present-only device is
+  // someone's second screen, not a person to write to.
+  const chatRecipients = remotePeers
+    .filter((p) => !p.companion)
+    .map((p) => ({
+      peerId: p.peerId,
+      name: p.name || (p.role === 'host' ? 'Host' : p.role === 'producer' ? 'Producer' : 'Guest'),
+      role: p.role ?? 'guest',
+    }));
   const phone = isPhone();
   const faceTrackEnded = !localStream?.getVideoTracks()[0] || localStream.getVideoTracks()[0]?.readyState === 'ended';
   const rearCameraEndsFace = !!presentingRearCamera && (phone || !!isFallbackMedia || faceTrackEnded);
@@ -685,7 +728,10 @@ export function CallStage({
         }}
         className="w-full rounded-xl bg-[#202124]/95 p-3 text-left shadow-2xl ring-1 ring-white/10 backdrop-blur transition hover:bg-[#2d2f34] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
       >
-        <span className="block text-xs font-medium text-white/70">{popup.sender}</span>
+        <span className="block text-xs font-medium text-white/70">
+          {popup.privateDetail ? <PrivateMark detail={popup.privateDetail} /> : <PublicMark />}
+          <bdi>{popup.sender}</bdi>
+        </span>
         <span className="block text-sm text-white/95 wrap-anywhere">{popup.text}</span>
       </button>
     </div>
@@ -1607,7 +1653,16 @@ export function CallStage({
             data-testid="chat-column"
             className="absolute inset-0 z-20 sm:static sm:z-0 sm:w-80 sm:shrink-0 sm:pb-5 sm:pr-2 sm:pt-2"
           >
-            <ChatPanel messages={messages} onSend={onSendChat} onClose={closeChat} onSendFile={onSendFile} />
+            <ChatPanel
+              messages={messages}
+              recipients={chatRecipients}
+              to={chatTo}
+              onTo={setChatTo}
+              numbers={chatNumbers}
+              onSend={onSendChat}
+              onClose={closeChat}
+              onSendFile={onSendFile}
+            />
           </div>
         )}
 
