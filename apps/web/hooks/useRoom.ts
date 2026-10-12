@@ -2485,8 +2485,9 @@ export function useRoom(slug: string) {
    * (withBoardAudio), and in the MP4 and backup of every take STARTED later. The
    * WAV master keeps the raw mic (micStream), so a sting is never baked into the
    * uncompressed master where it could not be re-timed. A take already running
-   * keeps the mic it started with — a live MediaRecorder can't have its track
-   * swapped — so its pads survive only as chapter markers.
+   * keeps the track it started with — a live MediaRecorder can't have its track
+   * swapped — so the pads alone are mixed into that track (mixIn); where there is
+   * no such graph they survive only as chapter markers.
    */
   const openMediaBoard = useCallback((): MediaBoard | null => {
     if (boardRef.current) return boardRef.current;
@@ -2494,7 +2495,11 @@ export function useRoom(slug: string) {
     if (!mic || mic.getAudioTracks().length === 0) return null;
     let board: MediaBoard;
     try {
-      board = new MediaBoard(mic);
+      // The mix is built on the microphone alone, and the pads alone go onto the
+      // stable track: a take that is already recording holds that track, and a
+      // mix built on it would carry every pad twice.
+      const media = switchableMediaRef.current;
+      board = new MediaBoard(media?.micStream ?? mic, undefined, (pads) => media?.mixIn(pads) ?? false);
     } catch {
       return null; // no Web Audio here; the call is unaffected
     }

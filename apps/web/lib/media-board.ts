@@ -11,6 +11,10 @@
  * full quality — so recording them again would be strictly worse than recording
  * *when* each one fired. Each trigger drops a chapter marker instead.
  *
+ * A take that is already recording when the board is made holds the microphone's
+ * own track and cannot be handed this mix, so the pads alone are also offered to
+ * `mixIn`, which puts them on that track.
+ *
  * Files are read locally and never uploaded, consistent with the rest of openMeet.
  */
 
@@ -33,6 +37,12 @@ export interface Pad {
 type Ctor = new (options?: AudioContextOptions) => AudioContext;
 
 export class MediaBoard {
+  /**
+   * Whether `mixIn` took the pads: a take that was already recording when
+   * this board was made then has them in its MP4 and backup too.
+   */
+  readonly recordsInRunningTake: boolean;
+
   private ctx: AudioContext;
   private dest: MediaStreamAudioDestinationNode;
   private monitor: MediaStreamAudioDestinationNode;
@@ -43,7 +53,7 @@ export class MediaBoard {
   private _pads: Pad[] = [];
   private seq = 0;
 
-  constructor(micStream: MediaStream, ctxCtor?: Ctor) {
+  constructor(micStream: MediaStream, ctxCtor?: Ctor, mixIn?: (pads: MediaStream) => boolean) {
     const C = ctxCtor ?? ((globalThis as unknown as { AudioContext: Ctor }).AudioContext);
     // The mix takes the microphone's place in the MP4, so it runs at the rate
     // the WAV master is recorded at, not at the output device's.
@@ -57,6 +67,9 @@ export class MediaBoard {
     // is the microphone everyone hears and the MP4 records.
     this.monitor = this.ctx.createMediaStreamDestination();
     this.stopMonitor = playLocally(this.monitor.stream);
+    // The pads alone, the stream that person hears: mixed into a track that
+    // already carries the microphone, they are recorded once, beside it.
+    this.recordsInRunningTake = mixIn?.(this.monitor.stream) ?? false;
   }
 
   get pads(): Pad[] {

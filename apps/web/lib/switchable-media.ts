@@ -345,6 +345,23 @@ export class SwitchableMedia {
     }
   }
 
+  /**
+   * Mix a sound into `stream` beside the microphone: the track every recorder
+   * that is already running holds, so a take in progress records the sound
+   * from here on with no change of track. `micStream` never carries it. False
+   * where there is no audio graph to mix into (the raw-track fallback), or
+   * where the graph refuses the sound.
+   */
+  mixIn(sound: MediaStream): boolean {
+    if (!this.audioCtx || !this.destinationNode) return false;
+    try {
+      this.audioCtx.createMediaStreamSource(sound).connect(this.destinationNode);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   setAudioEnabled(enabled: boolean): void {
     this.stream.getAudioTracks().forEach((t) => (t.enabled = enabled));
     // Off in the app is off in the master too.

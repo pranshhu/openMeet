@@ -8,6 +8,7 @@ import {
 } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { SwitchableMedia } from '@/lib/switchable-media';
+import { MediaBoard } from '@/lib/media-board';
 import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
 import { installStableGraph, type FakeGraphContext } from './stable-graph-fakes';
 
@@ -268,5 +269,121 @@ describe('the uncompressed master in a call', () => {
     const args = vi.mocked(resumeHostRecording).mock.calls[0]![0];
     expect(args.localStream.getAudioTracks()).toEqual(stable!.stream.getAudioTracks());
     expect(args.micStream).toBe(micOnly!.stream);
+  });
+});
+
+describe('SwitchableMedia.mixIn', () => {
+  it('puts a sound on the stable track, beside the microphone, and never on the microphone-only one', () => {
+    const sm = new SwitchableMedia(lobby());
+    const [stable, micOnly] = graphs[0]!.dests;
+    const pads = new MediaStream([track('audio', 'pads')]);
+
+    expect(sm.mixIn(pads)).toBe(true);
+
+    const padsIn = graphs[0]!.sources.find((s) => s.stream === pads)!;
+    expect(connectedTo(padsIn)).toHaveLength(1);
+    expect(connectedTo(padsIn)).toContain(stable);
+    expect(connectedTo(padsIn)).not.toContain(micOnly);
+    // The microphone's own path is left as it was: same tracks, never disconnected.
+    expect(graphs[0]!.sources[0]!.disconnect).not.toHaveBeenCalled();
+    expect(sm.stream.getAudioTracks()).toEqual(stable!.stream.getAudioTracks());
+    expect(sm.micStream).toBe(micOnly!.stream);
+  });
+
+  it('answers false when the graph refuses the sound, and where there is no graph', () => {
+    const sm = new SwitchableMedia(lobby());
+    // A stream with no audio track is one the graph cannot read.
+    expect(sm.mixIn(new MediaStream())).toBe(false);
+
+    // No MediaStreamTrackGenerator: the raw-track fallback.
+    vi.unstubAllGlobals();
+    const fallback = new SwitchableMedia(lobby());
+    expect(fallback.isFallback).toBe(true);
+    expect(fallback.mixIn(new MediaStream([track('audio', 'pads')]))).toBe(false);
+  });
+});
+
+describe('MediaBoard: the pads offered to a take that is already recording', () => {
+  afterEach(() => {
+    document.querySelectorAll('audio').forEach((a) => a.remove());
+  });
+
+  it('offers the pads alone, never the mix, and reports whether they were taken', () => {
+    const mixIn = vi.fn((_pads: MediaStream) => true);
+    const board = new MediaBoard(new MediaStream([track('audio', 'mic-only')]), undefined, mixIn);
+    const [mix, padsOnly] = graphs[0]!.dests;
+
+    // The microphone feeds the mix alone, so the other node holds only the pads.
+    expect(connectedTo(graphs[0]!.sources[0]!)).toContain(mix);
+    expect(connectedTo(graphs[0]!.sources[0]!)).not.toContain(padsOnly);
+    expect(mixIn).toHaveBeenCalledTimes(1);
+    expect(mixIn.mock.calls[0]![0]).toBe(padsOnly!.stream);
+    expect(board.recordsInRunningTake).toBe(true);
+    board.close();
+  });
+
+  it('reports false when nothing takes them', () => {
+    const alone = new MediaBoard(new MediaStream([track('audio', 'mic-only')]));
+    const refused = new MediaBoard(new MediaStream([track('audio', 'mic-only')]), undefined, () => false);
+    expect(alone.recordsInRunningTake).toBe(false);
+    expect(refused.recordsInRunningTake).toBe(false);
+    alone.close();
+    refused.close();
+  });
+});
+
+describe('a media board first opened during a take', () => {
+  it('puts its pads on the track that take records, and nowhere near the master', async () => {
+    const { result } = await joinAs('host', []);
+    act(() => {
+      emit('peer-joined', { peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+    const take = vi.mocked(startHostRecording).mock.calls[0]![0];
+
+    const board = result.current.openMediaBoard();
+
+    // Contexts in the order they were made: the call's own, then the board's.
+    const [stable, micOnly] = graphs[0]!.dests;
+    const [mix, padsOnly] = graphs[1]!.dests;
+    // The pads alone are connected to the node whose track the running take holds.
+    const padsIn = graphs[0]!.sources.find((s) => s.stream === padsOnly!.stream);
+    expect(padsIn).toBeDefined();
+    expect(connectedTo(padsIn!)).toHaveLength(1);
+    expect(connectedTo(padsIn!)).toContain(stable);
+    expect(take.localStream.getAudioTracks()).toEqual(stable!.stream.getAudioTracks());
+    // The master's track is never theirs.
+    expect(connectedTo(padsIn!)).not.toContain(micOnly);
+    expect(take.micStream).toBe(micOnly!.stream);
+    // The mix the call hears is built on the microphone alone: built on the
+    // stable track it would carry every pad twice.
+    expect(graphs[1]!.sources).toHaveLength(1);
+    expect(graphs[1]!.sources[0]!.stream).toBe(micOnly!.stream);
+    expect(connectedTo(graphs[1]!.sources[0]!)).toContain(mix);
+    expect(peers).toHaveLength(1);
+    expect(peers[0].replaceAudioTrack.mock.calls[0][0]).toBe(mix!.stream.getAudioTracks()[0]);
+    // No recorder is restarted and the voice's path is not touched.
+    expect(vi.mocked(startHostRecording)).toHaveBeenCalledTimes(1);
+    expect(graphs[0]!.sources[0]!.disconnect).not.toHaveBeenCalled();
+    expect(board!.recordsInRunningTake).toBe(true);
+  });
+
+  it('leaves the pads out of that take where there is no stable stream', async () => {
+    // An audio context for the board, but no track generator: the raw-track fallback.
+    vi.stubGlobal('MediaStreamTrackGenerator', undefined);
+    const { result } = await joinAs('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+    expect(result.current.state.isFallbackMedia).toBe(true);
+
+    const board = result.current.openMediaBoard();
+
+    expect(board!.recordsInRunningTake).toBe(false);
+    // Only the board made a context, and all it reads is the stream the call has.
+    expect(graphs).toHaveLength(1);
+    expect(graphs[0]!.sources).toHaveLength(1);
+    expect(graphs[0]!.sources[0]!.stream).toBe(result.current.state.localStream);
+    expect(peers).toHaveLength(1);
+    expect(peers[0].replaceAudioTrack.mock.calls[0][0]).toBe(graphs[0]!.dests[0]!.stream.getAudioTracks()[0]);
   });
 });

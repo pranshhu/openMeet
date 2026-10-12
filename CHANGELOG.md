@@ -248,7 +248,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Each camera backup is encoded at the same bitrate as the file it backs up
   (it was 5 Mbps at every resolution).
 - Audio is recorded in mono by default, which halves the uncompressed master
-  (about 518 MB per hour per person). A take recorded with the media board open
+  (about 518 MB per hour per person). A take started with the media board open
   has a two-channel audio track in its camera MP4, so stereo pads keep their
   stereo; the voice is the same on both channels and the WAV master stays mono.
 - The host's recording files carry the host's name after the role:
@@ -261,6 +261,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Record another take** is offered when everyone else has left too, and records the
   host alone, in place of the Copy invite link the summary showed then. A host with
   nobody else in the room can present, and the screen is recorded to its own file.
+- A media board opened during a take is recorded in that take: pads fired from
+  then on are in its camera MP4 and its backup, where they used to be recorded
+  only from the next take. The WAV master still holds the microphone alone.
+  What a pad plays while your microphone is off is not recorded in that one
+  take.
 
 ### Fixed
 
