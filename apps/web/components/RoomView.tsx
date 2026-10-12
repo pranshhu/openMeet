@@ -118,6 +118,14 @@ export function RoomView({ slug }: { slug: string }) {
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised, sendReaction,
     declineFiles, sendFile,
   } = useRoom(slug);
+  // The numbers this page gave people under To. Held here because the call
+  // screen is unmounted while everyone else is away and the chat lines are
+  // not: a line kept from before must still show the number it showed.
+  const [chatNumbers] = useState(() => new Map<string, number>());
+  // Who the next chat message is for, held here for the same reason: a
+  // person chosen before everyone left is still the choice when the call
+  // screen is back, or a message written for them would go to everyone.
+  const [chatTo, setChatTo] = useState('');
   const producer = isProducerLink();
   const present = isPresentLink();
   const check = isCheckLink();
@@ -353,6 +361,9 @@ export function RoomView({ slug }: { slug: string }) {
       recordBlocked={record.blocked}
       recordUnavailableReason={record.reason}
       messages={state.messages}
+      chatNumbers={chatNumbers}
+      chatTo={chatTo}
+      onChatTo={setChatTo}
       peerPresence={state.remotePeers.find(isStagePeer)?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}
