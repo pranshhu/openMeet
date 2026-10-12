@@ -23,7 +23,7 @@ export function useMarkerNote(recording: boolean): [boolean, (open: boolean) => 
       if (!singleKeysOn()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       // The field takes focus while this key is still being handled; cancelling
       // the key keeps its letter out of the note.
       e.preventDefault();
