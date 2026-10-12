@@ -252,6 +252,39 @@ describe('recoverTake', () => {
     expect(new DataView(calls[3]!.data as ArrayBuffer).getUint32(0, true)).toBe(1000);
   });
 
+  it.each([
+    [1, 65535],
+    [2, 65532],
+  ])('declares only whole sample frames for a rebuilt WAV of %i channel(s) that was cut part-way through one', async (channels, declared) => {
+    // A crash copy ends where a 64 KiB piece of the stream ended, which is not a frame boundary.
+    const header = new Blob([wavHeader({ sampleRate: 48000, channels, bitDepth: 24 }, 0)]);
+    const notes = notesWith({ files: [{ file: 'guest_r.wav', kind: 'wav', slot: 0 }] });
+    const { journal } = fakeJournal(notes, {
+      'guest_r.wav': { parts: [{ offset: 0, size: 44, data: header }, part(44, 65536)] },
+    });
+    const folder = fakeFolder();
+
+    await recoverTake(journal, folderOf(folder));
+
+    const calls = folder.opened[0]!.writable.calls;
+    expect(calls.map((c) => c.position)).toEqual([0, 44, 4, 40]);
+    expect(new DataView(calls[2]!.data as ArrayBuffer).getUint32(0, true)).toBe(36 + declared);
+    expect(new DataView(calls[3]!.data as ArrayBuffer).getUint32(0, true)).toBe(declared);
+  });
+
+  it('declares the length as it is for a rebuilt WAV whose crash copy has no header part', async () => {
+    const notes = notesWith({ files: [{ file: 'guest_r.wav', kind: 'wav', slot: 0 }] });
+    const { journal } = fakeJournal(notes, { 'guest_r.wav': { parts: [part(44, 65536)] } });
+    const folder = fakeFolder();
+
+    await recoverTake(journal, folderOf(folder));
+
+    const calls = folder.opened[0]!.writable.calls;
+    expect(calls.map((c) => c.position)).toEqual([44, 4, 40]);
+    expect(new DataView(calls[1]!.data as ArrayBuffer).getUint32(0, true)).toBe(36 + 65536);
+    expect(new DataView(calls[2]!.data as ArrayBuffer).getUint32(0, true)).toBe(65536);
+  });
+
   it('leaves a WAV whose final write already is the real header', async () => {
     // Removal that must fail this test: the last.offset !== 0 condition, so
     // every WAV gets patched.
@@ -990,12 +1023,12 @@ describe('saving a take from its crash copy', () => {
     // The closing page committed the folder's file whole, with the placeholder header.
     const take = await crashedTake({ 'guest_rec1.wav': 2 });
     const folder = new DiskFolder();
-    folder.files.set('guest_rec1.wav', wavBytes(2456, 0));
+    folder.files.set('guest_rec1.wav', wavBytes(2454, 0));
 
     const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
 
-    expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2500, source: 'kept' }]);
-    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2456, 2456));
+    expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2498, source: 'kept' }]);
+    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2454, 2454));
     expect(result.kept).toBeUndefined();
   });
 
@@ -1012,33 +1045,44 @@ describe('saving a take from its crash copy', () => {
 
     // The resume path copies the host's backups with this call alone.
     const resumed = new DiskFolder();
-    resumed.files.set('host_rec1.wav', wavBytes(2456, 0));
+    resumed.files.set('host_rec1.wav', wavBytes(2454, 0));
     expect(await copyBackupInto(journal, asFolder(resumed), entry)).toEqual({
       name: 'host_rec1.wav',
-      bytes: 2500,
+      bytes: 2498,
       source: 'kept',
     });
-    expect(resumed.files.get('host_rec1.wav')).toEqual(wavBytes(2456, 2456));
+    expect(resumed.files.get('host_rec1.wav')).toEqual(wavBytes(2454, 2454));
 
     const saved = new DiskFolder();
-    saved.files.set('host_rec1.wav', wavBytes(2456, 0));
+    saved.files.set('host_rec1.wav', wavBytes(2454, 0));
     const result = await saveRecoveredTake(journal, asFolder(saved));
-    expect(result.files).toContainEqual({ name: 'host_rec1.wav', bytes: 2500, source: 'kept' });
-    expect(saved.files.get('host_rec1.wav')).toEqual(wavBytes(2456, 2456));
+    expect(result.files).toContainEqual({ name: 'host_rec1.wav', bytes: 2498, source: 'kept' });
+    expect(saved.files.get('host_rec1.wav')).toEqual(wavBytes(2454, 2454));
     // Kept, as before the repair: the verdict of a file recorded on this computer.
     expect(reportIn(saved, 'sync_rec1.json').verification).toContainEqual(
-      expect.objectContaining({ file: 'host_rec1.wav', bytes: 2500, status: 'complete' })
+      expect.objectContaining({ file: 'host_rec1.wav', bytes: 2498, status: 'complete' })
     );
+  });
+
+  it('declares only whole sample frames for a kept WAV that ends part-way through one', async () => {
+    const take = await crashedTake({ 'guest_rec1.wav': 2 });
+    const folder = new DiskFolder();
+    folder.files.set('guest_rec1.wav', wavBytes(2456, 0));
+
+    await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    // 2456 bytes of mono 24-bit sound are 818 frames and two bytes of the next.
+    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2456, 2454));
   });
 
   it('leaves alone a kept WAV whose header is right, a kept .wav with no WAV header, and a kept .mp4', async () => {
     const take = await crashedTake({ 'guest_rec1.wav': 2, 'guest2_rec1.wav': 2, 'guest_rec1.mp4': 2 });
     const folder = new DiskFolder();
-    const right = wavBytes(2456, 2456);
+    const right = wavBytes(2454, 2454);
     // The header's bytes never landed: there is no format here to declare a length for.
-    const headless = wavBytes(2456, 0).fill(0, 0, WAV_HEADER_BYTES);
+    const headless = wavBytes(2454, 0).fill(0, 0, WAV_HEADER_BYTES);
     // An MP4 never starts like this; the name alone must keep the repair away from it.
-    const video = wavBytes(2456, 0);
+    const video = wavBytes(2454, 0);
     folder.files.set('guest_rec1.wav', right);
     folder.files.set('guest2_rec1.wav', headless);
     folder.files.set('guest_rec1.mp4', video);
@@ -1066,12 +1110,12 @@ describe('saving a take from its crash copy', () => {
 
     for (const folder of [cannotOpen, cannotWrite]) {
       const take = await crashedTake({ 'guest_rec1.wav': 2 });
-      folder.files.set('guest_rec1.wav', wavBytes(2456, 0));
+      folder.files.set('guest_rec1.wav', wavBytes(2454, 0));
 
       const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
 
-      expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2500, source: 'kept' }]);
-      expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2456, 0));
+      expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: 2498, source: 'kept' }]);
+      expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2454, 0));
     }
   });
 });

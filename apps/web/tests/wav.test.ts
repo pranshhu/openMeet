@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { wavHeader, f32ToS24LE, WAV_HEADER_BYTES } from '@/lib/wav';
+import { wavHeader, f32ToS24LE, WAV_HEADER_BYTES, wavFrameBytes, patchWavHeader } from '@/lib/wav';
 
 const str = (v: DataView, off: number, len: number) =>
   Array.from({ length: len }, (_, i) => String.fromCharCode(v.getUint8(off + i))).join('');
@@ -73,5 +73,66 @@ describe('f32ToS24LE', () => {
     // 0.5 * 8388607 = 4194303.5 -> 4194304 = 0x400000
     const out = new Uint8Array(f32ToS24LE(new Float32Array([0.5])));
     expect(Array.from(out)).toEqual([0x00, 0x00, 0x40]);
+  });
+});
+
+describe('wavFrameBytes', () => {
+  const fmt = (channels: number) => ({ sampleRate: 48000, channels, bitDepth: 24 });
+
+  it('reads the frame of a mono and of a stereo master from its header', () => {
+    expect(wavFrameBytes(wavHeader(fmt(1), 0))).toBe(3);
+    expect(wavFrameBytes(wavHeader(fmt(2), 0))).toBe(6);
+  });
+
+  it('reads 1 from a header that is short, or whose frame does not fit its channels and depth', () => {
+    expect(wavFrameBytes(new ArrayBuffer(43))).toBe(1);
+    expect(wavFrameBytes(new ArrayBuffer(WAV_HEADER_BYTES))).toBe(1);
+    const lying = wavHeader(fmt(1), 0);
+    new DataView(lying).setUint16(32, 60, true);
+    expect(wavFrameBytes(lying)).toBe(1);
+    // Consistent with itself, and far past any frame a master has.
+    const huge = wavHeader({ sampleRate: 48000, channels: 64, bitDepth: 24 }, 0);
+    expect(new DataView(huge).getUint16(32, true)).toBe(192);
+    expect(wavFrameBytes(huge)).toBe(1);
+  });
+
+  it('reads 1 from a header cut short, even where the bytes it keeps state a frame', () => {
+    const cut = wavHeader(fmt(1), 0);
+    expect(wavFrameBytes(cut.slice(0, 43))).toBe(1);
+    expect(wavFrameBytes(cut.slice(0, 10))).toBe(1);
+    expect(wavFrameBytes(new ArrayBuffer(0))).toBe(1);
+  });
+
+  it('takes a frame of up to 64 bytes and no more', () => {
+    expect(wavFrameBytes(wavHeader({ sampleRate: 48000, channels: 16, bitDepth: 32 }, 0))).toBe(64);
+    expect(wavFrameBytes(wavHeader({ sampleRate: 48000, channels: 65, bitDepth: 8 }, 0))).toBe(1);
+  });
+});
+
+describe('patchWavHeader', () => {
+  const writesOf = () => {
+    const writes = new Map<number, number>();
+    const writer = {
+      write: async (position: number, data: ArrayBuffer | ArrayBufferView) => {
+        writes.set(position, new DataView(data as ArrayBuffer).getUint32(0, true));
+      },
+    };
+    return { writes, writer };
+  };
+
+  it('declares the length it is given when no frame size is named', async () => {
+    const { writes, writer } = writesOf();
+    await patchWavHeader(writer, 5);
+    expect([...writes]).toEqual([
+      [4, 41],
+      [40, 5],
+    ]);
+  });
+
+  it('clamps both size fields to 0xFFFFFFFF past 4 GiB', async () => {
+    const { writes, writer } = writesOf();
+    await patchWavHeader(writer, 2 ** 32 + 5);
+    expect(writes.get(4)).toBe(0xffff_ffff);
+    expect(writes.get(40)).toBe(0xffff_ffff);
   });
 });

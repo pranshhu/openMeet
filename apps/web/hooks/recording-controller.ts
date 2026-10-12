@@ -1721,7 +1721,7 @@ export async function endHostRecording(
     if (total > 44) {
       const dataBytes = total - 44;
       try {
-        await patchWavHeader(writer, dataBytes);
+        await patchWavHeader(writer, dataBytes, receiver.frameBytes);
       } catch {
         // Writer may be closed or failing
       }

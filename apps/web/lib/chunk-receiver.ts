@@ -15,6 +15,7 @@ import type { FileWriter } from './fs-writer';
 import { StreamingSha256, type Sha256State } from './sha256';
 import { cleanFps } from './quality';
 import type { JournalFile } from './take-journal';
+import { wavFrameBytes } from './wav';
 
 export interface ChunkReceiverOpts {
   recordingId: string;
@@ -96,6 +97,7 @@ export class ChunkReceiver {
   private _abandoned = false;
   private _timedOut = false;
   private _receivedFinalHeader = false;
+  private _frameBytes = 1;
   private _receivedFinalized = false;
   private _resumed = false;
   /** Where the file stood when this receiver took over: the far-offset rule moves with it. */
@@ -155,6 +157,11 @@ export class ChunkReceiver {
 
   get receivedFinalHeader(): boolean {
     return this._receivedFinalHeader;
+  }
+
+  /** Bytes in one sample frame of the WAV this receiver saw open; 1 when it saw no such header. */
+  get frameBytes(): number {
+    return this._frameBytes;
   }
 
   get receivedFinalized(): boolean {
@@ -376,6 +383,8 @@ export class ChunkReceiver {
     // hashed, counted or acked once it resolves.
     if (this.maxBytes !== undefined && this.refused) return;
     this.lastDataReceivedAt = Date.now();
+    // A WAV stream opens with its header, which says how long a sample frame is.
+    if (header.offset === 0) this._frameBytes = wavFrameBytes(data);
     if (header.offset === 0 && this.lastIdx >= 0) {
       this._receivedFinalHeader = true;
     }

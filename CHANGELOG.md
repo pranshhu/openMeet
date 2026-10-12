@@ -406,6 +406,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   background. A host tab that was taken over during a take stays out instead of
   taking the call back, and a guest in that state who presses **Stop and save** gets
   their backup links instead of a "Recording" label that never cleared.
+- A guest's WAV that was cut off (a take saved after the host's browser crashed, or a
+  guest who dropped out) declares whole samples only, because a header that counts part
+  of a last sample makes `ffmpeg` print `Invalid PCM packet` for every command run on
+  that file, the FLAC check among them.
 
 ### Security
 

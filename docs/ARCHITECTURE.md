@@ -722,7 +722,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   header does not match its length gets its two size fields set from the length
   (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
   `patchWavHeader`), because a page that closes commits its files with the placeholder header;
-  a resume gives the host's own WAV the same repair through `copyBackupInto`. A take reopened from that journal replays the parts into the same folder files
+  a resume gives the host's own WAV the same repair through `copyBackupInto`.
+  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, and End & save for a guest whose final header never came),
+  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
+  pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. The frame size is read from the file's own
+  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
+  that header states.
+  A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero, and the hash state the commit stored beside its position lets the digest cover the part
   before the resume as well. A screen file already in the folder is never replaced — the resumed host
@@ -1540,3 +1548,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   or holds no audio.
 - **A WAV backup a participant downloads has no FLAC command on their screen.** Their
   page gives the file; the two commands are in the README.
+- **A guest's WAV can still end part-way through a sample after a resume.** When a take
+  is resumed after a crash and that guest never reconnects, the page that ends the take
+  has not seen the start of the file, so its header declares the length as it is.
+  `ffmpeg` then prints `Invalid PCM packet` for that file, on the FLAC commands too, and
+  by the rule in the sync file that WAV is kept.

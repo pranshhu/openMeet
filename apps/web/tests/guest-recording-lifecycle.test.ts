@@ -975,6 +975,22 @@ describe('host backup after a take in useRoom', () => {
     expect(warnings.filter((w) => /WAV master|Clock sync|Integrity not verified/.test(w))).toEqual([]);
   });
 
+  it("leaves the host's audio master out of the summary, with no command for it, when it got no samples", async () => {
+    const { result } = await hostTake(undefined, {
+      hostStartMs: 1_000_000,
+      hostWriter: { fileName: 'host_rec-host-1.mp4' },
+      hostWavWriter: { fileName: 'host_rec-host-1.wav' },
+      hostPcm: { totalBytes: 0 },
+      guestWriter: { fileName: 'guest_rec-host-1.mp4' },
+      channelRef: { current: null },
+      receiver: { digestHex: async () => '', bytesWritten: 0 },
+    });
+
+    const summary = result.current.state.summary;
+    expect(summary?.fileList.map((f) => f.name)).toEqual(['host_rec-host-1.mp4']);
+    expect(summary?.commands.filter((c) => c.cmd.includes('.wav'))).toEqual([]);
+  });
+
   it.each(['NotAllowedError', 'SecurityError'])(
     'asks for a folder again after the browser refused to write to the one it had (%s)',
     async (name) => {

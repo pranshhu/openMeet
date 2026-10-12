@@ -744,4 +744,60 @@ describe('endHostRecording — patches WAV header on incomplete or abandoned tak
     );
     expect(riffSizeView.getUint32(0, true)).toBe(996);
   });
+
+  it.each([
+    [1, 65535],
+    [2, 65532],
+  ])('declares only whole sample frames when a guest WAV of %i channel(s) was cut part-way through one', async (channels, declared) => {
+    const sizes = new Map<number, number>();
+    const guestWavWriter = {
+      fileName: 'guest_r.wav',
+      write: vi.fn().mockImplementation(async (offset: number, data: ArrayBuffer) => {
+        if (data.byteLength === 4) sizes.set(offset, new DataView(data).getUint32(0, true));
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const wavReceiver = new ChunkReceiver({
+      recordingId: 'r',
+      writer: guestWavWriter as never,
+      sendControl: vi.fn(),
+    });
+
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 44, ts: 1 }));
+    await wavReceiver.handleMessage(wavHeader({ sampleRate: 48000, channels, bitDepth: 24 }, 0));
+    // One 64 KiB piece of the next chunk arrived, and nothing after it.
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 1, offset: 44, size: 65536, ts: 2 }));
+    await wavReceiver.handleMessage(new ArrayBuffer(65536));
+    await wavReceiver.handleMessage(JSON.stringify({ type: 'stream-abandoned', recordingId: 'r', lastIdx: 1 }));
+
+    await endHostRecording({ recordingId: 'r', guestWavWriter: guestWavWriter as never, wavReceiver });
+
+    expect(sizes.get(40)).toBe(declared);
+    expect(sizes.get(4)).toBe(36 + declared);
+  });
+
+  it('declares the length as it is when a guest WAV never had its header', async () => {
+    const sizes = new Map<number, number>();
+    const guestWavWriter = {
+      fileName: 'guest_r.wav',
+      write: vi.fn().mockImplementation(async (offset: number, data: ArrayBuffer) => {
+        if (data.byteLength === 4) sizes.set(offset, new DataView(data).getUint32(0, true));
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const wavReceiver = new ChunkReceiver({
+      recordingId: 'r',
+      writer: guestWavWriter as never,
+      sendControl: vi.fn(),
+    });
+
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 0, offset: 44, size: 1000, ts: 1 }));
+    await wavReceiver.handleMessage(new ArrayBuffer(1000));
+    await wavReceiver.handleMessage(JSON.stringify({ type: 'stream-abandoned', recordingId: 'r', lastIdx: 0 }));
+
+    await endHostRecording({ recordingId: 'r', guestWavWriter: guestWavWriter as never, wavReceiver });
+
+    expect(sizes.get(40)).toBe(1000);
+    expect(sizes.get(4)).toBe(36 + 1000);
+  });
 });

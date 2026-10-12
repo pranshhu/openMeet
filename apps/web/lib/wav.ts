@@ -66,18 +66,39 @@ export function wavHeader(fmt: WavFormat, dataBytes: number): ArrayBuffer {
 }
 
 /**
+ * Bytes in one sample frame, as a WAV header states them. The header can come
+ * from another participant's browser, so the field is taken only when it is a
+ * small number that agrees with the channels and the depth beside it; anything
+ * else reads as 1, which leaves a length as it is.
+ */
+export function wavFrameBytes(header: ArrayBufferLike): number {
+  if (header.byteLength < WAV_HEADER_BYTES) return 1;
+  const view = new DataView(header);
+  const frame = view.getUint16(32, true);
+  const stated = (view.getUint16(22, true) * view.getUint16(34, true)) / 8;
+  return frame > 0 && frame <= 64 && frame === stated ? frame : 1;
+}
+
+/**
  * Patch an incomplete or abandoned WAV file's RIFF and data chunk sizes
  * based on the actual PCM data bytes written.
+ *
+ * A file that was cut off can end part-way through a sample frame, because a
+ * stream arrives in pieces that are not a whole number of frames long. Only
+ * whole frames are declared: a decoder reads what the header declares, and
+ * reports an error on a frame it cannot finish.
  */
 export async function patchWavHeader(
   writer: { write(position: number, data: ArrayBuffer | ArrayBufferView): Promise<void> },
-  dataBytes: number
+  dataBytes: number,
+  frameBytes = 1
 ): Promise<void> {
+  const whole = dataBytes - (dataBytes % frameBytes);
   const riffBuf = new ArrayBuffer(4);
-  new DataView(riffBuf).setUint32(0, u32(36 + dataBytes), true);
+  new DataView(riffBuf).setUint32(0, u32(36 + whole), true);
 
   const dataBuf = new ArrayBuffer(4);
-  new DataView(dataBuf).setUint32(0, u32(dataBytes), true);
+  new DataView(dataBuf).setUint32(0, u32(whole), true);
 
   await writer.write(4, riffBuf);
   await writer.write(40, dataBuf);
