@@ -557,8 +557,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   and saved, every guest is stopped by `recording-stop` and the Room's `recording` flag is
   cleared. `CallStage` keeps one flag (`paused`) from that press until a take records
   again, and the flag changes words only: the status bar reads "Paused. Continue starts a
-  new take." before the saved verdict, and only with a summary, so never over a save that
-  failed; Record reads **Continue** and the summary's main button **Continue recording**.
+  new take." before the saved verdict, and only with a summary that is not the one the
+  page held at the press (`summaryAtPause`), so never over a save that failed; Record
+  reads **Continue** and the summary's main button **Continue recording**.
   Continue is `recordNextTake`: `newTake`, the countdown, then a take with a new id whose
   files end in `_take<n>`. No recorder is paused (`ChunkRecorder.pause` has no caller),
   nothing is sent that End & save does not send, and the Room knows nothing of it.
