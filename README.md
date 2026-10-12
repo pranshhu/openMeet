@@ -132,6 +132,8 @@ retention policy to trust, because there's nothing retained.
   verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
   for pairing each video with its WAV master and for aligned copies that start at
   00:00, downloaded from the summary
+- Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
+  lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -525,6 +527,16 @@ the screen that follows offers them too.
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.
    The host's own backup is cleared at their next lobby visit after a take that ended cleanly.
 4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for by default and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
+5. **Smaller audio masters (optional):** openMeet records WAV. `sync.json` (`flac`) and
+   Editor commands in the summary give two commands for each WAV master. The first
+   writes a FLAC beside it, the same samples in a smaller file:
+   `ffmpeg -i "<file>.wav" -c:a flac "<file>.flac"`
+   The second decodes both files and prints two `MD5=` lines:
+   `ffmpeg -v error -i "<file>.wav" -i "<file>.flac" -map 0:a -c:a pcm_s24le -f md5 - -map 1:a -c:a pcm_s24le -f md5 -`
+   Delete a WAV only when its two lines are the same; when they differ, or ffmpeg prints
+   an error, keep it and encode again. Run the pairing and aligned-copy commands first:
+   they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
+   WAV backup you downloaded included.
 
 ### If the host's browser crashes
 

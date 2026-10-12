@@ -281,6 +281,29 @@ function alignWavCmd(file: string, padMs: number): string {
   return `ffmpeg -i "${file}" -af "adelay=${padMs}:all=1" -c:a pcm_s${WAV_BIT_DEPTH}le -rf64 auto "${out}"`;
 }
 
+// A FLAC beside the master: the same samples in a smaller file. Nothing names a
+// depth or a channel count, because ffmpeg's FLAC encoder keeps the input's.
+function flacCmd(file: string): string {
+  const out = file.replace(/\.[^.]+$/, '') + '.flac';
+  return `ffmpeg -i "${file}" -c:a flac "${out}"`;
+}
+
+// Decodes the master and its FLAC copy and prints one MD5 line for each. Both are
+// hashed as PCM at the master's depth: ffmpeg's md5 output is 16-bit unless told
+// otherwise, which would leave the low byte of every sample out of the comparison.
+function flacCheckCmd(file: string): string {
+  const flac = file.replace(/\.[^.]+$/, '') + '.flac';
+  const pcm = `-c:a pcm_s${WAV_BIT_DEPTH}le -f md5 -`;
+  return `ffmpeg -v error -i "${file}" -i "${flac}" -map 0:a ${pcm} -map 1:a ${pcm}`;
+}
+
+const FLAC_NOTE =
+  'Optional. openMeet records WAV. Each encode command writes a FLAC beside a WAV master: the same samples in a ' +
+  'smaller file, with the depth, the rate and the channels the WAV has. Each check command decodes the WAV and ' +
+  'its FLAC and prints two MD5 lines. When the two lines are the same the FLAC holds every sample of the WAV, ' +
+  'and only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, keep the WAV and ' +
+  'encode again. The pairing and aligned-copy commands read the WAV, so run them before deleting it.';
+
 const ALIGNED_HINT =
   "The aligned-copy commands under Editor commands write copies that start when the host's recording starts, " +
   "so each copy lines up with the host's files at 00:00 on a timeline. Audio copies get real silence. " +
@@ -705,11 +728,28 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   }));
   screenSegments.forEach((s, i) => align(s.file, s.offsetMs, `Screen segment ${i + 1}`));
 
+  // Every WAV master this report lists is a row of kind audio: the host's, each
+  // guest's, and the host's file from before a reload. A call-audio copy is not
+  // one: it was never lossless.
+  const flacFiles = fileList
+    .filter((f) => f.kind === 'audio')
+    .map((f) => ({ file: f.name, encode: flacCmd(f.name), check: flacCheckCmd(f.name) }));
+  // Each label starts with the file's name: the summary keys a row by its label,
+  // and a take that continued after a reload has two host files.
+  const flacCommands = flacFiles.flatMap((f) => [
+    { label: `${f.file}: FLAC copy, lossless and smaller`, cmd: f.encode },
+    {
+      label: `${f.file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match`,
+      cmd: f.check,
+    },
+  ]);
+
   const commands: { label: string; cmd: string }[] = [
     ...remuxCommands,
     ...screenRemuxCommands,
     ...combineCommands,
     ...alignCommands,
+    ...flacCommands,
   ];
 
   const report = {
@@ -789,6 +829,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         'stored as an edit list, and an editor that ignores it needs the clip moved by padMs.',
       files: alignedFiles,
     },
+    ...(flacFiles.length > 0 ? { flac: { note: FLAC_NOTE, files: flacFiles } } : {}),
     frameRate: {
       note: FRAME_RATE_NOTE,
       requestedFps: RECORDING_FRAME_RATE,

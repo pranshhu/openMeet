@@ -235,6 +235,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- A lossless **FLAC copy** of each WAV master, for smaller files: `sync.json` (`flac`)
+  and the session summary give an `ffmpeg` command per WAV that writes a FLAC beside
+  it, and one that checks the copy against the WAV (two equal MD5 lines) before the
+  WAV is deleted. openMeet still records WAV, and converts and deletes nothing itself.
 
 ### Changed
 

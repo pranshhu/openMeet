@@ -774,6 +774,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
   any file is not complete. Clock-sync needs the host to be
   recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  The report's `flac` section and the summary's Editor commands give two `ffmpeg` commands
+  for each WAV master the report lists (the `fileList` rows of kind `audio`: the host's, each
+  guest's, and the host's file from before a reload): `encode` writes a FLAC beside the WAV
+  (`flacCmd`) and `check` decodes both and prints one MD5 line for each, hashed as PCM at
+  `WAV_BIT_DEPTH` (`flacCheckCmd`); equal lines mean the FLAC holds every sample. No page
+  encodes or decodes FLAC: the masters, their backups and the crash copy stay WAV.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -1521,3 +1527,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A sender who waits alone is told nothing of a file that is still offered.** Neither
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
+- **openMeet records no FLAC.** A FLAC copy of a WAV master is made afterwards, with the
+  `ffmpeg` commands in the sync file, by whoever has the folder. A take still needs the
+  WAV's full size on the host's disk and in each guest's upload while it records (24-bit
+  at 48 kHz: about 520 MB an hour for a mono master, twice that in stereo). Nothing
+  deletes a WAV; the person does, after the check.
+- **A WAV that reads Empty still has FLAC commands.** As with its pairing command, the
+  report lists them for every audio master it names; ffmpeg then says the file is missing
+  or holds no audio.
+- **A WAV backup a participant downloads has no FLAC command on their screen.** Their
+  page gives the file; the two commands are in the README.

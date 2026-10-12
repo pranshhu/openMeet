@@ -1102,3 +1102,28 @@ describe('the record of who was told, in a take saved from its crash copy', () =
     expect(notice.note).toContain('keeps no record of who was told');
   });
 });
+
+describe('FLAC commands in a take saved from its crash copy', () => {
+  it("lists the host's audio master from the notes and the guest's rebuilt one", async () => {
+    const notes = notesWith({
+      files: [
+        { file: 'guest_r.mp4', kind: 'camera', slot: 0 },
+        { file: 'guest_r.wav', kind: 'wav', slot: 0 },
+      ],
+      backups: [{ dir: HOST_WAV, file: 'host_r.wav', kind: 'wav' }],
+    });
+    const { journal } = fakeJournal(notes, {
+      'guest_r.mp4': { parts: [part(0, 3)] },
+      'guest_r.wav': { parts: [part(0, 44)] },
+    });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = JSON.parse(new TextDecoder().decode(folder.written.get('sync_rec-1.json')!.data)) as {
+      flac: { files: { file: string; encode: string }[] };
+    };
+    expect(json.flac.files.map((f) => f.file)).toEqual(['host_r.wav', 'guest_r.wav']);
+    expect(json.flac.files[1]?.encode).toBe('ffmpeg -i "guest_r.wav" -c:a flac "guest_r.flac"');
+  });
+});
