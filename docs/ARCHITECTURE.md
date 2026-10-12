@@ -605,6 +605,13 @@ the host." in place of the advice to rejoin.
 `sendFile` queues one for a file picked in chat (`shared`), on the same list and held by the
 same `hold`, but with no `after`: a picked file does not wait behind a backup the host has not
 answered. It does nothing on the host's own page.
+`setSendLater(on)` is a guest's choice to defer its takes (`state.sendLater`, and
+`sendLaterRef`, which the callback writes itself). A take that starts while it is on is
+deferred as soon as its streams exist (`deferGuestStreams`, after the camera backup's
+`whenOpen()`); turned on during a take it defers that take at once. It cannot be turned off
+while a take it deferred still records, and a host or a present-only device is not given
+it. When the camera backup has no directory in browser storage the take is streamed, the
+choice is taken back and the recording banner says why.
 `recordWithCountdown` is the Record click: it
 asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
 draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.

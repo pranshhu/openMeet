@@ -53,6 +53,7 @@ import {
   startGuestRecording,
   endHostRecording,
   endGuestRecording,
+  deferGuestStreams,
   requestResume,
   allWriters,
   bindHostGuestChannel,
@@ -247,6 +248,11 @@ export interface RoomState {
    * no recording is affected.
    */
   incomingVideoOff: boolean;
+  /**
+   * Guest: takes are not streamed to the host while they record. The backup in
+   * this browser holds all of a take and is what the host is sent when it ends.
+   */
+  sendLater: boolean;
   /** This person has a hand raised. Everyone in the call sees it on their tile. */
   handRaised: boolean;
   /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
@@ -445,6 +451,10 @@ export async function handleGuestRecordingStarted(opts: {
   }
   await opts.beginGuestRecording();
 }
+
+/** Why a take could not be deferred: only a backup on disk can be sent after it. */
+const SEND_LATER_REFUSED =
+  'This browser can’t keep your recording on disk, so it is sent to the host while it records.';
 
 // Turn a recording failure into something the user can act on. Anything not
 // recognised still surfaces its message rather than being swallowed.
@@ -650,6 +660,7 @@ export function useRoom(slug: string) {
     notRecorded: false,
     lowPower: false,
     incomingVideoOff: false,
+    sendLater: false,
     handRaised: false,
     reactions: new Map(),
     capabilities: {},
@@ -721,6 +732,8 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
+  // Written by setSendLater itself: a take that starts before the next render reads it.
+  const sendLaterRef = useRef(false);
   // Written by setHandRaised itself: sendPresence reads it, and a join or a
   // reconnect may send presence before the next render.
   const handRaisedRef = useRef(false);
@@ -1068,6 +1081,18 @@ export function useRoom(slug: string) {
         },
       });
       recordingRef.current = handles;
+      // Chosen before this take, so none of it is streamed. Only a backup
+      // kept on disk can be sent afterwards, so its storage is asked first;
+      // without one the take is streamed and the choice is taken back.
+      if (sendLaterRef.current) {
+        await backup.whenOpen();
+        // A take that ended while storage answered must start nothing more.
+        if (recordingRef.current !== handles) return;
+        if (sendLaterRef.current && !deferGuestStreams(handles)) {
+          sendLaterRef.current = false;
+          setState((s) => ({ ...s, sendLater: false, recordingError: SEND_LATER_REFUSED }));
+        }
+      }
       if (canCapturePcm && !audioReady) {
         setState((s) => ({
           ...s,
@@ -2459,6 +2484,25 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * Guest: keep takes on this device while they record and send them to the
+   * host afterwards, or go back to streaming them. Turned on during a take it
+   * stops that take's streams at once. A take that was not streamed cannot be
+   * streamed again, so it stays on until that take has ended.
+   */
+  const setSendLater = useCallback((on: boolean) => {
+    // A host writes its own files, and a present-only device has no camera backup.
+    if (roleRef.current !== 'guest' || companionRef.current) return;
+    const h = recordingRef.current;
+    if (!on && h?.deferred) return;
+    if (on && h?.sender && !deferGuestStreams(h)) {
+      setState((s) => ({ ...s, recordingError: SEND_LATER_REFUSED }));
+      return;
+    }
+    sendLaterRef.current = on;
+    setState((s) => ({ ...s, sendLater: on }));
+  }, []);
+
+  /**
    * Raise or lower this person's hand. It travels with presence, which is sent
    * again to everyone who joins and after a reconnect, so nobody misses it.
    */
@@ -3218,6 +3262,7 @@ export function useRoom(slug: string) {
     readLoad,
     setLowPower,
     setIncomingVideoOff,
+    setSendLater,
     setHandRaised,
     sendReaction,
   };
