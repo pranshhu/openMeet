@@ -2824,6 +2824,24 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     expect(onSendChat).toHaveBeenLastCalledWith('on it', 'p-bob');
   });
 
+  it('keeps a chosen person who has left as the choice when someone else writes privately, and sends nothing', () => {
+    const onSendChat = vi.fn();
+    const props = { ...baseProps, remotePeers: [bob, pat], onSendChat };
+    const { rerender } = render(<CallStage {...props} />);
+    fireEvent.click(screen.getByLabelText('Chat'));
+    fireEvent.change(to(), { target: { value: 'p-bob' } });
+    fireEvent.click(screen.getByLabelText('Chat'));
+
+    rerender(<CallStage {...props} remotePeers={[pat]} messages={[fromPat]} />);
+    fireEvent.click(screen.getByLabelText('Chat, 1 unread'));
+    expect(to().selectedOptions[0]?.textContent).toBe('Not available');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That person left the call or reconnected. Choose who to send to.'
+    );
+    say('on it');
+    expect(onSendChat).not.toHaveBeenCalled();
+  });
+
   it('does not address a sender who has left, or a present-only device', () => {
     const onSendChat = vi.fn();
     const props = { ...baseProps, remotePeers: [bob, pat, secondScreen], onSendChat };
