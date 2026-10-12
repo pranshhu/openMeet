@@ -100,6 +100,8 @@ retention policy to trust, because there's nothing retained.
   the rear camera)
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
+- Private messages: with three or more in the call, a chat message can go to one
+  person instead of everyone, and is left out of the take's chat file
 - Switch camera or mic mid-take without breaking the files (Chromium; on Safari and
   iPhone, switch between takes)
 - Choose the speaker or headphones the call plays through, in the lobby or from the arrow
@@ -431,7 +433,7 @@ All in the one folder the host picks, per take:
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
 | `shared_<name>_<file name>.<ext>` | A file a participant sent the host from chat (a photo, a document, slides, audio or video, 100 MB at most), saved after the host accepted it and its SHA-256 matched; `_2`, `_3` when that name is taken |
 | `chapters_<id>.txt` | Chapter markers (when marked) |
-| `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out the messages of anyone set as not recorded |
+| `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out private messages and the messages of anyone set as not recorded |
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each

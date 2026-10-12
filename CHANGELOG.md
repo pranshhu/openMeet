@@ -152,6 +152,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- Private messages: in the chat panel, choose one person under **To** and the
+  message reaches only them. Both screens mark it as private, and it is left out
+  of the take's chat file.
 - The host can turn a participant's microphone off, from **People** in the call's
   control bar. That person is told at once and turns it back on with their own
   microphone button; during a take their recording has no sound until they do.
@@ -410,6 +413,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   guest who dropped out) declares whole samples only, because a header that counts part
   of a last sample makes `ffmpeg` print `Invalid PCM packet` for every command run on
   that file, the FLAC check among them.
+- **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
+  list, the chat's **To** list among them, used to add a chapter marker or open the note
+  field as well.
 
 ### Security
 
