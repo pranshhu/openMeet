@@ -827,6 +827,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and `again` sends nothing. A guest that had reported no estimate by then has a null offset.
   `ChunkReceiver` keeps the first start it accepts, with the time it arrived (`clockAtMs`), and
   a later report of the same start beside it (`clockEnd`), never in its place.
+  The round trip it holds is the one that came with that start; one reported without a
+  usable start is taken only while none is held, and a message the receiver takes nothing
+  from does not reach `onMeta`.
   `collectGuestReports` hands both on, and `lib/clock-drift.ts` `clockSection` writes the sync
   file's `clock` section from them: per guest the estimate its offsets come from (`start`), and,
   when a second one exists (`end`), how far the two computers' clocks moved in between
@@ -834,6 +837,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   The section compares the system clocks (`Date.now()` on both sides) and says so; a guest with
   no estimate is not listed, and nothing about movement is written without two estimates that
   each carry a round trip.
+  Its note says what a clock that is set during the take does: between a guest's two
+  estimates it shows as a `movedMs` of that size or as no `end`, and does not move the offset
+  of that guest's camera file and WAV; a guest that saw its own clock set back before it had
+  an estimate is not listed; any other change before the first estimate moves that guest's
+  offsets and shows in nothing.
   The second estimate is the guest's: `endGuestRecording` runs `ClockSync.again` (one round
   of three pings, three seconds at most, a fresh minimum) after the camera sender has drained
   and before `recording-finalized`, and skips it when that sender did not drain or its channel
@@ -1271,6 +1279,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   Its browser takes no estimate for the rest of that recording, because none would place
   the start it read earlier, and `sync.json` says to align by waveform. A new take
   measures afresh.
+- **A computer clock that is set before a guest's first estimate can shift that guest's
+  offsets by the size of the change.** A guest's start is read from `Date.now()` and placed
+  on the host's clock by an estimate taken later, and the host's start is read the same
+  way. A guest's page sees its own clock set back only when that happens between a ping
+  and its answer. Set at any other moment after that computer's recording started and
+  before the estimate, forward or back, a clock shifts that guest's offsets, and nothing
+  in `sync.json` shows it: align by waveform a clip that sits wrong by a second or more.
+  A clock set between a guest's two estimates does not move the offset of that guest's
+  camera file and WAV.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials

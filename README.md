@@ -525,6 +525,12 @@ the screen that follows offers them too.
    (`movedMs` over `spanMs`) and how far off that figure can be (`errorMs`). It compares
    the computers' clocks only: it is not a measurement of how the audio or video inside
    the files keeps time.
+   A computer clock that is set between a guest's two estimates does not move the offset
+   of that guest's camera file and WAV: `clock` shows a `movedMs` of about that size, or
+   no `end` for that guest. A guest whose browser saw its own clock set back before its
+   first estimate has no offset. Any other change of a clock after its recording started
+   and before that guest's first estimate puts the offset off by up to that amount and
+   nothing shows it, so align by waveform a clip that sits wrong by a second or more.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses

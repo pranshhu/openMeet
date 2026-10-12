@@ -1244,17 +1244,28 @@ describe("the crash copy keeps when a guest's clock estimate arrived", () => {
       const receiver = handles.receiver!;
       const at = Date.now();
       await receiver.handleMessage(
-        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: at - 100, rttMs: 12 })
+        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: at - 100 })
       );
       expect(handles.journal!.notes.files[0]).toMatchObject({
         guestStartHostMs: at - 100,
-        rttMs: 12,
+        rttMs: null,
         clockAtMs: at,
       });
 
-      // A minute later a round trip alone arrives: the estimate's time does not move.
+      // A minute later a round trip arrives alone, for a start held with none:
+      // it is noted, and the estimate's time does not move.
       vi.setSystemTime(at + 60_000);
       await receiver.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'g', rttMs: 15 }));
+      expect(handles.journal!.notes.files[0]).toMatchObject({
+        guestStartHostMs: at - 100,
+        rttMs: 15,
+        clockAtMs: at,
+      });
+
+      // Held, it stays: a report whose start is refused leaves the note as it is.
+      await receiver.handleMessage(
+        JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: at + 3_600_000, rttMs: 7 })
+      );
       expect(handles.journal!.notes.files[0]).toMatchObject({
         guestStartHostMs: at - 100,
         rttMs: 15,

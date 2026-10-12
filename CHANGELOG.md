@@ -244,6 +244,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   stops. `sync.json` (`clock`) then gives a start and an end offset for that guest, how
   far the two computers' clocks moved in between and within what error. It compares
   the computers' clocks, not how the audio or video in a file keeps time.
+  Its note says what a computer clock that is set during a take shows as.
 - A take resumed after a host reload keeps each guest's clock estimate from before the
   reload as its start, so `sync.json` (`clock`) covers the whole take, and a take saved
   from its crash copy says when its estimate was taken.

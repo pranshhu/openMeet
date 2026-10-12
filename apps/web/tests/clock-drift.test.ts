@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { clockSection } from '@/lib/clock-drift';
+import { ClockSync } from '@/lib/clock-sync';
 import { buildSyncReport } from '@/lib/sync-report';
 import { ChunkReceiver } from '@/lib/chunk-receiver';
 import { collectGuestReports, type RecordingHandles } from '@/hooks/recording-controller';
@@ -189,6 +190,31 @@ describe('ChunkReceiver: the first clock report stands, a later one is kept besi
     await meta(r, { guestStartHostMs: t - 400, rttMs: '9' });
     expect(r.clockEnd).toMatchObject({ startHostMs: t - 498, rttMs: 20 });
   });
+
+  it('keeps the round trip that came with the first start when a later report brings no start it can take', async () => {
+    const onMeta = vi.fn();
+    const r = receiver(onMeta);
+    const t = Date.now();
+    await meta(r, { guestStartHostMs: t - 500, rttMs: 30 });
+    // A start later than the host's clock is no start, and its round trip is another exchange's.
+    await meta(r, { guestStartHostMs: t + 3_600_000, rttMs: 7 });
+    await meta(r, { guestStartHostMs: null, rttMs: 9 });
+    await meta(r, { rttMs: 0 });
+    expect(r.guestStartHostMs).toBe(t - 500);
+    expect(r.syncRttMs).toBe(30);
+    expect(r.clockEnd).toBeNull();
+    expect(onMeta).toHaveBeenCalledTimes(1);
+    expect(onMeta).toHaveBeenLastCalledWith({ guestStartHostMs: t - 500, rttMs: 30 });
+  });
+
+  it('takes the round trip a first start comes with over one reported alone before it', async () => {
+    const r = receiver();
+    const t = Date.now();
+    await meta(r, { rttMs: 9 });
+    expect(r.syncRttMs).toBe(9);
+    await meta(r, { guestStartHostMs: t - 500, rttMs: 30 });
+    expect(r.syncRttMs).toBe(30);
+  });
 });
 
 describe('collectGuestReports: the clock readings reach the report', () => {
@@ -271,5 +297,166 @@ describe('ChunkReceiver: seeded with the estimate a crash copy holds', () => {
       expect(held(seeded(bad))).toEqual([null, null, null]);
     }
     expect(held(seeded({ guestStartHostMs: 1000, rttMs: 'fast', atMs: Infinity }))).toEqual([1000, null, null]);
+  });
+});
+
+describe('a computer clock that is set during the take, as the clock section shows it', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const SET = 5000;
+  const HOUR = 3_600_000;
+
+  type Change = { host?: number; guest?: number; lag?: number };
+
+  /**
+   * A guest's clock sync wired to the host's receiver over a link that takes
+   * `lag` ms each way. `t` is the true time, `host` and `guest` are how far
+   * each computer's clock is from it, and both recordings start together.
+   */
+  const take = () => {
+    vi.useFakeTimers();
+    const clock = { t: 1_700_000_000_000, host: 0, guest: 0, lag: 10 };
+    const pass = (ms: number) => {
+      clock.t += ms;
+      vi.setSystemTime(clock.t + clock.host);
+    };
+    const set = (change: Change) => {
+      clock.host += change.host ?? 0;
+      clock.guest += change.guest ?? 0;
+      clock.lag = change.lag ?? clock.lag;
+      pass(0);
+    };
+    // A change made while an answer is on its way back to the guest.
+    let onTheWay: { skip: number; change: Change } | null = null;
+    pass(0);
+    const hostStart = Date.now();
+    const sync: ClockSync = new ClockSync({
+      recordingId: 'r',
+      guestStartMs: clock.t + clock.guest,
+      now: () => clock.t + clock.guest,
+      send: (json) => {
+        pass(clock.lag);
+        void r.handleMessage(json);
+      },
+    });
+    const r = new ChunkReceiver({
+      recordingId: 'r',
+      writer: { write: vi.fn().mockResolvedValue(undefined), fileName: 'guest_r.mp4' } as never,
+      sendControl: (json) => {
+        pass(clock.lag);
+        if (onTheWay && onTheWay.skip-- === 0) set(onTheWay.change);
+        sync.handlePong(JSON.parse(json));
+      },
+    });
+    const section = () =>
+      clockSection(hostStart, [
+        {
+          slot: 0,
+          file: 'guest_r.mp4',
+          startHostMs: r.guestStartHostMs,
+          rttMs: r.syncRttMs,
+          clockAtMs: r.clockAtMs,
+          clockEnd: r.clockEnd ?? undefined,
+        },
+      ]);
+    return {
+      set,
+      pass,
+      sync,
+      section,
+      /** Make `change` during the answer that follows `skip` others. */
+      setDuringAnswer: (skip: number, change: Change) => {
+        onTheWay = { skip, change };
+      },
+    };
+  };
+
+  /** Three minutes of take with `change` made after two of them, between the two estimates. */
+  const setMidTake = async (change: Change) => {
+    const { set, pass, sync, section } = take();
+    await sync.run();
+    pass(120_000);
+    set(change);
+    pass(60_000);
+    await sync.again();
+    return section()!.guests[0]!;
+  };
+
+  const START_ONLY = { slot: 0, file: 'guest_r.mp4', start: { offsetMs: 0, rttMs: 20, measuredAtMs: 110 } };
+
+  it.each([
+    ['the guest clock forward', { guest: SET }, -SET],
+    ['the guest clock back by less than its recording has run', { guest: -SET }, SET],
+    ['the host clock forward', { host: SET }, SET],
+    ['the host clock back by less than the time between the estimates', { host: -SET }, -SET],
+  ])('%s shows as a movedMs of that size, and moves no guest offset', async (_name, change, movedMs) => {
+    expect(await setMidTake(change)).toMatchObject({ ...START_ONLY, movedMs, errorMs: 24 });
+  });
+
+  it('the guest clock back by more than its recording has run leaves no end, and moves no guest offset', async () => {
+    // The link is faster by then, and the round trip listed is the first exchange's.
+    expect(await setMidTake({ guest: -HOUR, lag: 7 })).toEqual(START_ONLY);
+  });
+
+  it('the host clock back by more than the time between the estimates leaves no end, and moves no guest offset', async () => {
+    expect(await setMidTake({ host: -HOUR })).toEqual(START_ONLY);
+  });
+
+  it('the guest clock set back during an exchange keeps the estimate from before it', async () => {
+    // In the first round, during its second answer: the start is the first sample's.
+    const first = take();
+    first.setDuringAnswer(1, { guest: -SET });
+    await first.sync.run();
+    first.pass(180_000);
+    await first.sync.again();
+    expect(first.section()!.guests[0]).toMatchObject({
+      start: { offsetMs: 0, rttMs: 20, measuredAtMs: 50 },
+      movedMs: SET,
+      errorMs: 24,
+    });
+
+    // In the round at the stop, during its second answer: the end is its first sample's.
+    const last = take();
+    await last.sync.run();
+    last.pass(180_000);
+    last.setDuringAnswer(1, { guest: -SET });
+    await last.sync.again();
+    expect(last.section()!.guests[0]).toMatchObject({ ...START_ONLY, movedMs: 0, errorMs: 24 });
+  });
+
+  it('the guest clock set back during its first exchange leaves that guest with no estimate', async () => {
+    const { setDuringAnswer, pass, sync, section } = take();
+    setDuringAnswer(0, { guest: -SET });
+    await sync.run();
+    pass(180_000);
+    // Nothing measured from here on places the start, so nothing is taken at the stop either.
+    await sync.again();
+    expect(section()).toBeNull();
+  });
+
+  it('a clock set before the first estimate, unseen, moves the offset, and the note says so', async () => {
+    // Both recordings started together, so the true offset is 0.
+    for (const [change, offsetMs] of [
+      [{ guest: -SET }, SET],
+      [{ guest: SET }, -SET],
+      [{ host: SET }, SET],
+      [{ host: -SET }, -SET],
+    ] as const) {
+      const { set, pass, sync, section } = take();
+      // Ten seconds in, between two rounds of pings, with no answer before it.
+      pass(8000);
+      set(change);
+      pass(2000);
+      await sync.run();
+      pass(180_000);
+      await sync.again();
+      expect(section()!.guests[0]).toMatchObject({ start: { offsetMs, rttMs: 20 }, movedMs: 0 });
+    }
+
+    const note = clockSection(HOST_START, [guest])!.note;
+    expect(note).toContain('shows as a movedMs of about the size of the change, or as a guest with no end');
+    expect(note).toContain('saw its own clock set back before it had an estimate takes none');
+    expect(note).toContain("moves that guest's offsets by up to the size of the change, and nothing here shows it");
+    expect(note).not.toContain('shows as a large movedMs');
   });
 });

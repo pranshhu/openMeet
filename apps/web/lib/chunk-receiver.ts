@@ -471,12 +471,17 @@ export class ChunkReceiver {
       }
       return;
     }
+    // A round trip is the error of the estimate it was measured with: it is
+    // taken with the start it came with, or while none is held. A held one is
+    // not replaced by a message whose start is refused, or the sync file would
+    // give this start the round trip of another exchange.
+    const takesRtt = rtt && (start || this._syncRttMs === null);
     if (start) {
       this._guestStartHostMs = m.guestStartHostMs;
       this._clockAtMs = now;
     }
-    if (rtt) this._syncRttMs = m.rttMs;
-    if (!start && !rtt) return;
+    if (takesRtt) this._syncRttMs = m.rttMs;
+    if (!start && !takesRtt) return;
     // The numbers are stored before anyone is told, and a listener that throws
     // must not reject handleMessage: nothing awaits it.
     try {
