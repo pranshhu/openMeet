@@ -148,4 +148,46 @@ describe('CallStage: pause a take', () => {
     expect(bar).toHaveTextContent('Saving didn’t finish.');
     expect(bar).not.toHaveTextContent('Paused');
   });
+
+  it('has no Pause while the take is being saved, or once it is saved', () => {
+    const { rerender } = render(<CallStage {...recording} />);
+    expect(screen.getByRole('button', { name: 'Pause recording' })).toBeInTheDocument();
+    // A second press there would end the take a second time, over the save.
+    rerender(<CallStage {...saved} phase="finalizing" />);
+    expect(screen.queryByRole('button', { name: 'Pause recording' })).toBeNull();
+    rerender(<CallStage {...saved} />);
+    expect(screen.queryByRole('button', { name: 'Pause recording' })).toBeNull();
+  });
+
+  it('does not say Paused while the room still reports a take', () => {
+    const { rerender } = render(<CallStage {...recording} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause recording' }));
+    rerender(<CallStage {...saved} roomRecording />);
+    const bar = screen.getByTestId('status-bar');
+    expect(bar).not.toHaveTextContent('Paused');
+    expect(within(bar).getByText('Recording')).toBeInTheDocument();
+  });
+
+  it('carries no key, so Alt+S ends the take as End & save and the page reads Saved', () => {
+    const onEnd = vi.fn();
+    const { rerender } = render(<CallStage {...recording} onEnd={onEnd} />);
+    expect(screen.getByRole('button', { name: 'Pause recording' })).not.toHaveAttribute('aria-keyshortcuts');
+    fireEvent.keyDown(document.body, { key: 's', code: 'KeyS', keyCode: 83, altKey: true });
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    rerender(<CallStage {...saved} onEnd={onEnd} />);
+    const bar = screen.getByTestId('status-bar');
+    expect(bar).not.toHaveTextContent('Paused');
+    expect(bar).toHaveTextContent('Saved — 2 files in your recording folder.');
+  });
+
+  it('keeps Continue on Record until a take records, with no Paused line before one', () => {
+    const { rerender } = render(<CallStage {...recording} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause recording' }));
+    rerender(<CallStage {...saved} />);
+    // Continue was pressed and the take has not started: the call screen as before a take.
+    rerender(<CallStage {...recording} phase="in-call" roomRecording={false} />);
+    expect(screen.getByTestId('status-bar')).not.toHaveTextContent('Paused');
+    expect(screen.getByRole('button', { name: 'Continue recording' })).toHaveTextContent('Continue');
+    expect(screen.queryByRole('button', { name: 'Start recording' })).toBeNull();
+  });
 });
