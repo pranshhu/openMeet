@@ -642,8 +642,11 @@ Known gaps, listed below:
   running recorder can't swap its audio track, so pads still play live and drop chapter
   markers, but their audio reaches the MP4 only from the next take. The WAV master is
   mic-only by design.
-- **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
-  `sync.json` has no offset and says to align the tracks by waveform.
+- **Clock sync needs one answer from the host while the guest is recording.** A guest's
+  browser keeps asking until it gets one. If none comes before that guest's recording
+  ends (the host never recorded meanwhile, or the link is too slow for an answer within
+  1.5 s), `sync.json` has no offset for that guest and says to align the tracks by
+  waveform.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.

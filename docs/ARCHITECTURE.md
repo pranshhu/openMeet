@@ -772,8 +772,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
-  any file is not complete. Clock-sync needs the host to be
-  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  any file is not complete.
+  A round of pings the host does not answer (it is not recording yet, or has not
+  bound the channel) is followed by another five seconds later, sent on whatever channel is
+  live (`ClockSync.sendOn`, called from `bindGuestChannel`), until one is answered or the
+  guest's recording ends (`stop`, called from `endGuestRecording`); a guest with no answer by
+  then has a null offset ("align by waveform").
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -1194,8 +1198,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   clicked. If the media board is closed and opened again before the download ends, the
   board offers that button again and does not show the new pad until it is opened once
   more or something else is added; a click in between adds the sound a second time.
-- **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
-  timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- **A guest's offset is null when none of its clock-sync pings was answered before its
+  recording ended:** the host never recorded while that guest did, or no answer came back
+  within 1.5 s (`perPingTimeoutMs`) on a slow link. `sync.json` then says to align by
+  waveform. An estimate that was sent into a connection as it dropped is not sent again.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials

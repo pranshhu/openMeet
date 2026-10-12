@@ -261,6 +261,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Record another take** is offered when everyone else has left too, and records the
   host alone, in place of the Copy invite link the summary showed then. A host with
   nobody else in the room can present, and the screen is recorded to its own file.
+- Clock sync keeps asking until the host answers, instead of giving up after about
+  eight seconds, and carries on over a reconnect. A guest whose first seconds went
+  unanswered gets a start offset in `sync.json`, where it said to align by waveform.
 
 ### Fixed
 

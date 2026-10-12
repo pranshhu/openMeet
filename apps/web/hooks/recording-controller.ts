@@ -139,9 +139,9 @@ export interface RecordingHandles {
   /** Resumed guest files whose replay stopped short, so the folder file has a hole. */
   shortFiles?: Set<string>;
   /**
-   * Clock-sync numbers a resume read back from the notes, by guest slot. The
-   * guest measures once, on its first channel, so the receiver built after the
-   * reload never hears them.
+   * Clock-sync numbers a resume read back from the notes, by guest slot, for
+   * the report to fall back on when the receiver built after the reload holds
+   * none.
    */
   slotClock?: Map<number, { startHostMs: number | null; rttMs: number | null }>;
   /** Surfaces a journal or backup warning for the caller to show. */
@@ -1242,7 +1242,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
 
   // Anchor the guest's recorder start, then run clock-sync so the host learns
   // this start on its own clock (for editor alignment). Fire-and-forget: it
-  // sends a recording_meta when it converges, or gives up silently on timeout.
+  // sends a recording_meta once a round of pings is answered, and asks until then.
   const guestStartMs = Date.now();
   const clockSync = new ClockSync({
     recordingId: args.recordingId,
@@ -1334,6 +1334,11 @@ export function bindGuestChannel(
   };
   channel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
   channel.onbufferedamountlow = () => sender.drainQueue();
+  // The pings follow the live channel: a reconnect replaces the one the take
+  // began on, and a ping sent into a closed channel is never answered.
+  clockSync?.sendOn((json) => {
+    if (channel.readyState === 'open') channel.send(json);
+  });
 }
 
 export function requestResume(h: RecordingHandles): void {
@@ -1758,6 +1763,8 @@ export async function endHostRecording(
 export async function endGuestRecording(
   h: RecordingHandles
 ): Promise<{ drained: boolean; backup: Blob | null; wavBackup?: Blob | null }> {
+  // The recording is over for this guest, so its clock sync stops asking.
+  h.clockSync?.stop();
   // Same reason as the host path: drain() must not start until the last chunk
   // has actually been handed to the sender, or the tail is silently dropped.
   await stopScreenRecording(h);

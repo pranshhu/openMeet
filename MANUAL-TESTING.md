@@ -95,6 +95,7 @@ EOF
 | 2.15 | Record alone | Host joins a new room alone, presses **Continue alone**, then **Record**, chooses a folder, records ~20 s, **End & save** | The waiting room gives way to the call screen with **Record** and **Copy invite link**; the count reads 3, 2, 1; the summary says Take 1 saved and lists `host-<your name>_*.mp4` and `host-<your name>_*.wav`, both complete; the folder holds no `guest_*` file | ☐ | |
 | 2.16 | A guest joins a take recorded alone | While the host records alone, a guest opens the invite link and joins | The guest sees the red notice and the REC pill at once, and no countdown; the host's take keeps running and its track panel lists the guest as Receiving; after **End & save** the folder holds `guest_*.mp4`, `guest_*.wav` and `call1_*.m4a` | ☐ | |
 | 2.17 | Who was told, in the sync file | Host, one guest, a producer (`?producer=1`) and a second guest unticked under the arrow beside **Record**. Record 20 s; have a third guest join during the take; End & save and open `sync_<id>.json` | `recordingNotice.people` has one line each. The recorded guest: `confirmedAtMs` a little after `announcedAtMs`. The producer: its name and `confirmedAtMs: null`. The unticked guest: `"name": null`, `"setAsNotRecorded": true`, `confirmedAtMs: null`. The late guest: a `listedAtMs` near the moment they joined and a `confirmedAtMs` after it. `note` says what each field shows. A second take's file starts its own record | ☐ | |
+| 2.18 | Alignment when the host answers late | Host and guest in a call. In the host tab's DevTools console paste `const send = RTCDataChannel.prototype.send, until = Date.now() + 30000; RTCDataChannel.prototype.send = function (d) { if (typeof d === 'string' && d.includes('clock_pong') && Date.now() < until) return; return send.call(this, d); };` then press **Record** within 10 s, record for a minute, **End & save** | The summary's Alignment line gives an offset in ms, not "align by waveform", and `sync_<id>.json` has a number in `timeline.guestMinusHostMs` | ☐ | |
 
 ## 3 — Data loss (the ones that matter most)
 
@@ -323,8 +324,9 @@ Also not covered automatically. Needs 3 browser profiles.
 - **A take with the media board open has two audio channels in its camera MP4,**
   also when the lobby says Mono, so stereo pads keep their stereo. The voice is
   the same on both channels, and the WAV master stays mono.
-- **Clock sync needs the host recording within ~8 s of the guest.** Otherwise
-  `sync.json` has no offset and says to align by waveform.
+- **Clock sync needs one answer from the host while the guest is recording.** The
+  guest keeps asking; with no answer before its recording ends, `sync.json` has no
+  offset for it and says to align by waveform.
 - **WAV past 4 GiB** (~4 h 08 m at 24-bit/48 kHz stereo) declares a clamped
   size. It plays in full; the header just cannot express the real number
   without RF64.
