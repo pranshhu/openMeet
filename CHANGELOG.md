@@ -152,6 +152,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   for someone who joins later, after a reconnect, and for a screen share that
   starts while it is on. A line above the stage says it is on, and a screen
   someone presents is covered by a note; both offer **Show video**.
+- Private messages: in the chat panel, choose one person under **To** and the
+  message reaches only them. Both screens mark it as private, and it is left out
+  of the take's chat file.
 - The host can turn a participant's microphone off, from **People** in the call's
   control bar. That person is told at once and turns it back on with their own
   microphone button; during a take their recording has no sound until they do.
@@ -412,6 +415,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   background. A host tab that was taken over during a take stays out instead of
   taking the call back, and a guest in that state who presses **Stop and save** gets
   their backup links instead of a "Recording" label that never cleared.
+- **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
+  list, the chat's **To** list among them, used to add a chapter marker or open the note
+  field as well.
 
 ### Security
 
