@@ -1720,6 +1720,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
   controls the browser opens only after its "use and move your camera" permission shows no such
   rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
+  the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
+  and frame-rate entries from a track's constraints once a camera setting is applied to it
+  (measured on Chrome 155), and the stable stream reads the asked rate from those constraints at
+  join, then from the track's settings. The two differ only when the lobby camera fell short of
+  the picked rate.
 - **Camera settings are not remembered.** A change of camera, a reload or a rejoin starts from what
   the camera has, and **Reset** goes back to the values at the panel's opening, not to the camera's
   factory values. The waiting room has no panel: it is in the lobby before and in the call after.
