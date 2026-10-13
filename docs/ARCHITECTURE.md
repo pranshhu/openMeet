@@ -629,7 +629,8 @@ guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `Room
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
 `notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
-backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
+backups, shown as offers on the host), `remoteScreens` (one screen per presenter, oldest
+first), `remoteScreenStream` (the first one's stream, or null), `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
@@ -725,7 +726,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
-  `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
+  `onRemoteScreenEnded`, given the stream that ended, on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
   `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
   `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is

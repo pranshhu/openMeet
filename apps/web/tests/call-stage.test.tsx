@@ -3022,3 +3022,58 @@ describe('CallStage: camera settings', () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+describe('CallStage: two people present', () => {
+  const presenting = { micOn: true, camOn: true, screenSharing: true };
+  const bothPresenting = [
+    { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+    { peerId: 'p2', name: 'Cara', stream: null, presence: presenting },
+  ];
+
+  it("names the screen after the person whose stream comes first, whoever is listed first", () => {
+    const first = new EventTarget() as unknown as MediaStream;
+    const second = new EventTarget() as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={second}
+        remoteScreens={[
+          { peerId: 'p2', stream: second },
+          { peerId: 'p1', stream: first },
+        ]}
+        remotePeers={bothPresenting}
+      />
+    );
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+    expect(screen.queryByText("Bob's screen")).toBeNull();
+  });
+
+  it('names the screen the usual way when its presenter is not listed', () => {
+    const stream = new EventTarget() as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={stream}
+        remoteScreens={[{ peerId: 'gone', stream }]}
+        remotePeers={bothPresenting}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+  });
+
+  it('names a present-only device as it names one without the list', () => {
+    const stream = new EventTarget() as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={stream}
+        remoteScreens={[{ peerId: 'p2', stream }]}
+        remotePeers={[
+          { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+          { peerId: 'p2', name: 'Colin', stream: null, companion: true, presence: presenting },
+        ]}
+      />
+    );
+    expect(screen.getByText('Colin (Presenting)')).toBeInTheDocument();
+  });
+});

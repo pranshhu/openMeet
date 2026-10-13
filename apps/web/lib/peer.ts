@@ -39,7 +39,8 @@ export interface PeerOpts {
   // The first remote stream seen is the camera; any later distinct one is the
   // shared screen, routed here instead of overwriting the camera.
   onRemoteScreen?: (stream: MediaStream) => void;
-  onRemoteScreenEnded?: () => void;
+  /** Given the stream whose video track ended, so a stream that came later is left alone. */
+  onRemoteScreenEnded?: (stream: MediaStream) => void;
   /** Negotiation failed locally (see onnegotiationneeded). */
   onNegotiationError?: (err: unknown) => void;
   /** Peer is unrecorded/screen-only (companion or producer). Every stream is routed to onRemoteScreen. */
@@ -131,7 +132,7 @@ export class PeerConnection {
       if (this.opts.screenOnly) {
         this.opts.onRemoteScreen?.(stream);
         const vt = stream.getVideoTracks()[0];
-        if (vt) vt.addEventListener('ended', () => this.opts.onRemoteScreenEnded?.());
+        if (vt) vt.addEventListener('ended', () => this.opts.onRemoteScreenEnded?.(stream));
         return;
       }
       // First remote stream (or any track of it) = camera.
@@ -143,7 +144,7 @@ export class PeerConnection {
       // A distinct stream id = the shared screen.
       this.opts.onRemoteScreen?.(stream);
       const vt = stream.getVideoTracks()[0];
-      if (vt) vt.addEventListener('ended', () => this.opts.onRemoteScreenEnded?.());
+      if (vt) vt.addEventListener('ended', () => this.opts.onRemoteScreenEnded?.(stream));
     };
 
     pc.ondatachannel = (ev) => {

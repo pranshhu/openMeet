@@ -325,6 +325,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- When two people presented and one of them stopped, the stage could keep a frozen
+  picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own
   small picture was drawn over the menu.
 - Browser storage that does not answer cannot hold up a guest's stop:
