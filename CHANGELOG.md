@@ -301,9 +301,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
-- The lobby lets go of a camera or microphone that arrives after Join or Present
-  only, and of one opened twice in development. After Microphone only, answering
-  "Headphones or speakers?" does not bring back the camera error from the first try.
+- The lobby lets go of a camera or microphone that arrives after Join, Present
+  only or leaving the page, and of one opened twice in development. After
+  Microphone only, answering "Headphones or speakers?" does not bring back the
+  camera error from the first try, and Try again asks for the microphone alone.
+  Join pressed while that answer reopens the microphone waits: press it again
+  once the preview is back.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.

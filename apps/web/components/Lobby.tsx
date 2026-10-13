@@ -215,6 +215,9 @@ export function Lobby({
   // for beside it is never stopped by anyone, and whichever lands last decides
   // the device and the headphones answer, so a change made meanwhile is not taken.
   const reopeningRef = useRef(false);
+  // Set while a capture change has stopped the microphone before asking for the
+  // new one, so the stream the lobby holds has no live microphone to hand over.
+  const micStoppedRef = useRef(false);
   // From the chosen folder to the end of the rebuild, which can take minutes:
   // Save and Delete wait, so neither runs under it.
   const [saving, setSaving] = useState(false);
@@ -340,9 +343,9 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, quality: string, fps: number, echo: boolean) {
+  function startPreview(mm: MediaManager, cam: string, quality: string, fps: number, echo: boolean) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', '', quality, fps, echo))
+    mm.acquire(deviceConstraints('', cam, quality, fps, echo))
       .then(async (s) => {
         // The lobby was left for the call, or this run of the effect was
         // cleaned up: nobody owns this capture, so it is let go.
@@ -357,12 +360,15 @@ export function Lobby({
         const micSettings = s.getAudioTracks()[0]?.getSettings?.() ?? {};
         const camSettings = s.getVideoTracks()[0]?.getSettings?.() ?? {};
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
-        setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
+        setCamId(cam === NO_CAMERA ? cam : (camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? ''));
         setActual(describeTrack(s.getVideoTracks()[0]));
         const outputs = await listSpeakers();
         if (outputs.length > 0) setSpeakers(outputs);
       })
-      .catch((e: unknown) => setPreviewError(previewProblem(e)));
+      .catch((e: unknown) => {
+        // A run of the effect that was cleaned up has no preview to explain.
+        if (mmRef.current === mm) setPreviewError(previewProblem(e));
+      });
   }
 
   useEffect(() => {
@@ -388,7 +394,7 @@ export function Lobby({
     setQualityId(saved);
     setFrameRate(savedFps);
     setListening(savedListening);
-    startPreview(mm, saved, savedFps, savedListening === 'speakers-ec');
+    startPreview(mm, '', saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
       mmRef.current = null;
@@ -412,6 +418,7 @@ export function Lobby({
     // change the microphone is let go before it is asked for; the camera stays.
     const released = echo !== (listening === 'speakers-ec');
     if (released) {
+      micStoppedRef.current = true;
       old?.getAudioTracks().forEach((t) => t.stop());
       // A preview whose microphone is stopped must not be joined. Taking it
       // down turns Join and the question off until the new one is open.
@@ -422,9 +429,9 @@ export function Lobby({
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
       const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
-      // Joined while this capture was being opened: the call keeps the stream
-      // it was given, and the capture that arrived late is let go.
-      if (handedOffRef.current) {
+      // Joined, or left, while this capture was being opened: the call keeps
+      // the stream it was given, and the capture that arrived late is let go.
+      if (handedOffRef.current || mmRef.current !== mm) {
         s.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -462,6 +469,7 @@ export function Lobby({
       setError(e instanceof Error ? e.message : 'Could not switch device.');
     } finally {
       reopeningRef.current = false;
+      micStoppedRef.current = false;
     }
   }
 
@@ -840,7 +848,11 @@ export function Lobby({
                       type="button"
                       onClick={() => {
                         // Not beside a capture that is still being opened.
-                        if (mmRef.current && !reopeningRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
+                        if (mmRef.current && !reopeningRef.current) {
+                          // What the person chose: no camera after Microphone only.
+                          const cam = camId === NO_CAMERA ? NO_CAMERA : '';
+                          startPreview(mmRef.current, cam, qualityId, frameRate, listening === 'speakers-ec');
+                        }
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -928,6 +940,12 @@ export function Lobby({
               e.preventDefault();
               if (!stream || !name.trim()) return;
               if (!(await okToTakeSeat())) return;
+              // A capture change that began while the seat was being asked
+              // about may have stopped the microphone: Join again once it is back.
+              if (micStoppedRef.current) {
+                joiningRef.current = false;
+                return;
+              }
               chooseBitrate(shownBitrate);
               chooseListening(shownListening);
               handedOffRef.current = true;

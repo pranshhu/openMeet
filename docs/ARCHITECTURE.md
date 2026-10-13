@@ -318,6 +318,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   capture stays open behind it. A capture that the first preview, Try again or `reacquire` was
   still opening is stopped as it arrives after any hand-over (Join or Present only), and so is
   one that arrives for a run of the mount effect that was cleaned up (`mmRef` is cleared then).
+  Join does nothing when the seat question is answered while the echo-cancellation answer has
+  stopped the microphone and its replacement has not arrived (`micStoppedRef`), and the person
+  presses Join again once the preview is back; Try again asks for the microphone alone when
+  Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
