@@ -92,7 +92,8 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   when it is exactly `true`, and a page reads nothing else as a raised hand. It also
   carries `title`, the sender's own text for their name tag: the Room passes it on, trimmed,
   only when `titleFrom` accepts it (a string of 1 to `MAX_TITLE_LENGTH` = 60 units once
-  trimmed), and a page checks it again.
+  cleaned: line breaks and other control characters become spaces, and a text with no
+  visible character is not a title), and a page checks it again.
   `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
   stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -498,6 +499,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   goes again to everyone who joins and after a reconnect. A page keeps what it receives on
   that person's `RemotePeer.title`, read through `titleFrom` by `applyRemotePeerPresence` on
   every presence, so a presence without a valid title leaves the person with none.
+  `titleFrom` turns each run of control characters and line breaks into one space, so a
+  title is one line, and a title with no visible character (only zero-width or direction
+  marks, say) is not a title.
   `CallStage` gives each camera feed its title (`StageFeed.title`, passed on by `feedProps`);
   a screen tile has none. `VideoTile` draws it as a second line of its own inside the name
   tag, smaller and dimmer, and the tile is a CSS container: below 224 px wide (the corner
@@ -2026,3 +2030,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   The logo is drawn by the page, so no recording of a camera or a microphone holds it.
 - **A notice at the top of the stage can cover the logo on a phone.**
 - **The waiting room has no logo.**
+- **A room's colour and logo stay in the host's browser after the room has expired.** The look
+  is kept under `om_look_<slug>` in `localStorage` and is not removed with the room, so it
+  stays until the site's data is cleared.

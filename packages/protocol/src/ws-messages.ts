@@ -138,12 +138,19 @@ export function isLogo(v: unknown): v is string {
 
 /**
  * A person's title as text to show, or '' when `v` is not one: not a string,
- * blank, or longer than MAX_TITLE_LENGTH once trimmed. Used by the Room and
- * by the page, because the field is another participant's.
+ * without a visible character, or longer than MAX_TITLE_LENGTH once cleaned.
+ * Each run of control characters and line or paragraph separators becomes one
+ * space, so a title is one line, and the ends are trimmed. A text that holds
+ * only control, format and space characters (a zero-width space, a
+ * right-to-left override) draws nothing and is not a title. Format characters
+ * inside a title that has visible ones are kept, as some scripts and emoji
+ * need them. Used by the Room and by the page, because the field is another
+ * participant's.
  */
 export function titleFrom(v: unknown): string {
   if (typeof v !== 'string') return '';
-  const t = v.trim();
+  const t = v.replace(/[\p{Cc}\u2028\u2029]+/gu, ' ').trim();
+  if (/^[\p{Cc}\p{Cf}\p{Z}]*$/u.test(t)) return '';
   return t.length <= MAX_TITLE_LENGTH ? t : '';
 }
 

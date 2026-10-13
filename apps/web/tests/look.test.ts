@@ -67,9 +67,21 @@ describe('the host look kept for a room', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
     });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
     saveLook('sss-tttt-uuu', { accent: 'purple' });
     expect(readLook('sss-tttt-uuu')).toEqual({ accent: 'purple' });
     expect(readLook('vvv-wwww-xxx')).toEqual({});
+  });
+
+  it('reads the look just saved when storage refuses it over an older one', () => {
+    saveLook('qqq-rrrr-sss', { accent: 'red' });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('full');
+    });
+    saveLook('qqq-rrrr-sss', { accent: 'green' });
+    expect(readLook('qqq-rrrr-sss')).toEqual({ accent: 'green' });
   });
 });
 

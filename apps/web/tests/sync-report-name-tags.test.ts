@@ -5,6 +5,7 @@ import { chooseTitle } from '@/lib/name-tag';
 import { buildSyncReport, type SyncReportInput } from '@/lib/sync-report';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
+const second = vi.hoisted(() => ({ on: false }));
 
 vi.mock('@/lib/api', () => ({
   getTurnCred: vi.fn().mockResolvedValue({ urls: [], username: 'u', credential: 'c', ttl: 100 }),
@@ -66,7 +67,28 @@ vi.mock('@/hooks/recording-controller', async () => {
         isAbandoned: false,
         bytesWritten: 1,
       },
-      slotPeerIds: new Map([[0, 'p-guest']]),
+      slotPeerIds: new Map([[0, 'p-guest'], ...(second.on ? [[1, 'p-guest-2'] as [number, string]] : [])]),
+      ...(second.on
+        ? {
+            guestSlots: new Map([['key-2', 1]]),
+            guestReceivers: new Map([
+              [
+                'key-2:mp4',
+                {
+                  receiver: {
+                    digestHex: async () => 'def',
+                    receivedFinalized: true,
+                    isAbandoned: false,
+                    bytesWritten: 1,
+                    flushAck: () => {},
+                  },
+                  ref: { current: null },
+                  writer: { fileName: 'guest2_rec-host-1.mp4', size: 1 },
+                },
+              ],
+            ]),
+          }
+        : {}),
     })),
     endHostRecording: vi.fn().mockResolvedValue({ backup: null }),
   };
@@ -231,6 +253,7 @@ describe('buildSyncReport: name tags', () => {
 });
 
 const GUEST = { peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: 'Asha' };
+const GUEST_2 = { peerId: 'p-guest-2', ordinal: 3, role: 'guest', displayName: 'Ben' };
 
 function emit(type: string, payload: any) {
   for (const handler of signalHandlers[type] ?? []) handler(payload);
@@ -255,7 +278,7 @@ const readBlob = (b: Blob) =>
   });
 
 /** A host in a room with one guest. */
-async function hosting() {
+async function hosting(peers = [GUEST]) {
   const { result } = renderHook(() => useRoom('abc-defg-hij'));
   await act(async () => {
     await result.current.join(lobbyStream(), 'Host Hana');
@@ -266,7 +289,7 @@ async function hosting() {
       role: 'host',
       peerId: 'p-host',
       ordinal: 1,
-      peers: [GUEST],
+      peers,
       recording: false,
     });
   });
@@ -304,6 +327,7 @@ describe('useRoom: name tags in the written sync file', () => {
   beforeEach(() => {
     signalHandlers = {};
     blobs = [];
+    second.on = false;
     chooseTitle('');
     globalThis.URL.createObjectURL = vi.fn().mockImplementation((b: Blob) => {
       blobs.push(b);
@@ -377,5 +401,18 @@ describe('useRoom: name tags in the written sync file', () => {
     await presence('p-guest', 'Author');
     for (let i = 0; i < 64; i++) await presence(i as unknown as string, 'Guest');
     expect((await savedReport(result)).nameTags?.people[1]).toMatchObject({ title: 'Author' });
+  });
+
+  it("writes each guest's title with that guest's own files", async () => {
+    second.on = true;
+    const result = await hosting([GUEST, GUEST_2]);
+    await presence('p-guest', 'Author');
+    await presence('p-guest-2', 'Editor');
+    const json = await savedReport(result);
+    expect(json.nameTags?.people).toEqual([
+      { role: 'host', name: 'Host Hana', files: ['host_rec-host-1.mp4'] },
+      { role: 'guest', slot: 0, name: 'Asha', title: 'Author', files: ['guest_rec-host-1.mp4'] },
+      { role: 'guest', slot: 1, name: 'Ben', title: 'Editor', files: ['guest2_rec-host-1.mp4'] },
+    ]);
   });
 });

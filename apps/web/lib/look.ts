@@ -69,6 +69,12 @@ export function saveLook(slug: string, look: Look): void {
   try {
     localStorage.setItem(key(slug), JSON.stringify(look));
   } catch {
-    /* private mode — the look lasts for this page */
+    // Private mode, or storage is full over an older look: drop the old one so
+    // readLook returns this page's copy.
+    try {
+      localStorage.removeItem(key(slug));
+    } catch {
+      /* storage is closed: there is nothing stored to drop */
+    }
   }
 }
