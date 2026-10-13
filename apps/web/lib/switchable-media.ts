@@ -35,11 +35,20 @@ export function isPhone(): boolean {
  *   One persistent writer; switching cancels old reader, closes stray frames, starts reader on new camera.
  * - Audio: AudioContext({ sampleRate: WAV_SAMPLE_RATE }) -> source(mic) -> MediaStreamAudioDestinationNode.
  *   Fixed channel count and sample rate; Chrome resamples on mic swap without sample-rate glitching.
+ * - The same microphone source feeds a second destination node, `micStream`: the
+ *   microphone alone, for the uncompressed master.
  *
  * In iOS Safari (where MSTG is missing): keeps raw tracks and uses replaceTrack on peers.
  */
 export class SwitchableMedia {
   readonly stream: MediaStream;
+  /**
+   * The microphone alone, on a track of its own that outlives a change of
+   * device: what the uncompressed master records. It shares no node with
+   * `stream` past the microphone's source, so nothing sent or recorded from
+   * that one can reach the master.
+   */
+  readonly micStream: MediaStream;
   readonly isFallback: boolean;
 
   private _currentCameraTrack: MediaStreamTrack | null = null;
@@ -50,6 +59,7 @@ export class SwitchableMedia {
   private videoWriter: WritableStreamDefaultWriter<unknown> | null = null;
   private audioCtx: AudioContext | null = null;
   private destinationNode: MediaStreamAudioDestinationNode | null = null;
+  private micDestination: MediaStreamAudioDestinationNode | null = null;
   private audioSourceNode: MediaStreamAudioSourceNode | null = null;
   private levelTap: ChannelSplitterNode | null = null;
   private stopMicWatch: (() => void) | null = null;
@@ -87,6 +97,8 @@ export class SwitchableMedia {
     if (this.isFallback) {
       // iOS Safari fallback: keep raw tracks directly
       this.stream = new MediaStream(localStream.getTracks());
+      // No audio graph here: the raw microphone track is the only one there is.
+      this.micStream = this.stream;
       return;
     }
 
@@ -122,9 +134,16 @@ export class SwitchableMedia {
     this.destinationNode.channelCount = recordedChannels(rawMicTrack, options.stereo ?? false);
     this.destinationNode.channelCountMode = 'explicit';
 
+    // The master's own output: the same microphone, mixed to the same channel
+    // count, on a node nothing else is connected to.
+    this.micDestination = this.audioCtx.createMediaStreamDestination();
+    this.micDestination.channelCount = this.destinationNode.channelCount;
+    this.micDestination.channelCountMode = 'explicit';
+
     if (rawMicTrack) {
       this.audioSourceNode = this.audioCtx.createMediaStreamSource(new MediaStream([rawMicTrack]));
       this.audioSourceNode.connect(this.destinationNode);
+      this.audioSourceNode.connect(this.micDestination);
       if (options.onMicWarning) {
         try {
           const splitter = this.audioCtx.createChannelSplitter(2);
@@ -147,6 +166,12 @@ export class SwitchableMedia {
     const stableAudioTrack = this.destinationNode.stream.getAudioTracks()[0];
     if (stableAudioTrack && rawMicTrack) {
       stableAudioTrack.enabled = rawMicTrack.enabled;
+    }
+
+    this.micStream = this.micDestination.stream;
+    const micOnlyTrack = this.micStream.getAudioTracks()[0];
+    if (micOnlyTrack && rawMicTrack) {
+      micOnlyTrack.enabled = rawMicTrack.enabled;
     }
 
     const tracks: MediaStreamTrack[] = [];
@@ -313,6 +338,7 @@ export class SwitchableMedia {
       this.audioSourceNode.disconnect();
       const newSource = this.audioCtx.createMediaStreamSource(new MediaStream([newTrack]));
       newSource.connect(this.destinationNode);
+      if (this.micDestination) newSource.connect(this.micDestination);
       if (this.levelTap) newSource.connect(this.levelTap);
       this.audioSourceNode = newSource;
     }
@@ -324,8 +350,27 @@ export class SwitchableMedia {
     }
   }
 
+  /**
+   * Mix a sound into `stream` beside the microphone: the track every recorder
+   * that is already running holds, so a take in progress records the sound
+   * from here on with no change of track. `micStream` never carries it. False
+   * where there is no audio graph to mix into (the raw-track fallback), or
+   * where the graph refuses the sound.
+   */
+  mixIn(sound: MediaStream): boolean {
+    if (!this.audioCtx || !this.destinationNode) return false;
+    try {
+      this.audioCtx.createMediaStreamSource(sound).connect(this.destinationNode);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   setAudioEnabled(enabled: boolean): void {
     this.stream.getAudioTracks().forEach((t) => (t.enabled = enabled));
+    // Off in the app is off in the master too.
+    this.micStream.getAudioTracks().forEach((t) => (t.enabled = enabled));
     if (this._currentMicTrack) {
       this._currentMicTrack.enabled = enabled;
     }
