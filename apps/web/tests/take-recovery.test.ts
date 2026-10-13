@@ -1038,6 +1038,20 @@ describe('saving a take from its crash copy', () => {
     expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(audio, declared, fmt));
   });
 
+  it.each([20, WAV_HEADER_BYTES])('leaves a rebuilt WAV alone when its crash copy is %i bytes, no more than a WAV header', async (size) => {
+    const take = await crashedTake({}, []);
+    const piece = new Uint8Array(size).map((_, i) => i + 1);
+    const file = take.live.file('guest_rec1.wav');
+    file.append(0, piece.buffer);
+    await file.commit(1);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: size, source: 'journal' }]);
+    expect(folder.files.get('guest_rec1.wav')).toEqual(piece);
+  });
+
   it('leaves a rebuilt WAV whose crash copy ends with the final header at offset 0', async () => {
     const take = await crashedTake({}, []);
     const file = take.live.file('guest_rec1.wav');
@@ -1079,6 +1093,21 @@ describe('saving a take from its crash copy', () => {
       const text = new TextDecoder().decode(folder.files.get('sync_rec1.json')!);
       expect(text).toContain('host_rec1.wav');
       expect(text).toContain('host_rec1.flac');
+    });
+
+    it.each([
+      [0, false],
+      [WAV_HEADER_BYTES, false],
+      [WAV_HEADER_BYTES + 1, true],
+    ])('is listed only when the folder holds more than a header: %i bytes', async (size, listed) => {
+      const folder = new DiskFolder();
+      folder.files.set('host_rec1.wav', new Uint8Array(size));
+
+      await saveRecoveredTake(await takeWithHostWav(false), asFolder(folder));
+
+      const text = new TextDecoder().decode(folder.files.get('sync_rec1.json')!);
+      expect(text.includes('host_rec1.wav')).toBe(listed);
+      expect(text.includes('host_rec1.flac')).toBe(listed);
     });
 
     it('is not listed, and has no command, when its backup could not be copied and the folder has no such file', async () => {
