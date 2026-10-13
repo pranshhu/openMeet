@@ -56,6 +56,9 @@ export function installStableGraph(): FakeGraphContext[] {
       id: 'stable-video',
       enabled: true,
       stop: vi.fn(),
+      // A generator has these of its own; they know nothing of a camera.
+      getConstraints: () => ({}),
+      applyConstraints: vi.fn().mockResolvedValue(undefined),
       writable: {
         getWriter: () => ({
           write: vi.fn().mockResolvedValue(undefined),
