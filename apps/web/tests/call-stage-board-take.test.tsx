@@ -93,4 +93,33 @@ describe('CallStage: a media board first opened during a take', () => {
     expect(screen.queryByText(MIC_OFF)).toBeNull();
     expect(screen.queryByText(MIC_ONLY)).toBeNull();
   });
+
+  it('sets the take line only for a board this click makes, not for one already handed in', () => {
+    const open = vi.fn(() => fakeBoard());
+    render(<CallStage {...props} board={fakeBoard()} onBoard={vi.fn()} onOpenMediaBoard={open} />);
+    openBoard();
+
+    expect(screen.getByText(/Load intros, stingers or ad reads/)).toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.queryByText(MIC_ONLY)).toBeNull();
+  });
+
+  it('does not count a handed-in board as new to the microphone-off line either', () => {
+    render(<CallStage {...props} board={recordedBoard()} onBoard={vi.fn()} />);
+    openBoard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off microphone' }));
+    expect(screen.queryByText(MIC_OFF)).toBeNull();
+    expect(screen.queryByText(MIC_ONLY)).toBeNull();
+  });
+
+  it('hands the board this click makes to its owner', () => {
+    const made = fakeBoard();
+    const onBoard = vi.fn();
+    render(<CallStage {...props} board={null} onBoard={onBoard} onOpenMediaBoard={() => made} />);
+    openBoard();
+
+    expect(onBoard).toHaveBeenCalledWith(made);
+    expect(screen.getByText(MIC_ONLY)).toBeInTheDocument();
+  });
 });

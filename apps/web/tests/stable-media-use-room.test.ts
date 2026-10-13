@@ -291,6 +291,40 @@ describe('useRoom stable media integration', () => {
     expect(result.current.state.activeCamId).toBe('cam-usb');
   });
 
+  it('keeps a microphone switched to while the microphone is off turned off', async () => {
+    const track = (id: string, deviceId: string) =>
+      ({ kind: 'audio', id, enabled: true, stop: vi.fn(), getSettings: () => ({ deviceId }) }) as any;
+    const rawAudio = track('raw-audio-id', 'mic-initial');
+    const nextMic = track('next-audio-id', 'mic-usb');
+    const lobbyStream = {
+      getTracks: () => [rawAudio],
+      getAudioTracks: () => [rawAudio],
+      getVideoTracks: () => [],
+    } as any;
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [nextMic], getAudioTracks: () => [nextMic] }),
+      },
+    });
+
+    const { result } = renderHook(() => useRoom('test-room'));
+    await act(async () => {
+      await result.current.join(lobbyStream, 'Alice', false);
+    });
+    act(() => result.current.setMic(false));
+    await act(async () => {
+      await result.current.switchMic('mic-usb');
+    });
+    expect(nextMic.enabled).toBe(false);
+
+    act(() => result.current.setMic(true));
+    await act(async () => {
+      await result.current.switchMic('mic-usb');
+    });
+    expect(nextMic.enabled).toBe(true);
+  });
+
   it('mirrors the mic verdict as a note and nothing more', async () => {
     const rawAudio = { kind: 'audio', id: 'raw-audio-id', enabled: true, stop: vi.fn() } as any;
     const rawVideo = { kind: 'video', id: 'raw-video-id', enabled: true, stop: vi.fn() } as any;
