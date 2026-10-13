@@ -2,6 +2,11 @@ import { CHUNK_TIMESLICE_MS, WAV_BIT_DEPTH } from '@openmeet/protocol';
 
 // Backstop for a source that has stopped producing frames; one frame is ~10ms.
 const PCM_DRAIN_TIMEOUT_MS = 500;
+// A gap smaller than this fraction of a frame is the two clocks drifting, not a late frame.
+const DRIFT_FRACTION = 20;
+// The most surplus (silence added where nothing was missing) that is remembered: one second of
+// 10 ms frames. The bound keeps one absurd timestamp from switching padding off for a whole take.
+const MAX_SURPLUS_FRAMES = 100;
 import type { RecordedChunk } from './recorder';
 import { f32ToS24LE, wavHeader, WAV_HEADER_BYTES, type WavFormat } from './wav';
 
@@ -130,15 +135,19 @@ export class PcmRecorder {
     const durationUs = (frame.numberOfFrames * 1_000_000) / frame.sampleRate;
     if (this.lastFrameEndUs !== null && frame.timestamp !== undefined) {
       const gapUs = frame.timestamp - this.lastFrameEndUs;
-      // Kept within one frame either way before the gap is added, so neither slow
-      // drift between the two clocks nor an old surplus hides or invents a gap.
-      this.lagUs = Math.max(-durationUs, Math.min(durationUs, this.lagUs)) + gapUs;
+      // Drift between the two clocks is a gap far smaller than a frame, so it is left out
+      // of the count; every other gap is counted. A surplus is remembered for up to
+      // MAX_SURPLUS_FRAMES, a debt for one frame.
+      if (Math.abs(gapUs) >= durationUs / DRIFT_FRACTION) {
+        this.lagUs = Math.max(-MAX_SURPLUS_FRAMES * durationUs, Math.min(durationUs, this.lagUs)) + gapUs;
+      }
       // Pad only whole missing frames. Sub-frame gaps are timestamp jitter from
       // Web Audio render quantum alignment (±1 quantum), not dropped frames;
       // real drops when the reader falls behind are whole frames. Silence is
       // added only for what both the jump at this frame and the file's standing
-      // against the timestamps say is missing: a frame stamped late and followed
-      // by one stamped early adds silence at most once in a take.
+      // against the timestamps say is missing, so the silence added where nothing
+      // was missing is bounded by the largest lateness the timestamps reach and
+      // does not grow with the length of the take.
       const missing = Math.round(Math.min(gapUs, this.lagUs) / durationUs);
       if (missing >= 1) {
         this.lagUs -= missing * durationUs;

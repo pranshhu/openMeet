@@ -272,11 +272,10 @@ describe('PcmRecorder', () => {
 
   describe('padding only while behind the track timestamps', () => {
     const FRAME_US = 10_000;
-    const FRAME_BYTES = 480 * 3;
 
     // Frames of 480 samples (10 ms at 48 kHz) stamped as given, read lazily so a
     // long take does not hold every frame in memory at once.
-    async function pad(timestamps: (number | undefined)[]) {
+    async function pad(timestamps: (number | undefined)[], samples = 480) {
       let next = 0;
       let bytes = 0;
       const rec = new PcmRecorder({
@@ -288,14 +287,21 @@ describe('PcmRecorder', () => {
           new ReadableStream<PcmFrame>({
             pull(c) {
               if (next >= timestamps.length) return c.close();
-              c.enqueue(frame(new Array(480).fill(0.5), 48000, 1, timestamps[next++]));
+              c.enqueue(frame(new Array(samples).fill(0.5), 48000, 1, timestamps[next++]));
             },
           }),
       });
       rec.start();
       await rec.whenDrained();
       await rec.stopAndFlush();
-      return { silentFrames: bytes / FRAME_BYTES - timestamps.length, droppedMs: rec.droppedMs };
+      return { silentFrames: bytes / (samples * 3) - timestamps.length, droppedMs: rec.droppedMs };
+    }
+
+    // Stamps where each frame starts `gap` after the end of the one before it; the first starts at 0.
+    function fromGaps(gaps: number[], frameUs = FRAME_US): number[] {
+      const stamps = [0];
+      for (const gap of gaps) stamps.push(stamps[stamps.length - 1]! + frameUs + gap);
+      return stamps;
     }
 
     it('adds no silence for frames on the grid', async () => {
@@ -338,7 +344,62 @@ describe('PcmRecorder', () => {
     it('does not let a long early drift hide a real gap afterwards', async () => {
       const stamps = Array.from({ length: 20_000 }, (_, i) => i * (FRAME_US - 2));
       stamps.push(stamps[stamps.length - 1]! + 4 * FRAME_US - 2);
-      expect(await pad(stamps)).toEqual({ silentFrames: 2, droppedMs: 20 });
+      expect(await pad(stamps)).toEqual({ silentFrames: 3, droppedMs: 30 });
+    });
+
+    it.each([
+      ['3 late by 6 ms then 3 early by 6 ms', [6_000, 6_000, 6_000, -6_000, -6_000, -6_000]],
+      ['2 late by 9 ms then 2 early by 9 ms', [9_000, 9_000, -9_000, -9_000]],
+      ['1 late by 18 ms then 3 early by 6 ms', [18_000, -6_000, -6_000, -6_000]],
+    ])('adds at most 2 frames of silence in a take of %s, 500 times', async (_name, cycle) => {
+      const gaps = Array.from({ length: 500 }, () => cycle).flat();
+      expect((await pad(fromGaps(gaps))).silentFrames).toBeLessThanOrEqual(2);
+    });
+
+    it('adds at most 2 frames of silence when timestamps wander 8 ms either side of the grid', async () => {
+      let seed = 12345;
+      const next = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+      const stamps = Array.from({ length: 5_000 }, (_, i) => i * FRAME_US + Math.round((next() * 2 - 1) * 8_000));
+      expect((await pad(stamps)).silentFrames).toBeLessThanOrEqual(2);
+    });
+
+    it('does not count 2 us of drift either way, so a real gap of one frame adds exactly one', async () => {
+      const stamps = fromGaps([...Array(100_000).fill(2), ...Array(100_000).fill(-2)]);
+      stamps.push(stamps[stamps.length - 1]! + 2 * FRAME_US);
+      expect(await pad(stamps)).toEqual({ silentFrames: 1, droppedMs: 10 });
+    });
+
+    it('takes back a late frame and its early partner once each, around a real gap', async () => {
+      const out = await pad([0, 40_000, 56_000, 60_000, 76_000, 80_000]);
+      expect(out).toEqual({ silentFrames: 4, droppedMs: 40 });
+    });
+
+    it('fills real gaps again within 100 of them after one timestamp ten seconds in the past', async () => {
+      // The clock steps back and the later frames follow it, one frame missing every 20 frames.
+      const gaps = [-10_000_000];
+      for (let g = 0; g < 150; g++) gaps.push(...Array(19).fill(0), FRAME_US);
+      const out = await pad(fromGaps(gaps));
+      expect(out.silentFrames).toBe(50);
+    });
+
+    it.each([128, 960])('keeps surplus to 1 frame for frames of %i samples, and fills a real gap', async (samples) => {
+      const frameUs = (samples * 1_000_000) / 48000;
+      const late = Math.round(frameUs * 0.6);
+      const gaps = Array.from({ length: 1_000 }, () => [late, -late]).flat();
+      expect((await pad(fromGaps(gaps, frameUs), samples)).silentFrames).toBeLessThanOrEqual(1);
+      const out = await pad(fromGaps([2 * frameUs], frameUs), samples);
+      expect(out.silentFrames).toBe(2);
+    });
+
+    it('does not pad for two frames that are each less than half a frame late', async () => {
+      expect(await pad(fromGaps([4_000, 4_000]))).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+
+    it('remembers lateness only up to one frame', async () => {
+      // 100 frames 4 ms late stand for 40 ms of lateness, of which one frame is kept; an
+      // early frame then a real gap of one frame finds the file already caught up.
+      const gaps = [...Array(100).fill(4_000), -20_000, FRAME_US];
+      expect(await pad(fromGaps(gaps))).toEqual({ silentFrames: 0, droppedMs: 0 });
     });
 
     it('does not let a long late drift invent a gap from later jitter', async () => {
