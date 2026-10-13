@@ -293,6 +293,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The WAV recording from a computer that stalls during a take stays as long as
   the MP4. Frames that were only late used to get silence added in front of
   them, which made the WAV longer than the take.
+- A screen file of the second take or later ends in `_take<n>`, as the other
+  files of that take do: `host_screen_<id>_take2.mp4`,
+  `guest_screen_<id>_2_take2.mp4`.
+- A take ended while someone was presenting could show their screen recording
+  as incomplete, or a "Recording failed" line, though the file was whole. The
+  screen file reads complete and the summary is written.
 - A media board shown again after everyone else left and came back is not
   taken for one opened during that take: the call screen remembers it, so the
   "mic only" line is not shown under the pads when the pads are in the take.

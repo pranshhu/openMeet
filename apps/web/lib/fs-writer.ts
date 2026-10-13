@@ -60,6 +60,7 @@ export class FileWriter {
   // awaiting) can interleave and corrupt the file. Chain every write so they
   // run strictly in call order.
   private writeTail: Promise<void> = Promise.resolve();
+  private closing: Promise<void> | null = null;
 
   constructor(opts?: { picker?: SaveFilePicker }) {
     this.picker =
@@ -121,11 +122,19 @@ export class FileWriter {
     return result;
   }
 
-  async close(): Promise<void> {
-    if (!this.writable) return;
-    // Let all queued writes finish before closing.
-    await this.writeTail.catch(() => {});
-    await this.writable.close();
-    this.writable = null;
+  /**
+   * Closes the stream once. Two callers can reach this at the same moment (the
+   * host's end of a take and a channel's close), and a stream refuses a second
+   * close while the first is still running, so every call gets the result of
+   * the one close.
+   */
+  close(): Promise<void> {
+    if (!this.writable) return Promise.resolve();
+    return (this.closing ??= (async () => {
+      // Let all queued writes finish before closing.
+      await this.writeTail.catch(() => {});
+      await this.writable!.close();
+      this.writable = null;
+    })());
   }
 }
