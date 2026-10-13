@@ -445,11 +445,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
 - **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
-  incoming video** (`CallStage`; not for the host, whose files are written directly). It
-  calls `useRoom().setSendLater`; while `state.sendLater` is on a `role="status"` row above
-  the stage says that the recording stays on this device during a take and goes to the host
-  after it. The item is disabled while a take it deferred records, because that take cannot
-  be streamed again. What a deferred take does is under `setSendLater` in "Call
+  incoming video** (`CallStage`; not for the host, whose files are written directly, and
+  not for a guest the host set as not recorded or whose browser cannot record, who have
+  nothing of their own to hold back). It calls `useRoom().setSendLater`; while
+  `state.sendLater` is on a `role="status"` row above the stage says that the recording
+  stays on this device during a take and goes to the host after it. The item is disabled
+  while a take it deferred records or is being saved, because that take cannot be streamed
+  again. What a deferred take does is under `setSendLater` in "Call
   orchestration" and under `defer()` in the `chunk-sender.ts` bullet; it reaches the host
   afterwards as a returned backup, offered by the guest's page when the host ends the take.
 - **Reactions** (`components/ReactionMenu.tsx`, `components/ReactionBadge.tsx`,
@@ -626,7 +628,9 @@ one answer never covers the other kind.
 unfinished send to each new connection to the host.
 A guest's `endRecording` calls it too, with the backups of the take that just ended
 (`takeBackupFiles` in `hooks/backup-return.ts`: the camera's, the WAV master's and each screen
-stretch's, only those whose directory opened in browser storage, eight at most), when the host's
+stretch's, only those whose directory opened in browser storage, eight at most; a screen
+stretch whose stream was finished, with its finish message sent and not given up or kept back,
+is in `screenFinished` and left out, because the host holds it whole), when the host's
 `recording-stop` ended a take whose streams did not all drain and the host has not set this
 guest as not recorded. `state.backupQueued` says so,
 and the guest's done line reads "Your backup of this take holds all of it and was offered to
@@ -742,7 +746,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and screen senders and marks the handles `deferred`, which `startScreenRecording` reads
   for a share that starts later; it refuses when the camera backup has no directory in
   browser storage. The WAV and a screen stretch are each deferred only when their own
-  backup has a directory there; one whose backup has none goes on being streamed.
+  backup has a directory there; one whose backup has none goes on being streamed. A stretch
+  that has begun to finish when its backup's storage answers is not deferred: its finish
+  message is the one the host gets.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once
@@ -1780,8 +1786,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   stop is said once, as soon as its backup's storage has answered, which can be before
   the host is reading its channel, and is not said again: the row then reads "Not
   receiving for …" instead of "Stopped. Their backup has the rest." No file is affected.
-- **The summary does not say that a guest chose to send later.** That guest's rows read as
-  for a stream that fell behind or never arrived.
+- **The summary does not say that a guest chose to send later.** That guest's rows read
+  "Incomplete. The upload from <name> stopped before the end, so this file ends early. Their
+  backup has the rest.", which is true of a stream that fell behind as well as of one kept
+  back, so the two are not told apart.
 - **While a take sent later ends, the guest's notice reads "Sending your last few seconds
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button

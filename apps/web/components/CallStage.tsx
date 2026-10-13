@@ -337,6 +337,8 @@ export function CallStage({
   const micNote = micWarning && !micDismissed.includes(micWarning) ? micWarning : null;
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   const isTakeActive = phase === 'recording' || phase === 'finalizing';
+  // A guest who is not recorded has nothing of its own to hold back.
+  const sendLaterOffered = role === 'guest' && !notRecorded && !recordBlocked;
   const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
   const overloaded = useOverloadWatch(phase === 'recording', readLoad, lowPower);
 
@@ -1015,7 +1017,7 @@ export function CallStage({
         </div>
       )}
 
-      {sendLater && role === 'guest' && (
+      {sendLater && sendLaterOffered && (
         <p
           role="status"
           className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
@@ -1332,13 +1334,14 @@ export function CallStage({
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
-                        {onSetSendLater && role === 'guest' && (
+                        {onSetSendLater && sendLaterOffered && (
                           <button
                             type="button"
                             role="menuitemcheckbox"
                             aria-checked={sendLater}
-                            // A take that was deferred cannot be streamed again.
-                            disabled={sendLater && phase === 'recording'}
+                            // A take that was deferred cannot be streamed again, and is not
+                            // changed while it is being saved.
+                            disabled={sendLater && isTakeActive}
                             onClick={() => {
                               setCamMenuOpen(false);
                               onSetSendLater(!sendLater);

@@ -11,6 +11,8 @@ let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 /** What the guest's take ends with, or the failure its ending throws. */
 let ended: { drained: boolean; backup: Blob | null; wavBackup?: Blob | null } | Error;
 let screens: { stop: () => Promise<Blob | null> }[] = [];
+/** The stretches in `screens` whose stream was finished, so the host holds them whole. */
+let finishedScreens: unknown[] = [];
 /** What the recorder hands over when the take's ending threw before it could. */
 let held: Blob | null = null;
 
@@ -106,6 +108,7 @@ vi.mock('@/hooks/recording-controller', async () => {
         giveUp: vi.fn(),
       },
       screenBackups: screens,
+      screenFinished: new Set(finishedScreens),
       backup: { stop: async () => held },
     })),
     endGuestRecording: vi.fn().mockImplementation(async () => {
@@ -187,6 +190,7 @@ describe('a guest whose take did not all reach the host', () => {
   beforeEach(() => {
     signalHandlers = {};
     screens = [];
+    finishedScreens = [];
     held = null;
     ended = { drained: true, backup: null };
     globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
@@ -230,6 +234,18 @@ describe('a guest whose take did not all reach the host', () => {
   it('offers the backup of each screen stretch with them', async () => {
     ended = { drained: false, backup: backupFile(CAMERA), wavBackup: backupFile(WAV) };
     screens = [{ stop: async () => backupFile(SCREEN) }];
+    const result = await recordingGuest();
+    await hostStops('rec-host-1');
+
+    expect(result.current.state.backupTransfers.map((t) => t.id)).toEqual([CAMERA, WAV, SCREEN]);
+  });
+
+  it('does not offer the backup of a screen stretch that was streamed to its end', async () => {
+    ended = { drained: false, backup: backupFile(CAMERA), wavBackup: backupFile(WAV) };
+    const whole = { stop: async () => backupFile(`openmeet-backup-screen-1700000000003-${ROOM}.mp4`) };
+    const keptBack = { stop: async () => backupFile(SCREEN) };
+    screens = [whole, keptBack];
+    finishedScreens = [whole];
     const result = await recordingGuest();
     await hostStops('rec-host-1');
 

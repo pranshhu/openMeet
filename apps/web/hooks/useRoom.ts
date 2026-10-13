@@ -2946,7 +2946,11 @@ export function useRoom(slug: string) {
             opts.from === 'recording-stop'
           ) {
             try {
-              const files = await takeBackupFiles(backup, wavBackup, h.screenBackups);
+              const files = await takeBackupFiles(
+                backup,
+                wavBackup,
+                h.screenBackups?.filter((sb) => !h.screenFinished?.has(sb))
+              );
               sendBackups(files);
               backupQueued = files.length > 0;
             } catch {

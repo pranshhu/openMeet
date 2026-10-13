@@ -162,6 +162,65 @@ describe('a screen share that starts during a take', () => {
     await stopScreenRecording(h);
   });
 
+  it('is not kept back when its backup answers after the stretch began to finish', async () => {
+    installMediaRecorder();
+    const { channel, sent } = screenChannel();
+    const h: RecordingHandles = { recordingId: 'rec-late', deferred: true };
+
+    const root = new FakeDirectoryHandle();
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    Object.defineProperty(globalThis.navigator, 'storage', {
+      configurable: true,
+      value: {
+        getDirectory: async () => {
+          await gate;
+          return root;
+        },
+      },
+    });
+    try {
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+      const sender = h.screenSender!;
+      const stopping = stopScreenRecording(h);
+      answer();
+      await stopping;
+      await new Promise((r) => setTimeout(r, 0));
+      expect(sender.isAbandoned).toBe(false);
+      expect(sent.map((m) => (JSON.parse(m as string) as { type: string }).type)).toEqual([
+        'recording-finalized',
+      ]);
+    } finally {
+      delete (globalThis.navigator as { storage?: unknown }).storage;
+    }
+  });
+
+  it('is not offered again once its stream was finished, and is when it was kept back', async () => {
+    installMediaRecorder();
+    const root = new FakeDirectoryHandle();
+    Object.defineProperty(globalThis.navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => root },
+    });
+    try {
+      const h: RecordingHandles = { recordingId: 'rec-two' };
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => screenChannel().channel });
+      const whole = h.screenBackup!;
+      await stopScreenRecording(h);
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => screenChannel().channel });
+      const keptBack = h.screenBackup!;
+      h.screenSender!.defer();
+      await stopScreenRecording(h);
+
+      expect(h.screenBackups).toEqual([whole, keptBack]);
+      expect([...(h.screenFinished ?? [])]).toEqual([whole]);
+    } finally {
+      delete (globalThis.navigator as { storage?: unknown }).storage;
+    }
+  });
+
   it('is streamed when the take is, also when the share’s backup is kept on disk', async () => {
     installMediaRecorder();
     const { channel, sent } = screenChannel();

@@ -1835,7 +1835,7 @@ describe('a take resumed from its journal', () => {
     expect(check?.received?.sha256Sent).toBeUndefined();
     const verdict = fileVerdict(check, 'R1');
     expect(verdict.status).toBe('incomplete');
-    expect(verdict.text).toContain('Ask R1 for the backup');
+    expect(verdict.text).toContain('Their backup has the rest.');
   });
 
   it('reports a resumed file whose guest never came back as incomplete', async () => {

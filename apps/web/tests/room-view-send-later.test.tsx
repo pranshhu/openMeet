@@ -10,6 +10,12 @@ vi.mock('@/hooks/useRoom', () => ({
   useRoom: () => ({ state, join: vi.fn(), leave: vi.fn(), setMic: vi.fn(), setCam: vi.fn(), ...hook }),
 }));
 
+// The guest's browser can record, which the item is offered for.
+vi.mock('@/lib/recorder', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/recorder')>('@/lib/recorder')),
+  isRecordingSupported: () => true,
+}));
+
 beforeEach(() => {
   localStorage.clear();
   hook = {};

@@ -107,6 +107,30 @@ describe('CallStage: send my recording later', () => {
     expect(screen.getByText(ROW)).toBeInTheDocument();
   });
 
+  it('cannot be unticked while the take it deferred is being saved', () => {
+    const spy = vi.fn();
+    render(<CallStage {...baseProps} phase="finalizing" sendLater onSetSendLater={spy} />);
+    openCameraMenu();
+    const item = screen.getByRole('menuitemcheckbox', { name: ITEM });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('gives neither the switch nor the row to a guest the host set as not recorded', () => {
+    render(<CallStage {...baseProps} notRecorded sendLater onSetSendLater={vi.fn()} />);
+    expect(screen.queryByText(ROW)).toBeNull();
+    openCameraMenu();
+    expect(screen.queryByRole('menuitemcheckbox', { name: ITEM })).toBeNull();
+  });
+
+  it('gives neither the switch nor the row to a guest whose browser cannot record', () => {
+    render(<CallStage {...baseProps} recordBlocked sendLater onSetSendLater={vi.fn()} />);
+    expect(screen.queryByText(ROW)).toBeNull();
+    openCameraMenu();
+    expect(screen.queryByRole('menuitemcheckbox', { name: ITEM })).toBeNull();
+  });
+
   it('gives a host neither the switch nor the row', () => {
     render(<CallStage {...baseProps} role="host" canRecord sendLater onSetSendLater={vi.fn()} />);
     expect(screen.queryByText(ROW)).toBeNull();
