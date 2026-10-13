@@ -889,7 +889,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
-  `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
   The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
   `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
@@ -1023,7 +1024,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
-   guest that keeps sending cannot hold the save open.
+   guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
+   still open is waited for the same way; one whose channel has closed is not, and its writer was
+   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   file that gave no finish signal within the limits, or whose channel closed without one, is
+   listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
+   so the channel's close and the end of the take can both ask for it.
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
