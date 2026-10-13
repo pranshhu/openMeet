@@ -17,6 +17,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Present a deck as slides: pick one picture per slide and turn them with Previous and
   Next. Everyone sees the slide, and during a recording the deck is saved like any
   presented screen.
+- **Camera settings** in the call's camera menu: exposure and colour temperature for
+  the camera you are on, where your camera offers them to the browser. The change is
+  in the call and in your recording.
+- **Camera settings** under the lobby preview, and on the check link: set exposure
+  and colour before you join.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.

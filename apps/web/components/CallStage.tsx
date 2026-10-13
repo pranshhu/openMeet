@@ -7,6 +7,7 @@ import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
+import { CameraSettings } from './CameraSettings';
 import { SlideControls } from './SlideControls';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
@@ -32,6 +33,7 @@ import { RoleLinks } from './RoleLinks';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { LISTENING_TAG } from '@/lib/listening';
 import { isPhone } from '@/lib/switchable-media';
+import { cameraControls } from '@/lib/camera-controls';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
@@ -423,6 +425,10 @@ export function CallStage({
   const showFallbackNotice = Boolean(isFallbackMedia && takeActive);
   // Joined with no camera: there is none to turn on or to pick until this person rejoins.
   const noCamera = !!localStream && localStream.getVideoTracks().length === 0;
+  const cameraTrack = localStream?.getVideoTracks()[0];
+  const [cameraSettingsOpen, setCameraSettingsOpen] = useState(false);
+  // Asked of the camera only while the menu is open, not on every render.
+  const offersCameraSettings = camMenuOpen && !noCamera && !!cameraTrack && cameraControls(cameraTrack).length > 0;
 
   async function handleSwitchMic(deviceId: string) {
     if (!onSwitchMic) return;
@@ -1219,6 +1225,9 @@ export function CallStage({
                 onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
               />
             )}
+            {cameraSettingsOpen && cameraTrack && (
+              <CameraSettings key={currentCamId} track={cameraTrack} onClose={() => setCameraSettingsOpen(false)} />
+            )}
             {slides && <SlideControls key={slides.stream.id} slides={slides} />}
             {/* Mounted while hidden too: its place in the show must survive
                 hiding the strip in the middle of a take. */}
@@ -1388,6 +1397,19 @@ export function CallStage({
                               </button>
                             ) : null
                           )}
+                        {offersCameraSettings && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setCamMenuOpen(false);
+                              setCameraSettingsOpen(true);
+                            }}
+                            className="mb-1 flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border-b border-white/10 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                          >
+                            <span>Camera settings</span>
+                          </button>
+                        )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>
