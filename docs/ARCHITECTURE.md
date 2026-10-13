@@ -877,14 +877,23 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the
   raw mic on every peer connection (`replaceAudioTrack`) and in the MP4 + backup of every take
   started afterwards (`withBoardAudio`); the WAV master always records the raw mic (`micStream`). A
-  take already recording when the board is first opened keeps a mic-only MP4 (a running
-  `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
-  board says so for that take. A pad set to loop (`setLoop`) repeats until it is stopped, and
+  take already recording when the board is first opened keeps the track it started with (a running
+  `MediaRecorder` can't swap tracks), so the board hands its pads alone to
+  `SwitchableMedia.mixIn`, which connects them to the stable track's destination node: that
+  take's MP4 and backup record them from then on, in the take's own channel count, and
+  `micStream` never carries them. The mix is built on `micStream`, not on the stable track, or it
+  would carry every pad twice. While the microphone is off the stable track is off with it, so
+  what a pad plays then is not in that take; where there is no stable stream (`isFallback`) no
+  pad is (`MediaBoard.recordsInRunningTake` is false). The pads play live and drop chapter markers
+  either way, and the board panel says which case applies while it does: its "This take keeps
+  your mic only" line where no pad is in that take, and a `role="status"` line while the
+  microphone is off (`CallStage` passes `midTake` and `micOffInTake`). A pad set to loop
+  (`setLoop`) repeats until it is stopped, and
   the switch reaches a pad that is already playing. Each pad plays through a gain node of its
   own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
   when stopped, counts as playing until it is silent, and is cut by a second stop. The mix
-  destination keeps the browser's default of two channels, so the MP4 (and backup) of a take with
-  the board open has a two-channel audio track even when the microphone is recorded in mono: a
+  destination keeps the browser's default of two channels, so the MP4 (and backup) of a take started
+  with the board open has a two-channel audio track even when the microphone is recorded in mono: a
   stereo pad keeps its stereo and the voice is the same on both channels. The WAV master follows
   `recordedChannels` either way. The person who fires a pad hears it from a second
   destination node that only the pads feed, played by an element (`playLocally`) on the
@@ -1106,7 +1115,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (WAV master) lock their sample rate on the first frame, so switching directly to a mic with a different
   sample rate (e.g. 44.1 kHz, 24 kHz, or 16 kHz Bluetooth) would corrupt both files.
   To solve this, `useRoom.join` constructs `SwitchableMedia` which wraps the lobby stream into ONE stable
-  output stream handed to everything (preview, PeerConnection, ChunkRecorder, BackupRecorder, and WAV).
+  output stream handed to the preview, PeerConnection, ChunkRecorder and the camera BackupRecorder,
+  and a microphone-only stream (`micStream`) handed to the WAV master and its backup.
   It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
   stream would conjure a blank video track and a silent audio track).
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
@@ -1118,6 +1128,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    The same source feeds a second destination node with the same channel count, whose track is
+    `micStream`: it carries the microphone and nothing else, follows a change of microphone the
+    same way, and is switched off with the microphone. Without an audio graph (the fallback
+    below) `micStream` is the stream itself.
     A switched-to microphone is asked for the echo cancellation the lobby microphone was asked
     for (read once from that track's `getConstraints()`, or from its settings when the browser
     gives no constraints back), so the lobby's answer holds for the whole call.
@@ -1203,12 +1217,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A resumed take's own track is two files, and openMeet does not join them.** The pre-crash part
   is recovered from the take's backup and the rest is written to `host_<id>_resumed.*`; both are
   listed with their offsets in `hostParts` and `aligned`, and an editor places them itself.
-- **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
-  running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
-  markers; takes started later include them. The WAV master is mic-only by design.
+- **Media board opened mid-take, microphone off:** what a pad plays while the microphone is off
+  is not in that take's MP4 or backup, because the track that take records is switched off with
+  the microphone: a pad fired then, and the stretch of a looping pad that was already playing.
+  A host's mute is the same switch and does the same.
+  It still plays live and drops its chapter marker, and takes started later record it either
+  way. In that take a pad has the take's channel count, so a stereo pad is mono unless stereo
+  was chosen at join; and where there is no stable stream (`isFallback`) that take has no pad
+  audio at all. The WAV master is mic-only by design.
 - **The media board is empty after a reload.** Pads are held in memory, so a pad that was
   looping stops when the tab reloads and the files have to be added again. A board opened
-  after **Resume recording** is opened mid-take, so that take's MP4 has no pad audio.
+  after **Resume recording** is opened mid-take: its pads are recorded in
+  `host_<id>_resumed.mp4`, under the limits of the gap above.
 - **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
   the tab shows "Everyone else left", there is no media board on screen; the pad plays on
   until someone joins and the call is back, or until Leave.
@@ -1417,6 +1437,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the sound of a video they present keep playing, in the call and in their files; the host can
   ask, or remove them. A mute is not remembered either: after the muted person reloads, their
   microphone is as their lobby left it.
+  The one exception is a take that was already running when that person first opened the
+  media board: what a pad plays while they are muted is not in that take's MP4 or backup.
 - **A person muted while their page still reads "Connecting…" sees the mic button there as
   on.** The waiting view keeps its own switch. The call screen shows it off, with the note, as
   soon as it appears, and one press there turns it back on.
