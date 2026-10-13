@@ -12,6 +12,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Noise suppression for the call: on a computer, tick **Noise suppression** in the
+  microphone menu and the others hear you with the browser's noise suppression on.
+  Your recordings stay raw.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.

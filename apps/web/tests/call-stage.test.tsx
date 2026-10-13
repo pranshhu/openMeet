@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
+import type { MediaBoard } from '@/lib/media-board';
 
 const baseProps = {
   role: 'host' as const,
@@ -2944,5 +2945,94 @@ describe('CallStage: the pop-up of a line for everyone starts with the page’s 
     const popup = screen.getByRole('status');
     expect(popup.textContent).toBe('To everyone: Private · from HostAnasend it to me');
     expect(popup.querySelector('[data-private-mark]')).toBeNull();
+  });
+});
+
+describe('CallStage: noise suppression in the microphone menu', () => {
+  const openMenu = () => fireEvent.click(screen.getByRole('button', { name: 'Select microphone' }));
+  const box = () => screen.queryByRole('checkbox', { name: 'Noise suppression' });
+  const noiseProps = { noiseSuppression: false, onNoiseSuppression: vi.fn(async () => null) };
+
+  async function withUserAgent<T>(userAgent: string, run: () => T | Promise<T>): Promise<T> {
+    const original = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', { value: userAgent, configurable: true });
+    try {
+      return await run();
+    } finally {
+      Object.defineProperty(navigator, 'userAgent', { value: original, configurable: true });
+    }
+  }
+
+  it('draws the row between the speaker row and the microphone list on a computer', () => {
+    render(<CallStage {...baseProps} {...noiseProps} />);
+    openMenu();
+    expect(box()).toBeEnabled();
+    expect(screen.getByRole('menu')).toHaveTextContent(/Noise suppression.*Microphone/);
+  });
+
+  it('shows the choice that is on', () => {
+    render(<CallStage {...baseProps} {...noiseProps} noiseSuppression />);
+    openMenu();
+    expect(box()).toBeChecked();
+  });
+
+  it('draws no row on a phone', async () => {
+    await withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)', () => {
+      render(<CallStage {...baseProps} {...noiseProps} />);
+      openMenu();
+      expect(box()).toBeNull();
+    });
+  });
+
+  it('draws no row where the browser keeps the raw tracks', () => {
+    render(<CallStage {...baseProps} {...noiseProps} isFallbackMedia />);
+    openMenu();
+    expect(box()).toBeNull();
+  });
+
+  it('draws no row without the choice and the way to change it', () => {
+    const { rerender } = render(<CallStage {...baseProps} noiseSuppression={false} />);
+    openMenu();
+    expect(box()).toBeNull();
+    rerender(<CallStage {...baseProps} onNoiseSuppression={noiseProps.onNoiseSuppression} />);
+    expect(box()).toBeNull();
+  });
+
+  it('turns it on through the page and leaves the alert line empty', async () => {
+    const onNoiseSuppression = vi.fn(async () => null);
+    render(<CallStage {...baseProps} {...noiseProps} onNoiseSuppression={onNoiseSuppression} />);
+    openMenu();
+    fireEvent.click(box()!);
+    await waitFor(() => expect(onNoiseSuppression).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(box()).toBeEnabled());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the line the page resolves with, and clears it on the next change that succeeds', async () => {
+    const lines: (string | null)[] = ['Noise suppression is not available in this browser.', null];
+    const onNoiseSuppression = vi.fn(async () => lines.shift() ?? null);
+    render(<CallStage {...baseProps} {...noiseProps} onNoiseSuppression={onNoiseSuppression} />);
+    openMenu();
+    fireEvent.click(box()!);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Noise suppression is not available in this browser.');
+
+    await waitFor(() => expect(box()).toBeEnabled());
+    fireEvent.click(box()!);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('disables the row with its reason when the browser cannot, the board is in use, or a take records', () => {
+    const { rerender } = render(<CallStage {...baseProps} {...noiseProps} noiseUnavailable />);
+    openMenu();
+    expect(box()).toBeDisabled();
+    expect(box()).toHaveAccessibleDescription('Not available in this browser.');
+
+    rerender(<CallStage {...baseProps} {...noiseProps} board={{} as unknown as MediaBoard} />);
+    expect(box()).toBeDisabled();
+    expect(box()).toHaveAccessibleDescription('Not with the media board in use.');
+
+    rerender(<CallStage {...baseProps} {...noiseProps} roomRecording />);
+    expect(box()).toBeDisabled();
+    expect(box()).toHaveAccessibleDescription('Change it between takes.');
   });
 });

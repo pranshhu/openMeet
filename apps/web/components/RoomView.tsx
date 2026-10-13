@@ -111,7 +111,7 @@ function FileLinks({ files }: { files: readonly (readonly [string | null, string
 
 export function RoomView({ slug }: { slug: string }) {
   const {
-    state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
+    state, join, leave, setMic, setCam, switchCamera, switchMic, setNoiseSuppression, sendChat, setPeerRecorded, toggleScreenShare,
     mutePeer, removePeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
@@ -431,6 +431,9 @@ export function RoomView({ slug }: { slug: string }) {
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}
+      noiseSuppression={state.noiseSuppression}
+      noiseUnavailable={state.noiseUnavailable}
+      onNoiseSuppression={setNoiseSuppression}
       onSwitchCamera={switchCamera}
       activeMicId={state.activeMicId}
       activeCamId={state.activeCamId}

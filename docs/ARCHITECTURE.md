@@ -1320,6 +1320,26 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     them (0.98 is the level the lobby's `micCheck` uses, `MIC_CLIP_PEAK`), and `null` again when sound returns,
     the clipping clears or the mic is turned off; and the tap reads the microphone as it arrives, before the
     destination mixes channels.
+  - **Noise suppression for the call alone** on a computer
+    (`openCallAudio`, `callAudioTrack`, `closeCallAudio`). It is a second `getUserMedia` capture of
+    the current microphone, opened with `micConstraints` and `noiseSuppression: { exact: true }`
+    in place of `noiseSuppression: false`, so nothing else differs from the raw capture. The
+    answer is `unavailable` when there is no audio graph or microphone, when a take is recording
+    (before the request or when it returns), when the request is refused, when the new track does not
+    report `getSettings().noiseSuppression === true`, or when it is the raw track itself: a browser
+    may hand back the capture it already has. Browsers can also apply the new request's processing to the
+    raw track, so `noiseSuppression`, `echoCancellation` and `autoGainControl` are read from the raw
+    track before and after the request: if any changed, the new track is stopped and they are read
+    again, and the answer is `unavailable` when they are back and `mic-changed` when they are not,
+    because the recordings would carry the change. The cleaned track never enters the audio graph,
+    `stream` or `micStream`; only `useRoom` reads `callAudioTrack`, and only
+    `PeerConnection.replaceAudioTrack` and the stream handed to a new connection receive it
+    (`callAudio` and `withCallAudio` in `useRoom`: the board's mix, else the cleaned track, else the
+    stable track). The recorders keep `withBoardAudio` and `micStream`. It is switched off with the
+    microphone (`setAudioEnabled`), never opened during a take, and ended by the media board
+    (`openMediaBoard`), by `switchMic` (which opens it again on the new microphone through the same
+    checks and falls back to the stable track when that is refused), by `stop` and by the device
+    taking it away (`onCallAudioEnded`).
   - **iOS Safari fallback**: where `MediaStreamTrackGenerator` is missing, raw tracks are kept directly,
     switching uses `PeerConnection.replaceCameraTrack` / `replaceAudioTrack` on senders (finding camera sender
     by current track to avoid colliding with screen share senders), and mid-take switching is refused with
@@ -1335,6 +1355,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
+- **Noise suppression for the call is limited.** It is not offered on a phone, to a producer
+  or to a present-only device. It is not remembered: a reload or a rejoin starts with it
+  off. It cannot be turned on while a take records, a guest set as not recorded
+  included. It is off for good once the media board has been opened in that call. The
+  host's call-audio copy of that person holds the cleaned sound. A shared screen's sound
+  and a presented video's sound are not processed. Whether the browser gave a separately
+  processed track is read from the track's settings, and where it did not the row says so.
 - **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt

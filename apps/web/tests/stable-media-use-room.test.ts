@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import * as recordingController from '@/hooks/recording-controller';
@@ -539,5 +539,344 @@ describe('useRoom stable media integration', () => {
       close.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// Noise suppression for the call: a second capture of the microphone that only the
+// connections' audio senders receive. The stable stream, the WAV master's stream and
+// every recorder keep what they held.
+describe('useRoom noise suppression', () => {
+  const NOISE_OFF = 'Noise suppression is not available in this browser.';
+  const MIC_CHANGED = "Your microphone's settings changed. Leave and join again before recording.";
+
+  function cleanedTrack(id: string, deviceId = 'mic-1') {
+    return Object.assign(new EventTarget(), {
+      kind: 'audio',
+      id,
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: () => ({ deviceId, noiseSuppression: true }),
+    }) as unknown as MediaStreamTrack;
+  }
+
+  /** A joined guest with one connection to the host, on the stable path. */
+  async function joinedGuest(opts: { lobby?: any; getUserMedia?: (c: MediaStreamConstraints) => Promise<MediaStream> } = {}) {
+    const graph = installStableMediaGlobals();
+    const cleaned = cleanedTrack('cleaned');
+    const queue = [cleaned];
+    const getUserMedia = vi.fn(
+      opts.getUserMedia ?? (async (c: MediaStreamConstraints) => {
+        const audio = c.audio as MediaTrackConstraints;
+        return new MediaStream([
+          audio.noiseSuppression ? (queue.shift() ?? cleanedTrack('cleaned-next', 'mic-2')) : rawTrack('raw-2', 'mic-2'),
+        ]);
+      })
+    );
+    vi.stubGlobal('navigator', { userAgent: 'test', mediaDevices: { getUserMedia } });
+    const hook = renderHook(() => useRoom('test-room'));
+    await act(async () => {
+      await hook.result.current.join(opts.lobby ?? twoChannelLobbyStream(), 'Alice');
+    });
+    await act(async () => {
+      signalHandlers['role-assigned']?.[0]?.({
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'guest-peer',
+        ordinal: 2,
+        peers: [{ peerId: 'host-peer', ordinal: 1, role: 'host' }],
+      });
+    });
+    return { ...hook, ...graph, cleaned, getUserMedia };
+  }
+
+  function rawTrack(id: string, deviceId: string) {
+    return {
+      kind: 'audio',
+      id,
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: () => ({ deviceId }),
+    } as unknown as MediaStreamTrack;
+  }
+
+  const lastAudioOf = (peer: any) => peer.replaceAudioTrack.mock.calls.at(-1)?.[0];
+
+  beforeEach(() => {
+    signalHandlers = {};
+    mockPeers = [];
+    vi.clearAllMocks();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('starts off, and sends the cleaned track to every connection once it is on', async () => {
+    const { result, cleaned } = await joinedGuest();
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(result.current.state.noiseUnavailable).toBe(false);
+
+    await act(async () => {
+      await signalHandlers['peer-joined']?.[0]?.({ type: 'peer-joined', peerId: 'p2', ordinal: 3, role: 'guest' });
+    });
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+
+    expect(line).toBeNull();
+    expect(result.current.state.noiseSuppression).toBe(true);
+    expect(mockPeers).toHaveLength(2);
+    for (const p of mockPeers) expect(p.replaceAudioTrack).toHaveBeenCalledWith(cleaned);
+  });
+
+  it('opens one capture however often it is asked for', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    getUserMedia.mockClear();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(result.current.state.noiseSuppression).toBe(true);
+  });
+
+  it('puts the stable track back on every connection when it is turned off', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.setNoiseSuppression(false);
+    });
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(cleaned.stop).toHaveBeenCalledTimes(1);
+    expect(lastAudioOf(mockPeers[0])).toBe(result.current.state.localStream!.getAudioTracks()[0]);
+  });
+
+  it('hands a connection that joins later a stream with the cleaned track and the same video', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await signalHandlers['peer-joined']?.[0]?.({ type: 'peer-joined', peerId: 'p2', ordinal: 3, role: 'guest' });
+    });
+
+    const handed = mockPeers[1].setLocalStreamAfterFirstOffer.mock.calls[0][0] as MediaStream;
+    expect(handed.getAudioTracks()).toEqual([cleaned]);
+    expect(handed.getVideoTracks()).toEqual(result.current.state.localStream!.getVideoTracks());
+  });
+
+  it('hands every connection rebuilt by a second role-assigned the cleaned track', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      signalHandlers['role-assigned']?.[0]?.({
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'guest-peer-2',
+        ordinal: 2,
+        peers: [{ peerId: 'host-peer', ordinal: 1, role: 'host' }],
+      });
+    });
+
+    const rebuilt = mockPeers[1].setLocalStream.mock.calls[0][0] as MediaStream;
+    expect(rebuilt.getAudioTracks()).toEqual([cleaned]);
+    expect(rebuilt.getVideoTracks()).toEqual(result.current.state.localStream!.getVideoTracks());
+  });
+
+  it('leaves the cleaned track off when the host mutes this microphone', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      signalHandlers['peer-mute']?.[0]?.({ type: 'peer-mute' });
+    });
+    expect(cleaned.enabled).toBe(false);
+  });
+
+  it('turns the cleaned track off and on with the microphone switch', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    act(() => result.current.setMic(false));
+    expect(cleaned.enabled).toBe(false);
+    act(() => result.current.setMic(true));
+    expect(cleaned.enabled).toBe(true);
+  });
+
+  it('records from the stable stream and the microphone stream, never the cleaned track', async () => {
+    const startGuest = vi.spyOn(recordingController, 'startGuestRecording').mockReturnValue({ recordingId: 'rec-1' } as any);
+    vi.stubGlobal('MediaRecorder', { isTypeSupported: () => true });
+    const { result, cleaned, destTrack } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await signalHandlers['recording-started']?.[0]?.({
+        type: 'recording-started',
+        recordingId: 'take-1',
+        from: 'host',
+      });
+    });
+
+    const args = startGuest.mock.calls[0]![0];
+    expect(args.localStream).toBe(result.current.state.localStream);
+    expect(args.localStream.getAudioTracks()).toEqual([destTrack]);
+    expect(args.micStream!.getAudioTracks()).toEqual([destTrack]);
+    const backups = vi.mocked(BackupRecorder).mock.calls.map(([o]) => o as any);
+    expect(backups.length).toBeGreaterThan(0);
+    for (const b of backups) expect(b.stream.getAudioTracks()).not.toContain(cleaned);
+  });
+
+  it('tells the person when the browser cannot do it and leaves the call as it was', async () => {
+    const { result } = await joinedGuest({
+      getUserMedia: async () => {
+        throw new Error('OverconstrainedError');
+      },
+    });
+    let line: string | null = null;
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBe(NOISE_OFF);
+    expect(result.current.state.noiseUnavailable).toBe(true);
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(mockPeers[0].replaceAudioTrack).not.toHaveBeenCalled();
+  });
+
+  it('tells the person when opening it moved the raw microphone settings', async () => {
+    const lobby = twoChannelLobbyStream();
+    let moved = false;
+    lobby.getAudioTracks()[0].getSettings = () => ({ deviceId: 'mic-1', noiseSuppression: moved });
+    const { result } = await joinedGuest({
+      lobby,
+      getUserMedia: async () => {
+        moved = true;
+        return new MediaStream([cleanedTrack('cleaned')]);
+      },
+    });
+    let line: string | null = null;
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBe(MIC_CHANGED);
+    expect(result.current.state.noiseUnavailable).toBe(true);
+    expect(result.current.state.noiseSuppression).toBe(false);
+  });
+
+  it('does nothing for a producer and for a present-only device', async () => {
+    const getUserMedia = vi.fn();
+    vi.stubGlobal('navigator', { userAgent: 'test', mediaDevices: { getUserMedia } });
+    for (const [producer, companion] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      const { result } = renderHook(() => useRoom('test-room'));
+      await act(async () => {
+        await result.current.join(new MediaStream(), 'Pat', producer, companion);
+      });
+      let line: string | null = 'unset';
+      await act(async () => {
+        line = await result.current.setNoiseSuppression(true);
+      });
+      expect(line).toBeNull();
+      expect(result.current.state.noiseSuppression).toBe(false);
+      expect(result.current.state.noiseUnavailable).toBe(false);
+    }
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('puts the stable track back and shows it off when the device takes the cleaned track away', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    act(() => {
+      cleaned.dispatchEvent(new Event('ended'));
+    });
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(lastAudioOf(mockPeers[0])).toBe(result.current.state.localStream!.getAudioTracks()[0]);
+  });
+
+  it('opens it again on the new microphone after a switch and sends that track', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.switchMic('mic-2');
+    });
+
+    const asked = getUserMedia.mock.calls.map(([c]) => c.audio as MediaTrackConstraints);
+    expect(asked.at(-1)).toMatchObject({ deviceId: { exact: 'mic-2' }, noiseSuppression: { exact: true } });
+    expect(result.current.state.noiseSuppression).toBe(true);
+    expect(lastAudioOf(mockPeers[0]).id).toBe('cleaned-next');
+  });
+
+  it('sends the stable track, and the switch still succeeds, when the new microphone refuses it', async () => {
+    const { result } = await joinedGuest({
+      getUserMedia: (() => {
+        let first = true;
+        return async (c: MediaStreamConstraints) => {
+          const audio = c.audio as MediaTrackConstraints;
+          if (audio.noiseSuppression) {
+            if (first) {
+              first = false;
+              return new MediaStream([cleanedTrack('cleaned')]);
+            }
+            throw new Error('OverconstrainedError');
+          }
+          return new MediaStream([rawTrack('raw-2', 'mic-2')]);
+        };
+      })(),
+    });
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.switchMic('mic-2');
+    });
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(result.current.state.activeMicId).toBe('mic-2');
+    expect(lastAudioOf(mockPeers[0])).toBe(result.current.state.localStream!.getAudioTracks()[0]);
+  });
+
+  it('sends the stable track and shows it off when the switch itself fails', async () => {
+    const { result } = await joinedGuest({
+      getUserMedia: (() => {
+        let first = true;
+        return async (c: MediaStreamConstraints) => {
+          if ((c.audio as MediaTrackConstraints).noiseSuppression && first) {
+            first = false;
+            return new MediaStream([cleanedTrack('cleaned')]);
+          }
+          throw new Error('NotReadableError');
+        };
+      })(),
+    });
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await expect(result.current.switchMic('mic-2')).rejects.toThrow('NotReadableError');
+    });
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(lastAudioOf(mockPeers[0])).toBe(result.current.state.localStream!.getAudioTracks()[0]);
+  });
+
+  it('leaves nothing open when the call is released', async () => {
+    const { result, cleaned } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.leave();
+    });
+    expect(cleaned.stop).toHaveBeenCalled();
   });
 });

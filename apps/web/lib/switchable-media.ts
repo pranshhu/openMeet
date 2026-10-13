@@ -8,6 +8,8 @@ export interface SwitchableMediaOptions {
   isRecording?: () => boolean;
   onTrackReplaced?: (kind: 'audio' | 'video', newTrack: MediaStreamTrack, oldTrack: MediaStreamTrack) => void;
   onMicWarning?: (warning: MicWarning | null) => void;
+  /** The noise-suppressed capture ended by itself (its device went away). Not called when it is closed on purpose. */
+  onCallAudioEnded?: () => void;
   /** Two channels when the microphone has them. */
   stereo?: boolean;
 }
@@ -63,6 +65,7 @@ export class SwitchableMedia {
   private audioSourceNode: MediaStreamAudioSourceNode | null = null;
   private levelTap: ChannelSplitterNode | null = null;
   private stopMicWatch: (() => void) | null = null;
+  private callTrack: MediaStreamTrack | null = null;
   private qualityId: string;
   private frameRate: number;
   private echoCancellation: boolean;
@@ -199,6 +202,75 @@ export class SwitchableMedia {
     return this._currentCameraTrack?.getSettings?.().deviceId ?? this._activeCamId;
   }
 
+  /** The microphone again with noise suppression on: for the call's senders only. Null while off. */
+  get callAudioTrack(): MediaStreamTrack | null {
+    return this.callTrack;
+  }
+
+  /**
+   * Opens a second capture of the current microphone with the browser's noise
+   * suppression required. It never enters the audio graph, `stream` or
+   * `micStream`, so nothing that is recorded can hold it. Never throws.
+   *
+   * `unavailable`: no separate processed capture was obtained (or a take is
+   * recording). `mic-changed`: opening it left the raw microphone processed
+   * differently, which the recordings would carry.
+   */
+  async openCallAudio(): Promise<'on' | 'unavailable' | 'mic-changed'> {
+    this.closeCallAudio();
+    const raw = this._currentMicTrack;
+    if (!this.audioCtx || !raw || this.options.isRecording?.()) return 'unavailable';
+    // Browsers share one capture between requests for the same microphone, and some
+    // apply the new request's processing to it, so the raw track is read around it.
+    const processing = () => {
+      const { noiseSuppression, echoCancellation, autoGainControl } = raw.getSettings?.() ?? {};
+      return [noiseSuppression, echoCancellation, autoGainControl];
+    };
+    const unchanged = (before: unknown[]) => processing().every((v, i) => v === before[i]);
+    const before = processing();
+    let track: MediaStreamTrack | undefined;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { ...micConstraints(this.activeMicId, this.echoCancellation), noiseSuppression: { exact: true } },
+        video: false,
+      });
+      track = stream.getAudioTracks()[0];
+    } catch {
+      return 'unavailable';
+    }
+    if (!track) return 'unavailable';
+    if (!unchanged(before)) {
+      track.stop();
+      return unchanged(before) ? 'unavailable' : 'mic-changed';
+    }
+    if (
+      track.getSettings?.().noiseSuppression !== true ||
+      track.id === raw.id ||
+      this.options.isRecording?.() ||
+      this._currentMicTrack !== raw ||
+      !this.audioCtx
+    ) {
+      track.stop();
+      return 'unavailable';
+    }
+    track.enabled = raw.enabled;
+    const opened = track;
+    opened.addEventListener('ended', () => {
+      if (this.callTrack !== opened) return;
+      this.callTrack = null;
+      this.options.onCallAudioEnded?.();
+    });
+    this.callTrack = opened;
+    return 'on';
+  }
+
+  /** Stops it. Safe to call when it is not open. */
+  closeCallAudio(): void {
+    const track = this.callTrack;
+    this.callTrack = null;
+    track?.stop?.();
+  }
+
   private startVideoPump(track: MediaStreamTrack | null) {
     if (!track || !this.videoWriter) return;
     const MSTP = (window as unknown as { MediaStreamTrackProcessor: new (init: { track: MediaStreamTrack }) => { readable: ReadableStream } }).MediaStreamTrackProcessor;
@@ -328,6 +400,8 @@ export class SwitchableMedia {
       return;
     }
 
+    // The cleaned capture belongs to the old microphone and may share its device.
+    this.closeCallAudio();
     const oldTrack = this._currentMicTrack;
     const constraints = micConstraints(deviceId, this.echoCancellation);
     const newStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
@@ -371,6 +445,8 @@ export class SwitchableMedia {
     this.stream.getAudioTracks().forEach((t) => (t.enabled = enabled));
     // Off in the app is off in the master too.
     this.micStream.getAudioTracks().forEach((t) => (t.enabled = enabled));
+    // A muted person is not heard through the call-only capture either.
+    if (this.callTrack) this.callTrack.enabled = enabled;
     if (this._currentMicTrack) {
       this._currentMicTrack.enabled = enabled;
     }
@@ -384,6 +460,7 @@ export class SwitchableMedia {
   }
 
   stop(): void {
+    this.closeCallAudio();
     this.stopMicWatch?.();
     this.stopMicWatch = null;
     if (this.currentVideoReader) {

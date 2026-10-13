@@ -210,6 +210,10 @@ export interface RoomState {
   connectionWarning: string | null;
   // This participant's own mic, judged where it enters the recording; a note in the call.
   micWarning: MicWarning | null;
+  /** The call hears this person's microphone through the browser's noise suppression. */
+  noiseSuppression: boolean;
+  /** Noise suppression could not be had here, so the choice is not offered again. */
+  noiseUnavailable: boolean;
   /** The host turned this participant's microphone off, and it has not been turned back on. */
   hostMuted: boolean;
   messages: ChatMessage[];
@@ -562,6 +566,20 @@ function withBoardAudio(localStream: MediaStream, board: MediaBoard | null): Med
   return mix ? new MediaStream([...localStream.getVideoTracks(), mix]) : localStream;
 }
 
+/**
+ * The microphone audio a connection sends in place of the stable track: the board's
+ * mix, else the noise-suppressed capture while it is on, else none. Recorders never
+ * ask this: they take withBoardAudio and the microphone stream.
+ */
+function callAudio(board: MediaBoard | null, media: SwitchableMedia | null, noise: boolean): MediaStreamTrack | null {
+  return board?.outputTrack ?? (noise ? media?.callAudioTrack : null) ?? null;
+}
+
+/** `localStream` with the call's audio track in place of its own, when there is one. */
+function withCallAudio(localStream: MediaStream, audio: MediaStreamTrack | null): MediaStream {
+  return audio ? new MediaStream([...localStream.getVideoTracks(), audio]) : localStream;
+}
+
 export function setupJoinerNegotiation(
   peers: Iterable<PeerConnection>,
   asProducer: boolean,
@@ -651,6 +669,8 @@ export function useRoom(slug: string) {
     recordingError: null,
     connectionWarning: null,
     micWarning: null,
+    noiseSuppression: false,
+    noiseUnavailable: false,
     hostMuted: false,
     messages: [],
     backupBlobUrl: null,
@@ -696,6 +716,9 @@ export function useRoom(slug: string) {
   const localNameRef = useRef<string>('');
   const mediaRef = useRef<MediaManager | null>(null);
   const switchableMediaRef = useRef<SwitchableMedia | null>(null);
+  // Written by setCallAudio itself: the hand-over to a new connection reads it
+  // before the next render.
+  const noiseRef = useRef(false);
   const roleRef = useRef<Role | null>(null);
   /** Recording channels that arrived while no take was running; a resume binds them. */
   const pendingChannelsRef = useRef<PendingRecordingChannel[]>([]);
@@ -1181,6 +1204,18 @@ export function useRoom(slug: string) {
     }));
   }, [slug, stopLeftoverTake]);
 
+  /**
+   * Make the choice of noise suppression and put the matching audio on every
+   * connection. The capture is opened or closed by the caller.
+   */
+  const setCallAudio = useCallback((on: boolean) => {
+    noiseRef.current = on;
+    setState((s) => (s.noiseSuppression === on ? s : { ...s, noiseSuppression: on }));
+    const media = switchableMediaRef.current;
+    const audio = callAudio(boardRef.current, media, on) ?? media?.stream.getAudioTracks()[0];
+    if (audio) for (const p of peersRef.current.values()) p.replaceAudioTrack(audio);
+  }, []);
+
   const join = useCallback(
     async (
       lobbyStream: MediaStream,
@@ -1198,6 +1233,7 @@ export function useRoom(slug: string) {
         : new SwitchableMedia(lobbyStream, {
             isRecording: () => phaseRef.current === 'recording',
             onMicWarning: (micWarning) => setState((s) => ({ ...s, micWarning })),
+            onCallAudioEnded: () => setCallAudio(false),
             stereo,
             onTrackReplaced: (kind, newTrack, oldTrack) => {
               for (const p of peersRef.current.values()) {
@@ -1677,7 +1713,10 @@ export function useRoom(slug: string) {
         // Everyone already here → negotiate now and leave the waiting room.
         // Otherwise wait for 'peer-joined'.
         const anyoneHere = peers.length > 0;
-        const outgoing = withBoardAudio(localStream, boardRef.current);
+        const outgoing = withCallAudio(
+          localStream,
+          callAudio(boardRef.current, switchableMediaRef.current, noiseRef.current)
+        );
         if (anyoneHere) {
           setupJoinerNegotiation(started, asProducer, outgoing, screenStreamRef.current);
         }
@@ -1746,7 +1785,7 @@ export function useRoom(slug: string) {
         const peer = startPeer(m.peerId, m.ordinal, m.role, m.companion);
         if (!asProducer && !asCompanion) {
           peer.setLocalStreamAfterFirstOffer(
-            withBoardAudio(localStream, boardRef.current),
+            withCallAudio(localStream, callAudio(boardRef.current, switchableMediaRef.current, noiseRef.current)),
             screenStreamRef.current
           );
           // Re-announce on every join, not just once: the DO relay only reaches
@@ -2065,7 +2104,7 @@ export function useRoom(slug: string) {
 
       signal.connect();
     },
-    [slug, beginGuestRecording, recordMarker, sendPresence, offerResume, stopLeftoverTake]
+    [slug, beginGuestRecording, recordMarker, sendPresence, offerResume, stopLeftoverTake, setCallAudio]
   );
 
   const setMic = useCallback(
@@ -2102,16 +2141,51 @@ export function useRoom(slug: string) {
   }, []);
 
   const switchMic = useCallback(async (deviceId: string) => {
-    if (!switchableMediaRef.current) return;
-    await switchableMediaRef.current.switchMic(deviceId);
+    const media = switchableMediaRef.current;
+    if (!media) return;
+    const hadNoiseSuppression = noiseRef.current;
+    // The switch ends the cleaned capture, so no connection may still hold it.
+    if (hadNoiseSuppression) setCallAudio(false);
+    await media.switchMic(deviceId);
     if (!micOnRef.current) {
-      switchableMediaRef.current.setAudioEnabled(false);
+      media.setAudioEnabled(false);
     }
+    if (hadNoiseSuppression && (await media.openCallAudio()) === 'on') setCallAudio(true);
     setState((s) => ({
       ...s,
       activeMicId: switchableMediaRef.current?.activeMicId,
     }));
-  }, []);
+  }, [setCallAudio]);
+
+  /**
+   * Turn noise suppression for the call on or off. Resolves with null when the choice
+   * was carried out and otherwise with the line to show. Only a person with a
+   * microphone of their own can have it, and not while the media board is in use:
+   * the board's mix is built on the raw microphone and recorded in later takes.
+   */
+  const setNoiseSuppression = useCallback(
+    async (on: boolean): Promise<string | null> => {
+      const media = switchableMediaRef.current;
+      if (!media) return null;
+      if (!on) {
+        media.closeCallAudio();
+        setCallAudio(false);
+        return null;
+      }
+      if (boardRef.current || noiseRef.current) return null;
+      const opened = await media.openCallAudio();
+      if (opened === 'on') {
+        if (boardRef.current) media.closeCallAudio();
+        else setCallAudio(true);
+        return null;
+      }
+      setState((s) => ({ ...s, noiseUnavailable: true }));
+      return opened === 'unavailable'
+        ? 'Noise suppression is not available in this browser.'
+        : "Your microphone's settings changed. Leave and join again before recording.";
+    },
+    [setCallAudio]
+  );
 
   /**
    * UI entry point: mark a moment. Guests relay to the host. Every label this
@@ -2579,12 +2653,14 @@ export function useRoom(slug: string) {
     } catch {
       return null; // no Web Audio here; the call is unaffected
     }
-    const mixed = board.outputTrack;
-    // EVERY peer, not just the primary one — the same mesh trap as screen share.
-    if (mixed) for (const p of peersRef.current.values()) p.replaceAudioTrack(mixed);
+    // The mix is built on the raw microphone and recorded in later takes, so it
+    // cannot carry the noise-suppressed capture: that one ends here.
+    switchableMediaRef.current?.closeCallAudio();
     boardRef.current = board;
+    // EVERY peer, not just the primary one — the same mesh trap as screen share.
+    setCallAudio(false);
     return board;
-  }, []);
+  }, [setCallAudio]);
 
   const sendChat = useCallback((text: string, to?: string) => {
     const ts = Date.now();
@@ -3279,6 +3355,7 @@ export function useRoom(slug: string) {
     setCam,
     switchCamera,
     switchMic,
+    setNoiseSuppression,
     sendChat,
     sendScript,
     dismissIncomingScript,

@@ -403,6 +403,11 @@ it, so their files hold processed audio, not raw. Noise suppression and gain con
 stay off. The answer is given before joining and remembered in that browser; to change
 it, leave the call and join again.
 
+On a computer, a person can also tick **Noise suppression** in the microphone menu
+during the call. The others then hear that microphone through the browser's noise
+suppression, and it changes no recorded file: the MP4, the WAV master and both backups
+hold the same raw audio as before.
+
 The host sees each person's answer on their name tag in the call: "headphones", "on
 speakers" or "on speakers, echo cancelled". Nobody else's screen shows it.
 

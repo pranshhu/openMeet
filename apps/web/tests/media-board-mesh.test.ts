@@ -4,6 +4,7 @@ import { useRoom } from '@/hooks/useRoom';
 import { startGuestRecording, startHostRecording } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { MediaBoard } from '@/lib/media-board';
+import { SwitchableMedia } from '@/lib/switchable-media';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let peers: any[] = [];
@@ -228,5 +229,113 @@ describe('media board in a mesh call', () => {
     });
 
     expect(audioOf(vi.mocked(startHostRecording).mock.calls[0]![0].localStream)).toEqual(['mic']);
+  });
+});
+
+// Noise suppression for the call and the media board are exclusive: the board's mix is
+// built on the raw microphone and is what later takes record.
+describe('media board and noise suppression', () => {
+  const cleaned = { id: 'cleaned', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+  let restores: (() => void)[] = [];
+
+  /** The cleaned capture is offered by the media; its browser side is covered in its own tests. */
+  function offerCleaned(opened: () => Promise<'on'> = async () => 'on') {
+    const open = vi.spyOn(SwitchableMedia.prototype, 'openCallAudio').mockImplementation(opened);
+    const close = vi.spyOn(SwitchableMedia.prototype, 'closeCallAudio').mockImplementation(() => {});
+    const track = vi.spyOn(SwitchableMedia.prototype, 'callAudioTrack', 'get').mockReturnValue(cleaned);
+    restores.push(() => open.mockRestore(), () => close.mockRestore(), () => track.mockRestore());
+    return { open, close };
+  }
+
+  beforeEach(() => {
+    signalHandlers = {};
+    peers = [];
+    vi.stubGlobal('MediaStream', FakeStream);
+  });
+
+  afterEach(() => {
+    restores.forEach((r) => r());
+    restores = [];
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  const lastAudioOf = (peer: any) => peer.replaceAudioTrack.mock.calls.at(-1)?.[0];
+
+  it("records the host's take from the microphone and its stream, not the cleaned capture", async () => {
+    offerCleaned();
+    const { result } = await joinAs('host', []);
+    act(() => {
+      emit('peer-joined', { peerId: 'g1', ordinal: 2, role: 'guest', displayName: 'A' });
+    });
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    expect(result.current.state.noiseSuppression).toBe(true);
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    const args = vi.mocked(startHostRecording).mock.calls[0]![0];
+    expect(args.localStream).toBe(result.current.state.localStream);
+    expect(audioOf(args.localStream)).toEqual(['mic']);
+    expect(audioOf(args.micStream!)).toEqual(['mic']);
+  });
+
+  it('ends noise suppression and sends the mix when the board is opened', async () => {
+    const { close } = offerCleaned();
+    const { result } = await joinAs('host', [{ peerId: 'g1', ordinal: 2, role: 'guest' }]);
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    expect(lastAudioOf(peers[0])).toBe(cleaned);
+
+    act(() => {
+      result.current.openMediaBoard();
+    });
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(lastAudioOf(peers[0])).toBe(mixed);
+  });
+
+  it('does not turn it on while the board exists', async () => {
+    const { open } = offerCleaned();
+    const { result } = await joinAs('host', [{ peerId: 'g1', ordinal: 2, role: 'guest' }]);
+    act(() => {
+      result.current.openMediaBoard();
+    });
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+
+    expect(line).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(lastAudioOf(peers[0])).toBe(mixed);
+  });
+
+  it('closes a capture that opened after the board was made', async () => {
+    let opens: () => void = () => {};
+    const { close } = offerCleaned(() => new Promise((resolve) => (opens = () => resolve('on'))));
+    const { result } = await joinAs('host', [{ peerId: 'g1', ordinal: 2, role: 'guest' }]);
+    let pending: Promise<string | null> = Promise.resolve(null);
+    act(() => {
+      pending = result.current.setNoiseSuppression(true);
+    });
+    act(() => {
+      result.current.openMediaBoard();
+    });
+    close.mockClear();
+    await act(async () => {
+      opens();
+      await pending;
+    });
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(lastAudioOf(peers[0])).toBe(mixed);
   });
 });

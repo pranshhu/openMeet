@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom, MAX_RELAYED_MARKERS } from '@/hooks/useRoom';
 import { PeerConnection } from '@/lib/peer';
+import { SwitchableMedia } from '@/lib/switchable-media';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { startGuestRecording, endGuestRecording, startHostRecording, endHostRecording, startScreenRecording, collectFileChecks, syncCallCopies, resumeHostRecording, bindHostGuestChannel, bindHostAudioChannel, bindHostScreenChannel, type RecordingHandles } from '@/hooks/recording-controller';
 import { findTakeJournals, type TakeJournal } from '@/lib/take-journal';
@@ -56,6 +57,7 @@ vi.mock('@/lib/peer', () => ({
     close: vi.fn(),
     setLocalStream: vi.fn(),
     setLocalStreamAfterFirstOffer: vi.fn(),
+    replaceAudioTrack: vi.fn(),
     createControlChannel: vi.fn(),
     addTransceiver: vi.fn(),
     restartIce: vi.fn(),
@@ -4089,6 +4091,43 @@ describe('resuming a crashed take from inside the call', () => {
     await act(async () => {
       await result.current.endRecording();
     });
+  });
+
+  it('resumes the host take from the microphone tracks, not the noise-suppressed capture', async () => {
+    const cleaned = { id: 'cleaned', kind: 'audio', enabled: true } as unknown as MediaStreamTrack;
+    const spies = [
+      vi.spyOn(SwitchableMedia.prototype, 'openCallAudio').mockResolvedValue('on'),
+      vi.spyOn(SwitchableMedia.prototype, 'callAudioTrack', 'get').mockReturnValue(cleaned),
+    ];
+    try {
+      const { result, joinedStream } = await hostAfterReload();
+      vi.mocked(findTakeJournals).mockResolvedValue([takeJournal()]);
+      await assignHost();
+      guestChannel('recording#R1');
+      await vi.waitFor(() =>
+        expect(result.current.state.resumeOffer).toEqual({ take: 1, canResume: true })
+      );
+      await act(async () => {
+        await result.current.setNoiseSuppression(true);
+      });
+      expect(result.current.state.noiseSuppression).toBe(true);
+      vi.mocked(resumeHostRecording).mockResolvedValue({ recordingId: 'rec-1', take: 1, hostStartMs: 1_000 });
+
+      await act(async () => {
+        await result.current.resumeRecording();
+      });
+
+      const args = vi.mocked(resumeHostRecording).mock.calls[0]![0];
+      // The joined stream here holds a camera only, so the take holds no audio track of its own.
+      expect(args.localStream.getAudioTracks()).toEqual([]);
+      expect(args.localStream.getVideoTracks()).toEqual(joinedStream.getVideoTracks());
+      expect(args.micStream?.getTracks()).toEqual(joinedStream.getTracks());
+      await act(async () => {
+        await result.current.endRecording();
+      });
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('saves what was recorded into the chosen folder and reports it', async () => {

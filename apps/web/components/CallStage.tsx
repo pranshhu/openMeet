@@ -37,6 +37,7 @@ import { isStagePeer } from '@/lib/stage-peers';
 import { useOverloadWatch } from '@/hooks/use-overload-watch';
 import { MIC_WARNING_TEXT, type MicWarning } from '@/lib/mic-watch';
 import { SpeakerRow } from './SpeakerRow';
+import { NoiseRow } from './NoiseRow';
 import { canPopOut, usePopOut } from '@/hooks/use-pop-out';
 import { ReactionBadge } from './ReactionBadge';
 import { ReactionMenu } from './ReactionMenu';
@@ -140,6 +141,9 @@ export function CallStage({
   capabilities,
   finalizingGuests,
   onSwitchMic,
+  noiseSuppression,
+  noiseUnavailable = false,
+  onNoiseSuppression,
   onSwitchCamera,
   activeMicId,
   activeCamId,
@@ -253,6 +257,11 @@ export function CallStage({
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
+  /** Noise suppression for what the others hear; the row is drawn only when both of these are given. */
+  noiseSuppression?: boolean;
+  noiseUnavailable?: boolean;
+  /** Resolves with the line to show when the change could not be carried out, else null. */
+  onNoiseSuppression?: (on: boolean) => Promise<string | null>;
   onSwitchCamera?: (deviceId: string) => Promise<void>;
   activeMicId?: string | undefined;
   activeCamId?: string | undefined;
@@ -428,6 +437,11 @@ export function CallStage({
     } catch (err) {
       setDeviceError(err instanceof Error ? err.message : 'Could not switch microphone.');
     }
+  }
+
+  async function handleNoiseSuppression(on: boolean) {
+    if (!onNoiseSuppression) return;
+    setDeviceError(await onNoiseSuppression(on));
   }
 
   async function handleSwitchCamera(deviceIdOrFacing: string) {
@@ -1263,6 +1277,15 @@ export function CallStage({
                         className="absolute bottom-full mb-2 left-0 z-30 min-w-64 max-w-[calc(100vw-2rem)] max-h-60 overflow-y-auto rounded-xl bg-[#202124] p-1.5 text-white shadow-2xl ring-1 ring-white/10"
                       >
                         <SpeakerRow devices={devices} />
+                        {noiseSuppression !== undefined && onNoiseSuppression && !phone && !isFallbackMedia && (
+                          <NoiseRow
+                            checked={noiseSuppression}
+                            unavailable={noiseUnavailable}
+                            boardInUse={Boolean(board)}
+                            takeActive={takeActive}
+                            onChange={handleNoiseSuppression}
+                          />
+                        )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Microphone
                         </div>
