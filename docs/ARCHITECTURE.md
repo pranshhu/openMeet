@@ -583,7 +583,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
   video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
   track, so the panel works on the track the call holds and a camera switch needs no change.
-  Nothing is stored, sent to anyone or written to a file.
+  Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
+  component under the preview, on the previewed video track and keyed by its `id`; that track is the
+  one handed to the call, so what is set there is what the call and the recording get.
 - **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
@@ -1720,7 +1722,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   rows. Brightness, contrast, saturation, sharpness and focus have no control.
 - **Camera settings are not remembered.** A change of camera, a reload or a rejoin starts from what
   the camera has, and **Reset** goes back to the values at the panel's opening, not to the camera's
-  factory values. The panel is on the call screen only, not in the lobby.
+  factory values. The waiting room has no panel: it is in the lobby before and in the call after.
+- **A change of camera, quality, frame rate or echo cancellation in the lobby opens the camera again.**
+  The sliders then show what the new capture has, not what was set on the one before.
 - **A long exposure time can lower the frame rate the camera delivers, and the file follows.** The
   self-view is mirrored, so Pan moves the other way on screen than in the recording. While a slider
   has the keyboard, **M** and **N** mark nothing.
