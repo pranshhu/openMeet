@@ -1630,8 +1630,16 @@ function pendingReceivers(h: RecordingHandles): ChunkReceiver[] {
       out.push(entry.receiver);
     }
   }
+  out.push(...liveScreenReceivers(h));
   return out;
 }
+
+/**
+ * A screen segment is live from its channel's arrival until that channel's
+ * close event, so a receiver listed here has a channel that can still deliver.
+ */
+const liveScreenReceivers = (h: RecordingHandles): ChunkReceiver[] =>
+  [...(h.screenLive?.keys() ?? [])].flatMap((n) => h.screenReceivers?.get(n) ?? []);
 
 /**
  * Slot 0's camera file is opened before any guest exists. True when the take
@@ -1673,6 +1681,7 @@ export async function endHostRecording(
   ]);
 
   const pReceivers = pendingReceivers(h);
+  const liveScreens = liveScreenReceivers(h);
 
   const peerId0 = h.slotPeerIds?.get(0);
   const name0 = (peerId0 ? opts?.getPeerName?.(peerId0) : undefined) || h.slotNames?.get(0) || 'Guest';
@@ -1693,6 +1702,16 @@ export async function endHostRecording(
       (slot !== undefined ? `Guest ${slot + 1}` : 'Guest');
     receiverGuestMap.set(entry.receiver, name);
   }
+  for (const [segment, peerId] of h.screenLive?.entries() ?? []) {
+    const r = h.screenReceivers?.get(segment);
+    if (!r) continue;
+    receiverGuestMap.set(
+      r,
+      (peerId ? opts?.getPeerName?.(peerId) : undefined) ||
+        (peerId ? slotNameForPeer(h, peerId) : undefined) ||
+        'Guest'
+    );
+  }
 
   const pendingCounts = new Map<string, number>();
   for (const r of pReceivers) {
@@ -1706,9 +1725,11 @@ export async function endHostRecording(
 
   reportProgress();
 
-  // Wait per file, in parallel. Screen segments are excluded on purpose: their
-  // channel is closed by the guest, and bindHostScreenChannel closes the writer
-  // on that event, so the close IS their finalize.
+  // Wait per file, in parallel, for the finish message of every file whose
+  // channel can still deliver, guest screen segments included: a writer closed
+  // before its file's finish message arrives reads as incomplete. A segment
+  // whose channel already closed is not here, its writer is closed by that
+  // event.
   await Promise.all(
     pReceivers.map(async (r) => {
       await r.whenFinalized(GUEST_TAIL_TIMEOUT_MS, GUEST_TAIL_HARD_CAP_MS);
@@ -1722,6 +1743,12 @@ export async function endHostRecording(
       reportProgress();
     })
   );
+
+  // A screen file that never finished within the limits is ended early, as the
+  // close of its channel would mark it.
+  for (const r of liveScreens) {
+    if (!r.receivedFinalized) (h.screenEndedEarlyByFile ??= new Set()).add(r.fileName);
+  }
 
   h.receiver?.flushAck();
   h.wavReceiver?.flushAck();

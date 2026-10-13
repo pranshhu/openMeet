@@ -1019,7 +1019,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
-   guest that keeps sending cannot hold the save open.
+   guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
+   still open is waited for the same way; one whose channel has closed is not, and its writer was
+   closed by that event. A screen file that gave no finish signal within the limits is listed as
+   ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
+   so the channel's close and the end of the take can both ask for it.
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own

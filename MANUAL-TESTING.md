@@ -160,6 +160,7 @@ Not covered by the automated test at all.
 | 5.9 | Computer presents a photo or video | On a computer, click the arrow beside **Present**, pick **A photo or video** and choose a video with sound; then do the same with a photo during a recording | Everyone else sees it in the spotlight and hears the video; the presenter sees it labelled "What you're presenting"; **Stop presenting** ends it. The photo shown during the recording lands as a `*_screen_*.mp4` | ☐ | |
 | 5.10 | Presenter hears a presented video | With headphones on, present a video with sound from a computer; then from a phone; then from a laptop joined with **Present only** | The computer hears the video; the phone and the Present-only laptop show it in silence. Everyone else hears it each time | ☐ | |
 | 5.11 | Present alone | Recording alone, host clicks **Present**, picks a tab for ~15 s, stops presenting, **End & save** | The stage reads "You’re presenting" while it lasts; `host-<your name>_screen_*.mp4` is in the folder, plays and is listed in the summary as complete | ☐ | |
+| 5.12 | End & save while a Present-only device presents | Phone joins as a guest. A laptop in another profile opens the invite link, chooses **Present only** and picks a screen. Host records ~30 s and presses **End & save** while the laptop is still presenting. Repeat with **Pause** | The summary lists the laptop's `guest_screen_*.mp4` as complete, with no "Incomplete" line and no "Recording failed" line, and the sync file is in the folder | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 

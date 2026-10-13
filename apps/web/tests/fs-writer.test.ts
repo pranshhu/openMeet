@@ -34,6 +34,59 @@ describe('FileWriter', () => {
     expect(writable.close).toHaveBeenCalledOnce();
   });
 
+  it('two close() calls at the same moment close the stream once and both resolve', async () => {
+    // Removal that must fail this test: the shared promise, so each call
+    // reaches the stream's own close.
+    let closes = 0;
+    const writable = {
+      write: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockImplementation(async () => {
+        closes++;
+        await new Promise((r) => setTimeout(r, 10));
+        if (closes > 1) throw new TypeError('Cannot close a closed or closing stream');
+      }),
+    };
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'h.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('h.mp4');
+
+    const results = await Promise.allSettled([fw.close(), fw.close()]);
+    await expect(fw.close()).resolves.toBeUndefined();
+
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(writable.close).toHaveBeenCalledOnce();
+  });
+
+  it('two close() calls on a stream whose close fails both reject with that error', async () => {
+    const writable = {
+      write: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockRejectedValue(new Error('disk full')),
+    };
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'h.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('h.mp4');
+
+    const results = await Promise.allSettled([fw.close(), fw.close()]);
+
+    expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+    expect(results.map((r) => (r as PromiseRejectedResult).reason.message)).toEqual(['disk full', 'disk full']);
+    expect(writable.close).toHaveBeenCalledOnce();
+  });
+
+  it('close() on a file that was never opened resolves', async () => {
+    await expect(new FileWriter({ picker: vi.fn() }).close()).resolves.toBeUndefined();
+  });
+
+  it('a write after close rejects', async () => {
+    const writable = fakeWritable();
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'h.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('h.mp4');
+    await fw.close();
+    await expect(fw.write(0, new ArrayBuffer(1))).rejects.toThrow();
+    expect(writable.write).not.toHaveBeenCalled();
+  });
+
   it('write before open throws', async () => {
     const fw = new FileWriter({ picker: vi.fn() });
     await expect(fw.write(0, new ArrayBuffer(1))).rejects.toThrow();

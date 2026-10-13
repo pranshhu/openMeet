@@ -290,6 +290,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A take ended while someone was presenting could show their screen recording
+  as incomplete, or a "Recording failed" line, though the file was whole. The
+  screen file reads complete and the summary is written.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.
