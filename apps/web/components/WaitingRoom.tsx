@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { Role } from '@openmeet/protocol';
 import { VideoTile } from './VideoTile';
 import { Icon } from './Icon';
@@ -19,6 +19,7 @@ export function WaitingRoom({
   note,
   busy = false,
   onContinueAlone,
+  extra,
 }: {
   role: Role | null;
   localStream: MediaStream | null;
@@ -33,6 +34,8 @@ export function WaitingRoom({
   busy?: boolean;
   /** A host who can record: go on to the call screen without waiting for anyone. */
   onContinueAlone?: () => void;
+  /** Drawn under the buttons, in the same column. */
+  extra?: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   // Seeded from the tracks, so a camera turned off in the lobby stays off here
@@ -166,6 +169,12 @@ export function WaitingRoom({
               Leave
             </button>
           </div>
+          {extra && (
+            // Rows centre themselves; from lg up the column is left-aligned, so they follow it.
+            <div className="flex w-full min-w-0 max-w-full flex-col items-center lg:items-start lg:*:self-start!">
+              {extra}
+            </div>
+          )}
         </div>
       </main>
     </div>

@@ -13,6 +13,8 @@ import type { MediaBoard } from '@/lib/media-board';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
+import { KnockNotice } from './KnockNotice';
+import { RoomAccess } from './RoomAccess';
 import { StatusScreen } from './StatusScreen';
 
 /**
@@ -270,6 +272,19 @@ export function RoomView({ slug }: { slug: string }) {
   // go on to the call screen without waiting for anyone: Record is there.
   const goAlone =
     record.canRecord && !state.companion ? { onContinueAlone: () => setAlone(true) } : {};
+  // A host who is alone still answers the people at the door and sets the room
+  // controls: they are drawn under the waiting screen's buttons.
+  const hostAccess =
+    state.role === 'host' && state.access
+      ? {
+          extra: (
+            <>
+              <KnockNotice role={state.role} waiting={state.access.waiting} onAdmit={admitPeer} />
+              <RoomAccess access={state.access} onChange={setRoomAccess} />
+            </>
+          ),
+        }
+      : {};
   // The Room has the join and the host has not answered it: nothing is
   // connecting, so no spinner.
   if (
@@ -301,6 +316,7 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleCam={setCam}
         {...(note ? { note } : {})}
         {...goAlone}
+        {...hostAccess}
       />
     );
   }
@@ -318,6 +334,7 @@ export function RoomView({ slug }: { slug: string }) {
         busy
         title={state.connectionWarning ? 'Having trouble connecting' : 'Connecting…'}
         note={state.connectionWarning ?? companionNote ?? 'Joining the call. This usually takes a few seconds.'}
+        {...hostAccess}
       />
     );
   }
@@ -336,6 +353,7 @@ export function RoomView({ slug }: { slug: string }) {
         title="Everyone else left"
         note="You’re still in the room. The call picks up again when someone joins."
         {...goAlone}
+        {...hostAccess}
       />
     );
   }

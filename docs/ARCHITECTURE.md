@@ -414,7 +414,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   guest can test a device ahead of the call. It never calls `join`. A link that also carries
   `producer=1` or `present=1` is that link, and `check` is ignored.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
-  the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
+  the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
+  host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
+  each person at the door and the lock and waiting room checkboxes (`RoomView` passes them as
+  the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
   and the Present-only link (the plain link plus `?producer=1` or `?present=1`, the flags
@@ -428,7 +431,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   place, so opening one closes the other): a row per person with **Mute**, which a producer
   and a present-only device do not get. A person the host muted sees their own mic button off
   and a `role="status"` line that says so, and during their own capture that their recording
-  has no sound until they turn it back on.
+  has no sound until they turn it back on. The button is there while someone else is in the
+  call and also, with nobody else, once the Room has sent the host `room-access`; then the
+  panel holds the lock and waiting room checkboxes alone. While someone waits at the door the
+  button carries a dot and reads "People, N waiting to join".
   Each row also has **Remove**, which asks in the row itself before it calls
   `useRoom().removePeer` (a blocking dialog would stall the tab that writes the take), with
   **Cancel** focused and last, at the row's right end where Remove was; during a take, and
@@ -1729,9 +1735,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lists it.
 - **Nobody else is told why a person left.** A removal reaches the other participants as an
   ordinary `peer-left`; its `reason` is `removed`, and no page reads it.
-- **The People panel exists on the call screen only.** A host whose page still reads
-  "Connecting…" cannot mute or remove the person it is connecting to, and a removal cannot be
-  undone from the panel: the removed person opens the link in a new tab.
+- **Mute and remove are on the call screen only.** The lock and waiting room checkboxes and
+  the rows for people at the door are also on the host's waiting screen, but a host whose
+  page still reads "Connecting…" cannot mute or remove the person it is connecting to, and a
+  removal cannot be undone from the panel: the removed person opens the link in a new tab.
 - **After a host reload the rundown has lost its place.** **Resume recording** brings back the
   take's markers, not the segment that was running: the strip is hidden and, shown, reads
   "Rundown not started" until the host chooses the segment the show had reached in the list

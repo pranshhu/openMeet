@@ -13,7 +13,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 ### Added
 
 - A waiting room: with it on, a person who opens the invite link waits until the host
-  lets them in or refuses them.
+  lets them in or refuses them. The host sees who is waiting on the call screen and
+  while waiting alone.
 - The host can lock the room from the People panel: nobody new can join until it is
   unlocked, and the people already in the call can still reconnect.
 - Opening the room in a second tab of the host's browser while a recording is

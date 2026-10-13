@@ -626,6 +626,7 @@ export function CallStage({
 
   const peerFallback = role === 'host' ? 'Guest' : 'Host';
   const isHost = role === 'host';
+  const waitingCount = roomAccess?.waiting.length ?? 0;
   // A rundown is stepped through during a take, so it is offered only where
   // one can be started: to a host who can record.
   const hasRundown = isHost && canRecord;
@@ -1199,7 +1200,7 @@ export function CallStage({
                 onClose={() => setBoardOpen(false)}
               />
             )}
-            {peopleOpen && isHost && onMutePeer && remotePeers.length > 0 && (
+            {peopleOpen && isHost && onMutePeer && (remotePeers.length > 0 || roomAccess) && (
               <PeoplePanel
                 people={remotePeers}
                 recording={takeActive || Boolean(resumeOffer)}
@@ -1559,10 +1560,17 @@ export function CallStage({
                 variant={chatOpen ? 'active' : 'default'}
                 onClick={() => openChat(!chatOpen)}
               />
-              {isHost && onMutePeer && remotePeers.length > 0 && (
+              {isHost && onMutePeer && (remotePeers.length > 0 || roomAccess) && (
                 <ControlButton
                   icon="people"
-                  label={peopleOpen ? 'Hide people' : 'People'}
+                  label={
+                    peopleOpen
+                      ? 'Hide people'
+                      : waitingCount > 0
+                        ? `People, ${waitingCount} waiting to join`
+                        : 'People'
+                  }
+                  badge={waitingCount > 0}
                   variant={peopleOpen ? 'active' : 'default'}
                   onClick={() => {
                     setPeopleOpen((o) => !o);
