@@ -17,7 +17,7 @@ import {
   recordingChannelKind,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
-import { patchWavHeader } from '@/lib/wav';
+import { patchWavHeader, wavFrameBytes, WAV_HEADER_BYTES } from '@/lib/wav';
 import { openTakeJournal, type JournalFileNote, type TakeJournal } from '@/lib/take-journal';
 import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
@@ -373,16 +373,21 @@ function slotNameForPeer(h: RecordingHandles, peerId: string): string | undefine
   return undefined;
 }
 
+/**
+ * `host_screen_<id>.mp4` for the first segment of the first take, `_2` and so on
+ * for later segments, and `_take<n>` last from the second take on, as every
+ * other file of a take ends.
+ */
 function screenFileName(
   role: 'host' | 'guest',
   recordingId: string,
   segment: number,
+  take: number,
   name?: unknown
 ): string {
   const who = roleWithName(role, name);
-  return segment <= 1
-    ? `${who}_screen_${recordingId}.mp4`
-    : `${who}_screen_${recordingId}_${segment}.mp4`;
+  const base = segment <= 1 ? `${who}_screen_${recordingId}` : `${who}_screen_${recordingId}_${segment}`;
+  return take <= 1 ? `${base}.mp4` : `${base}_take${take}.mp4`;
 }
 
 /**
@@ -990,7 +995,16 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       continue;
     }
 
-    const replayed = await args.journal.replay(note.file, { write: (position, data) => writer.write(position, data) });
+    // The WAV's own header, in the first part, says how long a sample frame is.
+    let frameBytes = 1;
+    const replayed = await args.journal.replay(note.file, {
+      write: async (position, data) => {
+        if (note.kind === 'wav' && position === 0) {
+          frameBytes = wavFrameBytes(await data.slice(0, WAV_HEADER_BYTES).arrayBuffer());
+        }
+        await writer.write(position, data);
+      },
+    });
     // A part the folder refused leaves the file shorter than the journal says.
     // Say so, and seed the receiver from what really landed, so the end it
     // announces is the file's own. The missing part is not asked for again:
@@ -1016,6 +1030,7 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
         if (c && c.readyState === 'open') c.send(json);
       },
       ...(resumeFrom ? { resumeFrom } : {}),
+      frameBytes,
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),
@@ -1637,8 +1652,16 @@ function pendingReceivers(h: RecordingHandles): ChunkReceiver[] {
       out.push(entry.receiver);
     }
   }
+  out.push(...liveScreenReceivers(h));
   return out;
 }
+
+/**
+ * A screen segment is live from its channel's arrival until that channel's
+ * close event, so a receiver listed here has a channel that can still deliver.
+ */
+const liveScreenReceivers = (h: RecordingHandles): ChunkReceiver[] =>
+  [...(h.screenLive?.keys() ?? [])].flatMap((n) => h.screenReceivers?.get(n) ?? []);
 
 /**
  * Slot 0's camera file is opened before any guest exists. True when the take
@@ -1680,6 +1703,7 @@ export async function endHostRecording(
   ]);
 
   const pReceivers = pendingReceivers(h);
+  const liveScreens = liveScreenReceivers(h);
 
   const peerId0 = h.slotPeerIds?.get(0);
   const name0 = (peerId0 ? opts?.getPeerName?.(peerId0) : undefined) || h.slotNames?.get(0) || 'Guest';
@@ -1700,6 +1724,16 @@ export async function endHostRecording(
       (slot !== undefined ? `Guest ${slot + 1}` : 'Guest');
     receiverGuestMap.set(entry.receiver, name);
   }
+  for (const [segment, peerId] of h.screenLive?.entries() ?? []) {
+    const r = h.screenReceivers?.get(segment);
+    if (!r) continue;
+    receiverGuestMap.set(
+      r,
+      (peerId ? opts?.getPeerName?.(peerId) : undefined) ||
+        (peerId ? slotNameForPeer(h, peerId) : undefined) ||
+        'Guest'
+    );
+  }
 
   const pendingCounts = new Map<string, number>();
   for (const r of pReceivers) {
@@ -1713,9 +1747,11 @@ export async function endHostRecording(
 
   reportProgress();
 
-  // Wait per file, in parallel. Screen segments are excluded on purpose: their
-  // channel is closed by the guest, and bindHostScreenChannel closes the writer
-  // on that event, so the close IS their finalize.
+  // Wait per file, in parallel, for the finish message of every file whose
+  // channel can still deliver, guest screen segments included: a writer closed
+  // before its file's finish message arrives reads as incomplete. A segment
+  // whose channel already closed is not here, its writer is closed by that
+  // event.
   await Promise.all(
     pReceivers.map(async (r) => {
       await r.whenFinalized(GUEST_TAIL_TIMEOUT_MS, GUEST_TAIL_HARD_CAP_MS);
@@ -1730,6 +1766,15 @@ export async function endHostRecording(
     })
   );
 
+  // A screen file that never finished within the limits is ended early, as the
+  // close of its channel would mark it. An empty file that close already
+  // removed is not listed.
+  for (const r of liveScreens) {
+    if (r.receivedFinalized) continue;
+    if (!h.screenWriters?.some((w) => w.fileName === r.fileName)) continue;
+    (h.screenEndedEarlyByFile ??= new Set()).add(r.fileName);
+  }
+
   h.receiver?.flushAck();
   h.wavReceiver?.flushAck();
   for (const entry of h.guestReceivers?.values() ?? []) entry.receiver.flushAck();
@@ -1737,11 +1782,13 @@ export async function endHostRecording(
   const patchReceiverWav = async (receiver?: ChunkReceiver, writer?: FileWriter) => {
     if (!receiver || !writer) return;
     if (receiver.receivedFinalHeader) return;
-    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten);
+    // A file reopened after a reload holds more than this receiver saw: the
+    // folder's own bytes were carried into it. The header declares the file.
+    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten, writer.size ?? 0);
     if (total > 44) {
       const dataBytes = total - 44;
       try {
-        await patchWavHeader(writer, dataBytes);
+        await patchWavHeader(writer, dataBytes, receiver.frameBytes);
       } catch {
         // Writer may be closed or failing
       }
@@ -1915,7 +1962,7 @@ export async function startScreenRecording(
       // already there; a fresh take's id is new, so it never probes.
       const free = await freeNumber(
         h.dir,
-        (n) => screenFileName('host', h.recordingId, n, h.hostName),
+        (n) => screenFileName('host', h.recordingId, n, h.take ?? 1, h.hostName),
         segment
       );
       if (free === null) {
@@ -1929,7 +1976,7 @@ export async function startScreenRecording(
       h.screenSegment = segment;
     }
     const writer = new FileWriter();
-    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment, h.hostName));
+    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment, h.take ?? 1, h.hostName));
     if (screen.getVideoTracks()[0]?.readyState === 'ended') {
       await writer.close();
       rollback();
@@ -2085,14 +2132,14 @@ export async function bindHostScreenChannel(
     // A number the folder already holds is given up for the next unclaimed one,
     // which keeps a segment saved before the crash from being opened over. A
     // fresh take reuses its own number.
-    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n), segment, claim);
+    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n, h.take ?? 1), segment, claim);
   }
   if (segment === null) {
     refuseScreenSegment(h, 'guest', onError);
     return;
   }
   const writer = new FileWriter();
-  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment));
+  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment, h.take ?? 1));
   // The share can stop while the file is opening. Its close event has fired by
   // now, so nothing below would ever close this file or drop its row.
   if (channel.readyState === 'closed') {
@@ -2151,6 +2198,9 @@ export async function bindHostScreenChannel(
   };
   channel.addEventListener('close', () => {
     h.screenLive?.delete(segment);
+    // A closed channel delivers nothing more, so a take being saved stops
+    // waiting for this file's finish message.
+    receiver.resolveEarly();
     if (!receiver.receivedFinalized) {
       (h.screenEndedEarlyByFile ??= new Set()).add(writer.fileName);
     }

@@ -248,7 +248,7 @@ export function SessionSummary({
           <ul className="mt-3 space-y-2">
             {commands.map((c) => (
               <li key={c.label}>
-                <div className="mb-1 text-xs text-white/60">{c.label}</div>
+                <div className="mb-1 break-words text-xs text-white/60">{c.label}</div>
                 <div className="flex items-start gap-2 rounded bg-black/40 p-2">
                   <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre text-xs text-white/80">
                     {c.cmd}
