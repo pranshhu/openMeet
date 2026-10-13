@@ -405,7 +405,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   full sheet with the control bar hidden while open. The bar's wrapper is one level above the
   stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
   menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  `className` to fill the spotlight or size a PiP. A picture taller than wide (a phone held
+  upright) is always drawn whole, as `contain` does, whatever `fit` says: the tile reads the
+  shape on the video element's `loadedmetadata` and `resize` events and starts again as not
+  tall when its stream changes. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
   every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
@@ -597,7 +600,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
   them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
-  where the preview shows a band of a tall picture.
+  where the preview draws a tall picture whole inside the wide box, so thirds of the box are
+  not thirds of the picture.
 - **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
   panel, in the browser that holds the room's host token (`Lobby`'s `isHost`), and not on the
   check page (`checkOnly`), which joins no call. The host picks a

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
 import { followSpeaker } from '@/lib/speaker';
 
 function initial(label: string): string {
@@ -42,10 +42,17 @@ export function VideoTile({
   volume?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  // Whether the picture the element holds is taller than wide (a phone held
+  // upright). Such a picture is drawn whole, as a contained one is, instead of as
+  // a band across its middle.
+  const [tall, setTall] = useState(false);
+  const whole = fit === 'contain' || tall;
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // A stream that is new, or gone, has not told its size yet.
+    setTall(false);
     // Assign AND clear. Only assigning meant a tile whose stream went away kept
     // rendering the last frame of a dead stream — e.g. after the peer left or
     // the call was torn down — so the UI showed video that no longer existed.
@@ -71,6 +78,11 @@ export function VideoTile({
     return followSpeaker(el);
   }, [muted]);
 
+  // The element reports its picture size when it first knows it and when it
+  // changes. It is read there, not per frame.
+  const readShape = ({ currentTarget: v }: SyntheticEvent<HTMLVideoElement>) =>
+    setTall(v.videoWidth > 0 && v.videoHeight > v.videoWidth);
+
   const showVideo = !!stream && !camOff;
 
   useEffect(() => {
@@ -79,14 +91,16 @@ export function VideoTile({
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${fit === 'contain' ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
+      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${whole ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
     >
       <video
         ref={ref}
         autoPlay
         playsInline
         muted={muted}
-        className={`h-full w-full ${fit === 'contain' ? 'object-contain' : 'object-cover'} transition-opacity duration-200 ${showVideo ? 'opacity-100' : 'opacity-0'} ${mirror ? '-scale-x-100' : ''}`}
+        onLoadedMetadata={readShape}
+        onResize={readShape}
+        className={`h-full w-full ${whole ? 'object-contain' : 'object-cover'} transition-opacity duration-200 ${showVideo ? 'opacity-100' : 'opacity-0'} ${mirror ? '-scale-x-100' : ''}`}
       />
       {!showVideo && (
         <div className="absolute inset-0 flex items-center justify-center">

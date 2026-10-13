@@ -293,6 +293,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A camera picture that is taller than wide, such as a phone held upright, is shown whole in
+  its tile instead of as a band across its middle.
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.

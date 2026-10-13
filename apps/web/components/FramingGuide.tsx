@@ -17,8 +17,8 @@ const LINES = [
  * lines over the picture and this component is given no stream, so nothing of
  * them can reach a recording or another participant.
  *
- * Not on a phone: held upright it gives a tall picture, the preview shows a
- * wide band of it, and thirds of that band are not thirds of what is recorded.
+ * Not on a phone: held upright it gives a tall picture, the preview draws it
+ * whole inside the wide box, and thirds of the box are not thirds of the picture.
  */
 export function FramingGuide() {
   const [on, setOn] = useState(false);
