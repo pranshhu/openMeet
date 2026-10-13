@@ -290,6 +290,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- The WAV recording from a computer that stalls during a take stays as long as
+  the MP4. Frames that were only late used to get silence added in front of
+  them, which made the WAV longer than the take.
 - A screen file of the second take or later ends in `_take<n>`, as the other
   files of that take do: `host_screen_<id>_take2.mp4`,
   `guest_screen_<id>_2_take2.mp4`.
