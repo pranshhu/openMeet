@@ -66,6 +66,7 @@ export class SwitchableMedia {
   private levelTap: ChannelSplitterNode | null = null;
   private stopMicWatch: (() => void) | null = null;
   private callTrack: MediaStreamTrack | null = null;
+  private callRequest = 0;
   private qualityId: string;
   private frameRate: number;
   private echoCancellation: boolean;
@@ -212,14 +213,21 @@ export class SwitchableMedia {
    * suppression required. It never enters the audio graph, `stream` or
    * `micStream`, so nothing that is recorded can hold it. Never throws.
    *
-   * `unavailable`: no separate processed capture was obtained (or a take is
-   * recording). `mic-changed`: opening it left the raw microphone processed
-   * differently, which the recordings would carry.
+   * Only the newest request keeps a capture. A request overtaken by a newer one,
+   * by a close, by a take that began, by a microphone switch or by a stop answers
+   * `not-now` and stops what it opened.
+   *
+   * `unavailable`: no separate processed capture was obtained, which the browser
+   * decided. `not-now`: the moment ruled it out, so asking again may work.
+   * `mic-changed`: opening it left the raw microphone processed differently,
+   * which the recordings would carry.
    */
-  async openCallAudio(): Promise<'on' | 'unavailable' | 'mic-changed'> {
+  async openCallAudio(): Promise<'on' | 'unavailable' | 'not-now' | 'mic-changed'> {
     this.closeCallAudio();
+    const request = ++this.callRequest;
     const raw = this._currentMicTrack;
-    if (!this.audioCtx || !raw || this.options.isRecording?.()) return 'unavailable';
+    if (!this.audioCtx || !raw) return 'unavailable';
+    if (this.options.isRecording?.()) return 'not-now';
     // Browsers share one capture between requests for the same microphone, and some
     // apply the new request's processing to it, so the raw track is read around it.
     const processing = () => {
@@ -236,20 +244,22 @@ export class SwitchableMedia {
       });
       track = stream.getAudioTracks()[0];
     } catch {
-      return 'unavailable';
+      // A refused request has no track and answers below.
+    }
+    if (request !== this.callRequest) {
+      track?.stop();
+      return 'not-now';
     }
     if (!track) return 'unavailable';
     if (!unchanged(before)) {
       track.stop();
       return unchanged(before) ? 'unavailable' : 'mic-changed';
     }
-    if (
-      track.getSettings?.().noiseSuppression !== true ||
-      track.id === raw.id ||
-      this.options.isRecording?.() ||
-      this._currentMicTrack !== raw ||
-      !this.audioCtx
-    ) {
+    if (this.options.isRecording?.() || this._currentMicTrack !== raw || !this.audioCtx) {
+      track.stop();
+      return 'not-now';
+    }
+    if (track.getSettings?.().noiseSuppression !== true || track.id === raw.id) {
       track.stop();
       return 'unavailable';
     }
@@ -266,6 +276,7 @@ export class SwitchableMedia {
 
   /** Stops it. Safe to call when it is not open. */
   closeCallAudio(): void {
+    this.callRequest++;
     const track = this.callTrack;
     this.callTrack = null;
     track?.stop?.();

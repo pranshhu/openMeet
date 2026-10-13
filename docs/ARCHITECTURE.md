@@ -1324,15 +1324,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     (`openCallAudio`, `callAudioTrack`, `closeCallAudio`). It is a second `getUserMedia` capture of
     the current microphone, opened with `micConstraints` and `noiseSuppression: { exact: true }`
     in place of `noiseSuppression: false`, so nothing else differs from the raw capture. The
-    answer is `unavailable` when there is no audio graph or microphone, when a take is recording
-    (before the request or when it returns), when the request is refused, when the new track does not
-    report `getSettings().noiseSuppression === true`, or when it is the raw track itself: a browser
-    may hand back the capture it already has. Browsers can also apply the new request's processing to the
-    raw track, so `noiseSuppression`, `echoCancellation` and `autoGainControl` are read from the raw
-    track before and after the request: if any changed, the new track is stopped and they are read
-    again, and the answer is `unavailable` when they are back and `mic-changed` when they are not,
-    because the recordings would carry the change. The cleaned track never enters the audio graph,
-    `stream` or `micStream`; only `useRoom` reads `callAudioTrack`, and only
+    answer is `unavailable` when there is no audio graph or microphone, when the request is refused,
+    when the new track does not report `getSettings().noiseSuppression === true`, or when it is the raw
+    track itself: a browser may hand back the capture it already has. Only the newest request keeps a
+    capture, and a request overtaken by a newer one, by a close, by a take that began (a take that is
+    recording before the request also answers so), by a microphone switch or by a stop answers
+    `not-now`, stops what it opened and marks nothing as unavailable. Browsers can also apply the new
+    request's processing to the raw track, so `noiseSuppression`, `echoCancellation` and
+    `autoGainControl` are read from the raw track before and after the request: if any changed, the
+    new track is stopped and they are read again, and the answer is `unavailable` when they are back
+    and `mic-changed` when they are not, because the recordings would carry the change. The cleaned
+    track never enters the audio graph, `stream` or `micStream`; only `useRoom` reads `callAudioTrack`, and only
     `PeerConnection.replaceAudioTrack` and the stream handed to a new connection receive it
     (`callAudio` and `withCallAudio` in `useRoom`: the board's mix, else the cleaned track, else the
     stable track). The recorders keep `withBoardAudio` and `micStream`. It is switched off with the

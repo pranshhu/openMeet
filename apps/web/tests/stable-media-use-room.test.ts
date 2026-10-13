@@ -869,6 +869,180 @@ describe('useRoom noise suppression', () => {
     expect(lastAudioOf(mockPeers[0])).toBe(result.current.state.localStream!.getAudioTracks()[0]);
   });
 
+  /** The next getUserMedia call waits until `release` is called. */
+  function holdNextCapture(getUserMedia: ReturnType<typeof vi.fn>, track: MediaStreamTrack) {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    getUserMedia.mockImplementationOnce(async () => {
+      await held;
+      return new MediaStream([track]);
+    });
+    return release;
+  }
+
+  const noiseRequests = (getUserMedia: ReturnType<typeof vi.fn>) =>
+    getUserMedia.mock.calls.filter(([c]) => (c.audio as MediaTrackConstraints).noiseSuppression).length;
+
+  it('ignores a tick during a microphone switch: one request, no unavailable line, the box stays on', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    await act(async () => {
+      await result.current.setNoiseSuppression(true);
+    });
+    getUserMedia.mockClear();
+    const release = holdNextCapture(getUserMedia, rawTrack('raw-2', 'mic-2'));
+
+    let switching: Promise<void> | undefined;
+    act(() => {
+      switching = result.current.switchMic('mic-2');
+    });
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBeNull();
+    expect(noiseRequests(getUserMedia)).toBe(0);
+
+    await act(async () => {
+      release();
+      await switching;
+    });
+    expect(noiseRequests(getUserMedia)).toBe(1);
+    expect(result.current.state.noiseUnavailable).toBe(false);
+    expect(result.current.state.noiseSuppression).toBe(true);
+  });
+
+  it('keeps ignoring ticks during a switch that began while an earlier request was still running', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    const releaseRequest = holdNextCapture(getUserMedia, cleanedTrack('late'));
+    let request: Promise<string | null> | undefined;
+    act(() => {
+      request = result.current.setNoiseSuppression(true);
+    });
+    const releaseSwitch = holdNextCapture(getUserMedia, rawTrack('raw-2', 'mic-2'));
+    let switching: Promise<void> | undefined;
+    act(() => {
+      switching = result.current.switchMic('mic-2');
+    });
+    await act(async () => {
+      releaseRequest();
+      await request;
+    });
+
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBeNull();
+    expect(noiseRequests(getUserMedia)).toBe(1);
+
+    await act(async () => {
+      releaseSwitch();
+      await switching;
+    });
+    expect(result.current.state.noiseUnavailable).toBe(false);
+  });
+
+  it('takes a tick again once a microphone switch is over, also one that failed', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    await act(async () => {
+      await result.current.switchMic('mic-2');
+    });
+    getUserMedia.mockImplementationOnce(async () => {
+      throw new Error('NotReadableError');
+    });
+    await act(async () => {
+      await expect(result.current.switchMic('mic-3')).rejects.toThrow('NotReadableError');
+    });
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBeNull();
+    expect(result.current.state.noiseSuppression).toBe(true);
+  });
+
+  it('takes a tick again after a request that threw or was refused', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    getUserMedia.mockImplementationOnce(async () => {
+      throw new Error('OverconstrainedError');
+    });
+    await act(async () => {
+      expect(await result.current.setNoiseSuppression(true)).toBe(NOISE_OFF);
+    });
+    await act(async () => {
+      expect(await result.current.setNoiseSuppression(true)).toBeNull();
+    });
+    expect(result.current.state.noiseSuppression).toBe(true);
+  });
+
+  it('keeps ignoring ticks while an earlier request runs on after a switch that began during it ended', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    const releaseRequest = holdNextCapture(getUserMedia, cleanedTrack('late'));
+    let request: Promise<string | null> | undefined;
+    act(() => {
+      request = result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.switchMic('mic-2');
+    });
+
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await result.current.setNoiseSuppression(true);
+    });
+    expect(line).toBeNull();
+    expect(noiseRequests(getUserMedia)).toBe(1);
+
+    await act(async () => {
+      releaseRequest();
+      await request;
+    });
+    expect(result.current.state.noiseUnavailable).toBe(false);
+  });
+
+  it('leaves the box off and available when its request was overtaken', async () => {
+    const { result, getUserMedia } = await joinedGuest();
+    const cleanedLate = cleanedTrack('late');
+    const release = holdNextCapture(getUserMedia, cleanedLate);
+
+    let pending: Promise<string | null> | undefined;
+    act(() => {
+      pending = result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      await result.current.setNoiseSuppression(false);
+      release();
+    });
+    let line: string | null = 'unset';
+    await act(async () => {
+      line = await pending!;
+    });
+    expect(line).toBeNull();
+    expect(result.current.state.noiseUnavailable).toBe(false);
+    expect(result.current.state.noiseSuppression).toBe(false);
+    expect(cleanedLate.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends one request when it is ticked twice before the first answers', async () => {
+    const { result, getUserMedia, cleaned } = await joinedGuest();
+    const release = holdNextCapture(getUserMedia, cleaned);
+
+    let first: Promise<string | null> | undefined;
+    let second: Promise<string | null> | undefined;
+    act(() => {
+      first = result.current.setNoiseSuppression(true);
+      second = result.current.setNoiseSuppression(true);
+    });
+    await act(async () => {
+      release();
+      await Promise.all([first, second]);
+    });
+    expect(await second).toBeNull();
+    expect(noiseRequests(getUserMedia)).toBe(1);
+    expect(result.current.state.noiseSuppression).toBe(true);
+    expect(cleaned.stop).not.toHaveBeenCalled();
+  });
+
   it('leaves nothing open when the call is released', async () => {
     const { result, cleaned } = await joinedGuest();
     await act(async () => {

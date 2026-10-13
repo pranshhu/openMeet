@@ -719,6 +719,9 @@ export function useRoom(slug: string) {
   // Written by setCallAudio itself: the hand-over to a new connection reads it
   // before the next render.
   const noiseRef = useRef(false);
+  // How many microphone switches and noise-suppression requests are running: while
+  // any is, a second request would open a second cleaned capture.
+  const noiseBusyRef = useRef(0);
   const roleRef = useRef<Role | null>(null);
   /** Recording channels that arrived while no take was running; a resume binds them. */
   const pendingChannelsRef = useRef<PendingRecordingChannel[]>([]);
@@ -2146,11 +2149,16 @@ export function useRoom(slug: string) {
     const hadNoiseSuppression = noiseRef.current;
     // The switch ends the cleaned capture, so no connection may still hold it.
     if (hadNoiseSuppression) setCallAudio(false);
-    await media.switchMic(deviceId);
-    if (!micOnRef.current) {
-      media.setAudioEnabled(false);
+    noiseBusyRef.current++;
+    try {
+      await media.switchMic(deviceId);
+      if (!micOnRef.current) {
+        media.setAudioEnabled(false);
+      }
+      if (hadNoiseSuppression && (await media.openCallAudio()) === 'on') setCallAudio(true);
+    } finally {
+      noiseBusyRef.current--;
     }
-    if (hadNoiseSuppression && (await media.openCallAudio()) === 'on') setCallAudio(true);
     setState((s) => ({
       ...s,
       activeMicId: switchableMediaRef.current?.activeMicId,
@@ -2172,8 +2180,15 @@ export function useRoom(slug: string) {
         setCallAudio(false);
         return null;
       }
-      if (boardRef.current || noiseRef.current) return null;
-      const opened = await media.openCallAudio();
+      if (boardRef.current || noiseRef.current || noiseBusyRef.current > 0) return null;
+      noiseBusyRef.current++;
+      let opened: Awaited<ReturnType<typeof media.openCallAudio>>;
+      try {
+        opened = await media.openCallAudio();
+      } finally {
+        noiseBusyRef.current--;
+      }
+      if (opened === 'not-now') return null;
       if (opened === 'on') {
         if (boardRef.current) media.closeCallAudio();
         else setCallAudio(true);

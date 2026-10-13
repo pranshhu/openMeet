@@ -214,25 +214,25 @@ describe('SwitchableMedia: the microphone again with noise suppression, for the 
     });
   }
 
-  it('answers unavailable without asking while a take records', async () => {
+  it('answers not-now without asking while a take records', async () => {
     const { media, gum } = rig({ isRecording: () => true });
-    expect(await media.openCallAudio()).toBe('unavailable');
+    expect(await media.openCallAudio()).toBe('not-now');
     expect(gum).not.toHaveBeenCalled();
   });
 
-  it('answers unavailable and stops the track when a take began during the request', async () => {
+  it('answers not-now and stops the track when a take began during the request', async () => {
     let recording = false;
     const track = audioTrack('cleaned');
     const { media } = rig({ isRecording: () => recording }, rawMic(), async () => {
       recording = true;
       return streamOf(track);
     });
-    expect(await media.openCallAudio()).toBe('unavailable');
+    expect(await media.openCallAudio()).toBe('not-now');
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(media.callAudioTrack).toBeNull();
   });
 
-  it('answers unavailable and stops the track when the microphone was switched during the request', async () => {
+  it('answers not-now and stops the track when the microphone was switched during the request', async () => {
     const track = audioTrack('cleaned');
     let switching: Promise<void> | undefined;
     const { media, gum } = rig({}, rawMic(), undefined);
@@ -242,12 +242,32 @@ describe('SwitchableMedia: the microphone again with noise suppression, for the 
       await switching;
       return streamOf(track);
     });
-    expect(await media.openCallAudio()).toBe('unavailable');
+    expect(await media.openCallAudio()).toBe('not-now');
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(media.callAudioTrack).toBeNull();
   });
 
-  it('answers unavailable and stops the track when the media was stopped during the request', async () => {
+  it('answers not-now and stops the track when the microphone changed after the request began', async () => {
+    const track = audioTrack('cleaned');
+    const { media, gum } = rig();
+    let release: () => void = () => {};
+    const switchOpened = new Promise<void>((resolve) => (release = resolve));
+    gum.mockImplementationOnce(async () => {
+      await switchOpened;
+      return streamOf(audioTrack('mic-2', false, 'mic-2'));
+    });
+    const switching = media.switchMic('mic-2');
+    gum.mockImplementationOnce(async () => {
+      release();
+      await switching;
+      return streamOf(track);
+    });
+    expect(await media.openCallAudio()).toBe('not-now');
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(media.callAudioTrack).toBeNull();
+  });
+
+  it('answers not-now and stops the track when the media was stopped during the request', async () => {
     const track = audioTrack('cleaned');
     const holder: { media?: SwitchableMedia } = {};
     const { media } = rig({}, rawMic(), async () => {
@@ -255,7 +275,7 @@ describe('SwitchableMedia: the microphone again with noise suppression, for the 
       return streamOf(track);
     });
     holder.media = media;
-    expect(await media.openCallAudio()).toBe('unavailable');
+    expect(await media.openCallAudio()).toBe('not-now');
     expect(track.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -268,6 +288,42 @@ describe('SwitchableMedia: the microphone again with noise suppression, for the 
     await media.openCallAudio();
     expect(first.stop).toHaveBeenCalledTimes(1);
     expect(media.callAudioTrack).toBe(second);
+  });
+
+  it('keeps only the newest of two requests in flight and stops both with the media', async () => {
+    const first = audioTrack('first');
+    const second = audioTrack('second');
+    const queue = [first, second];
+    const { media } = rig({}, rawMic(), async () => streamOf(queue.shift()!));
+    const p1 = media.openCallAudio();
+    const p2 = media.openCallAudio();
+    expect(await p1).toBe('not-now');
+    expect(await p2).toBe('on');
+    expect(first.stop).toHaveBeenCalledTimes(1);
+    expect(media.callAudioTrack).toBe(second);
+    media.stop();
+    expect(first.stop).toHaveBeenCalledTimes(1);
+    expect(second.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers not-now when a request in flight was overtaken and the browser then refused it', async () => {
+    const { media, gum } = rig();
+    gum.mockImplementationOnce(async () => {
+      throw new Error('OverconstrainedError');
+    });
+    const p1 = media.openCallAudio();
+    const p2 = media.openCallAudio();
+    expect(await p1).toBe('not-now');
+    expect(await p2).toBe('on');
+  });
+
+  it('answers not-now and stops the track of a request that a close overtook', async () => {
+    const { media, cleaned } = rig();
+    const pending = media.openCallAudio();
+    media.closeCallAudio();
+    expect(await pending).toBe('not-now');
+    expect(cleaned.stop).toHaveBeenCalledTimes(1);
+    expect(media.callAudioTrack).toBeNull();
   });
 
   it('turns the track off with the microphone and on again', async () => {
