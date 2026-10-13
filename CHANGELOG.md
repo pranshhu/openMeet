@@ -293,6 +293,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - The WAV recording from a computer that stalls during a take stays as long as
   the MP4. Frames that were only late used to get silence added in front of
   them, which made the WAV longer than the take.
+- A media board shown again after everyone else left and came back is not
+  taken for one opened during that take: the call screen remembers it, so the
+  "mic only" line is not shown under the pads when the pads are in the take.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.
