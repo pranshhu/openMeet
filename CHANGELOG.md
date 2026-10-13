@@ -12,6 +12,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- **Camera settings** in the call's camera menu: exposure, colour temperature and,
+  where the browser lists them, zoom, pan and tilt, for the camera you are on. The
+  change is in the call and in your recording.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.

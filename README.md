@@ -132,6 +132,9 @@ retention policy to trust, because there's nothing retained.
   cameras and shared screens, you still hear everyone, and your recording goes on
 - **Pop out** one person into a small window that stays on top of everything else and
   put it just under your webcam, so looking at them is looking at the lens (computers)
+- **Camera settings** in the call's camera menu: exposure and colour temperature, and zoom,
+  pan and tilt where the browser lists them, for the camera you are on. It lists only what
+  your camera offers the browser, and the change is in the call and in your recording
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 

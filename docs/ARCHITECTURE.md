@@ -571,6 +571,19 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   a person whose stream has not arrived; a producer and a present-only device have no camera
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
+- **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
+  lists **Camera settings** when the camera behind the call's video track lists any of exposure
+  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
+  turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
+  draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
+  `applyConstraints` replaces everything the track was asked before, so the request is the track's
+  own `getConstraints()` (size, frame rate, device, earlier sliders) with only the `advanced` set
+  for that key replaced. The panel keeps one request in flight and sends the newest value that
+  arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
+  video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
+  track, so the panel works on the track the call holds and a camera switch needs no change.
+  Nothing is stored, sent to anyone or written to a file.
 - **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
@@ -1299,7 +1312,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
-    Real camera settings are delegated from the real track. A switched-to camera is asked for the
+    Real camera settings, constraints (`getConstraints()`) and requests for new constraints
+    (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
     frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
@@ -1699,6 +1713,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
   the recording has a little more above and below than the lines show. The guide is not
   offered on a phone, is not remembered from one visit to the next, and the call has none.
+- **A camera that offers the browser none of the camera settings has no Camera settings item.**
+  The item is missing from the camera menu, as it is for a person who joined without a camera.
+  Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
+  controls the browser opens only after its "use and move your camera" permission shows no such
+  rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **Camera settings are not remembered.** A change of camera, a reload or a rejoin starts from what
+  the camera has, and **Reset** goes back to the values at the panel's opening, not to the camera's
+  factory values. The panel is on the call screen only, not in the lobby.
+- **A long exposure time can lower the frame rate the camera delivers, and the file follows.** The
+  self-view is mirrored, so Pan moves the other way on screen than in the recording. While a slider
+  has the keyboard, **M** and **N** mark nothing.
 - **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
   no **Add to calendar**, and a host in a browser without the room's host token is a guest
   there. The entry is one hour long with a fixed title and text; the calendar that opens it
