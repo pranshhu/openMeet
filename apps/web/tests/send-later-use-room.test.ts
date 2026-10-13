@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
+import { endGuestRecording } from '@/hooks/recording-controller';
 
 // As in tests/guest-fatal-close-save.test.tsx: the room, the connections and
 // the recorders are replaced. deferGuestStreams runs for real, on senders that
@@ -260,6 +261,51 @@ describe('a guest sending its recording later', () => {
     expect(result.current.state.phase).toBe('done');
     act(() => result.current.setSendLater(false));
     expect(result.current.state.sendLater).toBe(false);
+  });
+
+  it('cannot be changed while the take is being saved, ticked or not', async () => {
+    const result = await joined('guest');
+    await hostStarts('rec-host-1');
+    let saved!: (ended: { drained: boolean; backup: null }) => void;
+    vi.mocked(endGuestRecording).mockReturnValueOnce(
+      new Promise((resolve) => {
+        saved = resolve;
+      })
+    );
+    await act(async () => {
+      emitSignal('recording-stop', { type: 'recording-stop', from: 'host', recordingId: 'rec-host-1' });
+      await flush();
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+
+    act(() => result.current.setSendLater(true));
+    expect(result.current.state.sendLater).toBe(false);
+    for (const s of senders) expect(s.defer).not.toHaveBeenCalled();
+    expect(result.current.state.recordingError).toBeNull();
+
+    await act(async () => {
+      saved({ drained: false, backup: null });
+      await flush();
+    });
+    expect(result.current.state.phase).toBe('done');
+    act(() => result.current.setSendLater(true));
+    await hostStarts('rec-host-2');
+    vi.mocked(endGuestRecording).mockReturnValueOnce(
+      new Promise((resolve) => {
+        saved = resolve;
+      })
+    );
+    await act(async () => {
+      emitSignal('recording-stop', { type: 'recording-stop', from: 'host', recordingId: 'rec-host-2' });
+      await flush();
+    });
+    expect(result.current.state.phase).toBe('finalizing');
+    act(() => result.current.setSendLater(false));
+    expect(result.current.state.sendLater).toBe(true);
+    await act(async () => {
+      saved({ drained: false, backup: null });
+      await flush();
+    });
   });
 
   it('streams the next take again once it is off', async () => {

@@ -355,6 +355,11 @@ export class BackupRecorder {
     return this.backupDirName;
   }
 
+  /** Whether any chunk reached the disk: false for a backup whose directory opened and took none. */
+  get wroteToDisk(): boolean {
+    return this.opfsWrote;
+  }
+
   /** Resolves when the storage probe finished, whether or not storage was usable. */
   whenOpen(): Promise<void> {
     return (this.openPromise ?? Promise.resolve()).catch(() => {});
@@ -533,7 +538,11 @@ export class BackupRecorder {
       }
       await dir.removeEntry?.('.probe').catch(() => {});
 
-      if (this.openGivenUp) return;
+      // The answer came after the recorder gave up: no backup is kept in this directory.
+      if (this.openGivenUp) {
+        await root.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        return;
+      }
       this.backupDir = dir;
       this.backupDirName = dirName;
       this.opfsOk = true;

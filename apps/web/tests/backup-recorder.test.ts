@@ -483,6 +483,30 @@ describe('BackupRecorder — failure handling and memory boundedness', () => {
     expect(backup?.size).toBe(400);
   });
 
+  it('says no chunk reached the disk when its directory took none, and that one did when it took one', async () => {
+    const make = (root: FakeDirectoryHandle) =>
+      new BackupRecorder({
+        stream: new EventTarget() as unknown as MediaStream,
+        mrFactory: () => new FakeMR() as unknown as MediaRecorder,
+        mimeType: 'video/mp4',
+        opfsRoot: async () => root as never,
+      });
+    const full = make(new FullDirectoryHandle('root'));
+    full.start();
+    await full.whenOpen();
+    FakeMR.last!.emit(150);
+    await full.stop();
+    expect(full.dirName).not.toBeNull();
+    expect(full.wroteToDisk).toBe(false);
+
+    const open = make(new FakeDirectoryHandle('root'));
+    open.start();
+    await open.whenOpen();
+    FakeMR.last!.emit(150);
+    await open.stop();
+    expect(open.wroteToDisk).toBe(true);
+  });
+
   it('returns a WAV held in memory under the backup’s name when its directory took no chunk', async () => {
     const br = new BackupRecorder({
       stream: new EventTarget() as unknown as MediaStream,
@@ -896,6 +920,25 @@ describe('BackupRecorder — storage that does not answer', () => {
       expect(result?.size).toBe(160);
       expect(await findBackups(async () => root as never)).toEqual([]);
       expect(onWarn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves no directory in storage when it answers after the limit', async () => {
+    useStorageClock();
+    try {
+      const root = new FakeDirectoryHandle('root');
+      const storage = heldStorage();
+      const br = recorderOver(storage.root, vi.fn());
+      br.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      storage.release(root);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(br.dirName).toBeNull();
+      expect([...root.entries.keys()]).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

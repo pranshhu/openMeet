@@ -2516,11 +2516,14 @@ export function useRoom(slug: string) {
    * Guest: keep takes on this device while they record and send them to the
    * host afterwards, or go back to streaming them. Turned on during a take it
    * stops that take's streams at once. A take that was not streamed cannot be
-   * streamed again, so it stays on until that take has ended.
+   * streamed again, so it stays on until that take has ended. Nothing changes
+   * while a take is being saved.
    */
   const setSendLater = useCallback((on: boolean) => {
     // A host writes its own files, and a present-only device has no camera backup.
     if (roleRef.current !== 'guest' || companionRef.current) return;
+    // A take that is being saved has already decided what is streamed and what is kept.
+    if (phaseRef.current === 'finalizing') return;
     const h = recordingRef.current;
     if (!on && h?.deferred) return;
     if (on && h?.sender && !deferGuestStreams(h)) {
@@ -2946,11 +2949,7 @@ export function useRoom(slug: string) {
             opts.from === 'recording-stop'
           ) {
             try {
-              const files = await takeBackupFiles(
-                backup,
-                wavBackup,
-                h.screenBackups?.filter((sb) => !h.screenFinished?.has(sb))
-              );
+              const files = await takeBackupFiles(backup, wavBackup, h.screenBackups);
               sendBackups(files);
               backupQueued = files.length > 0;
             } catch {
@@ -2968,7 +2967,7 @@ export function useRoom(slug: string) {
               : {}),
             drained,
             backupQueued,
-            backupInMemory: !!backup && !(backup instanceof File),
+            backupInMemory: !!backup && !h.backup?.wroteToDisk,
             backupBlobUrl,
             wavBackupBlobUrl,
           }));
@@ -3144,7 +3143,7 @@ export function useRoom(slug: string) {
           backupBlobUrl,
           wavBackupBlobUrl,
           ...(guest
-            ? { drained: false, backupQueued: false, backupInMemory: !!backup && !(backup instanceof File) }
+            ? { drained: false, backupQueued: false, backupInMemory: !!backup && !h.backup?.wroteToDisk }
             : {}),
           recordingError: guest
             ? `Sending your recording didn’t finish (${reason}).`

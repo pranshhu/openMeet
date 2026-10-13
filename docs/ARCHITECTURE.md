@@ -450,10 +450,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   nothing of their own to hold back). It calls `useRoom().setSendLater`; while
   `state.sendLater` is on a `role="status"` row above the stage says that the recording
   stays on this device during a take and goes to the host after it. The item is disabled
-  while a take it deferred records or is being saved, because that take cannot be streamed
-  again. What a deferred take does is under `setSendLater` in "Call
-  orchestration" and under `defer()` in the `chunk-sender.ts` bullet; it reaches the host
-  afterwards as a returned backup, offered by the guest's page when the host ends the take.
+  while a take is being saved, and while a take records once it is ticked, because that take
+  cannot be streamed again; unticked it can be ticked during a take. What a deferred take
+  does is under `setSendLater` in "Call orchestration" and under `defer()` in the
+  `chunk-sender.ts` bullet; it reaches the host afterwards as a returned backup, offered by
+  the guest's page when the host ends the take.
 - **Reactions** (`components/ReactionMenu.tsx`, `components/ReactionBadge.tsx`,
   `lib/reactions.ts`) — the arrow in one pill with Raise hand opens a row of four (`REACTIONS`
   in the protocol: thumbs up, applause, laugh, heart). `ReactionMenu` keeps its own open
@@ -628,9 +629,7 @@ one answer never covers the other kind.
 unfinished send to each new connection to the host.
 A guest's `endRecording` calls it too, with the backups of the take that just ended
 (`takeBackupFiles` in `hooks/backup-return.ts`: the camera's, the WAV master's and each screen
-stretch's, only those whose directory opened in browser storage, eight at most; a screen
-stretch whose stream was finished, with its finish message sent and not given up or kept back,
-is in `screenFinished` and left out, because the host holds it whole), when the host's
+stretch's, only those whose directory opened in browser storage, eight at most), when the host's
 `recording-stop` ended a take whose streams did not all drain and the host has not set this
 guest as not recorded. `state.backupQueued` says so,
 and the guest's done line reads "Your backup of this take holds all of it and was offered to
@@ -642,9 +641,9 @@ answered. It does nothing on the host's own page.
 `sendLaterRef`, which the callback writes itself). A take that starts while it is on is
 deferred as soon as its streams exist (`deferGuestStreams`, after the camera and WAV backups'
 `whenOpen()`); turned on during a take it defers that take at once. It cannot be turned off
-while a take it deferred still records, and a host or a present-only device is not given
-it. When the camera backup has no directory in browser storage the take is streamed, the
-choice is taken back and the recording banner says why.
+while a take it deferred still records, and neither way while a take is being saved; a host
+or a present-only device is not given it. When the camera backup has no directory in browser
+storage the take is streamed, the choice is taken back and the recording banner says why.
 `recordWithCountdown` is the Record click: it
 asks for the folder when the session has none, counts `RECORD_COUNTDOWN_S` seconds (`CallStage`
 draws `RecordingCountdown` over the stage and keeps Record disabled), then calls `startRecording`.
@@ -788,8 +787,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
   backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   Storage that has not answered five seconds after `start()` is treated the same way: the wait
-  ends, the copy is held in RAM with that warning, and an answer that comes later is ignored,
-  so `stop()` and `whenOpen()` never wait on it for longer. A failed write is retried once and
+  ends, the copy is held in RAM with that warning, and an answer that comes later is ignored
+  and the directory it created is removed, so `stop()` and `whenOpen()` never wait on it for
+  longer and no empty backup directory stays in storage. A failed write is retried once and
   then the rest of the take continues in RAM with a warning
   banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. A
   backup whose directory opened and whose chunks could not be written there is returned from
@@ -1738,12 +1738,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   copy never holds a second estimate either: a take saved from one has no `end` in `clock`.
 - **A backup is offered by itself only after the host's stop.** A guest who leaves during a
   take, whose tab the room closed, or whose take a new take ended, keeps the backup in its
-  lobby, with **Send to host**. A backup that was kept in memory only (browser
-  storage unavailable) has no name to travel under: the done line sends the guest to the
-  download link and does not say to rejoin. The end of a take says only whether the camera and
-  the WAV arrived: a screen recording that fell behind while those two arrived is not
-  offered, and neither is a present-only device's. A guest the host set as not recorded
-  offers nothing.
+  lobby, with **Send to host**. A backup of which no chunk reached the disk (browser
+  storage unavailable, or a directory that took none) is in memory only and is not in the
+  lobby: the done line sends the guest to the download link and does not say to rejoin. The
+  end of a take says only whether the camera and the WAV arrived: a screen recording that
+  fell behind while those two arrived is not offered, and neither is a present-only
+  device's. A guest the host set as not recorded offers nothing.
 - **A backup offered after a take travels on the uplink the call is on.** It starts when
   the host presses **Save to folder**, waits while this guest's next take records, and is
   the whole take again, also when only its last seconds were missing on the host.
@@ -1790,6 +1790,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   "Incomplete. The upload from <name> stopped before the end, so this file ends early. Their
   backup has the rest.", which is true of a stream that fell behind as well as of one kept
   back, so the two are not told apart.
+- **A screen stretch that already reached the host whole is offered again.** After a take
+  whose backups are offered, every screen stretch's backup is offered, also one whose stream
+  was finished, and it travels a second time if the host saves it.
 - **While a take sent later ends, the guest's notice reads "Sending your last few seconds
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button

@@ -197,7 +197,7 @@ describe('a screen share that starts during a take', () => {
     }
   });
 
-  it('is not offered again once its stream was finished, and is when it was kept back', async () => {
+  it('has every stretch offered after the take, whether its finish message went out, its channel closed or it was kept back', async () => {
     installMediaRecorder();
     const root = new FakeDirectoryHandle();
     Object.defineProperty(globalThis.navigator, 'storage', {
@@ -205,17 +205,23 @@ describe('a screen share that starts during a take', () => {
       value: { getDirectory: async () => root },
     });
     try {
-      const h: RecordingHandles = { recordingId: 'rec-two' };
-      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => screenChannel().channel });
-      const whole = h.screenBackup!;
-      await stopScreenRecording(h);
-      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => screenChannel().channel });
-      const keptBack = h.screenBackup!;
-      h.screenSender!.defer();
-      await stopScreenRecording(h);
+      const h: RecordingHandles = { recordingId: 'rec-three', room: 'abc-defg-hij' };
+      const stretch = async (end: (channel: RTCDataChannel) => void) => {
+        const { channel } = screenChannel();
+        await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+        h.screenBackup!.writeChunk(new Uint8Array(1000).buffer);
+        end(channel);
+        await stopScreenRecording(h);
+      };
+      await stretch(() => {});
+      await stretch((channel) => {
+        (channel as { readyState: string }).readyState = 'closed';
+      });
+      await stretch(() => h.screenSender!.defer());
 
-      expect(h.screenBackups).toEqual([whole, keptBack]);
-      expect([...(h.screenFinished ?? [])]).toEqual([whole]);
+      const files = await takeBackupFiles(null, null, h.screenBackups);
+      expect(files).toHaveLength(3);
+      expect(new Set(files.map((f) => f.name)).size).toBe(3);
     } finally {
       delete (globalThis.navigator as { storage?: unknown }).storage;
     }

@@ -208,8 +208,6 @@ export interface RecordingHandles {
   screenSender?: ChunkSender | undefined;
   screenBackup?: BackupRecorder | undefined;
   screenBackups?: BackupRecorder[] | undefined;
-  /** Guest: the backups in `screenBackups` whose stretch was streamed to its end and finished, so the host holds it whole. */
-  screenFinished?: Set<BackupRecorder> | undefined;
   screenChannel?: RTCDataChannel | undefined;
   screenReceivers?: Map<number, ChunkReceiver>;
   /**
@@ -2066,14 +2064,12 @@ export async function stopScreenRecording(h: RecordingHandles): Promise<void> {
   h.screenRecorder = undefined;
   h.screenBackup = undefined;
   await rec?.stopAndFlush();
-  let finished = false;
   if (h.screenSender && h.screenChannel?.readyState === 'open') {
     await h.screenSender.drain();
     const canFinalize = !h.screenSender.isAbandoned && !h.screenSender.hasQueuedChunks;
     if (canFinalize) {
       const sha256 = (await h.screenSender.digestHex()) ?? '';
       finalizeChannel(h.screenChannel, h.recordingId, h.screenSender.lastAckedIdx ?? 0, sha256);
-      finished = true;
     }
   }
   await h.screenWriter?.close();
@@ -2086,7 +2082,6 @@ export async function stopScreenRecording(h: RecordingHandles): Promise<void> {
   await sb?.stop();
   if (sb) {
     h.screenBackups = [...(h.screenBackups ?? []), sb];
-    if (finished) (h.screenFinished ??= new Set()).add(sb);
   }
 }
 

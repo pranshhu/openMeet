@@ -1339,9 +1339,9 @@ export function CallStage({
                             type="button"
                             role="menuitemcheckbox"
                             aria-checked={sendLater}
-                            // A take that was deferred cannot be streamed again, and is not
-                            // changed while it is being saved.
-                            disabled={sendLater && isTakeActive}
+                            // A take that was deferred cannot be streamed again, and the
+                            // choice is not changed while a take is being saved.
+                            disabled={phase === 'finalizing' || (sendLater && phase === 'recording')}
                             onClick={() => {
                               setCamMenuOpen(false);
                               onSetSendLater(!sendLater);

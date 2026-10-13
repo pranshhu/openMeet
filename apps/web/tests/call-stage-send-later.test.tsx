@@ -107,6 +107,16 @@ describe('CallStage: send my recording later', () => {
     expect(screen.getByText(ROW)).toBeInTheDocument();
   });
 
+  it('cannot be ticked while a take is being saved', () => {
+    const spy = vi.fn();
+    render(<CallStage {...baseProps} phase="finalizing" onSetSendLater={spy} />);
+    openCameraMenu();
+    const item = screen.getByRole('menuitemcheckbox', { name: ITEM });
+    expect(item).toBeDisabled();
+    fireEvent.click(item);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('cannot be unticked while the take it deferred is being saved', () => {
     const spy = vi.fn();
     render(<CallStage {...baseProps} phase="finalizing" sendLater onSetSendLater={spy} />);
