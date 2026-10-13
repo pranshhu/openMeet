@@ -552,6 +552,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   At each opening the panel asks `getRoom` for the room's `expires_at`, takes it as no later
   than `ROOM_TTL_MS` from now, and says it. A session whose hour would end after it gets a
   line saying so and no link, and so does an answer that is not a time.
+- **Pause** — the host's button beside End & save while a take records (`CallStage`). It
+  is End & save by another name: it calls the same `onEnd`, so the take is closed, checked
+  and saved, every guest is stopped by `recording-stop` and the Room's `recording` flag is
+  cleared. `CallStage` keeps one flag (`paused`) from that press until a take records
+  again, and the flag changes words only: the status bar reads "Paused. Continue starts a
+  new take." before the saved verdict, and only with a summary that is not the one the
+  page held at the press (`summaryAtPause`), so never over a save that failed; Record
+  reads **Continue** and the summary's main button **Continue recording**.
+  Continue is `recordNextTake`: `newTake`, the countdown, then a take with a new id whose
+  files end in `_take<n>`. No recorder is paused (`ChunkRecorder.pause` has no caller),
+  nothing is sent that End & save does not send, and the Room knows nothing of it.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -1606,3 +1617,22 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A number under To is this page's own.** `Guest 2` on one person's screen is not `Guest 2` on
   another's, and a person who reconnects gets a new number. A display name is still its owner's
   text and can say anything; the words before it are the page's, and they are the ones to trust.
+- **A pause is a take boundary, not a gap in a file.** Pause takes the few seconds End &
+  save takes, and Continue starts take n+1 after the countdown: one set of files and one
+  sync file per part. `timeline.hostStartUnixMs` in each sync file places the parts on
+  one timeline; nothing joins them.
+- **Only the host's page says Paused.** A guest sees what follows any take: the Recording
+  mark goes, then "Sent to the host." and the backup links, then the countdown and the
+  notice when the host continues. The word is kept in the call screen: after a reload the
+  host's button reads Record, and the next take's files carry no `_take<n>`. When the
+  next take does not start, Record goes on reading Continue until one records.
+  A guest whose page did not get the stop (its connection to the Room was down at that moment)
+  keeps capturing into its own backup and reads Recording until the next take starts, as after
+  End & save. In a tab that lost the host seat during its take, Pause saves that tab's files
+  and Continue would record that tab alone.
+- **Two buttons read Pause while a host's teleprompter scrolls.** The teleprompter's
+  stops the script; the control bar's ends the take.
+- **The rundown starts over after a pause,** as after every take: the host chooses the
+  segment the show had reached in the list beside the button and starts it, which marks
+  it in the new take.
+- **Pause has no key.** Alt+S presses End & save, which saves the take the same way.

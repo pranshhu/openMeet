@@ -85,6 +85,9 @@ retention policy to trust, because there's nothing retained.
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- **Pause** during a take: the part so far is saved and closed, nothing is recorded
+  during the break, and **Continue** records the next part as a new take in the same
+  folder
 - A **check link** for each room (**Copy check link** in the host's lobby): a guest
   tests camera, microphone and connection days ahead, on the green room's own checks,
   without joining
@@ -438,6 +441,11 @@ end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` n
 screen file is. The host's files carry the host's name after the role, cut down to letters, digits
 and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
 the convenience copy; the WAV is the master.
+
+**Pause** ends a take and **Continue** starts the next one, so a paused session is one
+take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
+holds its start on the host's clock (`timeline.hostStartUnixMs`), which places the parts
+on one timeline with the real breaks between them.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
