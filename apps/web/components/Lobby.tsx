@@ -215,6 +215,8 @@ export function Lobby({
   // for beside it is never stopped by anyone, and whichever lands last decides
   // the device and the headphones answer, so a change made meanwhile is not taken.
   const reopeningRef = useRef(false);
+  // The same fact for the page to draw from: Join is off while a capture change is under way.
+  const [reopening, setReopening] = useState(false);
   // Set while a capture change has stopped the microphone before asking for the
   // new one, so the stream the lobby holds has no live microphone to hand over.
   const micStoppedRef = useRef(false);
@@ -411,6 +413,7 @@ export function Lobby({
     const mm = mmRef.current;
     if (!mm || reopeningRef.current) return;
     reopeningRef.current = true;
+    setReopening(true);
     const old = stream;
     const echo = nextListening === 'speakers-ec';
     // Echo cancellation belongs to the open microphone, and a browser can give
@@ -469,6 +472,7 @@ export function Lobby({
       setError(e instanceof Error ? e.message : 'Could not switch device.');
     } finally {
       reopeningRef.current = false;
+      setReopening(false);
       micStoppedRef.current = false;
     }
   }
@@ -763,7 +767,8 @@ export function Lobby({
   // A self-view reads naturally mirrored; a rear camera shows the world, not you.
   const rearCamera = stream?.getVideoTracks()[0]?.getSettings?.().facingMode === 'environment';
   // The preview holds the microphone alone: there is no picture to show, pick or size.
-  const micOnly = !!stream && stream.getVideoTracks().length === 0;
+  // With no preview the mode is the one chosen, as the line under Join reads it.
+  const micOnly = stream ? stream.getVideoTracks().length === 0 : camId === NO_CAMERA;
   // What the camera reports, which can fall short of the ask at this resolution.
   // Half a frame of slack: 29.97 asked and 30 reported is the same camera mode.
   const deliveredFps = cleanFps(stream?.getVideoTracks()[0]?.getSettings?.().frameRate);
@@ -861,7 +866,7 @@ export function Lobby({
                   </div>
                 ) : (
                   <>
-                    <p className="text-base font-medium">Allow camera and mic</p>
+                    <p className="text-base font-medium">{micOnly ? 'Allow microphone' : 'Allow camera and mic'}</p>
                     <p className="text-sm text-white/80">Choose Allow if your browser asks.</p>
                   </>
                 )}
@@ -938,7 +943,7 @@ export function Lobby({
             hidden={checkOnly}
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!stream || !name.trim()) return;
+              if (!stream || !name.trim() || reopeningRef.current) return;
               if (!(await okToTakeSeat())) return;
               // A capture change that began while the seat was being asked
               // about may have stopped the microphone: Join again once it is back.
@@ -982,10 +987,14 @@ export function Lobby({
               </p>
             </div>
             <div className="flex w-full flex-col gap-3">
-              <button type="submit" disabled={!stream || !name.trim()} className={`w-full ${primaryBtn}`}>
+              <button
+                type="submit"
+                disabled={!stream || !name.trim() || reopening}
+                className={`w-full ${primaryBtn}`}
+              >
                 Join now
               </button>
-              {!stream && (
+              {(!stream || reopening) && (
                 <p className="text-sm text-[#5f6368]">
                   Join opens once your {camId === NO_CAMERA ? 'microphone is' : 'camera and mic are'} on.
                 </p>

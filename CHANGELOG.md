@@ -305,8 +305,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   only or leaving the page, and of one opened twice in development. After
   Microphone only, answering "Headphones or speakers?" does not bring back the
   camera error from the first try, and Try again asks for the microphone alone.
-  Join pressed while that answer reopens the microphone waits: press it again
-  once the preview is back.
+  Join is off while any capture change is being opened, and a press of Join
+  that came before the change waits: press it again once the preview is back.
+  While the microphone reopens, the lobby keeps showing Microphone only.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.

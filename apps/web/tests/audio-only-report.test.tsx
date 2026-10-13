@@ -95,6 +95,18 @@ describe('buildSyncReport: a file recorded with no camera', () => {
     }
   });
 
+  it('labels the aligned copy of a file with no picture as audio, and of a camera file as video', () => {
+    const labels = (names: string[]) =>
+      buildSyncReport({ ...base, checks: checks(...names) })
+        .data.commands.map((c) => c.label)
+        .filter((l) => l.includes('aligned copy of the'));
+
+    expect(labels(['guest_r.mp4'])).toContain('Bo: aligned copy of the audio (starts 0.500 s in)');
+    expect(labels(['guest_r.mp4']).some((l) => l.includes('of the video'))).toBe(false);
+    expect(labels([])).toContain('Bo: aligned copy of the video (starts 0.500 s in)');
+    expect(labels([]).some((l) => l.includes('of the audio ('))).toBe(false);
+  });
+
   it('keeps the aligned copy and the remux of a host file with no picture', () => {
     const report = buildSyncReport({
       recordingId: 'rec',

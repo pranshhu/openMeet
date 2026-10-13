@@ -504,7 +504,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     alignCommands.push({
       label: wav
         ? `${who}: aligned copy of the audio master (${seconds(padMs)} s of silence added)`
-        : `${who}: aligned copy of the video (starts ${seconds(padMs)} s in)`,
+        : `${who}: aligned copy of the ${audioOnly(file) ? 'audio' : 'video'} (starts ${seconds(padMs)} s in)`,
       cmd,
     });
   };

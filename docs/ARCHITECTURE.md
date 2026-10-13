@@ -318,10 +318,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   capture stays open behind it. A capture that the first preview, Try again or `reacquire` was
   still opening is stopped as it arrives after any hand-over (Join or Present only), and so is
   one that arrives for a run of the mount effect that was cleaned up (`mmRef` is cleared then).
-  Join does nothing when the seat question is answered while the echo-cancellation answer has
-  stopped the microphone and its replacement has not arrived (`micStoppedRef`), and the person
-  presses Join again once the preview is back; Try again asks for the microphone alone when
-  Microphone only is on.
+  Join is off for as long as `reacquire` is opening a capture (the `reopening` state draws the
+  button disabled and the line under it reads as it does with the preview down; the form's
+  submit checks `reopeningRef`, so Enter does nothing either), so a person who presses
+  Microphone only, or presses it again for the camera, and then Join joins with the capture that
+  arrives, or with the earlier preview when it is refused. Join also does nothing when the seat
+  question is answered while the echo-cancellation answer has stopped the microphone and its
+  replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
+  preview is back; Try again asks for the microphone alone when Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
@@ -347,7 +351,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   blocked or busy, joins as a recorded participant; pressed again it opens the first listed
   camera as well. While the preview holds no video track it shows the person's initial, and
   the camera toggle, the framing guide and the camera, quality, bitrate and frame-rate
-  pickers are hidden.
+  pickers are hidden. With no preview at all (the microphone is being opened again) the mode
+  is the choice, `camId === NO_CAMERA`: the pickers stay hidden, the button stays pressed and
+  the placeholder reads "Allow microphone".
   The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
   (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
   microphone for five seconds, played back from an object URL that is revoked when the clip
@@ -1756,7 +1762,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   check that says otherwise, so the sync file of a take saved from the lobby still prints
   a pairing command for such a file, which `ffmpeg` refuses (the file has no video
   stream). The aligned-copy command for such a file is labelled "aligned copy of the
-  video"; the command itself works on it.
+  video", because the label follows the file check, which these takes lack; the command
+  itself works on it. A file whose check says it has no picture is labelled "aligned copy
+  of the audio".
 - **A guest's file recorded with no camera is named as audio only only when that guest's
   take finished cleanly.** The guest says so in its finish message. A guest that left
   early, that the host removed, whose stream was abandoned, or whose take was saved from
