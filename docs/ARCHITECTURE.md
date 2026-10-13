@@ -977,7 +977,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   pad is (`MediaBoard.recordsInRunningTake` is false). The pads play live and drop chapter markers
   either way, and the board panel says which case applies while it does: its "This take keeps
   your mic only" line where no pad is in that take, and a `role="status"` line while the
-  microphone is off (`CallStage` passes `midTake` and `micOffInTake`). A pad set to loop
+  microphone is off (`CallStage` passes `midTake` and `micOffInTake`). `RoomView` holds the board
+  this page made (`board`, handed to `CallStage` with `onBoard`), as it holds `chatTo`, so a call
+  screen built again after "Everyone else left" shows the same board and a click that shows it
+  is not the board being made during a take; only the click that makes it sets those lines.
+  A pad set to loop
   (`setLoop`) repeats until it is stopped, and
   the switch reaches a pad that is already playing. Each pad plays through a gain node of its
   own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
