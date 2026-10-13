@@ -1,4 +1,4 @@
-import { RECORDING_FRAME_RATE } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH } from '@openmeet/protocol';
 import type { SummaryFile, SyncReportInput } from './sync-report';
 import { WAV_HEADER_BYTES } from './wav';
 
@@ -10,6 +10,13 @@ const PROGRAM_NOTE =
   'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
   'leftOut names every file of the take that cmd does not read, and why. If ffmpeg says a stream specifier matches ' +
   'no streams, a file in audio has no sound track: take its input and its adelay out.';
+
+const SOUND_NOTE =
+  "cmd writes one file, named in output, and changes none of the take's files. Nobody in this take was recorded " +
+  'with a camera, so it is sound only: the files in audio mixed into one WAV at the depth of the masters. Each file ' +
+  'is placed by its padMs under aligned, so a person who started later is silent until then. Voices are added at ' +
+  'the level they were recorded, and the mix is not compressed. Run it in the recording folder with ffmpeg 4.4 or ' +
+  'later. leftOut names every file of the take that cmd does not read, and why.';
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -48,7 +55,8 @@ interface Person {
 /**
  * One ffmpeg command that lays every camera of the take in a grid and mixes
  * everyone's sound, each file placed by the padMs the report holds for it, or
- * null when the take has no such command. Only files the host measured and
+ * when nobody has a camera, one that mixes the sound into a WAV; null when
+ * the take has no such command. Only files the host measured and
  * found to hold something are read, so a report built without checks has none.
  */
 export function programMix(
@@ -92,12 +100,13 @@ export function programMix(
     sounds.push(...heard);
     if (tile || heard.length > 0) present++;
   }
-  if (present < 2 || tiles.length === 0) return null;
+  if (present < 2) return null;
 
   const inputs = [...tiles, ...sounds.filter((s) => !tiles.includes(s))];
   const indexOf = (file: string) => inputs.indexOf(file);
 
   const n = tiles.length;
+  const soundOnly = n === 0;
   const cols = Math.ceil(Math.sqrt(n));
   const w = Math.floor(WIDTH / cols);
   const h = Math.floor((w * 9) / 16);
@@ -110,7 +119,7 @@ export function programMix(
   });
   const layout = tiles.map((_, i) => `${(i % cols) * w}_${Math.floor(i / cols) * h}`).join('|');
   const stack =
-    n === 1
+    n <= 1
       ? []
       : [
           `${tiles.map((_, i) => `[v${i}]`).join('')}xstack=inputs=${n}:layout=${layout}:fill=black,` +
@@ -121,10 +130,12 @@ export function programMix(
   const graph = [...chains, ...stack, ...delays, mix].join(';');
 
   const first = inputs[0] as string;
-  const output = first.replace(/\.[^.]+$/, '') + '_program.mp4';
-  const cmd =
-    `ffmpeg ${inputs.map((f) => `-i "${f}"`).join(' ')} -filter_complex "${graph}" -map "[v]" -map "[a]" ` +
-    `-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k -ac 2 -movflags +faststart "${output}"`;
+  const output = first.replace(/\.[^.]+$/, '') + (soundOnly ? '_program.wav' : '_program.mp4');
+  const feed = `ffmpeg ${inputs.map((f) => `-i "${f}"`).join(' ')} -filter_complex "${graph}"`;
+  const cmd = soundOnly
+    ? `${feed} -map "[a]" -c:a pcm_s${WAV_BIT_DEPTH}le -ac 2 -rf64 auto "${output}"`
+    : `${feed} -map "[v]" -map "[a]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k ` +
+      `-ac 2 -movflags +faststart "${output}"`;
 
   const screens = new Set((input.screenSegments ?? []).map((s) => s.file));
   const copies = new Set((input.callCopies ?? []).map((c) => c.file));
@@ -143,14 +154,15 @@ export function programMix(
     .filter((f) => !inputs.includes(f))
     .map((file) => ({ file, why: why(file) }));
 
-  const label =
-    (n === 1
+  const head = soundOnly
+    ? "Program file: everyone's audio mixed into one WAV"
+    : n === 1
       ? "Program file: the camera with everyone's audio mixed (re-encodes, slow)"
-      : `Program file: the ${n} cameras in a grid with everyone's audio mixed (re-encodes, slow)`) +
-    (leftOut.length > 0 ? ' The sync file lists the files it leaves out.' : '');
+      : `Program file: the ${n} cameras in a grid with everyone's audio mixed (re-encodes, slow)`;
+  const label = head + (leftOut.length > 0 ? ' The sync file lists the files it leaves out.' : '');
 
   return {
     row: { label, cmd },
-    section: { note: PROGRAM_NOTE, output, cmd, video: tiles, audio: sounds, leftOut },
+    section: { note: soundOnly ? SOUND_NOTE : PROGRAM_NOTE, output, cmd, video: tiles, audio: sounds, leftOut },
   };
 }

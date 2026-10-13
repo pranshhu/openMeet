@@ -897,9 +897,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
   start and an `ffmpeg` command that writes a copy starting there,
   a `program` section (`lib/program-mix.ts`): one command that lays each camera in a grid and mixes
-  everyone's sound, placing each file by its `aligned` pad, with `leftOut` naming every file it does
-  not read and why; it reads only files whose `checks` entry holds bytes, so a report built without
-  `checks` has none,
+  everyone's sound, or, when nobody has a camera, mixes it into one WAV at the depth of the masters,
+  placing each file by its `aligned` pad, with `leftOut` naming every file it does not read and why;
+  it reads only files whose `checks` entry holds bytes, so a report built without `checks` has none,
   and a `frameRate` section: the default requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as
@@ -1948,8 +1948,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A resumed take's host tile is black until the reload.** The program command places the host's
   camera file from after the reload, and the file from before it is left out; the host's sound is
   whole.
-- **A take with no camera has no program command.** The WAV masters and their commands are there
-  as before.
 - **A returned backup is not in the program command.** It reads the files the take wrote, and a
   person whose file ended early stays as a still picture from there.
 - **A camera file with no sound track and no WAV makes the program command stop.** ffmpeg says the

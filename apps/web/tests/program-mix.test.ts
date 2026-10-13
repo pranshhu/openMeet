@@ -184,14 +184,6 @@ describe('buildSyncReport: the program file command', () => {
     expect(program?.leftOut).toEqual([]);
   });
 
-  it('writes no command when nobody has a camera', () => {
-    const input = withChecks(take, {
-      'host_r.mp4': { bytes: 1000, audioOnly: true },
-      'guest_r.mp4': { bytes: 1000, audioOnly: true },
-    });
-    expect(programOf(input)).toBeUndefined();
-  });
-
   it('places the host by the file written after a reload, and mixes both of its WAVs', () => {
     const input = withChecks({
       ...take,
@@ -302,5 +294,81 @@ describe('programMix: a pad that is not a non-negative whole number', () => {
     const r = programMix(input, aligned, buildSyncReport(input).data.fileList);
     expect(r?.section.video).toEqual(['host_r.mp4', 'guest1_r.mp4']);
     expect(r?.section.leftOut.map((l) => l.file)).toEqual(['guest2_r.mp4', 'guest2_r.wav']);
+  });
+});
+
+describe('programMix: a take where nobody has a camera', () => {
+  const silent = {
+    'host_r.mp4': { bytes: 1000, audioOnly: true },
+    'guest_r.mp4': { bytes: 1000, audioOnly: true },
+  };
+  const CMD_WAV =
+    'ffmpeg -i "host_r.wav" -i "guest_r.wav" -filter_complex "[0:a]adelay=0:all=1[a0];[1:a]adelay=1234:all=1[a1];' +
+    '[a0][a1]amix=inputs=2:normalize=0[a]" -map "[a]" -c:a pcm_s24le -ac 2 -rf64 auto "host_r_program.wav"';
+  const WAV_NOTE =
+    "cmd writes one file, named in output, and changes none of the take's files. Nobody in this take was recorded " +
+    'with a camera, so it is sound only: the files in audio mixed into one WAV at the depth of the masters. Each ' +
+    'file is placed by its padMs under aligned, so a person who started later is silent until then. Voices are ' +
+    'added at the level they were recorded, and the mix is not compressed. Run it in the recording folder with ' +
+    'ffmpeg 4.4 or later. leftOut names every file of the take that cmd does not read, and why.';
+  const LABEL_WAV = "Program file: everyone's audio mixed into one WAV";
+
+  it('writes one command that mixes the WAVs, each placed by its start', () => {
+    const r = buildSyncReport(withChecks(take, silent));
+    const program = (JSON.parse(r.json) as { program: Program }).program;
+    expect(program).toEqual({
+      note: WAV_NOTE,
+      output: 'host_r_program.wav',
+      cmd: CMD_WAV,
+      video: [],
+      audio: ['host_r.wav', 'guest_r.wav'],
+      leftOut: [
+        { file: 'host_r.mp4', why: "no picture, and the same sound is in this person's WAV master" },
+        { file: 'guest_r.mp4', why: "no picture, and the same sound is in this person's WAV master" },
+      ],
+    });
+    expect(r.data.commands.at(-1)).toEqual({ label: LABEL_WAV + LEFT_OUT_SENTENCE, cmd: CMD_WAV });
+    expect(program.note).not.toContain('H.264');
+  });
+
+  it('reads a guest with no WAV from its MP4 and still writes a WAV', () => {
+    const input = withChecks(
+      { ...take, guests: [{ slot: 0, file: 'guest_r.mp4', startHostMs: START + 1234, rttMs: 20 }] },
+      silent
+    );
+    const r = buildSyncReport(input);
+    const program = (JSON.parse(r.json) as { program: Program }).program;
+    expect(program.audio).toEqual(['host_r.wav', 'guest_r.mp4']);
+    expect(program.cmd).toContain('[1:a]adelay=1234:all=1[a1]');
+    expect(program.output).toBe('host_r_program.wav');
+    expect(program.leftOut).toEqual([
+      { file: 'host_r.mp4', why: "no picture, and the same sound is in this person's WAV master" },
+    ]);
+    expect(r.data.commands.at(-1)?.label).toBe(LABEL_WAV + LEFT_OUT_SENTENCE);
+  });
+
+  it('ends the label without the leftOut sentence when every file is read', () => {
+    const input = withChecks(
+      { ...take, hostWavFile: undefined, guests: [{ slot: 0, file: 'guest_r.mp4', startHostMs: START + 1234, rttMs: 20 }] },
+      silent
+    );
+    const r = buildSyncReport(input);
+    expect(programOf(input)?.leftOut).toEqual([]);
+    expect(programOf(input)?.output).toBe('host_r_program.wav');
+    expect(r.data.commands.at(-1)?.label).toBe(LABEL_WAV);
+  });
+
+  it('writes no command for one microphone-only person alone', () => {
+    const solo = withChecks({ ...take, guests: [] }, silent);
+    expect(programOf(solo)).toBeUndefined();
+    expect(buildSyncReport(solo).data.commands.some((c) => c.cmd.includes('_program'))).toBe(false);
+  });
+
+  it('keeps the video command when one person has a camera and one has none', () => {
+    const program = programOf(withChecks(take, { 'guest_r.mp4': { bytes: 1000, audioOnly: true } }));
+    expect(program?.cmd).toContain('-map "[v]"');
+    expect(program?.output).toBe('host_r_program.mp4');
+    expect(program?.video).toEqual(['host_r.mp4']);
+    expect(program?.note).toContain('H.264');
   });
 });
