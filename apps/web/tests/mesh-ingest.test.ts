@@ -175,6 +175,7 @@ type ResumeNote = {
   who?: string;
   guestStartHostMs?: number | null;
   rttMs?: number | null;
+  clockAtMs?: number;
   sha256State?: { nextIdx: number; words: number[]; remainder: number[]; length: number };
 };
 type JournalPosition = { nextIdx: number; end: number };
@@ -2338,5 +2339,77 @@ describe('a take resumed from its journal', () => {
 
     expect(removed).toEqual([]);
     expect((await collectGuestReports(h)).map((g) => g.file)).toEqual(['guest_rec.mp4']);
+  });
+});
+
+describe('a resumed take keeps the clock estimate from before the reload', () => {
+  const HOST_START = 1_700_000_000_000; // the hostStartMs resumeJournal gives its notes
+  const parts = { 'guest_rec.mp4': [{ offset: 0, size: 100 }, { offset: 100, size: 100 }] };
+  const position = { 'guest_rec.mp4': { nextIdx: 2, end: 200 } };
+  const report = (fields: object) => JSON.stringify({ type: 'recording_meta', recordingId: 'g', ...fields });
+
+  it('reads a report that arrives after the resume as the later one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(HOST_START + 600_000);
+      const note: ResumeNote = {
+        file: 'guest_rec.mp4',
+        kind: 'camera',
+        key: 'R1',
+        slot: 0,
+        guestStartHostMs: HOST_START + 500,
+        rttMs: 12,
+        clockAtMs: HOST_START + 700,
+      };
+      const j = resumeJournal([note], position, parts);
+      const channel = fakeChannel('recording#R1');
+      const h = await resumeHostRecording({
+        localStream: emptyFakeStream(),
+        journal: j.journal,
+        dir: fakeDir([], []),
+        channels: [{ channel, peerId: 'peer-a' }],
+      });
+
+      await channel.deliver(report({ guestStartHostMs: HOST_START + 503, rttMs: 20 }));
+
+      const [g] = await collectGuestReports(h, () => undefined);
+      expect(g).toMatchObject({
+        startHostMs: HOST_START + 500,
+        rttMs: 12,
+        clockAtMs: HOST_START + 700,
+        clockEnd: { startHostMs: HOST_START + 503, rttMs: 20, atMs: HOST_START + 600_000 },
+      });
+      // The sync file then states the movement across the reload.
+      const json = JSON.parse(
+        buildSyncReport({ recordingId: 'rec', hostStartMs: HOST_START, guests: [g!], resumed: true }).json
+      );
+      expect(json.clock.guests[0]).toMatchObject({
+        start: { offsetMs: 500, rttMs: 12, measuredAtMs: 700 },
+        end: { offsetMs: 503, rttMs: 20, measuredAtMs: 600_000 },
+        movedMs: 3,
+        errorMs: 20,
+        spanMs: 599_300,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a file with no noted estimate take its first one after the resume', async () => {
+    const j = resumeJournal([{ file: 'guest_rec.mp4', kind: 'camera', key: 'R1', slot: 0 }], position, parts);
+    const channel = fakeChannel('recording#R1');
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      dir: fakeDir([], []),
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+    const start = Date.now() - 500;
+
+    await channel.deliver(report({ guestStartHostMs: start, rttMs: 20 }));
+
+    const [g] = await collectGuestReports(h, () => undefined);
+    expect(g?.startHostMs).toBe(start);
+    expect(g?.clockEnd).toBeUndefined();
   });
 });

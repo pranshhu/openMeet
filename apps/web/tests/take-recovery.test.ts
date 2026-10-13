@@ -1171,3 +1171,32 @@ describe('FLAC commands in a take saved from its crash copy', () => {
     expect(json.flac.files[1]?.encode).toBe('ffmpeg -i "guest_r.wav" -c:a flac "guest_r.flac"');
   });
 });
+
+describe('saveRecoveredTake: the clock section of a take saved from its crash copy', () => {
+  it('says when the estimate was taken, and nothing about movement', async () => {
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [
+        {
+          file: 'guest_r.mp4',
+          kind: 'camera',
+          slot: 0,
+          who: 'Bob',
+          guestStartHostMs: start + 1500,
+          rttMs: 42,
+          clockAtMs: start + 1700,
+        },
+      ],
+    });
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = JSON.parse(new TextDecoder().decode(folder.written.get('sync_rec-1.json')!.data));
+    expect(json.clock.guests).toEqual([
+      { slot: 0, name: 'Bob', file: 'guest_r.mp4', start: { offsetMs: 1500, rttMs: 42, measuredAtMs: 1700 } },
+    ]);
+  });
+});

@@ -438,6 +438,11 @@ export async function handleGuestRecordingStarted(opts: {
   beginGuestRecording: () => Promise<void>;
 }): Promise<void> {
   if (opts.recordingRef.current) {
+    // The host has started another take, so no report waits for this one's
+    // closing clock estimate. Nothing would answer it, and the new capture
+    // would start three seconds late.
+    opts.recordingRef.current.clockSync?.stop();
+    delete opts.recordingRef.current.clockSync;
     await opts.endRecording();
   }
   await opts.beginGuestRecording();
@@ -957,6 +962,9 @@ export function useRoom(slug: string) {
     const mic = localStreamRef.current;
     if (!peerRef.current || !mic || recordingRef.current) return;
     const localStream = withBoardAudio(mic, boardRef.current);
+    // The uncompressed master reads the microphone's own track, which nothing
+    // else is mixed into.
+    const micOnly = switchableMediaRef.current?.micStream ?? mic;
     const recordingId = crypto.randomUUID();
     takeTroubleRef.current = false;
     fatalCloseRef.current = false;
@@ -975,7 +983,7 @@ export function useRoom(slug: string) {
     if (isPcmCaptureSupported() && localStream.getAudioTracks().length > 0) {
       wavBackup = new BackupRecorder({
         mimeType: 'audio/wav',
-        stream: mic,
+        stream: micOnly,
         room: slug,
         onWarn,
       });
@@ -1051,7 +1059,7 @@ export function useRoom(slug: string) {
       const handles = startGuestRecording({
         recordingId,
         localStream,
-        micStream: mic,
+        micStream: micOnly,
         channel,
         ...(audioReady && audioChannel ? { audioChannel } : {}),
         backup,
@@ -2138,7 +2146,7 @@ export function useRoom(slug: string) {
         // streams a fresh take passes: the MP4 stream (board mix included) and
         // the raw mic for the WAV master.
         localStream: withBoardAudio(localStreamRef.current!, boardRef.current),
-        micStream: localStreamRef.current ?? undefined,
+        micStream: switchableMediaRef.current?.micStream ?? localStreamRef.current ?? undefined,
         onError,
         onWarn: (msg) => {
           // A commit to the crash copy can give up some seconds after End &
@@ -2499,8 +2507,9 @@ export function useRoom(slug: string) {
    * (withBoardAudio), and in the MP4 and backup of every take STARTED later. The
    * WAV master keeps the raw mic (micStream), so a sting is never baked into the
    * uncompressed master where it could not be re-timed. A take already running
-   * keeps the mic it started with — a live MediaRecorder can't have its track
-   * swapped — so its pads survive only as chapter markers.
+   * keeps the track it started with — a live MediaRecorder can't have its track
+   * swapped — so the pads alone are mixed into that track (mixIn); where there is
+   * no such graph they survive only as chapter markers.
    */
   const openMediaBoard = useCallback((): MediaBoard | null => {
     if (boardRef.current) return boardRef.current;
@@ -2508,7 +2517,11 @@ export function useRoom(slug: string) {
     if (!mic || mic.getAudioTracks().length === 0) return null;
     let board: MediaBoard;
     try {
-      board = new MediaBoard(mic);
+      // The mix is built on the microphone alone, and the pads alone go onto the
+      // stable track: a take that is already recording holds that track, and a
+      // mix built on it would carry every pad twice.
+      const media = switchableMediaRef.current;
+      board = new MediaBoard(media?.micStream ?? mic, undefined, (pads) => media?.mixIn(pads) ?? false);
     } catch {
       return null; // no Web Audio here; the call is unaffected
     }
@@ -2728,7 +2741,7 @@ export function useRoom(slug: string) {
       recordingRef.current = handles = await startHostRecording({
         recordingId,
         localStream: withBoardAudio(localStream, boardRef.current),
-        micStream: localStream,
+        micStream: switchableMediaRef.current?.micStream ?? localStream,
         take: takeRef.current,
         journal,
         room: slug,

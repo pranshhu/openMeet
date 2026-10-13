@@ -15,6 +15,7 @@ import type { FileWriter } from './fs-writer';
 import { StreamingSha256, type Sha256State } from './sha256';
 import { cleanFps } from './quality';
 import type { JournalFile } from './take-journal';
+import type { ClockReading } from './clock-drift';
 import { wavFrameBytes } from './wav';
 
 export interface ChunkReceiverOpts {
@@ -34,11 +35,22 @@ export interface ChunkReceiverOpts {
   /**
    * The guest's start on the host clock and the clock-sync round trip, as this
    * receiver holds them after a `recording_meta` it took a value from; null for
-   * one it has not accepted. A guest can repeat the message: the last call wins.
+   * one it has not accepted. The last call wins. A later report of a start
+   * already held is not handed over: it is `clockEnd`.
    */
   onMeta?: (meta: { guestStartHostMs: number | null; rttMs: number | null }) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
   resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
+  /**
+   * The clock-sync numbers the crash copy holds for this file, for a take
+   * reopened after a crash: that estimate stays the first, and a report that
+   * arrives from here on is a later one.
+   */
+  clockFrom?: {
+    guestStartHostMs?: number | null | undefined;
+    rttMs?: number | null | undefined;
+    atMs?: number | undefined;
+  };
 }
 
 export const RESUME_ASK_INTERVAL_MS = 2000;
@@ -92,6 +104,8 @@ export class ChunkReceiver {
   private _bytesWritten = 0;
   private _guestStartHostMs: number | null = null;
   private _syncRttMs: number | null = null;
+  private _clockAtMs: number | null = null;
+  private _clockEnd: ClockReading | null = null;
   private _senderSha256: string | null = null;
   private _senderFrameRate: number | null = null;
   private _abandoned = false;
@@ -122,6 +136,14 @@ export class ChunkReceiver {
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
     this.onMeta = opts.onMeta;
+    // Read from storage, so each number is checked again. Without a start
+    // nothing is seeded: a round trip or a time alone describes no estimate.
+    const clock = opts.clockFrom;
+    if (clock && typeof clock.guestStartHostMs === 'number' && Number.isFinite(clock.guestStartHostMs)) {
+      this._guestStartHostMs = clock.guestStartHostMs;
+      if (typeof clock.rttMs === 'number' && Number.isFinite(clock.rttMs)) this._syncRttMs = clock.rttMs;
+      if (typeof clock.atMs === 'number' && Number.isFinite(clock.atMs)) this._clockAtMs = clock.atMs;
+    }
     const from = opts.resumeFrom;
     // A position the journal could not have produced is no position: the take
     // then starts this file where it would have without one.
@@ -187,13 +209,23 @@ export class ChunkReceiver {
   }
 
   // Guest recorder start, expressed on the host clock (from clock-sync), or null
-  // if the guest never reported it (host started >timeout after the guest).
+  // if no report of it was accepted. The first one accepted stands.
   get guestStartHostMs(): number | null {
     return this._guestStartHostMs;
   }
 
   get syncRttMs(): number | null {
     return this._syncRttMs;
+  }
+
+  /** When the start above was accepted, on the host clock. */
+  get clockAtMs(): number | null {
+    return this._clockAtMs;
+  }
+
+  /** A later report of the same start, by a newer estimate of the clock difference; null when none came. */
+  get clockEnd(): ClockReading | null {
+    return this._clockEnd;
   }
 
   /** Digest the sender reported for what it sent, once it finalizes. */
@@ -434,11 +466,31 @@ export class ChunkReceiver {
     // The guest reports its start on this clock, and started before it could
     // report: a later time is not a start. Left unset, the report says to align
     // by waveform rather than pad a file by an amount the sender made up.
-    const start = Number.isFinite(m.guestStartHostMs) && m.guestStartHostMs <= Date.now();
+    const now = Date.now();
+    const start = Number.isFinite(m.guestStartHostMs) && m.guestStartHostMs <= now;
     const rtt = Number.isFinite(m.rttMs);
-    if (start) this._guestStartHostMs = m.guestStartHostMs;
-    if (rtt) this._syncRttMs = m.rttMs;
-    if (!start && !rtt) return;
+    // The first start stands: it was measured nearest the moment it describes,
+    // and every offset in the report comes from it. A later report is the same
+    // start by a newer estimate of the clock difference, kept beside the first
+    // so the report can say how far the two clocks moved in between. One with
+    // no round trip has no error to state, so it is not kept.
+    if (start && this._guestStartHostMs !== null) {
+      if (rtt && m.rttMs >= 0) {
+        this._clockEnd = { startHostMs: m.guestStartHostMs, rttMs: m.rttMs, atMs: now };
+      }
+      return;
+    }
+    // A round trip is the error of the estimate it was measured with: it is
+    // taken with the start it came with, or while none is held. A held one is
+    // not replaced by a message whose start is refused, or the sync file would
+    // give this start the round trip of another exchange.
+    const takesRtt = rtt && (start || this._syncRttMs === null);
+    if (start) {
+      this._guestStartHostMs = m.guestStartHostMs;
+      this._clockAtMs = now;
+    }
+    if (takesRtt) this._syncRttMs = m.rttMs;
+    if (!start && !takesRtt) return;
     // The numbers are stored before anyone is told, and a listener that throws
     // must not reject handleMessage: nothing awaits it.
     try {

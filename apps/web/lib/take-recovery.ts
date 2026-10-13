@@ -280,6 +280,7 @@ export async function saveRecoveredTake(journal: TakeJournal, folder: FsDirector
         noWav: !wav,
         startHostMs: note.guestStartHostMs ?? null,
         rttMs: note.rttMs ?? null,
+        clockAtMs: note.clockAtMs ?? null,
         // The stream never reached recording-finalized, so the file cannot be
         // known to be whole.
         endedEarly: true,

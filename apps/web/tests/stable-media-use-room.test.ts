@@ -474,7 +474,8 @@ describe('useRoom stable media integration', () => {
       const mp4 = options.find((o) => o.mimeType !== 'audio/wav');
       expect(wav).toBeDefined();
       expect(mp4).toBeDefined();
-      expect(wav!.stream).toBe(result.current.state.localStream);
+      // The master's own stream, carrying the microphone's track.
+      expect(wav!.stream.getAudioTracks()).toEqual(result.current.state.localStream!.getAudioTracks());
       expect(mp4!.stream).not.toBe(wav!.stream);
     } finally {
       vi.unstubAllGlobals();
