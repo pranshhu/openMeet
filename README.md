@@ -104,7 +104,8 @@ retention policy to trust, because there's nothing retained.
   entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
-  the rear camera)
+  the rear camera), and so can a deck of slide pictures, turned with Previous and Next
+  or the arrow keys
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
 - Private messages: with three or more in the call, a chat message can go to one
@@ -134,6 +135,10 @@ retention policy to trust, because there's nothing retained.
   cameras and shared screens, you still hear everyone, and your recording goes on
 - **Pop out** one person into a small window that stays on top of everything else and
   put it just under your webcam, so looking at them is looking at the lens (computers)
+- **Camera settings** in the call's camera menu: exposure and colour temperature for the
+  camera you are on. It lists only what your camera offers the browser (zoom, pan and tilt
+  only where the browser lists them without a further permission), and the change is in the
+  call and in your recording. The lobby and the check page have it too, under the preview
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 

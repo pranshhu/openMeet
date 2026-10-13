@@ -425,7 +425,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
   initial until their stream arrives. Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area,
   mobile chat is a
-  full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
+  full sheet with the control bar hidden while open. The bar's wrapper is one level above the
+  stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
+  menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
   `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
@@ -558,7 +560,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   page, `checkOnly`, joins no call and leaves the box out). While the keys
   are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
   tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
-  rows and says they are off. Alt+R and Alt+S are chords and stay on.
+  rows and says they are off. Alt+R and Alt+S are chords and stay on. The four slide keys
+  (**Right** and **Page Down**, **Left** and **Page Up**) are `SlideControls`' own listener and
+  are only listed in `ROWS`, as one row; they are not single letters, so they stay on while the
+  single keys are off.
 - **`components/Rundown.tsx`** — the host's running order for a show. **Show rundown** in the
   control bar (`hasRundown`: only for a host who can record, a present-only one included)
   shows a strip between the stage and the bar, where the Levels strip goes. Outside a take
@@ -596,6 +601,21 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   a person whose stream has not arrived; a producer and a present-only device have no camera
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
+- **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
+  lists **Camera settings** when the camera behind the call's video track lists any of exposure
+  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
+  turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
+  draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
+  `applyConstraints` replaces everything the track was asked before, so the request is the track's
+  own `getConstraints()` (size, frame rate, device, earlier sliders) with only the `advanced` set
+  for that key replaced. The panel keeps one request in flight and sends the newest value that
+  arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
+  video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
+  track, so the panel works on the track the call holds and a camera switch needs no change.
+  Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
+  component under the preview, on the previewed video track and keyed by its `id`; that track is the
+  one handed to the call, so what is set there is what the call and the recording get.
 - **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
@@ -1020,6 +1040,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   connections in `told` that the room still lists, and `saveRecoveredTake` writes the
   list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
+- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
@@ -1334,7 +1355,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
-    Real camera settings are delegated from the real track. A switched-to camera is asked for the
+    Real camera settings, constraints (`getConstraints()`) and requests for new constraints
+    (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
     frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
@@ -1734,6 +1756,25 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
   the recording has a little more above and below than the lines show. The guide is not
   offered on a phone, is not remembered from one visit to the next, and the call has none.
+- **A camera that offers the browser none of the camera settings has no Camera settings item.**
+  The item is missing from the camera menu, as it is for a person who joined without a camera.
+  Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
+  controls the browser opens only after its "use and move your camera" permission shows no such
+  rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
+  the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
+  and frame-rate entries from a track's constraints once a camera setting is applied to it
+  (measured on Chrome 155), and the stable stream reads the asked rate from those constraints at
+  join, then from the track's settings. The two differ only when the lobby camera fell short of
+  the picked rate.
+- **Camera settings are not remembered.** A change of camera, a reload or a rejoin starts from what
+  the camera has, and **Reset** goes back to the values at the panel's opening, not to the camera's
+  factory values. The waiting room has no panel: it is in the lobby before and in the call after.
+- **A change of camera, quality, frame rate or echo cancellation in the lobby opens the camera again.**
+  The sliders then show what the new capture has, not what was set on the one before.
+- **A long exposure time can lower the frame rate the camera delivers, and the file follows.** The
+  self-view is mirrored, so Pan moves the other way on screen than in the recording. While a slider
+  has the keyboard, **M** and **N** mark nothing.
 - **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
   no **Add to calendar**, and a host in a browser without the room's host token is a guest
   there. The entry is one hour long with a fixed title and text; the calendar that opens it
@@ -1974,6 +2015,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
+- **A deck takes pictures only.** The Present menu's **Slides (pictures)** picker offers
+  images. A PDF or a slides file picked anyway is left out, and when nothing is left nothing
+  is presented and the menu closes. The slides are turned with the two buttons or the
+  four slide keys.
+- **A picture that cannot be decoded is a black slide.** `show` still moves to it, and the
+  count includes it.
+- **The Previous and Next row is not always on screen.** While the presenter waits alone
+  ("Everyone else left") the call screen is unmounted and there are no buttons; the deck
+  keeps its slide and the row is back, on that slide, when the call is. On a phone, while
+  chat covers the stage, the row is hidden with the control bar.
+- **Only the presenter turns the slides.** Nobody else in the call can, and a slide change
+  drops no chapter marker.
+- **The slide keys do nothing while a field, a fader or a list has the keyboard,** and a window
+  narrower than 640 px has no shortcut list to read them in. They turn nothing while chat covers
+  a phone's stage, as the row is hidden then.
 - **The host is not told the answer to a help request.** "Asked <name>" reads the same whatever
   the person does; the host sees a restart as that person's tile leaving and returning.
 - **A help request reaches a page still on "Connecting…" but is drawn only on the call screen.**

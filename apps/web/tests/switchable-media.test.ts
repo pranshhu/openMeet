@@ -4,6 +4,7 @@ import {
   isTrackGeneratorSupported,
 } from '@/lib/switchable-media';
 import { MIC_POLL_MS, MIC_SILENT_AFTER_MS } from '@/lib/mic-watch';
+import { installStableGraph } from './stable-graph-fakes';
 
 function createMockTrack(kind: 'audio' | 'video', id: string, settings: Record<string, unknown> = {}) {
   return {
@@ -652,5 +653,78 @@ describe('SwitchableMedia', () => {
       // During a take, switching is refused
       await expect(sm.switchCamera('cam-1')).rejects.toThrow(/after this take/i);
     });
+  });
+});
+
+describe('SwitchableMedia: the stable video track answers for the real camera', () => {
+  class FakeStream {
+    private tracks: MediaStreamTrack[];
+    constructor(tracks: MediaStreamTrack[] = []) {
+      this.tracks = [...tracks];
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((t) => t.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t.kind === 'video');
+    }
+  }
+
+  // The camera-control constraints are not in the DOM typings.
+  const ask = (set: object) => ({ advanced: [set] }) as MediaTrackConstraints;
+
+  function camera(id: string, constraints: object) {
+    return {
+      kind: 'video',
+      id,
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: vi.fn(() => ({ deviceId: id })),
+      getCapabilities: vi.fn(() => ({})),
+      getConstraints: vi.fn(() => constraints),
+      applyConstraints: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MediaStreamTrack;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('MediaStream', FakeStream);
+    installStableGraph();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends constraints to the real camera and reads its constraints back', async () => {
+    const cam = camera('cam-1', { width: 1280, advanced: [{ zoom: 2 }] });
+    const sm = new SwitchableMedia(new FakeStream([cam]) as unknown as MediaStream);
+    const stable = sm.stream.getVideoTracks()[0]!;
+
+    expect(stable.getConstraints()).toEqual({ width: 1280, advanced: [{ zoom: 2 }] });
+    await stable.applyConstraints(ask({ exposureTime: 100 }));
+    expect(cam.applyConstraints).toHaveBeenCalledWith({ advanced: [{ exposureTime: 100 }] });
+  });
+
+  it('reaches the new camera after a switch, through the same track', async () => {
+    const first = camera('cam-1', { width: 1280 });
+    const second = camera('cam-2', { width: 640 });
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(new FakeStream([second])) },
+    });
+    const sm = new SwitchableMedia(new FakeStream([first]) as unknown as MediaStream);
+    const stable = sm.stream.getVideoTracks()[0]!;
+
+    await sm.switchCamera('cam-2');
+
+    expect(sm.stream.getVideoTracks()[0]).toBe(stable);
+    expect(sm.stream.getVideoTracks()).toHaveLength(1);
+    expect(stable.getConstraints()).toEqual({ width: 640 });
+    await stable.applyConstraints(ask({ zoom: 3 }));
+    expect(second.applyConstraints).toHaveBeenCalledWith({ advanced: [{ zoom: 3 }] });
+    expect(first.applyConstraints).not.toHaveBeenCalled();
   });
 });

@@ -112,6 +112,11 @@ export class SwitchableMedia {
     if (typeof generator.getCapabilities === 'function' || rawCamTrack?.getCapabilities) {
       generator.getCapabilities = () => this._currentCameraTrack?.getCapabilities?.() ?? {};
     }
+    // A request to the stable track is a request to the camera behind it: the
+    // generator's own would change nothing the person sees.
+    generator.getConstraints = () => this._currentCameraTrack?.getConstraints?.() ?? {};
+    generator.applyConstraints = (constraints) =>
+      this._currentCameraTrack?.applyConstraints?.(constraints) ?? Promise.resolve();
     if (rawCamTrack) {
       generator.enabled = rawCamTrack.enabled;
     }
