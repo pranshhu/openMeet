@@ -142,7 +142,8 @@ retention policy to trust, because there's nothing retained.
 - `sync.json` with the start-time offset between tracks, the size of every file and a
   verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
   for pairing each video with its WAV master and for aligned copies that start at
-  00:00, downloaded from the summary
+  00:00, downloaded from the summary; when people gave a title, each recorded person's
+  name and title with their files, ready for lower thirds
 - Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
   lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
 - `chapters.txt` if anyone dropped markers

@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The sync file lists each recorded person's name and title with their files, ready for
+  lower thirds.
 - A title under your name: type it in the lobby and everyone in the call sees it on
   your name tag.
 - Opening the room in a second tab of the host's browser while a recording is

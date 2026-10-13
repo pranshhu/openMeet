@@ -925,7 +925,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   cancellation on, the report has an `echoCancellation` section naming that person's camera and
   WAV files, and the summary's rows for them read "echo cancellation on": the host's own from its
   microphone's settings at End & save, a guest's from the `listening` it announced, kept by peer id
-  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
+  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). When a recorded person gave a
+  title, the report has a `nameTags` section: each recorded person's name, title and files, for an
+  editor's lower thirds. The host's title is the one it joined with; a guest's is kept by peer id
+  past `peer-left` (`titlesRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
   in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
@@ -1967,4 +1970,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A small tile shows the name alone.** In a tile narrower than 224 px the title is hidden;
   its owner's tag still holds it in the tooltip.
 - **A title is its owner's own text and nobody checks it.** Only its type and length are
-  checked, and it is not in any file.
+  checked, and the only file it is written to is the sync file's `nameTags`.
+- **A take saved from its crash copy has no `nameTags`.** Its sync file lists names only, in
+  `guests[]`.
+- **After a host reload `nameTags` holds only the titles of people in the room after it.** A
+  guest who left before the reload is listed by name only, or not at all when nobody else has a
+  title.
+- **`nameTags` leaves some people out.** A guest set as not recorded, a producer and a
+  Present-only device have no file of their own, so they are not listed.

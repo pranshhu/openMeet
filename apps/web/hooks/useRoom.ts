@@ -37,7 +37,7 @@ import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
 import { listeningField } from '@/lib/listening';
-import { titleField } from '@/lib/name-tag';
+import { joinedTitle, titleField } from '@/lib/name-tag';
 import { isStagePeer } from '@/lib/stage-peers';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
@@ -625,7 +625,7 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
-/** How many peers' "echo cancellation on" a tab remembers. A peer id is new on every reconnect. */
+/** How many peers' "echo cancellation on" and titles a tab remembers. A peer id is new on every reconnect. */
 const MAX_ECHO_PEERS = 64;
 
 /**
@@ -742,6 +742,9 @@ export function useRoom(slug: string) {
   // the message arrives, and kept after a peer leaves: a take's notes are
   // written at its end, when a guest may be gone.
   const echoPeersRef = useRef(new Set<string>());
+  // Each peer's title from their latest presence, by peer id. Written where the
+  // message arrives and kept after a peer leaves, for the same reason.
+  const titlesRef = useRef(new Map<string, string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
@@ -1991,7 +1994,15 @@ export function useRoom(slug: string) {
         messagesRef.current = [...messagesRef.current, msg];
         setState((s) => ({ ...s, messages: messagesRef.current }));
       });
-      signal.on('presence', (m) =>
+      signal.on('presence', (m) => {
+        if (typeof m.fromPeerId === 'string') {
+          const titles = titlesRef.current;
+          const title = titleFrom(m.title);
+          if (title) titles.set(m.fromPeerId, title);
+          else titles.delete(m.fromPeerId);
+          // The oldest goes first: a Map keeps the order things were added in.
+          if (titles.size > MAX_ECHO_PEERS) titles.delete(titles.keys().next().value as string);
+        }
         setState((s) => {
           const remotePeers = applyRemotePeerPresence(s.remotePeers, m);
           return {
@@ -2005,8 +2016,8 @@ export function useRoom(slug: string) {
                 ? s.remoteScreenStream
                 : null,
           };
-        })
-      );
+        });
+      });
 
       // Another participant's reaction. The sender's id must be a string, and
       // takeReaction takes only a code this build knows, one a second from one
@@ -3037,6 +3048,16 @@ export function useRoom(slug: string) {
               slots: guestReports
                 .filter((g) => echoPeersRef.current.has(h.slotPeerIds?.get(g.slot) ?? ''))
                 .map((g) => g.slot),
+            },
+            nameTags: {
+              hostName: localNameRef.current,
+              hostTitle: joinedTitle(),
+              slotTitles: new Map(
+                guestReports.flatMap((g) => {
+                  const title = titlesRef.current.get(h.slotPeerIds?.get(g.slot) ?? '');
+                  return title ? [[g.slot, title] as const] : [];
+                })
+              ),
             },
             ...(h.resumed ? { resumed: true } : {}),
             ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),

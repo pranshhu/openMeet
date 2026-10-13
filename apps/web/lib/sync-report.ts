@@ -1,4 +1,4 @@
-import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
+import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, titleFrom, type Role } from '@openmeet/protocol';
 import { clockSection, type ClockReading } from './clock-drift';
 import { cleanFps } from './quality';
 import type { NoticeRecord } from './notice-log';
@@ -128,6 +128,17 @@ export interface SyncReportInput {
    * own, and guest slots. Their camera and audio files hold processed audio.
    */
   echoCancelled?: { host?: boolean | undefined; slots?: readonly number[] | undefined } | undefined;
+  /**
+   * The name and title each recorded person's tile showed, for lower thirds.
+   * Guest titles are keyed by slot.
+   */
+  nameTags?:
+    | {
+        hostName?: string | undefined;
+        hostTitle?: string | undefined;
+        slotTitles?: ReadonlyMap<number, string> | undefined;
+      }
+    | undefined;
   /** Who was told this take was being recorded, as far as the host's page could know. */
   recordingNotice?: NoticeRecord | undefined;
 }
@@ -209,6 +220,40 @@ const whoOf = (name: unknown, fallback: string): string => {
   const clean = cleanNameOf(name);
   return /[\p{L}\p{N}\p{P}\p{S}]/u.test(clean) ? clean : fallback;
 };
+
+// A name and a title come from other participants and end up in text on the
+// host's disk, so both are cleaned; a title is then kept only when it still
+// fits the length every tile shows.
+function personTag(name: unknown, title: unknown) {
+  const n = cleanNameOf(name);
+  const t = titleFrom(cleanNameOf(title));
+  return { ...(n ? { name: n } : {}), ...(t ? { title: t } : {}) };
+}
+
+/**
+ * Every recorded person with their name, title and files, or null when nobody
+ * has a title. A guest the host set as not recorded has no slot, so is not here.
+ */
+function nameTagsSection(input: SyncReportInput, hostParts: readonly { name: string }[]) {
+  const tags = input.nameTags;
+  const hostFiles = [...new Set([input.hostFile, input.hostWavFile, ...hostParts.map((p) => p.name)])].filter(
+    (f): f is string => Boolean(f)
+  );
+  const people = [
+    ...(input.hostFile || input.hostWavFile
+      ? [{ role: 'host' as const, ...personTag(tags?.hostName, tags?.hostTitle), files: hostFiles }]
+      : []),
+    ...[...input.guests]
+      .sort((a, b) => a.slot - b.slot)
+      .map((g) => ({
+        role: 'guest' as const,
+        slot: g.slot,
+        ...personTag(g.name, tags?.slotTitles?.get(g.slot)),
+        files: [g.file, g.wavFile].filter((f): f is string => Boolean(f)),
+      })),
+  ];
+  return people.some((p) => 'title' in p) ? { note: NAME_TAGS_NOTE, people } : null;
+}
 
 /**
  * Chapter list in description format.
@@ -335,6 +380,9 @@ const FRAME_RATE_NOTE =
 
 const CONFORM_NOTE =
   'Each conform command re-encodes the video to a constant frame rate: trackFps when it is known, requestedFps otherwise. That is not lossless and it is slow; the audio is copied untouched. Run it only when an editor drifts or refuses a file. The result is seekable, so it replaces the remux for that file; for every other file the lossless remux under seekability is still the one to run.';
+
+const NAME_TAGS_NOTE =
+  "Each recorded person's name and title as their tile showed them in the call. Nothing is drawn into the video files; use these for lower thirds.";
 
 const ECHO_DETAIL = 'echo cancellation on';
 
@@ -658,6 +706,14 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     // The report is written without the section.
   }
 
+  // Another companion, built the same way.
+  let nameTags: ReturnType<typeof nameTagsSection> = null;
+  try {
+    nameTags = nameTagsSection(input, hostParts);
+  } catch {
+    // The report is written without the section.
+  }
+
   const backupNote =
     "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant.";
 
@@ -843,6 +899,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         }
       : {}),
     ...(echoFiles.length > 0 ? { echoCancellation: { note: ECHO_NOTE, files: echoFiles } } : {}),
+    ...(nameTags ? { nameTags } : {}),
     ...(input.recordingNotice ? { recordingNotice: input.recordingNotice } : {}),
     integrity: overallIntegrity.text,
     verification: fileList.map((f) => ({
