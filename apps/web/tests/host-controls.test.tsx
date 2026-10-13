@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within, cleanup, act } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 import { PeoplePanel } from '@/components/PeoplePanel';
+import { CallStage } from '@/components/CallStage';
 import type { RemotePeer } from '@/hooks/useRoom';
+import type { HelpAsk } from '@openmeet/protocol';
 
 /**
  * The host's controls over the other people in the call, and what the person
@@ -274,7 +276,7 @@ describe('PeoplePanel: the host asks a person for help', () => {
     { peerId: 'p-cy', name: 'Cy', stream: null, role: 'producer' },
     { peerId: 'p-di', name: 'Di', stream: null, role: 'guest', companion: true },
   ];
-  const panel = (onAsk?: (peerId: string, ask: 'reconnect') => boolean) => (
+  const panel = (onAsk?: (peerId: string, ask: HelpAsk) => boolean) => (
     <PeoplePanel people={people} onMute={vi.fn()} onRemove={vi.fn()} onAsk={onAsk} onClose={vi.fn()} />
   );
 
@@ -440,5 +442,226 @@ describe('the person asked to restart their connection', () => {
     render(<RoomView slug="abc-defg-hij" />);
     expect(screen.queryByText(question)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull();
+  });
+});
+
+describe('PeoplePanel: the host asks a person to switch microphone or camera', () => {
+  const people: RemotePeer[] = [
+    { peerId: 'p-ana', name: 'Ana', stream: null, role: 'guest', presence: mic(true) },
+    { peerId: 'p-cy', name: 'Cy', stream: null, role: 'producer' },
+    { peerId: 'p-di', name: 'Di', stream: null, role: 'guest', companion: true },
+  ];
+  const open = (name: string, onAsk = vi.fn().mockReturnValue(true)) => {
+    render(<PeoplePanel people={people} onMute={vi.fn()} onRemove={vi.fn()} onAsk={onAsk} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: `Help ${name}` }));
+    return onAsk;
+  };
+
+  it("offers a guest the three asks, each sending its own code, in that order, then Cancel", () => {
+    for (const [button, code] of [
+      ['Switch microphone', 'microphone'],
+      ['Switch camera', 'camera'],
+      ['Restart connection', 'reconnect'],
+    ] as const) {
+      const onAsk = open('Ana');
+      const row = screen.getByRole('button', { name: 'Cancel' }).parentElement!;
+      expect(Array.from(row.children).map((b) => b.textContent)).toEqual([
+        'Switch microphone',
+        'Switch camera',
+        'Restart connection',
+        'Cancel',
+      ]);
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(onAsk).toHaveBeenCalledTimes(1);
+      expect(onAsk).toHaveBeenCalledWith('p-ana', code);
+      expect(screen.getByRole('status')).toHaveTextContent('Asked Ana. They answer on their own screen.');
+      cleanup();
+    }
+  });
+
+  it('wraps the four buttons inside the panel, each at least 44 px tall on a phone', () => {
+    open('Ana');
+    for (const name of ['Switch microphone', 'Switch camera', 'Restart connection', 'Cancel']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11');
+    }
+    expect(screen.getByRole('button', { name: 'Switch camera' }).parentElement).toHaveClass('flex-wrap');
+  });
+
+  it('offers a producer and a present-only device the restart alone', () => {
+    for (const name of ['Cy', 'Di']) {
+      open(name);
+      expect(screen.getByRole('button', { name: 'Restart connection' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Switch microphone' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Switch camera' })).toBeNull();
+      cleanup();
+    }
+  });
+});
+
+describe('the person asked to switch microphone or camera', () => {
+  const callStageProps = {
+    role: 'guest' as const,
+    phase: 'in-call' as const,
+    localStream: null,
+    remoteStream: null,
+    remotePeers: [],
+    remoteScreenStream: null,
+    localScreenStream: null,
+    localName: 'Ana',
+    peerName: 'Bo',
+    screenSharing: false,
+    canRecord: false,
+    roomRecording: false,
+    recordBlocked: false,
+    messages: [],
+    peerPresence: null,
+    screenShareSupported: true,
+    backupUrl: null,
+    wavBackupUrl: null,
+    syncReportUrl: null,
+    recordingError: null,
+    recordUnavailableReason: null,
+    onToggleMic: vi.fn(),
+    onToggleCam: vi.fn(),
+    onRecord: vi.fn(),
+    onEnd: vi.fn(),
+    onLeave: vi.fn(),
+    onSendChat: vi.fn(),
+    slug: 'abc-defg-hij',
+    onMark: vi.fn(),
+    markerCount: 0,
+    chaptersUrl: null,
+    summary: null,
+    takes: [],
+    onNewTake: vi.fn(),
+    onDiscardTake: vi.fn(),
+    onOpenMediaBoard: vi.fn(() => null),
+    onToggleScreen: vi.fn(),
+    capabilities: {},
+  };
+  const device = (deviceId: string, kind: MediaDeviceKind, label: string) =>
+    ({ deviceId, kind, label, groupId: deviceId, toJSON: () => ({}) }) as MediaDeviceInfo;
+
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        enumerateDevices: vi.fn().mockResolvedValue([
+          device('mic-1', 'audioinput', 'Desk Mic'),
+          device('mic-2', 'audioinput', 'USB Mic'),
+          device('cam-1', 'videoinput', 'Built-in Camera'),
+          device('cam-2', 'videoinput', 'Webcam'),
+        ]),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  const draw = (ask: HelpAsk, extra: Record<string, unknown> = {}) => {
+    const onDismissHelpAsk = vi.fn();
+    const onSwitchMic = vi.fn().mockResolvedValue(undefined);
+    const onSwitchCamera = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CallStage
+        {...callStageProps}
+        helpAsk={ask}
+        onDismissHelpAsk={onDismissHelpAsk}
+        onSwitchMic={onSwitchMic}
+        onSwitchCamera={onSwitchCamera}
+        {...extra}
+      />
+    );
+    return { onDismissHelpAsk, onSwitchMic, onSwitchCamera };
+  };
+
+  it.each([
+    ['microphone', 'Choose microphone', 'Select microphone', 'Desk Mic', 'USB Mic'],
+    ['camera', 'Choose camera', 'Select camera', 'Built-in Camera', 'Webcam'],
+  ] as const)(
+    'reads the %s question, opens only its own list on Choose, and switches only on a press in it',
+    async (ask, choose, arrow, first, second) => {
+      const { onDismissHelpAsk, onSwitchMic, onSwitchCamera } = draw(ask);
+      await act(async () => {});
+
+      expect(screen.getByText(`The host asks you to switch ${ask}.`)).toBeInTheDocument();
+      const choice = screen.getByRole('button', { name: choose });
+      const notNow = screen.getByRole('button', { name: 'Not now' });
+      expect(choice.compareDocumentPosition(notNow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(choice).toHaveClass('min-h-11');
+      expect(screen.queryByRole('menu')).toBeNull();
+
+      fireEvent.click(choice);
+      expect(onDismissHelpAsk).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByRole('menu')).toHaveLength(1);
+      expect(screen.getByRole('button', { name: arrow })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('menuitemradio', { name: first })).toBeInTheDocument();
+      expect(screen.getByRole('menuitemradio', { name: second })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: arrow })).toHaveFocus();
+      expect(onSwitchMic).not.toHaveBeenCalled();
+      expect(onSwitchCamera).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('menuitemradio', { name: second }));
+      const [switched, other] = ask === 'microphone' ? [onSwitchMic, onSwitchCamera] : [onSwitchCamera, onSwitchMic];
+      expect(switched).toHaveBeenCalledTimes(1);
+      expect(switched).toHaveBeenCalledWith(ask === 'microphone' ? 'mic-2' : 'cam-2');
+      expect(other).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps the list open when another list was open and the click lands outside the control bar', async () => {
+    draw('camera');
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Select microphone' }));
+    expect(screen.getByRole('menuitemradio', { name: 'Desk Mic' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose camera' }));
+    expect(screen.getByRole('menuitemradio', { name: 'Webcam' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitemradio', { name: 'Desk Mic' })).toBeNull();
+  });
+
+  it.each(['Choose what to present', 'Choose who is recorded'])(
+    'closes the list that %s opened when it opens its own',
+    async (opener) => {
+      draw('microphone', {
+        role: 'host',
+        canRecord: true,
+        remoteStream: new EventTarget() as unknown as MediaStream,
+        remotePeers: [{ peerId: 'p-bo', name: 'Bo', stream: null, role: 'guest' }],
+        onSetPeerRecorded: vi.fn(),
+      });
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: opener }));
+      expect(screen.getAllByRole('menu')).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Choose microphone' }));
+      const menus = screen.getAllByRole('menu');
+      expect(menus).toHaveLength(1);
+      expect(within(menus[0]!).getByRole('menuitemradio', { name: 'Desk Mic' })).toBeInTheDocument();
+    }
+  );
+
+  it('opens the list in the control bar even when chat had covered it', async () => {
+    draw('microphone');
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /chat/i }));
+    expect(screen.getByTestId('stage-column').querySelector('.hidden')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose microphone' }));
+    const arrow = screen.getByRole('button', { name: 'Select microphone' });
+    expect(arrow).toHaveFocus();
+    expect(arrow.closest('.hidden')).toBeNull();
+  });
+
+  it('opens no list on Not now', async () => {
+    const { onDismissHelpAsk } = draw('microphone');
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(onDismissHelpAsk).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });

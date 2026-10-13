@@ -1950,10 +1950,13 @@ export function useRoom(slug: string) {
         sendPresence();
         setState((s) => ({ ...s, hostMuted: true }));
       });
-      // The host asked this person to restart their connection. Only the
-      // question is kept, one at a time; nothing starts until their own press.
+      // The host asked this person to restart their connection or to switch
+      // a device. Only the question is kept, one at a time; nothing starts
+      // until their own press. A page with no device menus (a producer, a
+      // present-only device) has nothing to switch, so it is not asked.
       signal.on('peer-help', (m) => {
         if (roleRef.current === 'host' || !isHelpAsk(m.ask)) return;
+        if (m.ask !== 'reconnect' && !switchableMediaRef.current) return;
         setState((s) => ({ ...s, helpAsk: m.ask }));
       });
       signal.on('chat', (m) => {

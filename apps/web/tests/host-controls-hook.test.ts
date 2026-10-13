@@ -66,7 +66,7 @@ function emit(type: string, m: unknown) {
 }
 
 /** Join a room that already holds one other person, as the host or as a guest. */
-async function joinAs(role: 'host' | 'guest') {
+async function joinAs(role: 'host' | 'guest', asProducer = false) {
   const audio = { kind: 'audio', enabled: true, stop: vi.fn() };
   const video = { kind: 'video', enabled: true, stop: vi.fn() };
   const stream = Object.assign(new EventTarget(), {
@@ -77,7 +77,7 @@ async function joinAs(role: 'host' | 'guest') {
   }) as unknown as MediaStream;
   const { result } = renderHook(() => useRoom('abc-defg-hij'));
   await act(async () => {
-    await result.current.join(stream, 'Ana');
+    await result.current.join(stream, 'Ana', asProducer);
   });
   emit('role-assigned', {
     type: 'role-assigned',
@@ -239,5 +239,33 @@ describe('the host asks a person to restart their connection', () => {
       went = result.current.askPeer('p-other', 'reconnect');
     });
     expect(went).toBe(false);
+  });
+});
+
+describe('the host asks a person to switch microphone or camera', () => {
+  const signal = () =>
+    vi.mocked(SignalClient).mock.results.at(-1)!.value as { reconnect: ReturnType<typeof vi.fn> };
+
+  it('holds the ask for a guest and switches nothing', async () => {
+    const { result } = await joinAs('guest');
+    const before = result.current.state.localStream;
+
+    emit('peer-help', { type: 'peer-help', ask: 'microphone' });
+    expect(result.current.state.helpAsk).toBe('microphone');
+    emit('peer-help', { type: 'peer-help', ask: 'camera' });
+    expect(result.current.state.helpAsk).toBe('camera');
+    expect(result.current.state.localStream).toBe(before);
+    expect(signal().reconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops a device ask on a page that joined as a producer, and still takes a restart', async () => {
+    const { result } = await joinAs('guest', true);
+    emit('peer-help', { type: 'peer-help', ask: 'microphone' });
+    expect(result.current.state.helpAsk).toBeNull();
+    emit('peer-help', { type: 'peer-help', ask: 'camera' });
+    expect(result.current.state.helpAsk).toBeNull();
+
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+    expect(result.current.state.helpAsk).toBe('reconnect');
   });
 });

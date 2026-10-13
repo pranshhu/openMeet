@@ -157,9 +157,11 @@ export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
 
 /**
  * What a host can ask one person to do. A code, not copy. `reconnect` is a
- * full restart of that person's connection to the room.
+ * full restart of that person's connection to the room. `microphone` and
+ * `camera` ask them to switch that device: the code names no device, so the
+ * choice stays with the person on their own screen.
  */
-export const HELP_ASKS = ['reconnect'] as const;
+export const HELP_ASKS = ['reconnect', 'microphone', 'camera'] as const;
 export type HelpAsk = (typeof HELP_ASKS)[number];
 
 export function isHelpAsk(v: unknown): v is HelpAsk {

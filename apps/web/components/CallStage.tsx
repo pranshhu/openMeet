@@ -340,6 +340,14 @@ export function CallStage({
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [micMenuOpen, setMicMenuOpen] = useState(false);
   const [camMenuOpen, setCamMenuOpen] = useState(false);
+  const micArrowRef = useRef<HTMLButtonElement>(null);
+  const camArrowRef = useRef<HTMLButtonElement>(null);
+  // Set when the person answers a device question; a new object each time, so
+  // focus moves again even when that list is already open.
+  const [focusArrow, setFocusArrow] = useState<{ device: 'microphone' | 'camera' } | null>(null);
+  useEffect(() => {
+    if (focusArrow) (focusArrow.device === 'microphone' ? micArrowRef : camArrowRef).current?.focus();
+  }, [focusArrow]);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [recordMenuOpen, setRecordMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
@@ -501,6 +509,18 @@ export function CallStage({
       .filter((m) => m.private && m.fromPeerId)
       .pop()?.fromPeerId;
     if (sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
+  }
+  // Opens this person's own list for the device the host asked about. Nothing
+  // is switched here: that is a press on an item of the list.
+  function chooseDevice(device: 'microphone' | 'camera') {
+    onDismissHelpAsk?.();
+    // The control bar is hidden while chat covers the screen.
+    if (chatOpen) openChat(false);
+    setMicMenuOpen(device === 'microphone');
+    setCamMenuOpen(device === 'camera');
+    setPresentMenuOpen(false);
+    setRecordMenuOpen(false);
+    setFocusArrow({ device });
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -938,6 +958,7 @@ export function CallStage({
           ask={helpAsk}
           recording={phase === 'recording'}
           onRestart={() => onRestartConnection?.()}
+          onChoose={() => chooseDevice(helpAsk === 'camera' ? 'camera' : 'microphone')}
           onDismiss={() => onDismissHelpAsk?.()}
         />
       )}
@@ -1264,6 +1285,7 @@ export function CallStage({
                       }}
                     />
                     <button
+                      ref={micArrowRef}
                       type="button"
                       onClick={() => {
                         setMicMenuOpen((o) => !o);
@@ -1331,6 +1353,7 @@ export function CallStage({
                       }}
                     />
                     <button
+                      ref={camArrowRef}
                       type="button"
                       onClick={() => {
                         setCamMenuOpen((o) => !o);

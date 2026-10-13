@@ -385,6 +385,22 @@ describe('Room DO — the host asks a participant for help', () => {
     [h.ws, a.ws].forEach((w) => w.close());
   });
 
+  it('passes on a microphone ask without the device id sent with it', async () => {
+    const slug = 'hch-mics-aaa';
+    await seedRoom(slug, 'tok-hch-mic');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-mic' });
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+
+    h.ws.send(JSON.stringify({ type: 'peer-help', peerId: a.me.peerId, ask: 'microphone', deviceId: 'mic-2' }));
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    await settle();
+    expect(ofType(a.heard, 'peer-help')).toEqual([{ type: 'peer-help', ask: 'microphone' }]);
+    for (const w of [h, b]) expect(ofType(w.heard, 'peer-help')).toEqual([]);
+
+    [h.ws, a.ws, b.ws].forEach((w) => w.close());
+  });
+
   it('passes it on while a take runs', async () => {
     const slug = 'hch-take-aaa';
     await seedRoom(slug, 'tok-hch-take');

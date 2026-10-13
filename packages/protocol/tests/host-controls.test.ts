@@ -30,4 +30,10 @@ describe('the host asks a guest for help on the wire', () => {
     expect(isHelpAsk(1)).toBe(false);
     expect(isHelpAsk(undefined)).toBe(false);
   });
+
+  it('takes microphone and camera as asks too', () => {
+    expect(isHelpAsk('microphone')).toBe(true);
+    expect(isHelpAsk('camera')).toBe(true);
+    expect(isHelpAsk('speaker')).toBe(false);
+  });
 });

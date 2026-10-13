@@ -8,6 +8,13 @@ import { Icon } from './Icon';
 const rowButton =
   'min-h-11 shrink-0 rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-8';
 
+const RESTART_ASK: [string, HelpAsk][] = [['Restart connection', 'reconnect']];
+// Only a person with a microphone and camera of their own has devices to switch.
+const DEVICE_ASKS: [string, HelpAsk][] = [
+  ['Switch microphone', 'microphone'],
+  ['Switch camera', 'camera'],
+];
+
 /**
  * The host's list of everyone else in the call, opened from the control bar
  * and laid out like the media board. Each row carries its own buttons,
@@ -112,21 +119,24 @@ export function PeoplePanel({
                   {`Ask ${name} to:`}
                 </p>
                 <div className="mt-1 flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    aria-describedby={questionId}
-                    onClick={() => {
-                      setHelping(null);
-                      setAskedLine(
-                        onAsk(p.peerId, 'reconnect')
-                          ? `Asked ${name}. They answer on their own screen.`
-                          : `Could not ask ${name}. Try again.`
-                      );
-                    }}
-                    className={`${rowButton} hover:bg-white/10`}
-                  >
-                    Restart connection
-                  </button>
+                  {(hasMic ? DEVICE_ASKS : []).concat(RESTART_ASK).map(([text, ask]) => (
+                    <button
+                      key={ask}
+                      type="button"
+                      aria-describedby={questionId}
+                      onClick={() => {
+                        setHelping(null);
+                        setAskedLine(
+                          onAsk(p.peerId, ask)
+                            ? `Asked ${name}. They answer on their own screen.`
+                            : `Could not ask ${name}. Try again.`
+                        );
+                      }}
+                      className={`${rowButton} hover:bg-white/10`}
+                    >
+                      {text}
+                    </button>
+                  ))}
                   <button
                     type="button"
                     autoFocus
