@@ -369,3 +369,72 @@ describe('Stage', () => {
     expect(screen.queryByRole('button', { name: 'Show video' })).toBeNull();
   });
 });
+
+describe('Stage: several screens', () => {
+  const first = Object.assign(new EventTarget(), { id: 'first' }) as unknown as MediaStream;
+  const second = Object.assign(new EventTarget(), { id: 'second' }) as unknown as MediaStream;
+  const videoOf = (container: HTMLElement, s: MediaStream) =>
+    Array.from(container.querySelectorAll('video')).find(
+      (v) => (v as unknown as { srcObject?: unknown }).srcObject === s,
+    ) as HTMLVideoElement;
+  const stage = (
+    otherScreens?: { stream: MediaStream; label: string; muted?: boolean }[],
+    onShowVideo?: () => void,
+  ) => (
+    <Stage
+      local={local}
+      remote={remote}
+      remoteScreen={first}
+      {...(otherScreens ? { otherScreens } : {})}
+      localPresenting={false}
+      spotlight="remote"
+      onSwapSpotlight={() => {}}
+      screenLabel="Bob's screen"
+      onShowVideo={onShowVideo}
+    />
+  );
+
+  it('draws the first screen and every other one, each under its own name', () => {
+    const { container } = render(stage([{ stream: second, label: "Cara's screen" }]));
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+    expect(videoOf(container, first)).toBeTruthy();
+    expect(videoOf(container, second).muted).toBe(false);
+  });
+
+  it('mutes another screen when its entry says so', () => {
+    const { container } = render(stage([{ stream: second, label: 'What you’re presenting', muted: true }]));
+    expect(videoOf(container, second).muted).toBe(true);
+    expect(videoOf(container, first).muted).toBe(false);
+  });
+
+  it('stacks the screens below md and puts them side by side from md up', () => {
+    const { container } = render(stage([{ stream: second, label: "Cara's screen" }]));
+    const row = videoOf(container, second).closest('div.flex-col') as HTMLElement;
+    expect(row.className).toContain('md:flex-row');
+    expect(row.contains(videoOf(container, first))).toBe(true);
+  });
+
+  it('keeps a screen’s tile when the others change order', () => {
+    const third = Object.assign(new EventTarget(), { id: 'third' }) as unknown as MediaStream;
+    const a = { stream: second, label: "Cara's screen" };
+    const b = { stream: third, label: "Dan's screen" };
+    const { container, rerender } = render(stage([a, b]));
+    const tile = videoOf(container, third);
+    rerender(stage([b, a]));
+    expect(videoOf(container, third)).toBe(tile);
+  });
+
+  it('keeps the note for incoming video off over the first screen only, and still plays the other', () => {
+    const { container } = render(stage([{ stream: second, label: "Cara's screen" }], () => {}));
+    expect(screen.getAllByRole('button', { name: 'Show video' })).toHaveLength(1);
+    expect(videoOf(container, second)).toBeInTheDocument();
+  });
+
+  it('draws one screen as it does without the list when the list is empty', () => {
+    const alone = render(stage());
+    const html = alone.container.innerHTML;
+    alone.unmount();
+    expect(render(stage([])).container.innerHTML).toBe(html);
+  });
+});

@@ -3033,7 +3033,7 @@ describe('CallStage: two people present', () => {
   it("names the screen after the person whose stream comes first, whoever is listed first", () => {
     const first = new EventTarget() as unknown as MediaStream;
     const second = new EventTarget() as unknown as MediaStream;
-    render(
+    const { container } = render(
       <CallStage
         {...baseProps}
         remoteScreenStream={second}
@@ -3044,8 +3044,12 @@ describe('CallStage: two people present', () => {
         remotePeers={bothPresenting}
       />
     );
-    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
-    expect(screen.queryByText("Bob's screen")).toBeNull();
+    const tileOf = (s: MediaStream) =>
+      Array.from(container.querySelectorAll('video'))
+        .find((v) => (v as unknown as { srcObject?: unknown }).srcObject === s)!
+        .parentElement as HTMLElement;
+    expect(within(tileOf(second)).getByText("Cara's screen")).toBeInTheDocument();
+    expect(within(tileOf(first)).getByText("Bob's screen")).toBeInTheDocument();
   });
 
   it('names the screen the usual way when its presenter is not listed', () => {
@@ -3077,3 +3081,110 @@ describe('CallStage: two people present', () => {
     expect(screen.getByText('Colin (Presenting)')).toBeInTheDocument();
   });
 });
+
+describe('CallStage: every screen is on the stage', () => {
+  const presenting = { micOn: true, camOn: true, screenSharing: true };
+  const stream = (id: string) => Object.assign(new EventTarget(), { id }) as unknown as MediaStream;
+  const videoOf = (container: HTMLElement, s: MediaStream) =>
+    Array.from(container.querySelectorAll('video')).find(
+      (v) => (v as unknown as { srcObject?: unknown }).srcObject === s,
+    ) as HTMLVideoElement;
+  const peers = [
+    { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+    { peerId: 'p2', name: 'Cara', stream: null, presence: presenting },
+  ];
+
+  it("labels each of two screens with its presenter's name", () => {
+    const a = stream('a');
+    const b = stream('b');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'p2', stream: b },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+    expect(videoOf(container, b).muted).toBe(false);
+  });
+
+  it('names another screen the usual way when its presenter is not listed', () => {
+    const a = stream('a');
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'gone', stream: stream('b') },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText('Shared screen')).toBeInTheDocument();
+  });
+
+  it('plays no sound of another screen on a present-only device', () => {
+    const a = stream('a');
+    const b = stream('b');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        companion
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'p2', stream: b },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(videoOf(container, b).muted).toBe(true);
+  });
+
+  it('shows what you present beside another person’s screen, without its sound', () => {
+    const a = stream('a');
+    const mine = stream('mine');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[{ peerId: 'p1', stream: a }]}
+        localScreenStream={mine}
+        screenSharing
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+    expect(screen.getByText('What you’re presenting')).toBeInTheDocument();
+    expect(videoOf(container, mine).muted).toBe(true);
+  });
+
+  it('names your rear camera beside another person’s screen', () => {
+    const a = stream('a');
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[{ peerId: 'p1', stream: a }]}
+        localScreenStream={stream('mine')}
+        presentingRearCamera
+        screenSharing
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText('Your rear camera')).toBeInTheDocument();
+    expect(screen.queryByText('What you’re presenting')).toBeNull();
+  });
+
+  it('draws what you present once while nobody else presents', () => {
+    render(<CallStage {...baseProps} localScreenStream={stream('mine')} screenSharing remotePeers={peers} />);
+    expect(screen.getAllByText('What you’re presenting')).toHaveLength(1);
+  });
+});
+

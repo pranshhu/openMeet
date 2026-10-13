@@ -1163,6 +1163,21 @@ export function CallStage({
                 };
               })}
               remoteScreen={remoteScreenStream}
+              otherScreens={[
+                ...(remoteScreens ?? []).slice(1).map((r) => {
+                  const peer = remotePeers.find((p) => p.peerId === r.peerId);
+                  return { stream: r.stream, label: peer ? screenLabelOf(peer) : 'Shared screen', muted: !!companion };
+                }),
+                ...(remoteScreenStream && localScreenStream
+                  ? [
+                      {
+                        stream: localScreenStream,
+                        label: presentingRearCamera ? 'Your rear camera' : 'What you’re presenting',
+                        muted: true,
+                      },
+                    ]
+                  : []),
+              ]}
               localScreen={localScreenStream}
               localPresenting={screenSharing}
               screenLabel={(() => {

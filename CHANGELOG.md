@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- When two or more people present at the same time, every screen is on the stage, each
+  under its presenter's name. Each was already recorded to its own file.
 - Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
   presentation clicker sends.
 - Present a deck as slides: pick one picture per slide and turn them with Previous and

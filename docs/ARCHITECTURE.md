@@ -392,9 +392,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
-  floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
+  floating peer PiP on mobile; every presented screen is drawn in the spotlight, the first in
+  `remoteScreen` and the rest in `otherScreens`, stacked below 768 px and side by side above; a
+  desktop screen sharer sees a "You're presenting" placeholder with a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
-  feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
+  feed back as a viewfinder via `localScreenStream`, drawn beside other people's screens). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). While one other person is on the stage, their tile is drawn once their own camera
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
@@ -1996,3 +1998,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **The slide keys do nothing while a field, a fader or a list has the keyboard,** and a window
   narrower than 640 px has no shortcut list to read them in. They turn nothing while chat covers
   a phone's stage, as the row is hidden then.
+- **With incoming video stopped only the first screen carries the note and Show video.** The
+  other screens are black tiles under their names, which still play their sound. With four or
+  more screens on a phone each tile is small, and nothing enlarges one.
