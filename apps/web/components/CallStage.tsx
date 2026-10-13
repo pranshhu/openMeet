@@ -1208,7 +1208,7 @@ export function CallStage({
               rows the bar wraps to. Hidden on mobile while chat or the summary
               covers the stage. */}
           <div
-            className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
+            className={`relative z-20 shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
             {/* In the flow above the bar, so it covers no face and no other
                 panel, and it hides with the bar while chat covers a phone. */}
@@ -1509,7 +1509,7 @@ export function CallStage({
                       >
                         <label
                           role="menuitem"
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
+                          className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
                         >
                           <span>A photo or video</span>
                           <input
@@ -1550,7 +1550,7 @@ export function CallStage({
                               setPresentMenuOpen(false);
                               onToggleScreen('rear-camera');
                             }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
+                            className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
                           >
                             <span>Rear camera</span>
                           </button>

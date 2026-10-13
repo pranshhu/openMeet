@@ -320,6 +320,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- On a phone each item of the Present menu can be tapped anywhere on it; your own
+  small picture was drawn over the menu.
 - Browser storage that does not answer cannot hold up a guest's stop:
   the backup waits five seconds for it, then continues in memory with the usual
   warning. A screen backup held in memory says so as the camera backup does, and

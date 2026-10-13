@@ -88,6 +88,14 @@ describe('CallStage: slides', () => {
     expect(screen.queryByRole('menu', { name: 'Present options' })).toBeNull();
   });
 
+  it('gives every item of the Present menu a 44 px minimum height', () => {
+    render(<CallStage {...props} screenShareSupported={false} onToggleScreen={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Present a photo, video or your rear camera' }));
+    const items = within(screen.getByRole('menu', { name: 'Present options' })).getAllByRole('menuitem');
+    expect(items.map((item) => item.textContent)).toEqual(['A photo or video', 'Slides (pictures)', 'Rear camera']);
+    expect(items.filter((item) => !item.className.split(' ').includes('min-h-11'))).toEqual([]);
+  });
+
   it('does nothing when no file was chosen', () => {
     const onToggleScreen = vi.fn();
     render(<CallStage {...props} onToggleScreen={onToggleScreen} />);

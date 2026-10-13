@@ -400,7 +400,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
   initial until their stream arrives. Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area,
   mobile chat is a
-  full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
+  full sheet with the control bar hidden while open. The bar's wrapper is one level above the
+  stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
+  menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
   `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
