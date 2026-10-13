@@ -280,6 +280,9 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.77 | File offers wait for the take | Host records with one guest. During the take the guest sends a file; End & save. Then the guest sends a video of about 90 MB, the host presses **Save to folder** and at once **Record** | During the take the host sees no question and the guest reads "Waiting for the host to accept …"; after the save the question appears. In the second part the guest reads "Sending <name> is paused while this take records." and the file goes on after End & save; every file of the take reads complete | ☐ | |
 | 8.78 | A file that does not finish | The guest sends a video of about 90 MB, the host saves it and presses **Stop** at about half. The guest sends it again, the host saves it, and the guest closes its tab at about half; the host presses **Dismiss**. Last, the guest (back in the call) sends one small file twice | After **Stop** the host reads "Not saved: a file from <guest>. …" and the folder has no `shared_` file. After the tab closes the host reads "Receiving a file from <guest> stopped at …%", and after **Dismiss** the folder still has none. The small file is there twice, the second ending `_2`, and the first is unchanged | ☐ | |
 | 8.79 | Send a file from a phone | Join as a guest from a phone about 360 px wide, open **Chat**, tap **Send a file to the host** and pick a photo | The control is one line above the message box, at least 44 px tall; the line about the file is above the chat sheet and wraps inside the screen; the host gets the question | ☐ | |
+| 8.80 | Media board opened during a take | Host and guest, both on headphones (from a speaker the chime reaches the microphone through the room), record with no media board open. After about 10 s the host opens the media board, adds **+ Chime** and fires it while talking; then the guest does the same. End & save, and download the guest's backup from the guest's summary | The take never stops and no banner appears. The host's camera MP4 has the host's chime and `guest_<id>.mp4` has the guest's, each where it was fired, with the voice unbroken before, under and after it; the guest's backup has the guest's chime too. Neither WAV has a chime. Fired with the microphone off, a chime is heard by the other person and is not in that person's camera MP4 or backup | ☐ | |
+| 8.81 | Media board after a host reload | On headphones, record with a guest, reload the host tab, join, press **Resume recording**, open the media board, add **+ Chime**, fire it, End & save | `host_<id>_resumed.mp4` has the chime and `host_<id>_resumed.wav` does not | ☐ | |
+| 8.82 | Media board line during a take | In Chrome, start a take and then open the media board for the first time since the page loaded. Turn the microphone off, fire a pad, turn it on. End & save, record again and turn the microphone off. Repeat the first part on a phone about 390 px wide | Opened: no line about this take under the pads. Microphone off: "Your microphone is off, so this take is not recording the pads you play. Turn it on to record them."; on again: the line goes. In the next take no line appears with the microphone off. On the phone the line wraps inside the board and nothing behind it moves | ☐ | |
 
 ## 9 — Deploy
 
@@ -325,11 +328,13 @@ Also not covered automatically. Needs 3 browser profiles.
 - **A second host tab mid-take asks before it takes the call over.** If the host
   joins there anyway, the first tab's files end there; the rest of each guest's
   part is only in that guest's backup.
-- **The media board, if first opened during a take, isn't in that take's MP4.**
-  Pads still play live and drop markers; the next take includes them.
-- **A take with the media board open has two audio channels in its camera MP4,**
+- **A pad played with the microphone off isn't recorded in a take that was already
+  running when the media board was first opened.** It is heard and drops its marker;
+  the next take records it either way. On Safari and iPhone that take records no pads.
+- **A take started with the media board open has two audio channels in its camera MP4,**
   also when the lobby says Mono, so stereo pads keep their stereo. The voice is
-  the same on both channels, and the WAV master stays mono.
+  the same on both channels, and the WAV master stays mono. A take that was already
+  running when the board was first opened keeps the channels it started with.
 - **Clock sync needs the host recording within ~8 s of the guest.** Otherwise
   `sync.json` has no offset and says to align by waveform.
 - **WAV past 4 GiB** (~4 h 08 m at 24-bit/48 kHz stereo) declares a clamped

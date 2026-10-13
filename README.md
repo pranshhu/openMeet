@@ -648,10 +648,13 @@ Known gaps, listed below:
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
   End & save to keep this recording"), and the rest of each guest's part exists only in
   that guest's in-browser backup. The new tab records only from its own new take.
-- **The media board, if first opened during a take, isn't in that take's MP4.** A
-  running recorder can't swap its audio track, so pads still play live and drop chapter
-  markers, but their audio reaches the MP4 only from the next take. The WAV master is
-  mic-only by design.
+- **A pad played with your microphone off isn't recorded in a take that was already
+  running when you first opened the media board.** It is heard in the call and drops its
+  chapter marker, and a looping pad drops out of that take's MP4 for as long as the
+  microphone is off; turn the microphone on to record it, or play it in the next take,
+  where it is recorded either way. In that one take pads are also recorded in mono
+  unless you chose Stereo, and on Safari or an iPhone they are recorded only from the
+  next take. The WAV master is mic-only by design.
 - **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
   `sync.json` has no offset and says to align the tracks by waveform.
 - Anyone with a room's invite link can mint short-lived TURN credentials

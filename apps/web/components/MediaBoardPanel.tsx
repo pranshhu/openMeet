@@ -13,12 +13,15 @@ import { Icon } from './Icon';
 export function MediaBoardPanel({
   board,
   midTake = false,
+  micOffInTake = false,
   onFire,
   onClose,
 }: {
   board: MediaBoard | null;
   /** First opened during this take, whose recording therefore has no pads. */
   midTake?: boolean;
+  /** First opened during this take, which records the pads only while the microphone is on; it is off. */
+  micOffInTake?: boolean;
   onFire: (name: string) => void;
   onClose: () => void;
 }) {
@@ -198,11 +201,17 @@ export function MediaBoardPanel({
           })}
         </ul>
       )}
-      {/* Honest about the known gap, and only while it applies: a take already
-          running when the board first opens can't pick up the pads (its
-          recorder can't swap tracks). */}
+      {/* Honest about the known gap, and only while it applies. A take already
+          running when the board first opens keeps its recorder's track: where
+          the pads cannot be mixed into that track the take has none of them,
+          and where they can it has them only while the microphone is on. */}
       {midTake && (
         <p className="mt-2 text-xs text-[#fdd663]">This take keeps your mic only — pads are recorded from the next take.</p>
+      )}
+      {micOffInTake && (
+        <p role="status" className="mt-2 text-xs text-[#fdd663]">
+          Your microphone is off, so this take is not recording the pads you play. Turn it on to record them.
+        </p>
       )}
     </div>
   );
