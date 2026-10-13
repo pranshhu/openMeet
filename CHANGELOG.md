@@ -244,6 +244,25 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Send my recording later**, in a guest's camera menu, for a weak connection: the
   take stays on the guest's device while it records, so it does not compete with the
   call, and is offered to the host when the take ends.
+- **Microphone only**, under the lobby's preview: join with your microphone and no
+  camera. For a person who has no camera, whose camera is blocked or busy, or whose
+  computer struggles with video. Pressing it again opens the camera as well. It is off
+  while the camera and microphone are still being opened.
+- A person who joined with the microphone only is heard by everyone and shown by their
+  initial, and is recorded like everyone else: the WAV master, and an MP4 under the usual
+  name that holds their compressed audio and no picture; their in-browser backup is the
+  same pair. Their camera button is off for that call, and its menu says how to
+  get a camera: leave and join again. The session summary and `sync.json` (`audioOnly`)
+  name such files as audio only, print no pairing or frame-rate command for them, and
+  name a guest's once that guest's recording has finished cleanly.
+- A lossless **FLAC copy** of each WAV master, usually a smaller file: `sync.json` (`flac`)
+  and the session summary give an `ffmpeg` command per WAV that writes a FLAC beside
+  it, and one that checks the copy against the WAV (two equal MD5 lines) before the
+  WAV is deleted. openMeet still records WAV, and converts and deletes nothing itself.
+  A take saved from a crash copy lists the host's WAV, and its commands, only when the
+  file is in the folder.
+- The `.json` note beside a returned WAV backup holds the same two `ffmpeg` commands for
+  that file: one writes a lossless FLAC copy, one checks it before the WAV is deleted.
 - `sync.json` gains a `clock` section: for each guest, the clock estimate its start
   offset comes from, the round trip that bounds its error and when the host received it.
 - A guest's browser measures the clock difference to the host again as its recording
@@ -300,6 +319,22 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   the backup waits five seconds for it, then continues in memory with the usual
   warning. A screen backup held in memory says so as the camera backup does, and
   a guest whose backup is in memory only is told to download it, not to rejoin.
+- The lobby lets go of a camera or microphone that arrives after Join, Present
+  only or leaving the page, and of one opened twice in development. After
+  Microphone only, answering "Headphones or speakers?" does not bring back the
+  camera error from the first try, and Try again asks for the microphone alone.
+  Join is off while any capture change is being opened, and a press of Join
+  that came before the change waits: press it again once the preview is back.
+  While the microphone reopens, the lobby keeps showing Microphone only.
+- The WAV recording from a computer that stalls during a take stays as long as
+  the MP4. Frames that were only late used to get silence added in front of
+  them, which made the WAV longer than the take.
+- A screen file of the second take or later ends in `_take<n>`, as the other
+  files of that take do: `host_screen_<id>_take2.mp4`,
+  `guest_screen_<id>_2_take2.mp4`.
+- A take ended while someone was presenting could show their screen recording
+  as incomplete, or a "Recording failed" line, though the file was whole. The
+  screen file reads complete and the summary is written.
 - A media board shown again after everyone else left and came back is not
   taken for one opened during that take: the call screen remembers it, so the
   "mic only" line is not shown under the pads when the pads are in the take.
@@ -442,9 +477,24 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After the host reloads and resumes a take, **End & save** does not wait for a guest
   whose stream had stopped because it fell too far behind: the guest's page says so
   again when the host's page asks, and the file reads as stopped, not as missing its end.
+- A guest's WAV that was cut off (a take saved after the host's browser crashed, or a
+  guest who dropped out) declares whole samples only, because a header that counts part
+  of a last sample makes `ffmpeg` print `Invalid PCM packet` for every command run on
+  that file, the FLAC check among them. This holds for a guest cut off again after a
+  resume too.
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- Pressing **Join now** while the lobby was still opening a camera or microphone you
+  had just asked for joined you with a stream that went silent a moment later, and left
+  the new capture open. You join with what is open at that moment, and nothing stays
+  open behind you.
+- A guest's WAV in a take that was resumed after a reload declares all the audio the
+  file holds when that guest never sent again. A header that counts only the part the
+  crash copy held makes players, editors and the FLAC copy stop a few seconds early.
+- A take saved from the lobby after a crash in its first seconds has a guest WAV that
+  declares its audio. When the crash copy held only the first part of the file, the WAV
+  kept its placeholder header, which declares no audio at all.
 - Clock sync takes no estimate from an exchange during which the guest's computer clock
   was set back. A guest whose clock was corrected at such a moment, in the few seconds
   of measurement, got an alignment offset in `sync.json` wrong by half the correction,

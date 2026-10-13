@@ -76,6 +76,8 @@ export interface FileCheck {
   bytes: number;
   /** Rebuilt from the crash journal, so no digest of what the sender sent can exist. */
   recovered?: boolean | undefined;
+  /** The file in the camera's place holds sound and no picture: its recorder had no camera. */
+  audioOnly?: boolean | undefined;
   /** Only for a file that arrived from another participant. */
   received?:
     | {
@@ -132,7 +134,7 @@ export interface SyncReportInput {
 
 export interface SummaryFile {
   name: string;
-  kind: 'video' | 'audio' | 'screen' | 'call';
+  kind: 'video' | 'audio-only' | 'audio' | 'screen' | 'call';
   detail?: string | undefined;
   participant?: string | undefined;
   bytes?: number | undefined;
@@ -291,11 +293,42 @@ function alignWavCmd(file: string, padMs: number): string {
   return `ffmpeg -i "${file}" -af "adelay=${padMs}:all=1" -c:a pcm_s${WAV_BIT_DEPTH}le -rf64 auto "${out}"`;
 }
 
+// The FLAC beside a master: the same name with a .flac extension.
+function flacName(file: string): string {
+  return file.replace(/\.[^.]+$/, '') + '.flac';
+}
+
+// A FLAC beside the master: the same samples in a file that is usually smaller.
+// Nothing names a depth or a channel count, because ffmpeg's FLAC encoder keeps
+// the input's.
+export function flacCmd(file: string): string {
+  return `ffmpeg -i "${file}" -c:a flac "${flacName(file)}"`;
+}
+
+// Decodes the master and its FLAC copy and prints one MD5 line for each. Both are
+// hashed as PCM at the master's depth: ffmpeg's md5 output is 16-bit unless told
+// otherwise, which would leave the low byte of every sample out of the comparison.
+export function flacCheckCmd(file: string): string {
+  const pcm = `-c:a pcm_s${WAV_BIT_DEPTH}le -f md5 -`;
+  return `ffmpeg -v error -i "${file}" -i "${flacName(file)}" -map 0:a ${pcm} -map 1:a ${pcm}`;
+}
+
+const FLAC_NOTE =
+  'Optional. openMeet records WAV. Each encode command writes a FLAC beside a WAV master: the same samples in a ' +
+  'file that is usually smaller, with the depth, the rate and the channels the WAV has. Each check command ' +
+  'decodes the WAV and its FLAC and prints two MD5 lines. When the two lines are the same the FLAC holds every ' +
+  'sample of the WAV, and only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, ' +
+  'keep the WAV and encode again. The pairing and aligned-copy commands read the WAV, so run them before ' +
+  'deleting it.';
+
 const ALIGNED_HINT =
   "The aligned-copy commands under Editor commands write copies that start when the host's recording starts, " +
   "so each copy lines up with the host's files at 00:00 on a timeline. Audio copies get real silence. " +
   'Video copies are not re-encoded: the delay is stored in the file, and an editor that ignores it needs ' +
   'the clip moved by the time shown with its command.';
+
+const AUDIO_ONLY_NOTE =
+  'These files were recorded with no camera. Each is an MP4 that holds compressed audio and no picture, so it has no pairing command and no frame-rate entry. Edit from the WAV master of the same person.';
 
 const FRAME_RATE_NOTE =
   "MediaRecorder has no constant-frame-rate setting, so the frame rate inside these files can vary. requestedFps is the rate a camera is asked for by default. trackFps is what the browser reported that camera running at when its recording started, or null when that was not reported; a screen is only captured when it changes, so screen files have none. Neither is a count of the frames in a file. For that, run the file's measure command: it decodes the file with your own ffmpeg, and its last VFR line reads 0.000000 when every frame interval is the same.";
@@ -426,6 +459,9 @@ export function fileVerdict(
  */
 export function buildSyncReport(input: SyncReportInput): SyncReport {
   const { recordingId, hostFile, hostStartMs, guests } = input;
+  // A file recorded with no camera. Without its check a file reads as a camera file.
+  const audioOnly = (file: string | undefined) =>
+    file !== undefined && input.checks?.get(file)?.audioOnly === true;
   const markers = input.markers ?? [];
   const screenSegments = input.screenSegments ?? [];
   const screenFiles = screenSegments.map((s) => s.file);
@@ -452,9 +488,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ? { remuxHost: remuxCmd(hostFile) }
     : {};
   const combineMap: Record<string, string> = {
-    ...(input.hostWavFile && hostFile ? { host: muxWavCmd(hostFile, input.hostWavFile) } : {}),
+    ...(input.hostWavFile && hostFile && !audioOnly(hostFile) ? { host: muxWavCmd(hostFile, input.hostWavFile) } : {}),
   };
-  const combineCommands: { label: string; cmd: string }[] = input.hostWavFile && hostFile
+  const combineCommands: { label: string; cmd: string }[] = input.hostWavFile && hostFile && !audioOnly(hostFile)
     ? [{ label: 'Host: pair video with the uncompressed audio master', cmd: muxWavCmd(hostFile, input.hostWavFile) }]
     : [];
 
@@ -496,7 +532,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     alignCommands.push({
       label: wav
         ? `${who}: aligned copy of the audio master (${seconds(padMs)} s of silence added)`
-        : `${who}: aligned copy of the video (starts ${seconds(padMs)} s in)`,
+        : `${who}: aligned copy of the ${audioOnly(file) ? 'audio' : 'video'} (starts ${seconds(padMs)} s in)`,
       cmd,
     });
   };
@@ -521,7 +557,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       cmd: remuxCmd(g.file),
     });
 
-    if (g.wavFile) {
+    if (g.wavFile && !audioOnly(g.file)) {
       combineMap[key] = muxWavCmd(g.file, g.wavFile);
       combineCommands.push({
         label: `${slot === 0 && !cleanName ? 'Guest' : displayName}: pair video with the uncompressed audio master`,
@@ -632,7 +668,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       ? [
           {
             name: hostFile,
-            kind: 'video' as const,
+            kind: audioOnly(hostFile) ? ('audio-only' as const) : ('video' as const),
             ...(hostFilePart && hostFilePart.offsetMs > 0
               ? { detail: `continues from ${seconds(hostFilePart.offsetMs)} s` }
               : {}),
@@ -643,7 +679,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       const participant = cleanNameOf(g.name);
       return {
         name: g.file,
-        kind: 'video' as const,
+        kind: audioOnly(g.file) ? ('audio-only' as const) : ('video' as const),
         ...(participant ? { participant } : {}),
       };
     }),
@@ -728,12 +764,33 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   }));
   screenSegments.forEach((s, i) => align(s.file, s.offsetMs, `Screen segment ${i + 1}`));
 
+  // Every WAV master this report lists is a row of kind audio: the host's, each
+  // guest's, and the host's file from before a reload. A call-audio copy is not
+  // one: it was never lossless.
+  const flacFiles = fileList
+    .filter((f) => f.kind === 'audio')
+    .map((f) => ({ file: f.name, encode: flacCmd(f.name), check: flacCheckCmd(f.name) }));
+  // Each label starts with the file's name: the summary keys a row by its label,
+  // and a take that continued after a reload has two host files.
+  const flacCommands = flacFiles.flatMap((f) => [
+    { label: `${f.file}: FLAC copy, lossless and usually smaller`, cmd: f.encode },
+    {
+      label: `${f.file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error`,
+      cmd: f.check,
+    },
+  ]);
+
   const commands: { label: string; cmd: string }[] = [
     ...remuxCommands,
     ...screenRemuxCommands,
     ...combineCommands,
     ...alignCommands,
+    ...flacCommands,
   ];
+
+  const audioOnlyFiles = [hostFile, ...guests.map((g) => g.file)].filter(
+    (f): f is string => audioOnly(f)
+  );
 
   const report = {
     recordingId,
@@ -769,6 +826,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         `Uncompressed ${WAV_BIT_DEPTH}-bit PCM at ${WAV_SAMPLE_RATE / 1000} kHz, whatever rate the ` +
         'microphone ran at. Edit from these; the MP4 audio track is the convenience copy.',
     },
+    ...(audioOnlyFiles.length > 0 ? { audioOnly: { note: AUDIO_ONLY_NOTE, files: audioOnlyFiles } } : {}),
     screenFiles,
     ...(screenSegments.length > 0 ? { screenSegments } : {}),
     ...(guests.length > 0 ? { guests: guestReports } : {}),
@@ -813,13 +871,14 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       files: alignedFiles,
     },
     ...(clock ? { clock } : {}),
+    ...(flacFiles.length > 0 ? { flac: { note: FLAC_NOTE, files: flacFiles } } : {}),
     frameRate: {
       note: FRAME_RATE_NOTE,
       requestedFps: RECORDING_FRAME_RATE,
       conformNote: CONFORM_NOTE,
       files: [
-        ...(hostFile ? [frameRateEntry(hostFile, 'camera', input.hostTrackFps)] : []),
-        ...guests.map((g) => frameRateEntry(g.file, 'camera', g.trackFps)),
+        ...(hostFile && !audioOnly(hostFile) ? [frameRateEntry(hostFile, 'camera', input.hostTrackFps)] : []),
+        ...guests.filter((g) => !audioOnly(g.file)).map((g) => frameRateEntry(g.file, 'camera', g.trackFps)),
         ...screenFiles.map((f) => frameRateEntry(f, 'screen')),
       ],
     },

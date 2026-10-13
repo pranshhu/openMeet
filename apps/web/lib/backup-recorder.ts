@@ -5,6 +5,7 @@ import {
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
 import { cameraVideoBps } from './quality';
+import { mimeForStream } from './recorder';
 
 type MrFactory = (stream: MediaStream, opts: MediaRecorderOptions) => MediaRecorder;
 
@@ -404,7 +405,7 @@ export class BackupRecorder {
     if (!this.opts.stream) return;
     const factory = this.opts.mrFactory ?? ((s, o) => new MediaRecorder(s, o));
     const mr = factory(this.opts.stream, {
-      mimeType: this.opts.mimeType ?? RECORDING_MIME,
+      mimeType: mimeForStream(this.opts.stream, this.opts.mimeType ?? RECORDING_MIME),
       // Sized like the file this backs up: the preset for the camera's real
       // resolution, at the level joined with. A backup at another bitrate is not
       // a stand-in for the take, and the lobby's storage estimate assumes the

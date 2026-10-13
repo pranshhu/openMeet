@@ -311,7 +311,22 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   Record, the countdown, the teleprompter and the media board are there with nobody else in
   the room. The hook's phase is not changed by it.
   `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
-  (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
+  (ownership transfer — load-bearing).
+  A capture that `reacquire` was still opening when the stream was handed over is stopped as
+  it arrives and the handed-over stream is left alone, and Join hands over the capture the
+  `MediaManager` holds at that moment, so the call never gets a stream the lobby stops and no
+  capture stays open behind it. A capture that the first preview, Try again or `reacquire` was
+  still opening is stopped as it arrives after any hand-over (Join or Present only), and so is
+  one that arrives for a run of the mount effect that was cleaned up (`mmRef` is cleared then).
+  Join is off for as long as `reacquire` is opening a capture (the `reopening` state draws the
+  button disabled and the line under it reads as it does with the preview down; the form's
+  submit checks `reopeningRef`, so Enter does nothing either), so a person who presses
+  Microphone only, or presses it again for the camera, and then Join joins with the capture that
+  arrives, or with the earlier preview when it is refused. Join also does nothing when the seat
+  question is answered while the echo-cancellation answer has stopped the microphone and its
+  replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
+  preview is back; Try again asks for the microphone alone when Microphone only is on.
+  `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
   (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
@@ -320,14 +335,25 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   change the microphone is stopped before it is asked for, because a browser can give a second capture of
   an open microphone the processing of the first; the preview is taken down with it, so Join is off until
   the new one is open, and stays down with Try again when it cannot be opened. The camera, microphone,
-  quality and frame-rate pickers are off for as long as the preview is down, so only Try again opens a
-  capture then. A change of camera, microphone, quality, frame rate or echo cancellation made while
-  another is being opened is not taken (`reopeningRef`), so no capture is asked for beside one on its
-  way. The select shows what the
+  quality and frame-rate pickers are off for as long as the preview is down, so only Try again and
+  **Microphone only** open a capture then. **Microphone only** is off while a preview is being
+  opened and none has failed (`!stream && !previewError`), and Try again does nothing while
+  `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
+  microphone, quality, frame rate or echo cancellation made while another is being opened is not
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
   with Try again; a producer's lobby opens no camera or mic and joins with a zero-track stream.
+  **Microphone only**, a button under the preview, opens the microphone alone
+  (`chooseMicOnly` calls `reacquire` with the camera choice `NO_CAMERA`, for which
+  `cameraConstraints` returns `false`), so a person with no camera, or with one that is
+  blocked or busy, joins as a recorded participant; pressed again it opens the first listed
+  camera as well. While the preview holds no video track it shows the person's initial, and
+  the camera toggle, the framing guide and the camera, quality, bitrate and frame-rate
+  pickers are hidden. With no preview at all (the microphone is being opened again) the mode
+  is the choice, `camId === NO_CAMERA`: the pickers stay hidden, the button stays pressed and
+  the placeholder reads "Allow microphone".
   The lobby's readiness panel (`PreflightPanel`) carries **Test your mic**
   (`components/MicTest.tsx`, `lib/mic-test.ts`): an audio-only `MediaRecorder` on the previewed
   microphone for five seconds, played back from an object URL that is revoked when the clip
@@ -725,6 +751,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `recorder.ts` `ChunkRecorder`: `MediaRecorder` @ 2s timeslice; assigns `idx`/`offset`
   **synchronously** in `ondataavailable`, serializes `blob.arrayBuffer()` via a `tail` promise
   chain to preserve order; skips empty blobs.
+  `mimeForStream(stream, mime)` is what both `ChunkRecorder` and `BackupRecorder` start
+  their `MediaRecorder` with: for a stream with no video track (a person who joined with no
+  camera) it is the first `audio/mp4` entry of the call-audio list this browser supports, so
+  that person's `host_<id>.mp4` / `guest_<id>.mp4` and its backup are MP4 files with one audio
+  track, under the names, channel and verdict a camera file has. Nothing that reads a take's
+  files by name (the crash copy, a resume, the lobby's save, a returned backup) tells them
+  apart.
 - `chunk-sender.ts` (guest egress): `sendChunk` → `hash.update` → `buffer.add` → `enqueueOrSend`.
   Backpressure: `bufferedAmount>16MiB` → queue, drains at ≤8MiB (hysteresis). The pause half exists
   (`setPaused`, `onBackpressure`) but no take-time caller passes the hook — the three `new
@@ -816,7 +849,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   header does not match its length gets its two size fields set from the length
   (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
   `patchWavHeader`), because a page that closes commits its files with the placeholder header;
-  a resume gives the host's own WAV the same repair through `copyBackupInto`. A take reopened from that journal replays the parts into the same folder files
+  a resume gives the host's own WAV the same repair through `copyBackupInto`.
+  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, and End & save for a guest whose final header never came),
+  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
+  pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. The frame size is read from the file's own
+  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
+  that header states.
+  At End & save that length is the file's own (`FileWriter.size`) when it is more than the
+  receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
+  the crash copy's end where its receiver starts.
+  A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero, and the hash state the commit stored beside its position lets the digest cover the part
   before the resume as well. A screen file already in the folder is never replaced — the resumed host
@@ -903,6 +947,23 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is not open. A take that is ended because the host started another one takes none:
   `handleGuestRecordingStarted` (`useRoom`) stops its clock sync first, so the new capture
   does not wait for an answer that cannot come.
+  any file is not complete. Clock-sync needs the host to be
+  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  The report's `flac` section and the summary's Editor commands give two `ffmpeg` commands
+  for each WAV master the report lists (the `fileList` rows of kind `audio`: the host's, each
+  guest's, and the host's file from before a reload): `encode` writes a FLAC beside the WAV
+  (`flacCmd`) and `check` decodes both and prints one MD5 line for each, hashed as PCM at
+  `WAV_BIT_DEPTH` (`flacCheckCmd`); equal lines mean the FLAC holds every sample. No page
+  encodes or decodes FLAC: the masters, their backups and the crash copy stay WAV.
+  any file is not complete. A file recorded with no camera carries `audioOnly` in its file check
+  (`collectFileChecks`: the host's own from `RecordingHandles.audioOnly`, set when its
+  recorder is built with a microphone and no video track; a guest's from `audioOnly: true`
+  in that guest's `recording-finalized` on the camera channel, which the receiver keeps as
+  `senderAudioOnly` and takes only as the boolean `true`). `buildSyncReport` lists it as
+  kind `audio-only` ("Audio only, no camera" in the summary), names it under `audioOnly`
+  in the sync file, and leaves it out of `combine` and `frameRate`; its remux and aligned
+  commands stay, since both copy streams as they are. Clock-sync needs the host to be
+  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -933,7 +994,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
   Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
   `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
-  `guest_screen_<id>_2.mp4`, …). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
   The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
   `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
@@ -1044,6 +1106,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   shown that name, never the one the sender gave. It gets no note, and one that is stopped, cut
   off or fails its check is removed from the folder whole. `decline` takes the offers to turn
   down, so backups and picked files can be answered apart.
+  The note beside a returned WAV backup also holds a `flac` entry: the `encode` and `check`
+  commands of `lib/sync-report.ts` (`flacCmd`, `flacCheckCmd`) for the file's name in the
+  host's folder. A camera or a screen backup's note has none.
 
 ---
 
@@ -1067,7 +1132,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    Stop: host sends `recording-stop` FIRST, then `endHostRecording` waits (≤45s without progress per
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
-   guest that keeps sending cannot hold the save open.
+   guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
+   still open is waited for the same way; one whose channel has closed is not, and its writer was
+   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   file that gave no finish signal within the limits, or whose channel closed without one, is
+   listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
+   so the channel's close and the end of the take can both ask for it.
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
@@ -1205,6 +1275,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   reset DB state manually in tests.
 - `@openmeet/protocol` resolves via tsconfig `paths` + vitest `alias` — breaking either breaks all
   consumers.
+- **WAV master padding (`lib/pcm-recorder.ts`)**: `PcmRecorder` pads silence only for whole frames that
+  both the jump in a frame's timestamp and the file's standing against the track's timestamps (`lagUs`)
+  say are missing. The recorded track's timestamps do not drift against its samples; they step in
+  render quanta, so a frame can be stamped up to 8 ms late and the next one early, and those steps
+  cancel only when every gap is counted. A surplus is remembered for up to one second
+  (`MAX_SURPLUS_FRAMES`). Silence added where nothing was missing is therefore bounded by the
+  largest lateness the timestamps reach, so the WAV does not outgrow the take on a page that stalls.
 - **Stable stream for mid-take device switching (`lib/switchable-media.ts`)**:
   Removing or adding a track on a `MediaStream` that a running `MediaRecorder` is recording throws
   `InvalidModificationError` and kills the take. Furthermore, Chrome's AAC MP4 muxer and our `PcmRecorder`
@@ -1214,7 +1291,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   output stream handed to the preview, PeerConnection, ChunkRecorder and the camera BackupRecorder,
   and a microphone-only stream (`micStream`) handed to the WAV master and its backup.
   It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
-  stream would conjure a blank video track and a silent audio track).
+  stream would conjure a silent audio track). A lobby stream with a microphone and no camera is
+  wrapped, and its stable stream holds the audio track alone: the video generator is left out,
+  because a video track that never carries a frame would keep the other side's player silent.
+  That person has no camera for the whole call, so `switchCamera` opens nothing while the
+  stream has no video track and `CallStage` disables their camera button (`noCamera`).
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
@@ -1740,6 +1821,63 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   browser closes again.** The receivers a resume builds do not write to the crash copy's
   notes, so a save after that second crash says to align that guest by waveform. A crash
   copy never holds a second estimate either: a take saved from one has no `end` in `clock`.
+- **A real loss can be filled one frame short.** A gap is measured against the frame before it, and
+  that frame's own timestamp can be up to 8 ms late. Measured in Chrome, 30 stalls that each lost 5
+  frames got 135 of 150 frames of silence, so after many stalls the WAV is a little shorter than the
+  MP4.
+- **Where a track's timestamps run steadily early against its samples, real gaps go unfilled for a
+  while.** The track the app records from showed no such drift. Where it happens, the surplus that
+  builds up absorbs real gaps until it is used up, a second at most.
+- **openMeet records no FLAC.** A FLAC copy of a WAV master is made afterwards, with the
+  `ffmpeg` commands in the sync file, by whoever has the folder. A take still needs the
+  WAV's full size on the host's disk and in each guest's upload while it records (24-bit
+  at 48 kHz: about 520 MB an hour for a mono master, twice that in stereo). Nothing
+  deletes a WAV; the person does, after the check.
+- **A WAV that reads Empty still has FLAC commands.** As with its pairing command, the
+  report lists them for every audio master it names. A WAV that holds only its header
+  gives a FLAC with no samples and a check that prints two equal MD5 lines, those of no
+  audio; `ffmpeg` says the file is missing only for a name that is not in the folder.
+- **A WAV backup a participant downloads has no FLAC command on their screen.** Their
+  page gives the file; the two commands are in the README.
+- **A returned backup's two commands are only in its `.json` note.** There the quotes are
+  escaped, and no screen shows the commands with a copy button.
+- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
+  size fields are 32 bits and cannot hold its length, so they declare the most they can
+  hold, more than the file has, and the FLAC commands, like any other command on that
+  file, report it.
+- **Microphone only is not remembered.** A person with no camera presses it on every
+  visit. While it is pressed the lobby's storage and folder figures still count a camera
+  file, so they overstate what that person's recording needs. A person whose camera
+  never started gets no Speaker row in the lobby after pressing it; the call's microphone
+  menu has one.
+- **A person who joined with the microphone only cannot turn a camera on in that call.**
+  A running recorder cannot be given a video track, so the stream keeps the shape it was
+  joined with. They leave and join again with a camera. The host is not told before a take
+  that such a person has no camera: their tile shows an initial, as it does for a camera
+  that is turned off. On a computer the others' camera menu still lists **Pop out** for
+  that person; choosing it opens no window and shows the line about a window that did not
+  open.
+- **A file recorded with no camera sits in the camera file's place.** The health panel
+  lists it as "Camera", a returned backup of it is named `…_camera_…`, the page shown after
+  leaving calls its backup "Backup video", and a take saved from the lobby after a crash
+  lists it as a camera file. Each is an MP4 that holds sound and no picture.
+- **A guest with no camera whose browser cannot record a WAV master** (Safari) is recorded
+  as that MP4 alone, plus the host's call-audio copy. Not tested: recording is
+  Chromium-only.
+- **A take saved from the lobby after a crash, and the host's own part from before a
+  reload, list a file recorded with no camera as a camera file.** Neither has the file
+  check that says otherwise, so the sync file of a take saved from the lobby still prints
+  a pairing command for such a file, which `ffmpeg` refuses (the file has no video
+  stream). The aligned-copy command for such a file is labelled "aligned copy of the
+  video", because the label follows the file check, which these takes lack; the command
+  itself works on it. A file whose check says it has no picture is labelled "aligned copy
+  of the audio".
+- **A guest's file recorded with no camera is named as audio only only when that guest's
+  take finished cleanly.** The guest says so in its finish message. A guest that left
+  early, that the host removed, whose stream was abandoned, or whose take was saved from
+  the lobby after a crash never sent it, and its file is listed as a camera file. It is
+  the guest's own word: a guest that says it for a file with a picture gets that one file
+  listed as audio only.
 - **A backup is offered by itself only after the host's stop.** A guest who leaves during a
   take, whose tab the room closed, or whose take a new take ended, keeps the backup in its
   lobby, with **Send to host**. A backup of which no chunk reached the disk (browser

@@ -73,6 +73,12 @@ export interface ChunkRecordingFinalized {
    * receiver bounds it before using it.
    */
   frameRate?: number;
+  /**
+   * The sender's recorder had a microphone and no camera: this file holds sound
+   * and no picture. Camera files only. Said by the sender and used as a label;
+   * the receiver takes nothing but `true` for it.
+   */
+  audioOnly?: boolean;
 }
 
 // Clock-sync (guest <-> host) over the recording DataChannel. The two peers each

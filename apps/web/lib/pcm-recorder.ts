@@ -2,6 +2,9 @@ import { CHUNK_TIMESLICE_MS, WAV_BIT_DEPTH } from '@openmeet/protocol';
 
 // Backstop for a source that has stopped producing frames; one frame is ~10ms.
 const PCM_DRAIN_TIMEOUT_MS = 500;
+// The most surplus (silence added where nothing was missing) that is remembered: one second of
+// 10 ms frames. The bound keeps one absurd timestamp from switching padding off for a whole take.
+const MAX_SURPLUS_FRAMES = 100;
 import type { RecordedChunk } from './recorder';
 import { f32ToS24LE, wavHeader, WAV_HEADER_BYTES, type WavFormat } from './wav';
 
@@ -61,6 +64,8 @@ export class PcmRecorder {
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
   private lastFrameEndUs: number | null = null;
+  // How far the file is behind the track's own timestamps (negative: ahead).
+  private lagUs = 0;
   private reader: ReadableStreamDefaultReader<PcmFrame> | null = null;
   private done: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -128,11 +133,15 @@ export class PcmRecorder {
     const durationUs = (frame.numberOfFrames * 1_000_000) / frame.sampleRate;
     if (this.lastFrameEndUs !== null && frame.timestamp !== undefined) {
       const gapUs = frame.timestamp - this.lastFrameEndUs;
-      // Pad only whole missing frames. Sub-frame gaps are timestamp jitter from
-      // Web Audio render quantum alignment (±1 quantum), not dropped frames;
-      // real drops when the reader falls behind are whole frames.
-      const missing = Math.round(gapUs / durationUs);
+      // The track's timestamps step in render quanta, so a frame can be stamped up to 8 ms late
+      // and the next one early. Those steps cancel only when every gap is counted. A surplus is
+      // remembered for up to MAX_SURPLUS_FRAMES, a debt for one frame, so late frames cannot make
+      // the file grow. Silence is added only for whole frames that both the jump at this frame
+      // and the running count say are missing.
+      this.lagUs = Math.max(-MAX_SURPLUS_FRAMES * durationUs, Math.min(durationUs, this.lagUs)) + gapUs;
+      const missing = Math.round(Math.min(gapUs, this.lagUs) / durationUs);
       if (missing >= 1) {
+        this.lagUs -= missing * durationUs;
         this._droppedMs += (missing * durationUs) / 1000;
         const bytesPerSample = WAV_BIT_DEPTH / 8;
         const silenceBytes = missing * frame.numberOfFrames * frame.numberOfChannels * bytesPerSample;

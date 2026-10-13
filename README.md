@@ -61,6 +61,8 @@ retention policy to trust, because there's nothing retained.
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- No camera needed: **Microphone only** in the lobby joins a person with their
+  microphone alone
 - Record alone: a host with nobody else in the room presses **Continue alone** and
   records from the call screen; anyone who joins during the take is recorded from then on
 
@@ -139,6 +141,8 @@ retention policy to trust, because there's nothing retained.
   verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
   for pairing each video with its WAV master and for aligned copies that start at
   00:00, downloaded from the summary
+- Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
+  lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -430,7 +434,7 @@ All in the one folder the host picks, per take:
 | `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
 | `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
-| `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, … |
+| `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
@@ -439,7 +443,7 @@ All in the one folder the host picks, per take:
 | `chat_<id>.txt` | Chat log from the take window (when messages sent); leaves out private messages and the messages of anyone set as not recorded |
 
 `<id>` is new for every take, and files from the second take on also
-end in `_take<n>` (`host_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
+end in `_take<n>` (`host_<id>_take2.mp4`, `host_screen_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
 screen file is. The host's files carry the host's name after the role, cut down to letters, digits
 and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
 the convenience copy; the WAV is the master.
@@ -448,6 +452,9 @@ the convenience copy; the WAV is the master.
 take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
 holds its start on the host's clock (`timeline.hostStartUnixMs`), which places the parts
 on one timeline with the real breaks between them.
+A person who joined with **Microphone only** has the same two files under the same
+names. Their `.mp4` holds the compressed audio and no picture; the WAV is the master,
+as for everyone.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
@@ -553,6 +560,18 @@ the screen that follows offers them too.
    When part of a guest's take did not reach the host while it recorded, that guest's page offers its backup
    by itself as soon as the host ends the take: the host gets the same **Save to folder** question, with no rejoin.
 4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for by default and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
+5. **Smaller audio masters (optional):** openMeet records WAV. `sync.json` (`flac`) and
+   Editor commands in the summary give two commands for each WAV master. The first
+   writes a FLAC beside it, the same samples in a file that is usually smaller:
+   `ffmpeg -i "<file>.wav" -c:a flac "<file>.flac"`
+   The second decodes both files and prints two `MD5=` lines:
+   `ffmpeg -v error -i "<file>.wav" -i "<file>.flac" -map 0:a -c:a pcm_s24le -f md5 - -map 1:a -c:a pcm_s24le -f md5 -`
+   Delete a WAV only when its two lines are the same; when they differ, or ffmpeg prints
+   an error, keep it and encode again. Run the pairing and aligned-copy commands first:
+   they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
+   WAV backup you downloaded included. The one exception is a WAV that was cut off after
+   it passed 4 GiB: its size fields cannot hold its length, so ffmpeg prints an error.
+   A returned WAV backup's own `.json` holds the two commands for that file, under `flac`.
 
 ### If the host's browser crashes
 

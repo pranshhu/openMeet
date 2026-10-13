@@ -1616,6 +1616,12 @@ describe('aligned copies', () => {
       'Bob: aligned copy of the audio master (1.500 s of silence added)',
       'Carol: aligned copy of the video (starts 3.200 s in)',
       'Carol: aligned copy of the audio master (3.200 s of silence added)',
+      'host_r.wav: FLAC copy, lossless and usually smaller',
+      'host_r.wav: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error',
+      'guest_r.wav: FLAC copy, lossless and usually smaller',
+      'guest_r.wav: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error',
+      'guest2_r.wav: FLAC copy, lossless and usually smaller',
+      'guest2_r.wav: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error',
     ]);
   });
 

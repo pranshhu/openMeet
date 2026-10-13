@@ -16,6 +16,7 @@ import { StreamingSha256, type Sha256State } from './sha256';
 import { cleanFps } from './quality';
 import type { JournalFile } from './take-journal';
 import type { ClockReading } from './clock-drift';
+import { wavFrameBytes } from './wav';
 
 export interface ChunkReceiverOpts {
   recordingId: string;
@@ -40,6 +41,8 @@ export interface ChunkReceiverOpts {
   onMeta?: (meta: { guestStartHostMs: number | null; rttMs: number | null }) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
   resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
+  /** Bytes in one sample frame of a WAV reopened after a crash, whose first piece this receiver never sees. */
+  frameBytes?: number;
   /**
    * The clock-sync numbers the crash copy holds for this file, for a take
    * reopened after a crash: that estimate stays the first, and a report that
@@ -107,9 +110,11 @@ export class ChunkReceiver {
   private _clockEnd: ClockReading | null = null;
   private _senderSha256: string | null = null;
   private _senderFrameRate: number | null = null;
+  private _senderAudioOnly = false;
   private _abandoned = false;
   private _timedOut = false;
   private _receivedFinalHeader = false;
+  private _frameBytes = 1;
   private _receivedFinalized = false;
   private _resumed = false;
   /** Where the file stood when this receiver took over: the far-offset rule moves with it. */
@@ -134,6 +139,7 @@ export class ChunkReceiver {
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
     this.onMeta = opts.onMeta;
+    this._frameBytes = opts.frameBytes ?? 1;
     // Read from storage, so each number is checked again. Without a start
     // nothing is seeded: a round trip or a time alone describes no estimate.
     const clock = opts.clockFrom;
@@ -177,6 +183,11 @@ export class ChunkReceiver {
 
   get receivedFinalHeader(): boolean {
     return this._receivedFinalHeader;
+  }
+
+  /** Bytes in one sample frame of the WAV this receiver saw open; 1 when it saw no such header. */
+  get frameBytes(): number {
+    return this._frameBytes;
   }
 
   get receivedFinalized(): boolean {
@@ -229,6 +240,11 @@ export class ChunkReceiver {
   /** Frame rate the sender's camera reported, once it finalizes; null if it never said or said nonsense. */
   get senderFrameRate(): number | null {
     return this._senderFrameRate;
+  }
+
+  /** The sender said this file holds sound and no picture, once it finalizes. */
+  get senderAudioOnly(): boolean {
+    return this._senderAudioOnly;
   }
 
   /** The file this receiver writes into. */
@@ -308,6 +324,8 @@ export class ChunkReceiver {
           }
           const fps = cleanFps((parsed as ChunkRecordingFinalized).frameRate);
           if (fps !== null) this._senderFrameRate = fps;
+          // The sender's word, kept as a label for the report: nothing but `true` counts.
+          if ((parsed as ChunkRecordingFinalized).audioOnly === true) this._senderAudioOnly = true;
           this.finalizeResolve?.();
         } else if (t === 'stream-abandoned') {
           this._abandoned = true;
@@ -408,6 +426,8 @@ export class ChunkReceiver {
     // hashed, counted or acked once it resolves.
     if (this.maxBytes !== undefined && this.refused) return;
     this.lastDataReceivedAt = Date.now();
+    // A WAV stream opens with its header, which says how long a sample frame is.
+    if (header.offset === 0) this._frameBytes = wavFrameBytes(data);
     if (header.offset === 0 && this.lastIdx >= 0) {
       this._receivedFinalHeader = true;
     }
