@@ -238,6 +238,16 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- `sync.json` gains a `clock` section: for each guest, the clock estimate its start
+  offset comes from, the round trip that bounds its error and when the host received it.
+- A guest's browser measures the clock difference to the host again as its recording
+  stops. `sync.json` (`clock`) then gives a start and an end offset for that guest, how
+  far the two computers' clocks moved in between and within what error. It compares
+  the computers' clocks, not how the audio or video in a file keeps time.
+  Its note says what a computer clock that is set during a take shows as.
+- A take resumed after a host reload keeps each guest's clock estimate from before the
+  reload as its start, so `sync.json` (`clock`) covers the whole take, and a take saved
+  from its crash copy says when its estimate was taken.
 - **Pause** for the host during a take. The take is saved and closed exactly as with
   End & save, so nothing is recorded during the break and the part so far is safe on
   disk. The page reads "Paused", and **Continue** records the next part as a new take
@@ -269,6 +279,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **Record another take** is offered when everyone else has left too, and records the
   host alone, in place of the Copy invite link the summary showed then. A host with
   nobody else in the room can present, and the screen is recorded to its own file.
+- Clock sync keeps asking until the host answers, instead of giving up after about
+  eight seconds, and carries on over a reconnect. A guest whose first seconds went
+  unanswered gets a start offset in `sync.json`, where it said to align by waveform.
 - A media board opened during a take is recorded in that take: pads fired from
   then on are in its camera MP4 and its backup, where they used to be recorded
   only from the next take. The WAV master still holds the microphone alone.
@@ -416,6 +429,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- Clock sync takes no estimate from an exchange during which the guest's computer clock
+  was set back. A guest whose clock was corrected at such a moment, in the few seconds
+  of measurement, got an alignment offset in `sync.json` wrong by half the correction,
+  which can be seconds. That guest gets the estimate from before the correction, or
+  none, and the file then says to align by waveform.
 
 ### Security
 

@@ -525,6 +525,20 @@ the screen that follows offers them too.
    ignores it still needs the offset. Call-audio copies are listed under
    `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
    no clock sync applies.
+   `clock` in `sync.json` says, for each guest, when the estimate behind its offset was
+   taken and the round trip of the exchange it came from; the offset can be wrong by up to
+   half of that plus 2 ms.
+   When a take ends normally each guest's browser takes a second estimate, and `clock`
+   then also gives an end offset, how far the two computers' clocks moved in between
+   (`movedMs` over `spanMs`) and how far off that figure can be (`errorMs`). It compares
+   the computers' clocks only: it is not a measurement of how the audio or video inside
+   the files keeps time.
+   A computer clock that is set between a guest's two estimates does not move the offset
+   of that guest's camera file and WAV: `clock` shows a `movedMs` of about that size, or
+   no `end` for that guest. A guest whose browser saw its own clock set back before its
+   first estimate has no offset. Any other change of a clock after its recording started
+   and before that guest's first estimate puts the offset off by up to that amount and
+   nothing shows it, so align by waveform a clip that sits wrong by a second or more.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses
@@ -657,6 +671,18 @@ Known gaps, listed below:
   next take. The WAV master is mic-only by design.
 - **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
   `sync.json` has no offset and says to align the tracks by waveform.
+- **The media board, if first opened during a take, isn't in that take's MP4.** A
+  running recorder can't swap its audio track, so pads still play live and drop chapter
+  markers, but their audio reaches the MP4 only from the next take. The WAV master is
+  mic-only by design.
+- **Clock sync needs one answer from the host while the guest is recording.** A guest's
+  browser keeps asking until it gets one. If none comes before that guest's recording
+  ends (the host never recorded meanwhile, or the link is too slow for an answer within
+  1.5 s), `sync.json` has no offset for that guest and says to align the tracks by
+  waveform.
+  The same goes for a guest whose browser saw its computer's clock set back between a
+  question and its answer, before it had a first estimate: that browser asks no more
+  for that recording.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.

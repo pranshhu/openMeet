@@ -1,4 +1,5 @@
 import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
+import { clockSection, type ClockReading } from './clock-drift';
 import { cleanFps } from './quality';
 import type { NoticeRecord } from './notice-log';
 
@@ -47,6 +48,10 @@ export interface GuestSyncInput {
   sha256Written?: string | undefined;
   /** This guest's file continued after a browser reload; no single digest covers it. */
   resumed?: boolean | undefined;
+  /** When the host accepted the estimate `startHostMs` comes from, on the host clock; null when that was not kept. */
+  clockAtMs?: number | null | undefined;
+  /** A later estimate of the same start, taken as the guest's recording stopped. */
+  clockEnd?: ClockReading | undefined;
 }
 
 export interface ScreenSegmentInput {
@@ -604,6 +609,19 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
 
   const primaryGuestMinusHostMs = guestReports[0]?.offsetMs ?? null;
 
+  // How each guest's offset was measured and whether the clocks held. It is a
+  // companion: a failure here must not cost the take its sync file.
+  let clock: ReturnType<typeof clockSection> = null;
+  try {
+    clock = clockSection(
+      hostStartMs,
+      // A name is the guest's to choose, and this goes to the host's disk.
+      guests.map((g) => ({ ...g, name: cleanNameOf(g.name) || undefined }))
+    );
+  } catch {
+    // The report is written without the section.
+  }
+
   const backupNote =
     "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant.";
 
@@ -794,6 +812,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
         'stored as an edit list, and an editor that ignores it needs the clip moved by padMs.',
       files: alignedFiles,
     },
+    ...(clock ? { clock } : {}),
     frameRate: {
       note: FRAME_RATE_NOTE,
       requestedFps: RECORDING_FRAME_RATE,

@@ -438,6 +438,11 @@ export async function handleGuestRecordingStarted(opts: {
   beginGuestRecording: () => Promise<void>;
 }): Promise<void> {
   if (opts.recordingRef.current) {
+    // The host has started another take, so no report waits for this one's
+    // closing clock estimate. Nothing would answer it, and the new capture
+    // would start three seconds late.
+    opts.recordingRef.current.clockSync?.stop();
+    delete opts.recordingRef.current.clockSync;
     await opts.endRecording();
   }
   await opts.beginGuestRecording();

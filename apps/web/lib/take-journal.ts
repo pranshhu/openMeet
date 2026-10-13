@@ -25,6 +25,8 @@ export interface JournalFileNote {
   who?: string;
   guestStartHostMs?: number | null;
   rttMs?: number | null;
+  /** When the host accepted the estimate behind `guestStartHostMs`, on the host clock. */
+  clockAtMs?: number;
   /** Screen stretch start on the host clock; absent for camera and WAV files. */
   startedAtMs?: number | null;
   /** The hash state of everything committed so far, and the wire index it was committed at. */
@@ -506,6 +508,7 @@ function fileNoteFrom(value: unknown): JournalFileNote | null {
   }
   const rtt = value.rttMs;
   if (rtt === null || (typeof rtt === 'number' && Number.isFinite(rtt))) note.rttMs = rtt;
+  if (typeof value.clockAtMs === 'number' && Number.isFinite(value.clockAtMs)) note.clockAtMs = value.clockAtMs;
   if (typeof value.startedAtMs === 'number' && Number.isFinite(value.startedAtMs)) note.startedAtMs = value.startedAtMs;
   const sha256State = sha256StateFrom(value.sha256State);
   if (sha256State) note.sha256State = sha256State;

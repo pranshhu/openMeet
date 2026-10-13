@@ -786,6 +786,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is left untouched (`keptFiles`) and never reopened in that take. A replay that stops short marks
   the file (`shortFiles`): it gets no stored hash state and reads incomplete. A guest's clock-sync
   numbers reach its note through the receiver's `onMeta` and are read back at a resume or a save.
+  The note also keeps when the estimate arrived (`clockAtMs`, stamped once by `noteClock`), a
+  resumed receiver is seeded with the three numbers (`clockFrom`), so a report that arrives
+  after the reload is the later one, and a save hands the time to the sync file.
   Guest screen notes are rebuilt from the crash copy and listed (`resumedScreens`); a call-audio
   copy opened after a resume asks the folder for a free number (`freeNumber`, shared with the screen
   files), and each number is claimed before it is asked about.
@@ -822,8 +825,40 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
-  any file is not complete. Clock-sync needs the host to be
-  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  any file is not complete.
+  A round of pings the host does not answer (it is not recording yet, or has not
+  bound the channel) is followed by another five seconds later, sent on whatever channel is
+  live (`ClockSync.sendOn`, called from `bindGuestChannel`), until one is answered or the
+  guest's recording ends (`stop`, called from `endGuestRecording`); a guest with no answer by
+  then has a null offset ("align by waveform").
+  A round trip that reads below zero (`handlePong`) shows that the guest's clock was set back
+  between a ping and its answer. The guest read its start before that, so no estimate measured
+  from then on places it: the round ends there and reports the sample it already holds. With
+  none it reports nothing, and that recording asks no more (`clockSetBack`): no later round,
+  and `again` sends nothing. A guest that had reported no estimate by then has a null offset.
+  `ChunkReceiver` keeps the first start it accepts, with the time it arrived (`clockAtMs`), and
+  a later report of the same start beside it (`clockEnd`), never in its place.
+  The round trip it holds is the one that came with that start; one reported without a
+  usable start is taken only while none is held, and a message the receiver takes nothing
+  from does not reach `onMeta`.
+  `collectGuestReports` hands both on, and `lib/clock-drift.ts` `clockSection` writes the sync
+  file's `clock` section from them: per guest the estimate its offsets come from (`start`), and,
+  when a second one exists (`end`), how far the two computers' clocks moved in between
+  (`movedMs` over `spanMs`, within `errorMs`: half the sum of the two round trips plus 4 ms).
+  The section compares the system clocks (`Date.now()` on both sides) and says so; a guest with
+  no estimate is not listed, and nothing about movement is written without two estimates that
+  each carry a round trip.
+  Its note says what a clock that is set during the take does: between a guest's two
+  estimates it shows as a `movedMs` of that size or as no `end`, and does not move the offset
+  of that guest's camera file and WAV; a guest that saw its own clock set back before it had
+  an estimate is not listed; any other change before the first estimate moves that guest's
+  offsets and shows in nothing.
+  The second estimate is the guest's: `endGuestRecording` runs `ClockSync.again` (one round
+  of three pings, three seconds at most, a fresh minimum) after the camera sender has drained
+  and before `recording-finalized`, and skips it when that sender did not drain or its channel
+  is not open. A take that is ended because the host started another one takes none:
+  `handleGuestRecordingStarted` (`useRoom`) stops its clock sync first, so the new capture
+  does not wait for an answer that cannot come.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -985,6 +1020,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A guest's stop ends with one more clock-sync round, three seconds at most, before its
+   `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
    tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.
@@ -1265,8 +1302,23 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   clicked. If the media board is closed and opened again before the download ends, the
   board offers that button again and does not show the new pad until it is opened once
   more or something else is added; a click in between adds the sound a second time.
-- **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
-  timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- **A guest's offset is null when none of its clock-sync pings was answered before its
+  recording ended:** the host never recorded while that guest did, or no answer came back
+  within 1.5 s (`perPingTimeoutMs`) on a slow link. `sync.json` then says to align by
+  waveform. An estimate that was sent into a connection as it dropped is not sent again.
+- **A guest whose clock was seen set back before its first estimate has a null offset.**
+  Its browser takes no estimate for the rest of that recording, because none would place
+  the start it read earlier, and `sync.json` says to align by waveform. A new take
+  measures afresh.
+- **A computer clock that is set before a guest's first estimate can shift that guest's
+  offsets by the size of the change.** A guest's start is read from `Date.now()` and placed
+  on the host's clock by an estimate taken later, and the host's start is read the same
+  way. A guest's page sees its own clock set back only when that happens between a ping
+  and its answer. Set at any other moment after that computer's recording started and
+  before the estimate, forward or back, a clock shifts that guest's offsets, and nothing
+  in `sync.json` shows it: align by waveform a clip that sits wrong by a second or more.
+  A clock set between a guest's two estimates does not move the offset of that guest's
+  camera file and WAV.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
@@ -1636,3 +1688,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   segment the show had reached in the list beside the button and starts it, which marks
   it in the new take.
 - **Pause has no key.** Alt+S presses End & save, which saves the take the same way.
+- **A guest whose first clock estimate arrives after a resume loses it if the host's
+  browser closes again.** The receivers a resume builds do not write to the crash copy's
+  notes, so a save after that second crash says to align that guest by waveform. A crash
+  copy never holds a second estimate either: a take saved from one has no `end` in `clock`.
