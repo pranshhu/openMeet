@@ -112,6 +112,7 @@ export function CallStage({
   sidecarsSaved,
   drained = true,
   backupQueued = false,
+  backupInMemory = false,
   onToggleMic,
   onToggleCam,
   onRecord,
@@ -207,6 +208,8 @@ export function CallStage({
   drained?: boolean;
   /** Guest: the last take's backups were offered to the host, because not all of it arrived while it recorded. */
   backupQueued?: boolean;
+  /** Guest: the last take's camera backup is held in memory only, so no lobby lists it. */
+  backupInMemory?: boolean;
   // Non-fatal: shown as a banner without ending the call.
   recordingError: string | null;
   micWarning?: MicWarning | null;
@@ -834,7 +837,7 @@ export function CallStage({
               // The drain hit its cap or the sender gave up: the host's copy may
               // be short, and only this guest's backup has the rest.
               <span className="text-[#fdd663]">
-                {`Some of your recording may not have reached the host${backupUrl ? ' — rejoin and press Send to host on your backup, or download it.' : '.'}`}
+                {`Some of your recording may not have reached the host${backupUrl ? (backupInMemory ? ' — download your backup.' : ' — rejoin and press Send to host on your backup, or download it.') : '.'}`}
               </span>
             )}
             {!(isHost && summary) && backupUrl && (

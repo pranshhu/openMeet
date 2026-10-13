@@ -381,6 +381,7 @@ export function RoomView({ slug }: { slug: string }) {
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
       backupQueued={state.backupQueued}
+      backupInMemory={state.backupInMemory}
       readLoad={readLoad}
       readTrackHealth={readTrackHealth}
       lowPower={state.lowPower}

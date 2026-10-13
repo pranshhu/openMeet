@@ -11,6 +11,8 @@ let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 /** What the guest's take ends with, or the failure its ending throws. */
 let ended: { drained: boolean; backup: Blob | null; wavBackup?: Blob | null } | Error;
 let screens: { stop: () => Promise<Blob | null> }[] = [];
+/** What the recorder hands over when the take's ending threw before it could. */
+let held: Blob | null = null;
 
 vi.mock('@/lib/api', () => ({
   getTurnCred: vi.fn().mockResolvedValue({ iceServers: [] }),
@@ -104,6 +106,7 @@ vi.mock('@/hooks/recording-controller', async () => {
         giveUp: vi.fn(),
       },
       screenBackups: screens,
+      backup: { stop: async () => held },
     })),
     endGuestRecording: vi.fn().mockImplementation(async () => {
       if (ended instanceof Error) throw ended;
@@ -184,6 +187,7 @@ describe('a guest whose take did not all reach the host', () => {
   beforeEach(() => {
     signalHandlers = {};
     screens = [];
+    held = null;
     ended = { drained: true, backup: null };
     globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
     globalThis.URL.revokeObjectURL = vi.fn();
@@ -207,6 +211,20 @@ describe('a guest whose take did not all reach the host', () => {
     ]);
     expect(backupChannels().map((c) => c.label)).toEqual([`backup#${CAMERA}`, `backup#${WAV}`]);
     expect(JSON.parse(backupChannels()[0]!.sent[0] as string)).toMatchObject({ type: 'backup_offer', size: 4 });
+  });
+
+  it('says a camera backup that has no name is held in memory only', async () => {
+    ended = { drained: false, backup: new Blob([new Uint8Array([1, 2, 3, 4])]) };
+    const result = await recordingGuest();
+    await hostStops('rec-host-1');
+    expect(result.current.state.backupInMemory).toBe(true);
+  });
+
+  it('does not say so of a camera backup that has a name', async () => {
+    ended = { drained: false, backup: backupFile(CAMERA) };
+    const result = await recordingGuest();
+    await hostStops('rec-host-1');
+    expect(result.current.state.backupInMemory).toBe(false);
   });
 
   it('offers the backup of each screen stretch with them', async () => {
@@ -279,6 +297,17 @@ describe('a guest whose take did not all reach the host', () => {
     expect(result.current.state.phase).toBe('done');
     expect(result.current.state.drained).toBe(false);
     expect(result.current.state.backupQueued).toBe(false);
+  });
+
+  it('says the backup is in memory only when the take failed to end and it has no name', async () => {
+    held = new Blob([new Uint8Array([1, 2, 3, 4])]);
+    ended = new Error('storage');
+    const result = await recordingGuest();
+    await hostStops('rec-host-1');
+
+    expect(result.current.state.phase).toBe('done');
+    expect(result.current.state.backupBlobUrl).not.toBeNull();
+    expect(result.current.state.backupInMemory).toBe(true);
   });
 
   it('offers nothing when the guest leaves during the take', async () => {

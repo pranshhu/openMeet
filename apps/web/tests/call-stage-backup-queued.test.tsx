@@ -66,3 +66,19 @@ describe('CallStage: a take whose backup was offered to the host', () => {
     expect(screen.queryByText(QUEUED)).toBeNull();
   });
 });
+
+describe('CallStage: a take whose backup is held in memory only', () => {
+  it('sends the guest to the download and not to a lobby that does not list it', () => {
+    render(<CallStage {...baseProps} drained={false} backupInMemory />);
+    expect(
+      screen.getByText('Some of your recording may not have reached the host — download your backup.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/rejoin/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download your backup' })).toBeInTheDocument();
+  });
+
+  it('keeps the advice to rejoin for a backup on disk', () => {
+    render(<CallStage {...baseProps} drained={false} backupInMemory={false} />);
+    expect(screen.getByText(/rejoin and press Send to host on your backup, or download it/)).toBeInTheDocument();
+  });
+});

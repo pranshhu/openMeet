@@ -141,3 +141,12 @@ export class FullDirectoryHandle extends FakeDirectoryHandle {
     return file;
   }
 }
+
+/** Storage whose answer is held until the test gives it, so a slow or silent browser can be played. */
+export function heldStorage() {
+  let release!: (dir: FakeDirectoryHandle) => void;
+  const answer = new Promise<FakeDirectoryHandle>((resolve) => {
+    release = resolve;
+  });
+  return { root: () => answer, release };
+}

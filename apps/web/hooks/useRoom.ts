@@ -218,6 +218,8 @@ export interface RoomState {
   drained: boolean;
   /** Guest: the last take did not all reach the host, and this page offered its backups to the host. */
   backupQueued: boolean;
+  /** Guest: the last take's camera backup is held in memory only, under no name. */
+  backupInMemory: boolean;
   // Host-only: editor alignment + seekability companion for the finished pair.
   syncReportUrl: string | null;
   sidecarsSaved: boolean;
@@ -655,6 +657,7 @@ export function useRoom(slug: string) {
     wavBackupBlobUrl: null,
     drained: true,
     backupQueued: false,
+    backupInMemory: false,
     syncReportUrl: null,
     sidecarsSaved: false,
     markers: [],
@@ -954,13 +957,14 @@ export function useRoom(slug: string) {
     // The host set this guest as not recorded. Every way a guest's capture can
     // start comes through here, so this is the one place that decides.
     if (notRecordedRef.current) return;
+    const onWarn = (msg: string) => setState((s) => ({ ...s, recordingError: msg }));
     if (companionRef.current) {
       if (!peerRef.current || recordingRef.current) return;
       const recordingId = crypto.randomUUID();
       takeTroubleRef.current = false;
       fatalCloseRef.current = false;
       setState((s) => ({ ...s, recordingError: null, markers: [] }));
-      const handles: RecordingHandles = { recordingId, room: slug };
+      const handles: RecordingHandles = { recordingId, room: slug, onWarn };
       recordingRef.current = handles;
       const activeScreen = screenStreamRef.current;
       if (activeScreen && peerRef.current) {
@@ -992,7 +996,6 @@ export function useRoom(slug: string) {
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(new UnsupportedCodecError()) }));
       return;
     }
-    const onWarn = (msg: string) => setState((s) => ({ ...s, recordingError: msg }));
     const backup = new BackupRecorder({ mimeType, stream: localStream, room: slug, onWarn });
     backup.start();
 
@@ -2961,6 +2964,7 @@ export function useRoom(slug: string) {
               : {}),
             drained,
             backupQueued,
+            backupInMemory: !!backup && !(backup instanceof File),
             backupBlobUrl,
             wavBackupBlobUrl,
           }));
@@ -3135,7 +3139,9 @@ export function useRoom(slug: string) {
           finalizingGuests: [],
           backupBlobUrl,
           wavBackupBlobUrl,
-          ...(guest ? { drained: false, backupQueued: false } : {}),
+          ...(guest
+            ? { drained: false, backupQueued: false, backupInMemory: !!backup && !(backup instanceof File) }
+            : {}),
           recordingError: guest
             ? `Sending your recording didn’t finish (${reason}).`
             : `Saving didn’t finish (${reason}). Some files in your recording folder may be incomplete.`,

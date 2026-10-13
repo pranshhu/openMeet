@@ -296,6 +296,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- Browser storage that does not answer cannot hold up a guest's stop:
+  the backup waits five seconds for it, then continues in memory with the usual
+  warning. A screen backup held in memory says so as the camera backup does, and
+  a guest whose backup is in memory only is told to download it, not to rejoin.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.

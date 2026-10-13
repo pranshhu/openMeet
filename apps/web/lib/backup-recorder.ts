@@ -37,6 +37,12 @@ export const BACKUP_PREFIX = 'openmeet-backup';
 // clutter. A crash never writes it, so crash backups are never cleared.
 const FINALIZED_MARK = 'finalized';
 
+// How long a recorder waits for the browser's storage to open. Storage that has
+// not answered by then is treated as refused: a stop must not wait on it.
+const OPEN_LIMIT_MS = 5_000;
+
+const MEMORY_ONLY_WARNING = 'Local storage is unavailable — backup lives in memory only.';
+
 /** The room a backup was recorded in, or null for older backups that don't say. */
 export function backupRoom(name: string): string | null {
   return /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
@@ -335,6 +341,7 @@ export class BackupRecorder {
   private writeTail: Promise<void> = Promise.resolve();
   private opfsOk = false;
   private opfsWrote = false;
+  private openGivenUp = false;
   private warnedStorageFailure = false;
   private stoppedResult: Blob | null | undefined = undefined;
   private stopPromise: Promise<Blob | null> | null = null;
@@ -367,7 +374,7 @@ export class BackupRecorder {
     if (typeof navigator !== 'undefined') {
       void (navigator as { storage?: { persist?: () => Promise<boolean> } }).storage?.persist?.();
     }
-    this.openPromise = this.tryOpenOpfs();
+    this.openPromise = this.openWithinLimit();
 
     if (this.isWav()) {
       if (this.opts.stream && (isPcmCaptureSupported() || this.opts.frameSource) && this.opts.stream.getAudioTracks().length > 0) {
@@ -482,13 +489,28 @@ export class BackupRecorder {
     await this.backupDir?.getFileHandle(FINALIZED_MARK, { create: true }).catch(() => {});
   }
 
+  /** Resolves when storage has opened or been refused, or when it has not answered within the limit. */
+  private openWithinLimit(): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.openGivenUp = true;
+        this.opts.onWarn?.(MEMORY_ONLY_WARNING);
+        resolve();
+      }, OPEN_LIMIT_MS);
+      void this.tryOpenOpfs().then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
   private async tryOpenOpfs(): Promise<void> {
     const getRoot = this.opts.opfsRoot ?? defaultOpfsRoot();
     if (!getRoot) {
       this.opfsOk = false;
       this.backupDir = null;
       this.backupDirName = null;
-      this.opts.onWarn?.('Local storage is unavailable — backup lives in memory only.');
+      this.opts.onWarn?.(MEMORY_ONLY_WARNING);
       return;
     }
     try {
@@ -511,14 +533,16 @@ export class BackupRecorder {
       }
       await dir.removeEntry?.('.probe').catch(() => {});
 
+      if (this.openGivenUp) return;
       this.backupDir = dir;
       this.backupDirName = dirName;
       this.opfsOk = true;
     } catch {
+      if (this.openGivenUp) return;
       this.opfsOk = false;
       this.backupDir = null;
       this.backupDirName = null;
-      this.opts.onWarn?.('Local storage is unavailable — backup lives in memory only.');
+      this.opts.onWarn?.(MEMORY_ONLY_WARNING);
     }
   }
 

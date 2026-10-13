@@ -1301,6 +1301,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
     ...(wavSender ? { wavSender } : {}),
     ...(args.audioChannel ? { wavChannel: args.audioChannel } : {}),
     ...(args.room ? { room: args.room } : {}),
+    ...(onWarn ? { onWarn } : {}),
     ...(args.onHostTakeId ? { onHostTakeId: args.onHostTakeId } : {}),
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
   };
@@ -1916,6 +1917,7 @@ export async function startScreenRecording(
     mimeType,
     fileName: 'openmeet-backup-screen',
     ...(h.room ? { room: h.room } : {}),
+    ...(h.onWarn ? { onWarn: h.onWarn } : {}),
   });
 
   if (role === 'host') {

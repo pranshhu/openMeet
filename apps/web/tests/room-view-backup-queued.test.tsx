@@ -52,3 +52,13 @@ describe('a take whose backup was offered to the host', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('a take whose backup is held in memory only', () => {
+  it('hands the call the flag', () => {
+    state = { ...state, backupQueued: false, backupInMemory: true };
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(
+      screen.getByText('Some of your recording may not have reached the host — download your backup.')
+    ).toBeInTheDocument();
+  });
+});

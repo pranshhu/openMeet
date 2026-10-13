@@ -781,7 +781,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   labels it "(WAV)") → **writes committed per-chunk files** (`NNNNNN.part`) to an OPFS directory
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
   backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
-  A failed write is retried once and then the rest of the take continues in RAM with a warning
+  Storage that has not answered five seconds after `start()` is treated the same way: the wait
+  ends, the copy is held in RAM with that warning, and an answer that comes later is ignored,
+  so `stop()` and `whenOpen()` never wait on it for longer. A failed write is retried once and
+  then the rest of the take continues in RAM with a warning
   banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. A
   backup whose directory opened and whose chunks could not be written there is returned from
   memory as a `File` under that directory's name, so it can still be offered to the host; one
@@ -1730,9 +1733,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A backup is offered by itself only after the host's stop.** A guest who leaves during a
   take, whose tab the room closed, or whose take a new take ended, keeps the backup in its
   lobby, with **Send to host**. A backup that was kept in memory only (browser
-  storage unavailable) has no name to travel under: the done line keeps the advice to
-  rejoin and the download link. The end of a take says only whether the camera and the
-  WAV arrived: a screen recording that fell behind while those two arrived is not
+  storage unavailable) has no name to travel under: the done line sends the guest to the
+  download link and does not say to rejoin. The end of a take says only whether the camera and
+  the WAV arrived: a screen recording that fell behind while those two arrived is not
   offered, and neither is a present-only device's. A guest the host set as not recorded
   offers nothing.
 - **A backup offered after a take travels on the uplink the call is on.** It starts when
@@ -1751,8 +1754,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the backup is only in that guest's lobby. If browser storage fails during such a take,
   the backup goes on in memory under the existing warning, and from there on that guest's
   camera and WAV are held nowhere else. A screen recording of such a take is held in memory
-  the same way, with no warning and no download link of its own: until the host has saved the
-  offer, closing the tab loses it.
+  the same way, with the same warning: until the host has saved the offer, closing the tab
+  loses it.
+- **No page offers a download of a screen backup that is held in memory only.** The done line
+  has links for the camera and the WAV backup, and the lobby lists only backups on disk, so a
+  screen backup whose storage was refused or did not answer is lost when the tab closes.
 - **When every guest sends later, a host reload leaves no take to resume.** The crash copy
   writes its notes with the guests' bytes, and none arrived, so the host is offered neither
   **Unsaved recording** nor **Resume recording**. When the host is back the guests' pages

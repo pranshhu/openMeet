@@ -5,7 +5,7 @@ import { wavHeader } from '@/lib/wav';
 import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
 import { presetById } from '@/lib/quality';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
-import { FakeDirectoryHandle, FakeFileHandle, FullDirectoryHandle } from './fake-opfs';
+import { FakeDirectoryHandle, FakeFileHandle, FullDirectoryHandle, heldStorage } from './fake-opfs';
 
 function fakeFrame(samples: number[], sampleRate = 48000, channels = 1): PcmFrame {
   const data = Float32Array.from(samples);
@@ -812,6 +812,143 @@ describe('BackupRecorder — the open outcome is observable', () => {
     broken.start();
     await expect(broken.whenOpen()).resolves.toBeUndefined();
     expect(broken.dirName).toBeNull();
+  });
+});
+
+describe('BackupRecorder — storage that does not answer', () => {
+  const MEMORY_ONLY = 'Local storage is unavailable — backup lives in memory only.';
+
+  // Only the timeout is faked: jsdom's FileReader, which a stop reads through, needs the real clock.
+  const useStorageClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+  function recorderOver(root: () => Promise<FakeDirectoryHandle>, onWarn: (msg: string) => void) {
+    return new BackupRecorder({
+      stream: {} as MediaStream,
+      mrFactory: () => new FakeMR() as unknown as MediaRecorder,
+      opfsRoot: root as never,
+      onWarn,
+    });
+  }
+
+  it('stop() ends after five seconds with the copy held in memory and one warning', async () => {
+    useStorageClock();
+    try {
+      const onWarn = vi.fn();
+      const br = recorderOver(heldStorage().root, onWarn);
+      br.start();
+      FakeMR.last!.emit(150);
+      FakeMR.last!.emit(250);
+
+      let result: Blob | null | undefined;
+      const stopped = br.stop().then((r) => {
+        result = r;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(result).toBeUndefined();
+      expect(onWarn).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await stopped;
+      expect(result?.size).toBe(400);
+      expect(result instanceof File).toBe(false);
+      expect(br.dirName).toBeNull();
+      expect(onWarn.mock.calls).toEqual([[MEMORY_ONLY]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('whenOpen() resolves after five seconds', async () => {
+    useStorageClock();
+    try {
+      const br = recorderOver(heldStorage().root, vi.fn());
+      br.start();
+      let open = false;
+      void br.whenOpen().then(() => {
+        open = true;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(open).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(open).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores an answer that arrives after the limit', async () => {
+    useStorageClock();
+    try {
+      const onWarn = vi.fn();
+      const root = new FakeDirectoryHandle('root');
+      const storage = heldStorage();
+      const br = recorderOver(storage.root, onWarn);
+      br.start();
+      FakeMR.last!.emit(100);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      storage.release(root);
+      await vi.advanceTimersByTimeAsync(10);
+      FakeMR.last!.emit(60);
+      const result = await br.stop();
+
+      expect(br.dirName).toBeNull();
+      expect(result?.size).toBe(160);
+      expect(await findBackups(async () => root as never)).toEqual([]);
+      expect(onWarn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refusal that arrives after the limit does not warn a second time', async () => {
+    useStorageClock();
+    try {
+      const onWarn = vi.fn();
+      let refuse!: (err: Error) => void;
+      const br = recorderOver(
+        () => new Promise<FakeDirectoryHandle>((_, reject) => { refuse = reject; }),
+        onWarn,
+      );
+      br.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      refuse(new Error('denied'));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(onWarn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an answer inside the limit on disk, with no warning and no timer left', async () => {
+    useStorageClock();
+    try {
+      const onWarn = vi.fn();
+      const root = new FakeDirectoryHandle('root');
+      const storage = heldStorage();
+      const br = recorderOver(storage.root, onWarn);
+      br.start();
+      FakeMR.last!.emit(150);
+      await vi.advanceTimersByTimeAsync(4_000);
+      storage.release(root);
+      await br.whenOpen();
+      expect(br.dirName).toMatch(/^openmeet-backup-\d{13}$/);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      FakeMR.last!.emit(250);
+      const result = await br.stop();
+
+      expect(result?.size).toBe(400);
+      expect(result instanceof File).toBe(true);
+      expect(br.dirName).not.toBeNull();
+      const backups = await findBackups(async () => root as never);
+      expect(backups).toHaveLength(1);
+      expect(backups[0]!.size).toBe(400);
+      expect(onWarn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
