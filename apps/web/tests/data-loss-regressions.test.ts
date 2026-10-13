@@ -745,6 +745,63 @@ describe('endHostRecording — patches WAV header on incomplete or abandoned tak
     expect(riffSizeView.getUint32(0, true)).toBe(996);
   });
 
+  it('leaves the header a guest finished with as it is', async () => {
+    const positions: number[] = [];
+    const guestWavWriter = {
+      fileName: 'guest_r.wav',
+      write: vi.fn().mockImplementation(async (offset: number) => {
+        positions.push(offset);
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const wavReceiver = new ChunkReceiver({
+      recordingId: 'r',
+      writer: guestWavWriter as never,
+      sendControl: vi.fn(),
+    });
+    const mono = { sampleRate: 48000, channels: 1, bitDepth: 24 };
+
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 44, ts: 1 }));
+    await wavReceiver.handleMessage(wavHeader(mono, 0));
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 1, offset: 44, size: 960, ts: 2 }));
+    await wavReceiver.handleMessage(new ArrayBuffer(960));
+    // The recorder's last chunk is the header again, with the real sizes.
+    await wavReceiver.handleMessage(JSON.stringify({ idx: 2, offset: 0, size: 44, ts: 3 }));
+    await wavReceiver.handleMessage(wavHeader(mono, 960));
+    await wavReceiver.handleMessage(JSON.stringify({ type: 'recording-finalized', recordingId: 'r', totalBytes: 1048, sha256: '' }));
+
+    await endHostRecording({ recordingId: 'r', guestWavWriter: guestWavWriter as never, wavReceiver });
+
+    expect(positions).toEqual([0, 44, 0]);
+  });
+
+  it("writes the sizes into a second guest's WAV that was cut off", async () => {
+    const sizes = new Map<number, number>();
+    const writer = {
+      fileName: 'guest2_r.wav',
+      write: vi.fn().mockImplementation(async (offset: number, data: ArrayBuffer) => {
+        if (data.byteLength === 4) sizes.set(offset, new DataView(data).getUint32(0, true));
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const receiver = new ChunkReceiver({ recordingId: 'r', writer: writer as never, sendControl: vi.fn() });
+
+    await receiver.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 44, ts: 1 }));
+    await receiver.handleMessage(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 0));
+    await receiver.handleMessage(JSON.stringify({ idx: 1, offset: 44, size: 65536, ts: 2 }));
+    await receiver.handleMessage(new ArrayBuffer(65536));
+    await receiver.handleMessage(JSON.stringify({ type: 'stream-abandoned', recordingId: 'r', lastIdx: 1 }));
+
+    await endHostRecording({
+      recordingId: 'r',
+      guestReceivers: new Map([['K2:wav', { receiver, ref: { current: null }, writer: writer as never }]]),
+      extraWriters: [writer as never],
+    });
+
+    expect(sizes.get(40)).toBe(65535);
+    expect(sizes.get(4)).toBe(36 + 65535);
+  });
+
   it.each([
     [1, 65535],
     [2, 65532],

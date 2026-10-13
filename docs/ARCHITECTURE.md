@@ -769,6 +769,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   reports an error on a frame it cannot finish. The frame size is read from the file's own
   header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
   that header states.
+  At End & save that length is the file's own (`FileWriter.size`) when it is more than the
+  receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
+  the crash copy's end where its receiver starts.
   A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero, and the hash state the commit stored beside its position lets the digest cover the part

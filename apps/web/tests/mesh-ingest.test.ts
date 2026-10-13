@@ -2033,6 +2033,45 @@ describe('a take resumed from its journal', () => {
     expect(folder.size('guest2_rec.mp4')).toBe(300);
   });
 
+  it("declares all of a guest's WAV when the folder held more of it than the crash copy and the guest never sends again", async () => {
+    // The closing page committed 344 bytes of the WAV; the crash copy trails at 244.
+    const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
+    const j = resumeJournal(
+      [wavNote],
+      { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
+      { 'guest_rec.wav': [{ offset: 0, size: 44 }, { offset: 44, size: 200 }] }
+    );
+    // The two size fields of the header, by the position each was written at.
+    const fields = new Map<number, number>();
+    let size = 344;
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        getFile: async () => new Blob([new Uint8Array(size)]),
+        createWritable: async () => {
+          let end = 0;
+          return {
+            write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
+              const bytes = d.data instanceof Blob ? d.data.size : d.data.byteLength;
+              if (!(d.data instanceof Blob) && bytes === 4) fields.set(d.position, new DataView(d.data).getUint32(0, true));
+              end = Math.max(end, d.position + bytes);
+            },
+            close: async () => {
+              size = end;
+            },
+          };
+        },
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+
+    const h = await resumeHostRecording({ localStream: emptyFakeStream(), journal: j.journal, dir, channels: [] });
+    await endHostRecording(h);
+
+    expect(size).toBe(344);
+    expect(fields.get(40)).toBe(300);
+    expect(fields.get(4)).toBe(336);
+  });
+
   it('leaves a longer folder file as it is when its bytes cannot be carried over, and says so', async () => {
     // The first file cannot be read back; the copy of the second is refused.
     const unreadable = swapFolder({ 'guest_rec.mp4': 300 }, { readable: false });

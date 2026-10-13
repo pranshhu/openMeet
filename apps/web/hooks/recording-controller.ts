@@ -1717,7 +1717,9 @@ export async function endHostRecording(
   const patchReceiverWav = async (receiver?: ChunkReceiver, writer?: FileWriter) => {
     if (!receiver || !writer) return;
     if (receiver.receivedFinalHeader) return;
-    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten);
+    // A file reopened after a reload holds more than this receiver saw: the
+    // folder's own bytes were carried into it. The header declares the file.
+    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten, writer.size ?? 0);
     if (total > 44) {
       const dataBytes = total - 44;
       try {

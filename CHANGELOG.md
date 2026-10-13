@@ -416,6 +416,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- A guest's WAV in a take that was resumed after a reload declares all the audio the
+  file holds when that guest never sent again. A header that counts only the part the
+  crash copy held makes players, editors and the FLAC copy stop a few seconds early.
 
 ### Security
 
