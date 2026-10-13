@@ -248,6 +248,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A take resumed after a host reload keeps each guest's clock estimate from before the
   reload as its start, so `sync.json` (`clock`) covers the whole take, and a take saved
   from its crash copy says when its estimate was taken.
+- **Pause** for the host during a take. The take is saved and closed exactly as with
+  End & save, so nothing is recorded during the break and the part so far is safe on
+  disk. The page reads "Paused", and **Continue** records the next part as a new take
+  in the same folder, after the usual countdown and with the recording notice shown
+  again. A paused session is one take per part, not one file with a gap in it.
 
 ### Changed
 
@@ -261,7 +266,7 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Each camera backup is encoded at the same bitrate as the file it backs up
   (it was 5 Mbps at every resolution).
 - Audio is recorded in mono by default, which halves the uncompressed master
-  (about 518 MB per hour per person). A take recorded with the media board open
+  (about 518 MB per hour per person). A take started with the media board open
   has a two-channel audio track in its camera MP4, so stereo pads keep their
   stereo; the voice is the same on both channels and the WAV master stays mono.
 - The host's recording files carry the host's name after the role:
@@ -277,6 +282,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - Clock sync keeps asking until the host answers, instead of giving up after about
   eight seconds, and carries on over a reconnect. A guest whose first seconds went
   unanswered gets a start offset in `sync.json`, where it said to align by waveform.
+- A media board opened during a take is recorded in that take: pads fired from
+  then on are in its camera MP4 and its backup, where they used to be recorded
+  only from the next take. The WAV master still holds the microphone alone.
+  What a pad plays while your microphone is off is not recorded in that one
+  take, and the board says so while it is off.
 
 ### Fixed
 

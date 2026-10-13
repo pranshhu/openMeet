@@ -85,6 +85,9 @@ retention policy to trust, because there's nothing retained.
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- **Pause** during a take: the part so far is saved and closed, nothing is recorded
+  during the break, and **Continue** records the next part as a new take in the same
+  folder
 - A **check link** for each room (**Copy check link** in the host's lobby): a guest
   tests camera, microphone and connection days ahead, on the green room's own checks,
   without joining
@@ -439,6 +442,11 @@ screen file is. The host's files carry the host's name after the role, cut down 
 and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
 the convenience copy; the WAV is the master.
 
+**Pause** ends a take and **Continue** starts the next one, so a paused session is one
+take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
+holds its start on the host's clock (`timeline.hostStartUnixMs`), which places the parts
+on one timeline with the real breaks between them.
+
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
 recorded as `avc3` (in-band parameter sets, so a resolution change mid-recording — a
@@ -654,6 +662,15 @@ Known gaps, listed below:
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
   End & save to keep this recording"), and the rest of each guest's part exists only in
   that guest's in-browser backup. The new tab records only from its own new take.
+- **A pad played with your microphone off isn't recorded in a take that was already
+  running when you first opened the media board.** It is heard in the call and drops its
+  chapter marker, and a looping pad drops out of that take's MP4 for as long as the
+  microphone is off; turn the microphone on to record it, or play it in the next take,
+  where it is recorded either way. In that one take pads are also recorded in mono
+  unless you chose Stereo, and on Safari or an iPhone they are recorded only from the
+  next take. The WAV master is mic-only by design.
+- **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
+  `sync.json` has no offset and says to align the tracks by waveform.
 - **The media board, if first opened during a take, isn't in that take's MP4.** A
   running recorder can't swap its audio track, so pads still play live and drop chapter
   markers, but their audio reaches the MP4 only from the next take. The WAV master is

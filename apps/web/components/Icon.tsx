@@ -9,6 +9,7 @@ export type IconName =
   | 'chat'
   | 'record'
   | 'stop'
+  | 'pause'
   | 'call_end'
   | 'copy'
   | 'check'
@@ -56,6 +57,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
   record: <circle cx="12" cy="12" r="8" />,
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+  pause: <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />,
   script: (
     <path d="M4 3h13a2 2 0 0 1 2 2v13a3 3 0 0 0 3 3H7a3 3 0 0 1-3-3V3zm3 4v2h9V7H7zm0 4v2h9v-2H7zm0 4v2h6v-2H7z" />
   ),

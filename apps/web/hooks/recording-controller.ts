@@ -500,8 +500,9 @@ function noteClock(
 export interface StartHostArgs {
   recordingId: string;
   localStream: MediaStream;
-  /** The raw mic for the WAV master, when `localStream` carries the media-board
-   *  mix. The master stays mic-only so a sting can be re-timed in post. */
+  /** The microphone alone, for the WAV master. Passed on every take: the audio
+   *  track of `localStream` can carry a media board's pads, and the master stays
+   *  mic-only so a sting can be re-timed in post. */
   micStream?: MediaStream;
   /** 1-based. Later takes are suffixed so they don't overwrite earlier ones. */
   take?: number;
@@ -541,8 +542,9 @@ export interface StartHostArgs {
 export interface StartGuestArgs {
   recordingId: string;
   localStream: MediaStream;
-  /** The raw mic for the WAV master, when `localStream` carries the media-board
-   *  mix. The master stays mic-only so a sting can be re-timed in post. */
+  /** The microphone alone, for the WAV master. Passed on every take: the audio
+   *  track of `localStream` can carry a media board's pads, and the master stays
+   *  mic-only so a sting can be re-timed in post. */
   micStream?: MediaStream;
   channel: RTCDataChannel;
   /** Separate channel for the uncompressed WAV master. Optional: without it the
@@ -822,7 +824,7 @@ export interface ResumeHostArgs {
   channels: PendingRecordingChannel[];
   /** The host's own capture, as `startHostRecording` receives it. */
   localStream: MediaStream;
-  /** The raw mic, when the recording stream carries the board's mix instead. */
+  /** The microphone alone, for the WAV master; see `startHostRecording`. */
   micStream?: MediaStream | undefined;
   onError?: (err: unknown) => void;
   onWarn?: (msg: string) => void;
