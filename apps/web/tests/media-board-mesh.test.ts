@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { startGuestRecording, startHostRecording } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
+import { MediaBoard } from '@/lib/media-board';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let peers: any[] = [];
@@ -141,6 +142,20 @@ describe('media board in a mesh call', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it('hands back the board it already made and does not make a second', async () => {
+    const { result } = await joinAs('host', []);
+    let first: unknown;
+    let second: unknown;
+    act(() => {
+      first = result.current.openMediaBoard();
+      second = result.current.openMediaBoard();
+    });
+
+    expect(first).not.toBeNull();
+    expect(second).toBe(first);
+    expect(MediaBoard).toHaveBeenCalledTimes(1);
   });
 
   it('sends the mix to every connected peer and to a peer who joins later', async () => {

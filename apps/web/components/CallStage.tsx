@@ -120,6 +120,8 @@ export function CallStage({
   chatNumbers: roomNumbers,
   chatTo: roomTo,
   onChatTo,
+  board: roomBoard,
+  onBoard,
   slug,
   onMark,
   markerCount,
@@ -220,6 +222,9 @@ export function CallStage({
   /** Who the next chat message is for, and how it is changed, kept by whoever outlives this screen. */
   chatTo?: string;
   onChatTo?: (to: string) => void;
+  /** The media board this page made, and how it is set, kept by whoever outlives this screen. */
+  board?: MediaBoard | null;
+  onBoard?: (board: MediaBoard | null) => void;
   slug: string;
   /** `at`: when the marked moment was, on this page's clock; left out, it is now. */
   onMark: (label: string, at?: number) => void;
@@ -543,7 +548,9 @@ export function CallStage({
   const scriptWaiting = incomingScript !== null && !prompterOpen;
   // The host's rundown strip, above the control bar.
   const [rundownOpen, setRundownOpen] = useState(false);
-  const [board, setBoard] = useState<MediaBoard | null>(null);
+  const [ownBoard, setOwnBoard] = useState<MediaBoard | null>(null);
+  const board = roomBoard ?? ownBoard;
+  const setBoard = onBoard ?? setOwnBoard;
   const [boardOpen, setBoardOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   // Hand focus back to the People button, as closing chat does for its own.
@@ -551,7 +558,7 @@ export function CallStage({
     setPeopleOpen(false);
     setTimeout(() => document.querySelector<HTMLElement>('button[aria-label="People"]')?.focus());
   }
-  // First opened mid-take: that take's recorder keeps the track it has (a running
+  // Made mid-take: that take's recorder keeps the track it has (a running
   // MediaRecorder can't swap tracks). Its pads reach the file only where the
   // board could mix them into that track, and only while the mic is on. Only
   // that take: the next one starts with the board already in the mix.
