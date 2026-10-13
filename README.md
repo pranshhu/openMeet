@@ -85,6 +85,9 @@ retention policy to trust, because there's nothing retained.
 - Three ready sounds on the media board (a chime, a rimshot and a soft looping bed),
   made in your browser: nothing to bring and nothing downloaded
 - Multiple takes in one session, without a second folder prompt
+- **Pause** during a take: the part so far is saved and closed, nothing is recorded
+  during the break, and **Continue** records the next part as a new take in the same
+  folder
 - A **check link** for each room (**Copy check link** in the host's lobby): a guest
   tests camera, microphone and connection days ahead, on the green room's own checks,
   without joining
@@ -441,6 +444,11 @@ screen file is. The host's files carry the host's name after the role, cut down 
 and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
 the convenience copy; the WAV is the master.
 
+**Pause** ends a take and **Continue** starts the next one, so a paused session is one
+take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
+holds its start on the host's clock (`timeline.hostStartUnixMs`), which places the parts
+on one timeline with the real breaks between them.
+
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,
 recorded as `avc3` (in-band parameter sets, so a resolution change mid-recording — a
@@ -519,6 +527,20 @@ the screen that follows offers them too.
    ignores it still needs the offset. Call-audio copies are listed under
    `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
    no clock sync applies.
+   `clock` in `sync.json` says, for each guest, when the estimate behind its offset was
+   taken and the round trip of the exchange it came from; the offset can be wrong by up to
+   half of that plus 2 ms.
+   When a take ends normally each guest's browser takes a second estimate, and `clock`
+   then also gives an end offset, how far the two computers' clocks moved in between
+   (`movedMs` over `spanMs`) and how far off that figure can be (`errorMs`). It compares
+   the computers' clocks only: it is not a measurement of how the audio or video inside
+   the files keeps time.
+   A computer clock that is set between a guest's two estimates does not move the offset
+   of that guest's camera file and WAV: `clock` shows a `movedMs` of about that size, or
+   no `end` for that guest. A guest whose browser saw its own clock set back before its
+   first estimate has no offset. Any other change of a clock after its recording started
+   and before that guest's first estimate puts the offset off by up to that amount and
+   nothing shows it, so align by waveform a clip that sits wrong by a second or more.
 3. **Backups:** A participant's own backup copy comes from a separate recorder and the offset does not apply to it.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses
@@ -644,12 +666,27 @@ Known gaps, listed below:
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
   End & save to keep this recording"), and the rest of each guest's part exists only in
   that guest's in-browser backup. The new tab records only from its own new take.
+- **A pad played with your microphone off isn't recorded in a take that was already
+  running when you first opened the media board.** It is heard in the call and drops its
+  chapter marker, and a looping pad drops out of that take's MP4 for as long as the
+  microphone is off; turn the microphone on to record it, or play it in the next take,
+  where it is recorded either way. In that one take pads are also recorded in mono
+  unless you chose Stereo, and on Safari or an iPhone they are recorded only from the
+  next take. The WAV master is mic-only by design.
+- **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
+  `sync.json` has no offset and says to align the tracks by waveform.
 - **The media board, if first opened during a take, isn't in that take's MP4.** A
   running recorder can't swap its audio track, so pads still play live and drop chapter
   markers, but their audio reaches the MP4 only from the next take. The WAV master is
   mic-only by design.
-- **Clock sync needs the host to be recording within ~8 s of the guest.** Otherwise
-  `sync.json` has no offset and says to align the tracks by waveform.
+- **Clock sync needs one answer from the host while the guest is recording.** A guest's
+  browser keeps asking until it gets one. If none comes before that guest's recording
+  ends (the host never recorded meanwhile, or the link is too slow for an answer within
+  1.5 s), `sync.json` has no offset for that guest and says to align the tracks by
+  waveform.
+  The same goes for a guest whose browser saw its computer's clock set back between a
+  question and its answer, before it had a first estimate: that browser asks no more
+  for that recording.
 - Anyone with a room's invite link can mint short-lived TURN credentials
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.

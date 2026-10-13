@@ -139,9 +139,9 @@ export interface RecordingHandles {
   /** Resumed guest files whose replay stopped short, so the folder file has a hole. */
   shortFiles?: Set<string>;
   /**
-   * Clock-sync numbers a resume read back from the notes, by guest slot. The
-   * guest measures once, on its first channel, so the receiver built after the
-   * reload never hears them.
+   * Clock-sync numbers a resume read back from the notes, by guest slot, for
+   * the report to fall back on when the receiver built after the reload holds
+   * none.
    */
   slotClock?: Map<number, { startHostMs: number | null; rttMs: number | null }>;
   /** Surfaces a journal or backup warning for the caller to show. */
@@ -493,14 +493,18 @@ function noteClock(
     if (!note) return;
     note.guestStartHostMs = meta.guestStartHostMs;
     note.rttMs = meta.rttMs;
+    // onMeta runs as a report is accepted, so the first call that carries a
+    // start is when that estimate arrived.
+    if (meta.guestStartHostMs !== null && note.clockAtMs === undefined) note.clockAtMs = Date.now();
   });
 }
 
 export interface StartHostArgs {
   recordingId: string;
   localStream: MediaStream;
-  /** The raw mic for the WAV master, when `localStream` carries the media-board
-   *  mix. The master stays mic-only so a sting can be re-timed in post. */
+  /** The microphone alone, for the WAV master. Passed on every take: the audio
+   *  track of `localStream` can carry a media board's pads, and the master stays
+   *  mic-only so a sting can be re-timed in post. */
   micStream?: MediaStream;
   /** 1-based. Later takes are suffixed so they don't overwrite earlier ones. */
   take?: number;
@@ -540,8 +544,9 @@ export interface StartHostArgs {
 export interface StartGuestArgs {
   recordingId: string;
   localStream: MediaStream;
-  /** The raw mic for the WAV master, when `localStream` carries the media-board
-   *  mix. The master stays mic-only so a sting can be re-timed in post. */
+  /** The microphone alone, for the WAV master. Passed on every take: the audio
+   *  track of `localStream` can carry a media board's pads, and the master stays
+   *  mic-only so a sting can be re-timed in post. */
   micStream?: MediaStream;
   channel: RTCDataChannel;
   /** Separate channel for the uncompressed WAV master. Optional: without it the
@@ -821,7 +826,7 @@ export interface ResumeHostArgs {
   channels: PendingRecordingChannel[];
   /** The host's own capture, as `startHostRecording` receives it. */
   localStream: MediaStream;
-  /** The raw mic, when the recording stream carries the board's mix instead. */
+  /** The microphone alone, for the WAV master; see `startHostRecording`. */
   micStream?: MediaStream | undefined;
   onError?: (err: unknown) => void;
   onWarn?: (msg: string) => void;
@@ -1012,6 +1017,9 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),
+      // The estimate the crashed session accepted stays the first one, so the
+      // guest's report at the stop is read as the later one.
+      clockFrom: { guestStartHostMs: note.guestStartHostMs, rttMs: note.rttMs, atMs: note.clockAtMs },
     });
 
     const ext = note.kind === 'camera' ? 'mp4' : 'wav';
@@ -1244,7 +1252,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
 
   // Anchor the guest's recorder start, then run clock-sync so the host learns
   // this start on its own clock (for editor alignment). Fire-and-forget: it
-  // sends a recording_meta when it converges, or gives up silently on timeout.
+  // sends a recording_meta once a round of pings is answered, and asks until then.
   const guestStartMs = Date.now();
   const clockSync = new ClockSync({
     recordingId: args.recordingId,
@@ -1336,6 +1344,11 @@ export function bindGuestChannel(
   };
   channel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
   channel.onbufferedamountlow = () => sender.drainQueue();
+  // The pings follow the live channel: a reconnect replaces the one the take
+  // began on, and a ping sent into a closed channel is never answered.
+  clockSync?.sendOn((json) => {
+    if (channel.readyState === 'open') channel.send(json);
+  });
 }
 
 export function requestResume(h: RecordingHandles): void {
@@ -1760,6 +1773,8 @@ export async function endHostRecording(
 export async function endGuestRecording(
   h: RecordingHandles
 ): Promise<{ drained: boolean; backup: Blob | null; wavBackup?: Blob | null }> {
+  // The recording is over for this guest, so its clock sync stops asking.
+  h.clockSync?.stop();
   // Same reason as the host path: drain() must not start until the last chunk
   // has actually been handed to the sender, or the tail is silently dropped.
   await stopScreenRecording(h);
@@ -1783,6 +1798,11 @@ export async function endGuestRecording(
     h.sender ? h.sender.drain() : Promise.resolve(true),
     h.wavSender ? h.wavSender.drain() : Promise.resolve(true),
   ]);
+  // One more clock estimate, taken once the camera channel is empty, so a
+  // ping waits behind nothing. Skipped when that channel is closed or still
+  // holds data: the round would only run out its three seconds before the
+  // host is told the file is final.
+  if (drained && h.channel?.readyState === 'open') await h.clockSync?.again();
   const sha256 = (await h.sender?.digestHex()) ?? '';
   // Finalize EACH channel it owns, not just the camera. The host waits per file
   // now, because separate SCTP streams give no ordering guarantee between them:
@@ -2199,6 +2219,8 @@ export async function collectGuestReports(
       ...(h.guestWavWriter?.fileName ? { wavFile: h.guestWavWriter.fileName } : {}),
       startHostMs: h.receiver.guestStartHostMs ?? h.slotClock?.get(0)?.startHostMs ?? null,
       rttMs: h.receiver.syncRttMs ?? h.slotClock?.get(0)?.rttMs ?? null,
+      clockAtMs: h.receiver.clockAtMs,
+      clockEnd: h.receiver.clockEnd ?? undefined,
       trackFps: h.receiver.senderFrameRate,
       sha256Written: writtenSha0,
       noWav: !h.guestWavWriter,
@@ -2233,6 +2255,8 @@ export async function collectGuestReports(
       ...(wavEntry?.writer?.fileName ? { wavFile: wavEntry.writer.fileName } : {}),
       startHostMs: mp4Entry?.receiver.guestStartHostMs ?? h.slotClock?.get(slot)?.startHostMs ?? null,
       rttMs: mp4Entry?.receiver.syncRttMs ?? h.slotClock?.get(slot)?.rttMs ?? null,
+      clockAtMs: mp4Entry?.receiver.clockAtMs ?? null,
+      clockEnd: mp4Entry?.receiver.clockEnd ?? undefined,
       trackFps: mp4Entry?.receiver.senderFrameRate ?? null,
       sha256Written: writtenSha,
       noWav: !wavEntry,

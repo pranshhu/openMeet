@@ -560,6 +560,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   At each opening the panel asks `getRoom` for the room's `expires_at`, takes it as no later
   than `ROOM_TTL_MS` from now, and says it. A session whose hour would end after it gets a
   line saying so and no link, and so does an answer that is not a time.
+- **Pause** — the host's button beside End & save while a take records (`CallStage`). It
+  is End & save by another name: it calls the same `onEnd`, so the take is closed, checked
+  and saved, every guest is stopped by `recording-stop` and the Room's `recording` flag is
+  cleared. `CallStage` keeps one flag (`paused`) from that press until a take records
+  again, and the flag changes words only: the status bar reads "Paused. Continue starts a
+  new take." before the saved verdict, and only with a summary that is not the one the
+  page held at the press (`summaryAtPause`), so never over a save that failed; Record
+  reads **Continue** and the summary's main button **Continue recording**.
+  Continue is `recordNextTake`: `newTake`, the countdown, then a take with a new id whose
+  files end in `_take<n>`. No recorder is paused (`ChunkRecorder.pause` has no caller),
+  nothing is sent that End & save does not send, and the Room knows nothing of it.
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
@@ -810,6 +821,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is left untouched (`keptFiles`) and never reopened in that take. A replay that stops short marks
   the file (`shortFiles`): it gets no stored hash state and reads incomplete. A guest's clock-sync
   numbers reach its note through the receiver's `onMeta` and are read back at a resume or a save.
+  The note also keeps when the estimate arrived (`clockAtMs`, stamped once by `noteClock`), a
+  resumed receiver is seeded with the three numbers (`clockFrom`), so a report that arrives
+  after the reload is the later one, and a save hands the time to the sync file.
   Guest screen notes are rebuilt from the crash copy and listed (`resumedScreens`); a call-audio
   copy opened after a resume asks the folder for a free number (`freeNumber`, shared with the screen
   files), and each number is claimed before it is asked about.
@@ -846,8 +860,40 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   segments (deleted) and the first guest's camera file when no guest sent into it (deleted); every
   file it lists shows its verdict and, when it was checked, its size (a file that was never created
   has no check, so no size); one that holds no bytes reads Empty, and one warning says so whenever
-  any file is not complete. Clock-sync needs the host to be
-  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  any file is not complete.
+  A round of pings the host does not answer (it is not recording yet, or has not
+  bound the channel) is followed by another five seconds later, sent on whatever channel is
+  live (`ClockSync.sendOn`, called from `bindGuestChannel`), until one is answered or the
+  guest's recording ends (`stop`, called from `endGuestRecording`); a guest with no answer by
+  then has a null offset ("align by waveform").
+  A round trip that reads below zero (`handlePong`) shows that the guest's clock was set back
+  between a ping and its answer. The guest read its start before that, so no estimate measured
+  from then on places it: the round ends there and reports the sample it already holds. With
+  none it reports nothing, and that recording asks no more (`clockSetBack`): no later round,
+  and `again` sends nothing. A guest that had reported no estimate by then has a null offset.
+  `ChunkReceiver` keeps the first start it accepts, with the time it arrived (`clockAtMs`), and
+  a later report of the same start beside it (`clockEnd`), never in its place.
+  The round trip it holds is the one that came with that start; one reported without a
+  usable start is taken only while none is held, and a message the receiver takes nothing
+  from does not reach `onMeta`.
+  `collectGuestReports` hands both on, and `lib/clock-drift.ts` `clockSection` writes the sync
+  file's `clock` section from them: per guest the estimate its offsets come from (`start`), and,
+  when a second one exists (`end`), how far the two computers' clocks moved in between
+  (`movedMs` over `spanMs`, within `errorMs`: half the sum of the two round trips plus 4 ms).
+  The section compares the system clocks (`Date.now()` on both sides) and says so; a guest with
+  no estimate is not listed, and nothing about movement is written without two estimates that
+  each carry a round trip.
+  Its note says what a clock that is set during the take does: between a guest's two
+  estimates it shows as a `movedMs` of that size or as no `end`, and does not move the offset
+  of that guest's camera file and WAV; a guest that saw its own clock set back before it had
+  an estimate is not listed; any other change before the first estimate moves that guest's
+  offsets and shows in nothing.
+  The second estimate is the guest's: `endGuestRecording` runs `ClockSync.again` (one round
+  of three pings, three seconds at most, a fresh minimum) after the camera sender has drained
+  and before `recording-finalized`, and skips it when that sender did not drain or its channel
+  is not open. A take that is ended because the host started another one takes none:
+  `handleGuestRecordingStarted` (`useRoom`) stops its clock sync first, so the new capture
+  does not wait for an answer that cannot come.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -912,14 +958,23 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the
   raw mic on every peer connection (`replaceAudioTrack`) and in the MP4 + backup of every take
   started afterwards (`withBoardAudio`); the WAV master always records the raw mic (`micStream`). A
-  take already recording when the board is first opened keeps a mic-only MP4 (a running
-  `MediaRecorder` can't swap tracks); its pads still play live and drop chapter markers, and the
-  board says so for that take. A pad set to loop (`setLoop`) repeats until it is stopped, and
+  take already recording when the board is first opened keeps the track it started with (a running
+  `MediaRecorder` can't swap tracks), so the board hands its pads alone to
+  `SwitchableMedia.mixIn`, which connects them to the stable track's destination node: that
+  take's MP4 and backup record them from then on, in the take's own channel count, and
+  `micStream` never carries them. The mix is built on `micStream`, not on the stable track, or it
+  would carry every pad twice. While the microphone is off the stable track is off with it, so
+  what a pad plays then is not in that take; where there is no stable stream (`isFallback`) no
+  pad is (`MediaBoard.recordsInRunningTake` is false). The pads play live and drop chapter markers
+  either way, and the board panel says which case applies while it does: its "This take keeps
+  your mic only" line where no pad is in that take, and a `role="status"` line while the
+  microphone is off (`CallStage` passes `midTake` and `micOffInTake`). A pad set to loop
+  (`setLoop`) repeats until it is stopped, and
   the switch reaches a pad that is already playing. Each pad plays through a gain node of its
   own: one set to fade (`setFade`) comes in over `PAD_FADE_S` when fired and goes out over it
   when stopped, counts as playing until it is silent, and is cut by a second stop. The mix
-  destination keeps the browser's default of two channels, so the MP4 (and backup) of a take with
-  the board open has a two-channel audio track even when the microphone is recorded in mono: a
+  destination keeps the browser's default of two channels, so the MP4 (and backup) of a take started
+  with the board open has a two-channel audio track even when the microphone is recorded in mono: a
   stereo pad keeps its stereo and the voice is the same on both channels. The WAV master follows
   `recordedChannels` either way. The person who fires a pad hears it from a second
   destination node that only the pads feed, played by an element (`playLocally`) on the
@@ -1000,6 +1055,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    file, `GUEST_TAIL_TIMEOUT_MS`, and ≤2 min in all, `GUEST_TAIL_HARD_CAP_MS`) for each guest's
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open.
+   A guest's stop ends with one more clock-sync round, three seconds at most, before its
+   `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
    tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.
@@ -1141,7 +1198,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (WAV master) lock their sample rate on the first frame, so switching directly to a mic with a different
   sample rate (e.g. 44.1 kHz, 24 kHz, or 16 kHz Bluetooth) would corrupt both files.
   To solve this, `useRoom.join` constructs `SwitchableMedia` which wraps the lobby stream into ONE stable
-  output stream handed to everything (preview, PeerConnection, ChunkRecorder, BackupRecorder, and WAV).
+  output stream handed to the preview, PeerConnection, ChunkRecorder and the camera BackupRecorder,
+  and a microphone-only stream (`micStream`) handed to the WAV master and its backup.
   It is skipped for companions AND producers, which join with no camera or mic (wrapping an empty
   stream would conjure a blank video track and a silent audio track).
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
@@ -1153,6 +1211,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
     the source node into the destination node, and Web Audio resamples smoothly with no track ID change.
+    The same source feeds a second destination node with the same channel count, whose track is
+    `micStream`: it carries the microphone and nothing else, follows a change of microphone the
+    same way, and is switched off with the microphone. Without an audio graph (the fallback
+    below) `micStream` is the stream itself.
     A switched-to microphone is asked for the echo cancellation the lobby microphone was asked
     for (read once from that track's `getConstraints()`, or from its settings when the browser
     gives no constraints back), so the lobby's answer holds for the whole call.
@@ -1238,12 +1300,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A resumed take's own track is two files, and openMeet does not join them.** The pre-crash part
   is recovered from the take's backup and the rest is written to `host_<id>_resumed.*`; both are
   listed with their offsets in `hostParts` and `aligned`, and an editor places them itself.
-- **Media board opened mid-take:** that take's MP4 (and backup) has no pad audio — a
-  running `MediaRecorder` can't swap tracks. Pads still play live and drop chapter
-  markers; takes started later include them. The WAV master is mic-only by design.
+- **Media board opened mid-take, microphone off:** what a pad plays while the microphone is off
+  is not in that take's MP4 or backup, because the track that take records is switched off with
+  the microphone: a pad fired then, and the stretch of a looping pad that was already playing.
+  A host's mute is the same switch and does the same.
+  It still plays live and drops its chapter marker, and takes started later record it either
+  way. In that take a pad has the take's channel count, so a stereo pad is mono unless stereo
+  was chosen at join; and where there is no stable stream (`isFallback`) that take has no pad
+  audio at all. The WAV master is mic-only by design.
 - **The media board is empty after a reload.** Pads are held in memory, so a pad that was
   looping stops when the tab reloads and the files have to be added again. A board opened
-  after **Resume recording** is opened mid-take, so that take's MP4 has no pad audio.
+  after **Resume recording** is opened mid-take: its pads are recorded in
+  `host_<id>_resumed.mp4`, under the limits of the gap above.
 - **A looping pad cannot be stopped from the waiting room.** When everyone else leaves and
   the tab shows "Everyone else left", there is no media board on screen; the pad plays on
   until someone joins and the call is back, or until Leave.
@@ -1269,8 +1337,23 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   clicked. If the media board is closed and opened again before the download ends, the
   board offers that button again and does not show the new pad until it is opened once
   more or something else is added; a click in between adds the sound a second time.
-- **Clock sync needs the host recording within ~8 s of the guest** (`ClockSync.run`
-  timeout); otherwise the offset is null and `sync.json` says to align by waveform.
+- **A guest's offset is null when none of its clock-sync pings was answered before its
+  recording ended:** the host never recorded while that guest did, or no answer came back
+  within 1.5 s (`perPingTimeoutMs`) on a slow link. `sync.json` then says to align by
+  waveform. An estimate that was sent into a connection as it dropped is not sent again.
+- **A guest whose clock was seen set back before its first estimate has a null offset.**
+  Its browser takes no estimate for the rest of that recording, because none would place
+  the start it read earlier, and `sync.json` says to align by waveform. A new take
+  measures afresh.
+- **A computer clock that is set before a guest's first estimate can shift that guest's
+  offsets by the size of the change.** A guest's start is read from `Date.now()` and placed
+  on the host's clock by an estimate taken later, and the host's start is read the same
+  way. A guest's page sees its own clock set back only when that happens between a ping
+  and its answer. Set at any other moment after that computer's recording started and
+  before the estimate, forward or back, a clock shifts that guest's offsets, and nothing
+  in `sync.json` shows it: align by waveform a clip that sits wrong by a second or more.
+  A clock set between a guest's two estimates does not move the offset of that guest's
+  camera file and WAV.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
@@ -1452,6 +1535,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the sound of a video they present keep playing, in the call and in their files; the host can
   ask, or remove them. A mute is not remembered either: after the muted person reloads, their
   microphone is as their lobby left it.
+  The one exception is a take that was already running when that person first opened the
+  media board: what a pad plays while they are muted is not in that take's MP4 or backup.
 - **A person muted while their page still reads "Connecting…" sees the mic button there as
   on.** The waiting view keeps its own switch. The call screen shows it off, with the note, as
   soon as it appears, and one press there turns it back on.
@@ -1619,6 +1704,29 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A number under To is this page's own.** `Guest 2` on one person's screen is not `Guest 2` on
   another's, and a person who reconnects gets a new number. A display name is still its owner's
   text and can say anything; the words before it are the page's, and they are the ones to trust.
+- **A pause is a take boundary, not a gap in a file.** Pause takes the few seconds End &
+  save takes, and Continue starts take n+1 after the countdown: one set of files and one
+  sync file per part. `timeline.hostStartUnixMs` in each sync file places the parts on
+  one timeline; nothing joins them.
+- **Only the host's page says Paused.** A guest sees what follows any take: the Recording
+  mark goes, then "Sent to the host." and the backup links, then the countdown and the
+  notice when the host continues. The word is kept in the call screen: after a reload the
+  host's button reads Record, and the next take's files carry no `_take<n>`. When the
+  next take does not start, Record goes on reading Continue until one records.
+  A guest whose page did not get the stop (its connection to the Room was down at that moment)
+  keeps capturing into its own backup and reads Recording until the next take starts, as after
+  End & save. In a tab that lost the host seat during its take, Pause saves that tab's files
+  and Continue would record that tab alone.
+- **Two buttons read Pause while a host's teleprompter scrolls.** The teleprompter's
+  stops the script; the control bar's ends the take.
+- **The rundown starts over after a pause,** as after every take: the host chooses the
+  segment the show had reached in the list beside the button and starts it, which marks
+  it in the new take.
+- **Pause has no key.** Alt+S presses End & save, which saves the take the same way.
+- **A guest whose first clock estimate arrives after a resume loses it if the host's
+  browser closes again.** The receivers a resume builds do not write to the crash copy's
+  notes, so a save after that second crash says to align that guest by waveform. A crash
+  copy never holds a second estimate either: a take saved from one has no `end` in `clock`.
 - **A backup is offered by itself only after the host's stop.** A guest who leaves during a
   take, whose tab the room closed, or whose take a new take ended, keeps the backup in its
   lobby, with **Send to host**. A backup that was kept in memory only (browser
