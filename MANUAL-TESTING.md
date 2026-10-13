@@ -167,6 +167,7 @@ Not covered by the automated test at all.
 | 5.11 | Present alone | Recording alone, host clicks **Present**, picks a tab for ~15 s, stops presenting, **End & save** | The stage reads "You’re presenting" while it lasts; `host-<your name>_screen_*.mp4` is in the folder, plays and is listed in the summary as complete | ☐ | |
 | 5.12 | End & save while a Present-only device presents | Phone joins as a guest. A laptop in another profile opens the invite link, chooses **Present only** and picks a screen. Host records ~30 s and presses **End & save** while the laptop is still presenting. Repeat with **Pause** | The summary lists the laptop's `guest_screen_*.mp4` as complete, with no "Incomplete" line and no "Recording failed" line, and the sync file is in the folder | ☐ | |
 | 5.13 | Present slides | On a computer, start a recording, click the arrow beside **Present**, pick **Slides (pictures)** and choose three pictures named `slide1.png`, `slide2.png` and `slide3.png`; press **Next** twice, then **Previous** once; then **Stop presenting** | Everyone else sees slide 1, 2, 3, 2 in that order; the presenter reads `Slide 2 of 3`; the take's one `*_screen_*.mp4` shows the same four pictures in order | ☐ | |
+| 5.14 | Turn slides with the keys | While presenting three slides, press **Right**, **Right**, **Left**, **Page Down**; then click into the chat field and press **Right** | The presenter reads slide 2, 3, 2, 3 in turn; in the chat field the slide stays and the cursor moves | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 

@@ -63,3 +63,113 @@ describe('SlideControls', () => {
     }
   });
 });
+
+describe('SlideControls keys', () => {
+  const press = (key: string, init: KeyboardEventInit = {}, target: Window | Element = window) =>
+    fireEvent.keyDown(target, { key, ...init });
+
+  afterEach(() => localStorage.removeItem('om_single_keys'));
+
+  it('turns to the next slide with ArrowRight and PageDown, and back with ArrowLeft and PageUp', () => {
+    for (const [forward, back] of [
+      ['ArrowRight', 'ArrowLeft'],
+      ['PageDown', 'PageUp'],
+    ] as const) {
+      const slides = deckAt(1);
+      render(<SlideControls slides={slides} />);
+      press(forward);
+      expect(slides.show).toHaveBeenLastCalledWith(2);
+      expect(screen.getByText('Slide 3 of 3')).toBeInTheDocument();
+      press(back);
+      press(back);
+      expect(slides.show).toHaveBeenLastCalledWith(0);
+      expect(screen.getByText('Slide 1 of 3')).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it('does nothing past the first or the last slide, and still takes the key from the page', () => {
+    const last = deckAt(2);
+    render(<SlideControls slides={last} />);
+    expect(press('ArrowRight')).toBe(false);
+    expect(press('PageDown')).toBe(false);
+    expect(last.show).not.toHaveBeenCalled();
+    cleanup();
+
+    const first = deckAt(0);
+    render(<SlideControls slides={first} />);
+    expect(press('ArrowLeft')).toBe(false);
+    expect(press('PageUp')).toBe(false);
+    expect(first.show).not.toHaveBeenCalled();
+  });
+
+  it('takes the key it used from the page and leaves every other key alone', () => {
+    const slides = deckAt(0);
+    render(<SlideControls slides={slides} />);
+    expect(press('ArrowRight')).toBe(false);
+    for (const key of ['ArrowDown', 'ArrowUp', ' ', 'Enter', 'Home', 'End']) expect(press(key)).toBe(true);
+    expect(slides.show).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a held key and a key with Ctrl, Cmd, Alt or Shift to the browser', () => {
+    const slides = deckAt(1);
+    render(<SlideControls slides={slides} />);
+    for (const init of [
+      { repeat: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { altKey: true },
+      { shiftKey: true },
+    ]) {
+      expect(press('ArrowRight', init)).toBe(true);
+    }
+    expect(slides.show).not.toHaveBeenCalled();
+  });
+
+  it('leaves the arrow keys to a field, a list and a fader', () => {
+    const slides = deckAt(1);
+    render(
+      <>
+        <SlideControls slides={slides} />
+        <input aria-label="field" />
+        <textarea aria-label="area" />
+        <select aria-label="list" />
+        <div contentEditable suppressContentEditableWarning aria-label="editable" />
+      </>
+    );
+    for (const label of ['field', 'area', 'list', 'editable']) {
+      expect(press('ArrowRight', {}, screen.getByLabelText(label))).toBe(true);
+    }
+    expect(slides.show).not.toHaveBeenCalled();
+  });
+
+  it('leaves the keys alone while its row is not displayed', () => {
+    const slides = deckAt(1);
+    render(<SlideControls slides={slides} />);
+    screen.getByRole('group', { name: 'Slides' }).checkVisibility = () => false;
+    expect(press('ArrowRight')).toBe(true);
+    expect(slides.show).not.toHaveBeenCalled();
+  });
+
+  it('stops listening when it unmounts', () => {
+    const slides = deckAt(1);
+    const { unmount } = render(<SlideControls slides={slides} />);
+    unmount();
+    expect(press('ArrowRight')).toBe(true);
+    expect(slides.show).not.toHaveBeenCalled();
+  });
+
+  it('turns the slide while the single keys are off', () => {
+    localStorage.setItem('om_single_keys', '0');
+    const slides = deckAt(0);
+    render(<SlideControls slides={slides} />);
+    press('ArrowRight');
+    expect(slides.show).toHaveBeenCalledWith(1);
+  });
+
+  it('names its keys on its buttons', () => {
+    render(<SlideControls slides={deckAt(1)} />);
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveAttribute('aria-keyshortcuts', 'ArrowRight PageDown');
+    expect(screen.getByRole('button', { name: 'Previous' })).toHaveAttribute('aria-keyshortcuts', 'ArrowLeft PageUp');
+  });
+});

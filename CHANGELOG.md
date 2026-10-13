@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
+  presentation clicker sends.
 - Present a deck as slides: pick one picture per slide and turn them with Previous and
   Next. Everyone sees the slide, and during a recording the deck is saved like any
   presented screen.
