@@ -269,4 +269,98 @@ describe('PcmRecorder', () => {
 
     expect(rec.droppedMs).toBe(40);
   });
+
+  describe('padding only while behind the track timestamps', () => {
+    const FRAME_US = 10_000;
+    const FRAME_BYTES = 480 * 3;
+
+    // Frames of 480 samples (10 ms at 48 kHz) stamped as given, read lazily so a
+    // long take does not hold every frame in memory at once.
+    async function pad(timestamps: (number | undefined)[]) {
+      let next = 0;
+      let bytes = 0;
+      const rec = new PcmRecorder({
+        stream: { getAudioTracks: () => [{} as MediaStreamTrack] } as unknown as MediaStream,
+        onChunk: (c) => {
+          if (c.header.offset >= WAV_HEADER_BYTES) bytes += c.header.size;
+        },
+        frameSource: () =>
+          new ReadableStream<PcmFrame>({
+            pull(c) {
+              if (next >= timestamps.length) return c.close();
+              c.enqueue(frame(new Array(480).fill(0.5), 48000, 1, timestamps[next++]));
+            },
+          }),
+      });
+      rec.start();
+      await rec.whenDrained();
+      await rec.stopAndFlush();
+      return { silentFrames: bytes / FRAME_BYTES - timestamps.length, droppedMs: rec.droppedMs };
+    }
+
+    it('adds no silence for frames on the grid', async () => {
+      expect(await pad([0, 10_000, 20_000, 30_000, 40_000])).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+
+    it('adds silence at most once when frames alternate 6 ms late and 6 ms early', async () => {
+      const stamps: number[] = [0];
+      let t = 0;
+      for (let i = 0; i < 100; i++) {
+        // Late by 6 ms: gap of +6 ms. Early by 6 ms: gap of -6 ms.
+        stamps.push(t + FRAME_US + 6_000);
+        stamps.push(t + 2 * FRAME_US);
+        t += 2 * FRAME_US;
+      }
+      expect(await pad(stamps)).toEqual({ silentFrames: 1, droppedMs: 10 });
+    });
+
+    it.each([1, 3])('fills a real gap of %i whole frames', async (k) => {
+      const out = await pad([0, FRAME_US + k * FRAME_US]);
+      expect(out).toEqual({ silentFrames: k, droppedMs: k * 10 });
+    });
+
+    it('uses up the surplus from one false frame before filling a real gap, then fills the next', async () => {
+      const out = await pad([
+        0, // ends at 10 ms
+        16_000, // 6 ms late: one frame of silence
+        20_000, // 6 ms early: takes nothing back
+        40_000, // a real gap of one frame, already covered by the surplus
+        60_000, // a second real gap of one frame
+      ]);
+      expect(out).toEqual({ silentFrames: 2, droppedMs: 20 });
+    });
+
+    it.each([2, -2])('adds no silence when every frame drifts %i us against the sample count', async (drift) => {
+      const stamps = Array.from({ length: 100_000 }, (_, i) => i * (FRAME_US + drift));
+      expect(await pad(stamps)).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+
+    it('does not let a long early drift hide a real gap afterwards', async () => {
+      const stamps = Array.from({ length: 20_000 }, (_, i) => i * (FRAME_US - 2));
+      stamps.push(stamps[stamps.length - 1]! + 4 * FRAME_US - 2);
+      expect(await pad(stamps)).toEqual({ silentFrames: 2, droppedMs: 20 });
+    });
+
+    it('does not let a long late drift invent a gap from later jitter', async () => {
+      const stamps = Array.from({ length: 10_000 }, (_, i) => i * (FRAME_US + 2));
+      let t = stamps[stamps.length - 1]! + FRAME_US + 2;
+      // Two frames 6 ms early, then one 6 ms late.
+      for (const jitter of [-6_000, -6_000, 6_000]) {
+        stamps.push(t + jitter);
+        t = stamps[stamps.length - 1]! + FRAME_US;
+      }
+      expect(await pad(stamps)).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+
+    it('keeps its standing across a frame that has no timestamp', async () => {
+      const out = await pad([
+        0,
+        2_000, // 8 ms early: the file is ahead by 8 ms
+        undefined,
+        50_000,
+        68_000, // 8 ms late, which only repays the 8 ms
+      ]);
+      expect(out).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+  });
 });

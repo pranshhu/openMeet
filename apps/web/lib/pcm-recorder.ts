@@ -61,6 +61,8 @@ export class PcmRecorder {
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
   private lastFrameEndUs: number | null = null;
+  // How far the file is behind the track's own timestamps (negative: ahead).
+  private lagUs = 0;
   private reader: ReadableStreamDefaultReader<PcmFrame> | null = null;
   private done: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -128,11 +130,18 @@ export class PcmRecorder {
     const durationUs = (frame.numberOfFrames * 1_000_000) / frame.sampleRate;
     if (this.lastFrameEndUs !== null && frame.timestamp !== undefined) {
       const gapUs = frame.timestamp - this.lastFrameEndUs;
+      // Kept within one frame either way before the gap is added, so neither slow
+      // drift between the two clocks nor an old surplus hides or invents a gap.
+      this.lagUs = Math.max(-durationUs, Math.min(durationUs, this.lagUs)) + gapUs;
       // Pad only whole missing frames. Sub-frame gaps are timestamp jitter from
       // Web Audio render quantum alignment (±1 quantum), not dropped frames;
-      // real drops when the reader falls behind are whole frames.
-      const missing = Math.round(gapUs / durationUs);
+      // real drops when the reader falls behind are whole frames. Silence is
+      // added only for what both the jump at this frame and the file's standing
+      // against the timestamps say is missing: a frame stamped late and followed
+      // by one stamped early adds silence at most once in a take.
+      const missing = Math.round(Math.min(gapUs, this.lagUs) / durationUs);
       if (missing >= 1) {
+        this.lagUs -= missing * durationUs;
         this._droppedMs += (missing * durationUs) / 1000;
         const bytesPerSample = WAV_BIT_DEPTH / 8;
         const silenceBytes = missing * frame.numberOfFrames * frame.numberOfChannels * bytesPerSample;

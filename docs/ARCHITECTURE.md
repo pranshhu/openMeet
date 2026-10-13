@@ -1157,6 +1157,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   reset DB state manually in tests.
 - `@openmeet/protocol` resolves via tsconfig `paths` + vitest `alias` — breaking either breaks all
   consumers.
+- **WAV master padding (`lib/pcm-recorder.ts`)**: `PcmRecorder` pads silence only for whole frames that
+  both the jump in a frame's timestamp and the file's standing against the track's timestamps (`lagUs`,
+  kept within one frame either way) say are missing. A frame stamped late and followed by one stamped
+  early therefore adds silence at most once, so the WAV does not outgrow the take on a page that stalls.
 - **Stable stream for mid-take device switching (`lib/switchable-media.ts`)**:
   Removing or adding a track on a `MediaStream` that a running `MediaRecorder` is recording throws
   `InvalidModificationError` and kills the take. Furthermore, Chrome's AAC MP4 muxer and our `PcmRecorder`
