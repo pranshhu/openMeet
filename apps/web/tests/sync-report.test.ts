@@ -630,6 +630,22 @@ describe('post-session report', () => {
     expect(copies[2]?.detail).toBe('+0ms');
   });
 
+  it('says in the copy note that a copy can be noise-suppressed, and keeps the file limit sentence', () => {
+    const callCopies = [{ file: 'call1_r.m4a', offsetMs: 0 }];
+    const noteOf = (capped: boolean) =>
+      (
+        JSON.parse(buildSyncReport({ ...base, guests: [], callCopies, callCopiesCapped: capped }).json) as {
+          callCopies: { note: string };
+        }
+      ).callCopies.note;
+    const plain = noteOf(false);
+    expect(plain).toContain(
+      "as the host heard it. A guest who turned on noise suppression for the call is noise-suppressed in this copy; that guest's own camera file and WAV are not. A fallback for"
+    );
+    expect(plain).toContain('Place each file at its offsetMs');
+    expect(noteOf(true)).toMatch(/noise-suppressed in this copy;.*file limit, so later stretches have no copy\.$/);
+  });
+
   it('leads the warnings with the interrupted notice, leaving the others alone', () => {
     // Removal that must fail this test: pushing the notice anywhere but as the
     // first warning, or pushing it when the input does not ask for it.

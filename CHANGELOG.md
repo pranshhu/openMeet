@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The sync file says that a call-audio copy holds the noise-suppressed sound of a guest
+  who had noise suppression on for the call.
 - Noise suppression for the call: on a computer, tick **Noise suppression** in the
   microphone menu and the others hear you with the browser's noise suppression on.
   Your recordings stay raw.

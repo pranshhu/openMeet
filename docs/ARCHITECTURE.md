@@ -888,10 +888,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   builds a `sync.json` companion (start-offsets for editor alignment — `timeline.guestMinusHostMs`
   for the first guest, `guests[]` per guest slot, `screenSegments[]` with each segment's offset from
   the host start, with `sharer` display name on each entry, `callCopies.files[]`, each call-audio
-  copy with its offset from the host start and the guest's name, and `hostParts[]`, each file of the
-  host's own track with its offset from the start — a resumed take's own track is two files, and a
-  file that continued after a reload reads "not verified" when the crash copy kept no hash state, so
-  no single digest covers it — plus integrity verdicts,
+  copy with its offset from the host start and the guest's name (the section's note says a copy can
+  be noise-suppressed), and `hostParts[]`, each file of the host's own track with its offset from the
+  start — a resumed take's own track is two files, and a file that continued after a reload reads
+  "not verified" when the crash copy kept no hash state, so no single digest covers it — plus integrity verdicts,
   a size and a verdict for every file (`verification[]`: complete / unverified / incomplete, from
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
@@ -1362,6 +1362,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   host's call-audio copy of that person holds the cleaned sound. A shared screen's sound
   and a presented video's sound are not processed. Whether the browser gave a separately
   processed track is read from the track's settings, and where it did not the row says so.
+- **The sync file does not name which guest had noise suppression on.** No page tells another
+  which of its people turned it on for the call, so the `callCopies` note says a copy can be
+  noise-suppressed and covers every copy.
 - **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt

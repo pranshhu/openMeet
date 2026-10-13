@@ -834,7 +834,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
       ? {
           callCopies: {
             note:
-              "The host's own recording of each guest's live call audio: call quality, as the host heard it. A fallback for a guest track that is missing or short. Place each file at its offsetMs from the host start." +
+              "The host's own recording of each guest's live call audio: call quality, as the host heard it. A guest who turned on noise suppression for the call is noise-suppressed in this copy; that guest's own camera file and WAV are not. A fallback for a guest track that is missing or short. Place each file at its offsetMs from the host start." +
               (input.callCopiesCapped
                 ? ' The take reached its file limit, so later stretches have no copy.'
                 : ''),
