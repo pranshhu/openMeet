@@ -14,6 +14,7 @@ const ROWS: [keys: string, does: string][] = [
   ['Alt+S', 'End & save (host)'],
   ['M', 'Marker, while recording'],
   ['N', 'Marker with a note, while recording'],
+  ['← →', 'Previous or next slide'],
   ['?', 'This list'],
 ];
 

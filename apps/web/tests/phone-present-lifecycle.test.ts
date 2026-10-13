@@ -533,4 +533,81 @@ describe('present presentation lifecycle with useRoom', () => {
       expect.objectContaining({ id: 'desktop-screen-track' })
     );
   });
+  describe('presenting a deck of slides', () => {
+    class MockImage {
+      naturalWidth = 1200;
+      naturalHeight = 800;
+      onload: (() => void) | null = null;
+      set src(_v: string) {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+    let origImage: typeof Image;
+    const slide = (name: string) => new File(['image-bytes'], name, { type: 'image/png' });
+
+    beforeEach(() => {
+      origImage = globalThis.Image;
+      globalThis.Image = MockImage as unknown as typeof Image;
+    });
+
+    afterEach(() => {
+      globalThis.Image = origImage;
+    });
+
+    it('sends one video track, shows the presenter the deck, and ends it with the share', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      await act(async () => {
+        await result.current.toggleScreenShare([slide('a.png'), slide('b.png')]);
+      });
+
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(result.current.state.slides?.count).toBe(2);
+      expect(result.current.state.localScreenStream).not.toBeNull();
+      expect(mockCaptureStream).toHaveBeenCalledTimes(1);
+      expect(peer.addTrack).toHaveBeenCalledTimes(1);
+      expect(peer.addTrack).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'canvas-video-track' }),
+        expect.anything()
+      );
+
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(result.current.state.slides).toBeNull();
+      expect(mockCanvasStreamTracks[0].stop).toHaveBeenCalled();
+    });
+
+    it('presents nothing when no file is a picture', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      await act(async () => {
+        await result.current.toggleScreenShare([new File(['pdf'], 'deck.pdf', { type: 'application/pdf' })]);
+      });
+
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(result.current.state.slides).toBeNull();
+      expect(peer.addTrack).not.toHaveBeenCalled();
+    });
+
+    it('lets go of the deck when the presenter leaves', async () => {
+      const { result } = await setupConnectedRoom();
+
+      await act(async () => {
+        await result.current.toggleScreenShare([slide('a.png')]);
+      });
+      expect(result.current.state.slides).not.toBeNull();
+
+      await act(async () => {
+        await result.current.leave();
+      });
+
+      expect(result.current.state.slides).toBeNull();
+      expect(mockCanvasStreamTracks[0].stop).toHaveBeenCalled();
+    });
+  });
 });

@@ -102,7 +102,8 @@ retention policy to trust, because there's nothing retained.
   entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
-  the rear camera)
+  the rear camera), and so can a deck of slide pictures, turned with Previous and Next
+  or the arrow keys
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
 - Private messages: with three or more in the call, a chat message can go to one
