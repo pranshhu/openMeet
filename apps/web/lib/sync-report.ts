@@ -291,28 +291,33 @@ function alignWavCmd(file: string, padMs: number): string {
   return `ffmpeg -i "${file}" -af "adelay=${padMs}:all=1" -c:a pcm_s${WAV_BIT_DEPTH}le -rf64 auto "${out}"`;
 }
 
-// A FLAC beside the master: the same samples in a smaller file. Nothing names a
-// depth or a channel count, because ffmpeg's FLAC encoder keeps the input's.
+// The FLAC beside a master: the same name with a .flac extension.
+function flacName(file: string): string {
+  return file.replace(/\.[^.]+$/, '') + '.flac';
+}
+
+// A FLAC beside the master: the same samples in a file that is usually smaller.
+// Nothing names a depth or a channel count, because ffmpeg's FLAC encoder keeps
+// the input's.
 export function flacCmd(file: string): string {
-  const out = file.replace(/\.[^.]+$/, '') + '.flac';
-  return `ffmpeg -i "${file}" -c:a flac "${out}"`;
+  return `ffmpeg -i "${file}" -c:a flac "${flacName(file)}"`;
 }
 
 // Decodes the master and its FLAC copy and prints one MD5 line for each. Both are
 // hashed as PCM at the master's depth: ffmpeg's md5 output is 16-bit unless told
 // otherwise, which would leave the low byte of every sample out of the comparison.
 export function flacCheckCmd(file: string): string {
-  const flac = file.replace(/\.[^.]+$/, '') + '.flac';
   const pcm = `-c:a pcm_s${WAV_BIT_DEPTH}le -f md5 -`;
-  return `ffmpeg -v error -i "${file}" -i "${flac}" -map 0:a ${pcm} -map 1:a ${pcm}`;
+  return `ffmpeg -v error -i "${file}" -i "${flacName(file)}" -map 0:a ${pcm} -map 1:a ${pcm}`;
 }
 
 const FLAC_NOTE =
   'Optional. openMeet records WAV. Each encode command writes a FLAC beside a WAV master: the same samples in a ' +
-  'smaller file, with the depth, the rate and the channels the WAV has. Each check command decodes the WAV and ' +
-  'its FLAC and prints two MD5 lines. When the two lines are the same the FLAC holds every sample of the WAV, ' +
-  'and only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, keep the WAV and ' +
-  'encode again. The pairing and aligned-copy commands read the WAV, so run them before deleting it.';
+  'file that is usually smaller, with the depth, the rate and the channels the WAV has. Each check command ' +
+  'decodes the WAV and its FLAC and prints two MD5 lines. When the two lines are the same the FLAC holds every ' +
+  'sample of the WAV, and only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, ' +
+  'keep the WAV and encode again. The pairing and aligned-copy commands read the WAV, so run them before ' +
+  'deleting it.';
 
 const ALIGNED_HINT =
   "The aligned-copy commands under Editor commands write copies that start when the host's recording starts, " +
@@ -760,9 +765,9 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   // Each label starts with the file's name: the summary keys a row by its label,
   // and a take that continued after a reload has two host files.
   const flacCommands = flacFiles.flatMap((f) => [
-    { label: `${f.file}: FLAC copy, lossless and smaller`, cmd: f.encode },
+    { label: `${f.file}: FLAC copy, lossless and usually smaller`, cmd: f.encode },
     {
-      label: `${f.file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match`,
+      label: `${f.file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error`,
       cmd: f.check,
     },
   ]);

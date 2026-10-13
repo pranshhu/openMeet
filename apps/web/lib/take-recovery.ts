@@ -155,9 +155,10 @@ async function rebuild(journal: TakeJournal, folder: FsDirectoryHandle, notes: J
         continue;
       }
       const last = parts[parts.length - 1];
-      // The PCM recorder's final chunk is the real header, at offset 0; when a
-      // crash kept that chunk out, the header on disk is the placeholder.
-      if (note.kind === 'wav' && last && last.offset !== 0) {
+      // The PCM recorder's final chunk is the real header, at offset 0, after
+      // the other parts. A first part is at offset 0 too, so a crash copy of
+      // one part holds no final header; the header on disk is the placeholder.
+      if (note.kind === 'wav' && last && !(last.offset === 0 && parts.length > 1)) {
         await patchWavHeader(writer, journalEnd - WAV_HEADER_BYTES, frame);
       }
       await writer.close();
@@ -288,7 +289,10 @@ export async function saveRecoveredTake(journal: TakeJournal, folder: FsDirector
     }
 
     const hostCam = notes.backups.find((b) => b.kind === 'camera');
-    const hostWav = notes.backups.find((b) => b.kind === 'wav');
+    // The notes name the host's WAV whether or not its backup could be copied;
+    // a file that is not in the folder has no row and no command.
+    const notedWav = notes.backups.find((b) => b.kind === 'wav');
+    const hostWav = notedWav && (await existingSize(folder, notedWav.file)) !== null ? notedWav : undefined;
     const screenSegments: ScreenSegmentInput[] = noted
       .filter((f) => f.kind === 'screen')
       .map((note) => ({

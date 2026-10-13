@@ -503,9 +503,10 @@ describe('saveRecoveredTake', () => {
       ],
     });
     // The root holds no backup directory: the report must name the host's files
-    // from the notes, not from a copy it could assemble.
+    // from the notes, not from a copy it could assemble. The folder already
+    // holds the host's WAV, so it is listed.
     const { journal, finish } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } });
-    const folder = fakeFolder();
+    const folder = fakeFolder({ 'host_r.wav': { size: 1000 } });
 
     const result = await saveRecoveredTake(journal, folderOf(folder));
 
@@ -826,7 +827,7 @@ describe('saving a take from its crash copy', () => {
     const takeDir = root.entries.get(TAKE_DIR) as FakeDirectoryHandle;
     // The next page load lists what storage holds.
     const listed = async () => (await findTakeJournals(getRoot))[0]!;
-    return { root, takeDir, listed };
+    return { root, takeDir, listed, live };
   }
 
   const reportIn = (folder: DiskFolder, name: string) => JSON.parse(new TextDecoder().decode(folder.files.get(name)!));
@@ -1012,12 +1013,84 @@ describe('saving a take from its crash copy', () => {
 
   const FMT = { sampleRate: 48000, channels: 1, bitDepth: 24 };
   /** A WAV as it sits in the folder: `audio` bytes of sound behind a header that declares `declared` of them. */
-  function wavBytes(audio: number, declared: number): Uint8Array<ArrayBuffer> {
+  function wavBytes(audio: number, declared: number, fmt = FMT): Uint8Array<ArrayBuffer> {
     const bytes = new Uint8Array(WAV_HEADER_BYTES + audio);
-    bytes.set(new Uint8Array(wavHeader(FMT, declared)));
+    bytes.set(new Uint8Array(wavHeader(fmt, declared)));
     for (let i = 0; i < audio; i++) bytes[WAV_HEADER_BYTES + i] = (i * 7 + 3) & 0xff;
     return bytes;
   }
+
+  it.each([
+    [1, 301, 300],
+    [2, 604, 600],
+  ])('declares whole frames for a rebuilt WAV of %i channel(s) whose crash copy holds one part', async (channels, audio, declared) => {
+    // The first part of every WAV starts at offset 0, so one part alone is not the recorder's final header.
+    const fmt = { ...FMT, channels };
+    const take = await crashedTake({}, []);
+    const file = take.live.file('guest_rec1.wav');
+    file.append(0, wavBytes(audio, 0, fmt).buffer);
+    await file.commit(1);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(result.files).toEqual([{ name: 'guest_rec1.wav', bytes: WAV_HEADER_BYTES + audio, source: 'journal' }]);
+    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(audio, declared, fmt));
+  });
+
+  it('leaves a rebuilt WAV whose crash copy ends with the final header at offset 0', async () => {
+    const take = await crashedTake({}, []);
+    const file = take.live.file('guest_rec1.wav');
+    file.append(0, wavBytes(2454, 0).buffer);
+    await file.commit(1);
+    // The recorder's closing write: a header that declares what the sound holds.
+    file.append(0, wavBytes(0, 2454).slice(0, WAV_HEADER_BYTES).buffer);
+    await file.commit(2);
+    const folder = new DiskFolder();
+
+    await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    expect(folder.files.get('guest_rec1.wav')).toEqual(wavBytes(2454, 2454));
+  });
+
+  describe('a host WAV named in the notes', () => {
+    const backup = 'openmeet-backup-host-audio-1760000000000-xyz-abcd-pqr';
+
+    /** A crash copy whose notes name host_rec1.wav, with its backup stored when `stored` is set. */
+    async function takeWithHostWav(stored: boolean) {
+      const take = await crashedTake({ 'guest_rec1.mp4': 1 });
+      if (stored) {
+        const dir = await take.root.getDirectoryHandle(backup, { create: true });
+        const chunk = await (await dir.getFileHandle('000000.part', { create: true })).createWritable();
+        await chunk.write(wavBytes(956, 956));
+        await chunk.close();
+      }
+      const journal = await take.listed();
+      journal.notes.backups.push({ dir: backup, file: 'host_rec1.wav', kind: 'wav' });
+      journal.notes.backups.push({ dir: 'openmeet-backup-host-camera-1760000000000-xyz-abcd-pqr', file: 'host_rec1.mp4', kind: 'camera' });
+      return journal;
+    }
+
+    it('is listed, with its commands, when the folder holds it', async () => {
+      const folder = new DiskFolder();
+
+      await saveRecoveredTake(await takeWithHostWav(true), asFolder(folder));
+
+      const text = new TextDecoder().decode(folder.files.get('sync_rec1.json')!);
+      expect(text).toContain('host_rec1.wav');
+      expect(text).toContain('host_rec1.flac');
+    });
+
+    it('is not listed, and has no command, when its backup could not be copied and the folder has no such file', async () => {
+      const folder = new DiskFolder();
+      const journal = await takeWithHostWav(false);
+
+      const result = await saveRecoveredTake(journal, asFolder(folder));
+
+      expect(result.files).toContainEqual({ name: 'host_rec1.wav', bytes: 0, source: 'failed', reason: 'backup unavailable' });
+      expect(new TextDecoder().decode(folder.files.get('sync_rec1.json')!)).not.toContain('host_rec1.wav');
+    });
+  });
 
   it('gives a kept guest WAV whose header declares no audio the header its length calls for', async () => {
     // The closing page committed the folder's file whole, with the placeholder header.
@@ -1160,7 +1233,7 @@ describe('FLAC commands in a take saved from its crash copy', () => {
       'guest_r.mp4': { parts: [part(0, 3)] },
       'guest_r.wav': { parts: [part(0, 44)] },
     });
-    const folder = fakeFolder();
+    const folder = fakeFolder({ 'host_r.wav': { size: 1000 } });
 
     await saveRecoveredTake(journal, folderOf(folder));
 

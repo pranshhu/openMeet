@@ -50,7 +50,7 @@ describe('the note beside a returned WAV backup', () => {
 
   it('tells the host what each command does and when the WAV may be deleted', () => {
     expect(noteFor('audio', WAV).flac?.note).toBe(
-      'Optional. encode writes a FLAC beside this WAV: the same samples in a smaller file. check decodes both ' +
+      'Optional. encode writes a FLAC beside this WAV: the same samples in a file that is usually smaller. check decodes both ' +
         'and prints two MD5 lines. When the two lines are the same the FLAC holds every sample of the WAV, and ' +
         'only then is it safe to delete the WAV; when they differ, or ffmpeg prints an error, keep the WAV and ' +
         'encode again.'

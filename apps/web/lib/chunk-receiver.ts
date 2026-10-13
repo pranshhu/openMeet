@@ -41,6 +41,8 @@ export interface ChunkReceiverOpts {
   onMeta?: (meta: { guestStartHostMs: number | null; rttMs: number | null }) => void;
   /** Where the journal's parts already put this file, for a take reopened after a crash. */
   resumeFrom?: { nextIdx: number; end: number; sha256State?: unknown };
+  /** Bytes in one sample frame of a WAV reopened after a crash, whose first piece this receiver never sees. */
+  frameBytes?: number;
   /**
    * The clock-sync numbers the crash copy holds for this file, for a take
    * reopened after a crash: that estimate stays the first, and a report that
@@ -136,6 +138,7 @@ export class ChunkReceiver {
     this.journalFile = opts.journalFile;
     this.onWarn = opts.onWarn;
     this.onMeta = opts.onMeta;
+    this._frameBytes = opts.frameBytes ?? 1;
     // Read from storage, so each number is checked again. Without a start
     // nothing is seeded: a round trip or a time alone describes no estimate.
     const clock = opts.clockFrom;

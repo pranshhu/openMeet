@@ -21,9 +21,9 @@ const HOST_CHECK =
   'ffmpeg -v error -i "host_r.wav" -i "host_r.flac" -map 0:a -c:a pcm_s24le -f md5 - -map 1:a -c:a pcm_s24le -f md5 -';
 /** The same command for another file. */
 const forFile = (cmd: string, stem: string) => cmd.replace(/host_r/g, stem);
-const copyLabel = (file: string) => `${file}: FLAC copy, lossless and smaller`;
+const copyLabel = (file: string) => `${file}: FLAC copy, lossless and usually smaller`;
 const checkLabel = (file: string) =>
-  `${file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match`;
+  `${file}: check the FLAC copy, and delete the WAV only if its two MD5 lines match and ffmpeg prints no error`;
 
 interface Flac {
   note: string;
@@ -89,10 +89,10 @@ describe('buildSyncReport: FLAC copies of the audio masters', () => {
     expect(note).toContain('run them before deleting it');
   });
 
-  it('says what a copy and its check show: the same samples in a smaller file, and two MD5 lines', () => {
+  it('says what a copy and its check show: the same samples in a file that is usually smaller, and two MD5 lines', () => {
     const note = flacOf(take)?.note ?? '';
     expect(note).toContain('Optional. openMeet records WAV.');
-    expect(note).toContain('the same samples in a smaller file, with the depth, the rate and the channels the WAV has');
+    expect(note).toContain('the same samples in a file that is usually smaller, with the depth, the rate and the channels the WAV has');
     expect(note).toContain('Each check command decodes the WAV and its FLAC and prints two MD5 lines.');
   });
 

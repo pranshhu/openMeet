@@ -1720,12 +1720,14 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   at 48 kHz: about 520 MB an hour for a mono master, twice that in stereo). Nothing
   deletes a WAV; the person does, after the check.
 - **A WAV that reads Empty still has FLAC commands.** As with its pairing command, the
-  report lists them for every audio master it names; ffmpeg then says the file is missing
-  or holds no audio.
+  report lists them for every audio master it names. A WAV that holds only its header
+  gives a FLAC with no samples and a check that prints two equal MD5 lines, those of no
+  audio; `ffmpeg` says the file is missing only for a name that is not in the folder.
 - **A WAV backup a participant downloads has no FLAC command on their screen.** Their
   page gives the file; the two commands are in the README.
-- **A guest's WAV can still end part-way through a sample after a resume.** When a take
-  is resumed after a crash and that guest never reconnects, the page that ends the take
-  has not seen the start of the file, so its header declares the length as it is.
-  `ffmpeg` then prints `Invalid PCM packet` for that file, on the FLAC commands too, and
-  by the rule in the sync file that WAV is kept.
+- **A returned backup's two commands are only in its `.json` note.** There the quotes are
+  escaped, and no screen shows the commands with a copy button.
+- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
+  size fields are 32 bits and cannot hold its length, so they declare the most they can
+  hold, more than the file has, and the FLAC commands, like any other command on that
+  file, report it.
