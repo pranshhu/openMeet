@@ -122,7 +122,9 @@ bitrate for the actual track via `presetForTrack`, and the camera `ChunkRecorder
 `BackupRecorder` via `cameraVideoBps`: that preset at the level picked in the lobby (`BITRATE_LEVELS`:
 Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`), times 1.5 when the track delivers
 more than 40 fps (`presetAt`), under the same ceiling; capture constraints in
-`lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
+`lib/media.ts` `RECORDING_CONSTRAINTS`; `cameraConstraints` takes `portrait` and then asks for the
+preset's height and a width of 9/16 of it, rounded to an even number, as `ideal` values: 608 x 1080
+at 1080p). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
 `cameraConstraints` asks the camera for it. The picker lists only the rates the camera's
 capabilities reach (`supportedFrameRates`), so 50 and 60 appear on few cameras. The
@@ -340,7 +342,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   opened and none has failed (`!stream && !previewError`), and Try again does nothing while
   `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
   microphone, quality, frame rate or echo cancellation made while another is being opened is not
-  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. Under the quality picker a
+  **Picture shape** picker (`om_portrait` in `localStorage`, `'1'` for portrait and anything else
+  landscape) opens the camera again like a change of quality and is passed to every capture the lobby
+  opens. It is not on a phone, which ignores a stored `'1'`, and it is hidden with the quality picker
+  for Microphone only. While portrait is chosen the Framing guide is not drawn, and a line says so
+  when the camera's track is not taller than wide. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
@@ -1329,7 +1336,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings, constraints (`getConstraints()`) and requests for new constraints
     (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
-    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
+    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`), and
+    for its shape: portrait when the asked height is above the asked width.
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
@@ -2005,3 +2013,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **With incoming video stopped only the first screen carries the note and Show video.** The
   other screens are black tiles under their names, which still play their sound. With four or
   more screens on a phone each tile is small, and nothing enlarges one.
+- **A portrait picture is the middle of the camera's wide picture.** A 1080p camera gives
+  608 x 1080, not 1080 x 1920, and the lobby's "Capturing" line shows the real size. It is
+  encoded at the chosen quality's bitrate, which is more than that many pixels need. It is not
+  offered on a phone, has no framing guide, cannot be changed during a call, and was checked
+  with test cameras only.

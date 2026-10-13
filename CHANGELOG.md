@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- On a computer the lobby offers a portrait (9:16) picture shape for the camera, for
+  people who record for vertical video.
 - When two or more people present at the same time, every screen is on the stage, each
   under its presenter's name. Each was already recorded to its own file.
 - Slides are turned with the arrow keys, or Page Up and Page Down, which is what a

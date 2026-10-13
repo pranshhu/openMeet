@@ -728,3 +728,95 @@ describe('SwitchableMedia: the stable video track answers for the real camera', 
     expect(first.applyConstraints).not.toHaveBeenCalled();
   });
 });
+
+describe.each([
+  ['the stable stream', true],
+  ['the raw tracks (no track generator)', false],
+])('SwitchableMedia, %s: the picture shape across a camera switch', (_name, stable) => {
+  class FakeStream {
+    private tracks: MediaStreamTrack[];
+    constructor(tracks: MediaStreamTrack[] = []) {
+      this.tracks = [...tracks];
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((t) => t.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t.kind === 'video');
+    }
+    addTrack(t: MediaStreamTrack) {
+      this.tracks.push(t);
+    }
+    removeTrack(t: MediaStreamTrack) {
+      this.tracks = this.tracks.filter((x) => x !== t);
+    }
+  }
+  // A lobby camera that was asked for `asked`, and that delivers 1080 lines.
+  const lobbyCam = (asked: object) =>
+    Object.assign(createMockTrack('video', 'cam-1', { height: 1080 }), { getConstraints: () => asked });
+  const media = (asked: object) =>
+    new FakeStream([createMockTrack('audio', 'mic-1'), lobbyCam(asked)]) as unknown as MediaStream;
+  const sizeAsked = (call: unknown[]) => {
+    const v = (call[0] as { video: MediaTrackConstraints }).video;
+    return [v.width, v.height];
+  };
+  const desktop = () => {
+    const getUserMedia = vi.fn().mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-2')]));
+    vi.stubGlobal('navigator', { userAgent: 'test-desktop', mediaDevices: { getUserMedia } });
+    return getUserMedia;
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('MediaStream', FakeStream);
+    if (stable) installStableGraph();
+    else vi.stubGlobal('MediaStreamTrackGenerator', undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asks the new camera for a portrait picture when the lobby camera was asked for one', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: { ideal: 608 }, height: { ideal: 1080 } }));
+    expect(sm.isFallback).toBe(!stable);
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('asks for a wide picture when the lobby camera was asked for one', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: { ideal: 1920 }, height: { ideal: 1080 } }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it('reads the shape from bare numbers too', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: 608, height: 1080 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('is wide when the lobby camera was asked for no size', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it.runIf(stable)('asks the reopened old camera for the same shape when a phone switch fails', async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('no rear camera'))
+      .mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-1')]));
+    vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia } });
+    const sm = new SwitchableMedia(media({ width: { ideal: 608 }, height: { ideal: 1080 } }));
+    await expect(sm.switchCamera('environment')).rejects.toThrow('no rear camera');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+    expect(sizeAsked(getUserMedia.mock.calls[1]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+});
