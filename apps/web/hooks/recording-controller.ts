@@ -17,7 +17,7 @@ import {
   recordingChannelKind,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
-import { patchWavHeader } from '@/lib/wav';
+import { patchWavHeader, wavFrameBytes, WAV_HEADER_BYTES } from '@/lib/wav';
 import { openTakeJournal, type JournalFileNote, type TakeJournal } from '@/lib/take-journal';
 import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
@@ -991,7 +991,16 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       continue;
     }
 
-    const replayed = await args.journal.replay(note.file, { write: (position, data) => writer.write(position, data) });
+    // The WAV's own header, in the first part, says how long a sample frame is.
+    let frameBytes = 1;
+    const replayed = await args.journal.replay(note.file, {
+      write: async (position, data) => {
+        if (note.kind === 'wav' && position === 0) {
+          frameBytes = wavFrameBytes(await data.slice(0, WAV_HEADER_BYTES).arrayBuffer());
+        }
+        await writer.write(position, data);
+      },
+    });
     // A part the folder refused leaves the file shorter than the journal says.
     // Say so, and seed the receiver from what really landed, so the end it
     // announces is the file's own. The missing part is not asked for again:
@@ -1017,6 +1026,7 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
         if (c && c.readyState === 'open') c.send(json);
       },
       ...(resumeFrom ? { resumeFrom } : {}),
+      frameBytes,
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),
@@ -1765,11 +1775,13 @@ export async function endHostRecording(
   const patchReceiverWav = async (receiver?: ChunkReceiver, writer?: FileWriter) => {
     if (!receiver || !writer) return;
     if (receiver.receivedFinalHeader) return;
-    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten);
+    // A file reopened after a reload holds more than this receiver saw: the
+    // folder's own bytes were carried into it. The header declares the file.
+    const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten, writer.size ?? 0);
     if (total > 44) {
       const dataBytes = total - 44;
       try {
-        await patchWavHeader(writer, dataBytes);
+        await patchWavHeader(writer, dataBytes, receiver.frameBytes);
       } catch {
         // Writer may be closed or failing
       }

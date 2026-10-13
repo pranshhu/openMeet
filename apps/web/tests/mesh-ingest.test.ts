@@ -4,6 +4,7 @@ import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
 import { MAX_OFFSET_JUMP_BYTES } from '@/lib/chunk-receiver';
 import { StreamingSha256 } from '@/lib/sha256';
+import { wavHeader } from '@/lib/wav';
 import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import {
   bindHostGuestChannel,
@@ -16,6 +17,19 @@ import {
   resumeHostRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
+
+// jsdom ships no Blob.prototype.arrayBuffer, and the one a real browser has is
+// what a resume reads a WAV's header with.
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.arrayBuffer !== 'function') {
+  Blob.prototype.arrayBuffer = function () {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
 
 /**
  * Host-driven recording means ONE click starts every guest at once. Before
@@ -188,7 +202,7 @@ type JournalPosition = { nextIdx: number; end: number };
 function resumeJournal(
   files: ResumeNote[],
   positions: Record<string, JournalPosition> = {},
-  parts: Record<string, { offset: number; size: number }[]> = {},
+  parts: Record<string, { offset: number; size: number; data?: Uint8Array }[]> = {},
   journalDead = false
 ) {
   const replayed: string[] = [];
@@ -216,7 +230,7 @@ function resumeJournal(
       let end = 0;
       for (const part of parts[name] ?? []) {
         try {
-          await into.write(part.offset, new Blob([new Uint8Array(part.size)]));
+          await into.write(part.offset, new Blob([(part.data ?? new Uint8Array(part.size)) as BlobPart]));
         } catch {
           break; // a real journal's replay never rejects
         }
@@ -1967,6 +1981,8 @@ describe('a take resumed from its journal', () => {
   ) {
     const sizes = new Map(Object.entries(seed));
     const writes: [string, number, number][] = [];
+    // The value of each four-byte write by its position: a WAV header's two size fields.
+    const fields = new Map<number, number>();
     const dir = {
       getFileHandle: async (name: string, o?: { create?: boolean }) => {
         if (!sizes.has(name)) {
@@ -1984,6 +2000,7 @@ describe('a take resumed from its journal', () => {
                 const bytes = d.data instanceof Blob ? d.data.size : d.data.byteLength;
                 if (opts.refuseWrite?.(d.position, bytes)) throw new Error('disk full');
                 writes.push([name, d.position, bytes]);
+                if (!(d.data instanceof Blob) && bytes === 4) fields.set(d.position, new DataView(d.data).getUint32(0, true));
                 end = Math.max(end, d.position + bytes);
               },
               close: async () => {
@@ -1994,7 +2011,7 @@ describe('a take resumed from its journal', () => {
         };
       },
     } as unknown as NonNullable<RecordingHandles['dir']>;
-    return { dir, writes, size: (name: string) => sizes.get(name) };
+    return { dir, writes, fields, size: (name: string) => sizes.get(name) };
   }
 
   it('carries over what the folder holds beyond the crash copy, and continues the file', async () => {
@@ -2047,6 +2064,73 @@ describe('a take resumed from its journal', () => {
     expect(errors).toEqual([]);
     expect(folder.size('guest_rec.mp4')).toBe(300);
     expect(folder.size('guest2_rec.mp4')).toBe(300);
+  });
+
+  it("declares all of a guest's WAV when the folder held more of it than the crash copy and the guest never sends again", async () => {
+    // The closing page committed 344 bytes of the WAV; the crash copy trails at 244.
+    const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
+    const j = resumeJournal(
+      [wavNote],
+      { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
+      { 'guest_rec.wav': [{ offset: 0, size: 44 }, { offset: 44, size: 200 }] }
+    );
+    // The two size fields of the header, by the position each was written at.
+    const fields = new Map<number, number>();
+    let size = 344;
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        getFile: async () => new Blob([new Uint8Array(size)]),
+        createWritable: async () => {
+          let end = 0;
+          return {
+            write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
+              const bytes = d.data instanceof Blob ? d.data.size : d.data.byteLength;
+              if (!(d.data instanceof Blob) && bytes === 4) fields.set(d.position, new DataView(d.data).getUint32(0, true));
+              end = Math.max(end, d.position + bytes);
+            },
+            close: async () => {
+              size = end;
+            },
+          };
+        },
+      }),
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+
+    const h = await resumeHostRecording({ localStream: emptyFakeStream(), journal: j.journal, dir, channels: [] });
+    await endHostRecording(h);
+
+    expect(size).toBe(344);
+    expect(fields.get(40)).toBe(300);
+    expect(fields.get(4)).toBe(336);
+  });
+
+  it('declares only whole sample frames of a resumed guest WAV that is cut off again part-way through one', async () => {
+    // The receiver reopened here never sees the first piece of the file, so the header in the crash copy is where the frame size comes from.
+    const header = new Uint8Array(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 0));
+    const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
+    const j = resumeJournal(
+      [wavNote],
+      { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
+      { 'guest_rec.wav': [{ offset: 0, size: 44, data: header }, { offset: 44, size: 200 }] }
+    );
+    const folder = swapFolder({ 'guest_rec.wav': 244 });
+    const channel = fakeChannel('recording-audio#R1');
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      dir: folder.dir,
+      channels: [{ channel, peerId: 'peer-a' }],
+    });
+
+    // 101 bytes more: 301 bytes of 3-byte frames, the last one unfinished.
+    await sendChunk(channel, 2, 244, 101);
+    (channel as unknown as { readyState: string }).readyState = 'closed';
+    await endHostRecording(h);
+
+    expect(folder.size('guest_rec.wav')).toBe(345);
+    expect(folder.fields.get(40)).toBe(300);
+    expect(folder.fields.get(4)).toBe(336);
   });
 
   it('leaves a longer folder file as it is when its bytes cannot be carried over, and says so', async () => {

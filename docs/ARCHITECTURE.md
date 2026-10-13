@@ -772,7 +772,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   header does not match its length gets its two size fields set from the length
   (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
   `patchWavHeader`), because a page that closes commits its files with the placeholder header;
-  a resume gives the host's own WAV the same repair through `copyBackupInto`. A take reopened from that journal replays the parts into the same folder files
+  a resume gives the host's own WAV the same repair through `copyBackupInto`.
+  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, and End & save for a guest whose final header never came),
+  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
+  pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. The frame size is read from the file's own
+  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
+  that header states.
+  At End & save that length is the file's own (`FileWriter.size`) when it is more than the
+  receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
+  the crash copy's end where its receiver starts.
+  A take reopened from that journal replays the parts into the same folder files
   and seeds each receiver from them: the far-offset rule is measured from the resumed end, not from
   zero, and the hash state the commit stored beside its position lets the digest cover the part
   before the resume as well. A screen file already in the folder is never replaced — the resumed host
@@ -859,6 +870,14 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   is not open. A take that is ended because the host started another one takes none:
   `handleGuestRecordingStarted` (`useRoom`) stops its clock sync first, so the new capture
   does not wait for an answer that cannot come.
+  any file is not complete. Clock-sync needs the host to be
+  recording within ~8s of the guest, else it degrades (offset null → "align by waveform").
+  The report's `flac` section and the summary's Editor commands give two `ffmpeg` commands
+  for each WAV master the report lists (the `fileList` rows of kind `audio`: the host's, each
+  guest's, and the host's file from before a reload): `encode` writes a FLAC beside the WAV
+  (`flacCmd`) and `check` decodes both and prints one MD5 line for each, hashed as PCM at
+  `WAV_BIT_DEPTH` (`flacCheckCmd`); equal lines mean the FLAC holds every sample. No page
+  encodes or decodes FLAC: the masters, their backups and the crash copy stay WAV.
 - `notice-log.ts` `NoticeLog`: the host's record of who was told that a take was being
   recorded, written into `sync_<id>.json` as `recordingNotice` (`buildSyncReport` passes
   it through). `useRoom` makes one as `startRecording` announces the take, with everyone
@@ -1001,6 +1020,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   shown that name, never the one the sender gave. It gets no note, and one that is stopped, cut
   off or fails its check is removed from the folder whole. `decline` takes the offers to turn
   down, so backups and picked files can be answered apart.
+  The note beside a returned WAV backup also holds a `flac` entry: the `encode` and `check`
+  commands of `lib/sync-report.ts` (`flacCmd`, `flacCheckCmd`) for the file's name in the
+  host's folder. A camera or a screen backup's note has none.
 
 ---
 
@@ -1716,3 +1738,20 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Where a track's timestamps run steadily early against its samples, real gaps go unfilled for a
   while.** The track the app records from showed no such drift. Where it happens, the surplus that
   builds up absorbs real gaps until it is used up, a second at most.
+- **openMeet records no FLAC.** A FLAC copy of a WAV master is made afterwards, with the
+  `ffmpeg` commands in the sync file, by whoever has the folder. A take still needs the
+  WAV's full size on the host's disk and in each guest's upload while it records (24-bit
+  at 48 kHz: about 520 MB an hour for a mono master, twice that in stereo). Nothing
+  deletes a WAV; the person does, after the check.
+- **A WAV that reads Empty still has FLAC commands.** As with its pairing command, the
+  report lists them for every audio master it names. A WAV that holds only its header
+  gives a FLAC with no samples and a check that prints two equal MD5 lines, those of no
+  audio; `ffmpeg` says the file is missing only for a name that is not in the folder.
+- **A WAV backup a participant downloads has no FLAC command on their screen.** Their
+  page gives the file; the two commands are in the README.
+- **A returned backup's two commands are only in its `.json` note.** There the quotes are
+  escaped, and no screen shows the commands with a copy button.
+- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
+  size fields are 32 bits and cannot hold its length, so they declare the most they can
+  hold, more than the file has, and the FLAC commands, like any other command on that
+  file, report it.
