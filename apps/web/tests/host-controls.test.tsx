@@ -267,3 +267,178 @@ describe('the host removes a person', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('PeoplePanel: the host asks a person for help', () => {
+  const people: RemotePeer[] = [
+    { peerId: 'p-ana', name: 'Ana', stream: null, role: 'guest', presence: mic(true) },
+    { peerId: 'p-cy', name: 'Cy', stream: null, role: 'producer' },
+    { peerId: 'p-di', name: 'Di', stream: null, role: 'guest', companion: true },
+  ];
+  const panel = (onAsk?: (peerId: string, ask: 'reconnect') => boolean) => (
+    <PeoplePanel people={people} onMute={vi.fn()} onRemove={vi.fn()} onAsk={onAsk} onClose={vi.fn()} />
+  );
+
+  it('asks for a restart of the row that was pressed, and says the person answers on their own screen', () => {
+    const onAsk = vi.fn().mockReturnValue(true);
+    render(panel(onAsk));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Ana' }));
+    expect(screen.getByText('Ask Ana to:')).toBeInTheDocument();
+    expect(onAsk).not.toHaveBeenCalled();
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const restart = screen.getByRole('button', { name: 'Restart connection' });
+    expect(cancel).toHaveFocus();
+    expect(restart.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // On a narrow screen the buttons go to a second line instead of out of the panel.
+    expect(restart.parentElement).toHaveClass('flex-wrap');
+
+    fireEvent.click(restart);
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    expect(onAsk).toHaveBeenCalledWith('p-ana', 'reconnect');
+    expect(screen.queryByText('Ask Ana to:')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Help Ana' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Asked Ana. They answer on their own screen.');
+  });
+
+  it('asks for the person whose Help was pressed, not the first', () => {
+    const onAsk = vi.fn().mockReturnValue(true);
+    render(panel(onAsk));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Di' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    expect(onAsk).toHaveBeenCalledWith('p-di', 'reconnect');
+  });
+
+  it('says so when the ask did not go out', () => {
+    render(panel(vi.fn().mockReturnValue(false)));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Ana' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Could not ask Ana. Try again.');
+  });
+
+  it('keeps only the line of the latest ask', () => {
+    render(panel(vi.fn().mockReturnValueOnce(false).mockReturnValue(true)));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Ana' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Help Di' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent('Asked Di. They answer on their own screen.');
+  });
+
+  it('asks nothing on Cancel and shows no line', () => {
+    const onAsk = vi.fn();
+    render(panel(onAsk));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Ana' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onAsk).not.toHaveBeenCalled();
+    expect(screen.queryByText('Ask Ana to:')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('offers Help between Mute and Remove, on a producer’s and a present-only device’s row too', () => {
+    render(panel(vi.fn()));
+
+    const rows = screen.getAllByRole('listitem');
+    expect(rows.map((li) => li.textContent)).toEqual([
+      'AnaMuteHelpRemove',
+      'Cy (Producer)HelpRemove',
+      'Di (Presenting)HelpRemove',
+    ]);
+    expect(screen.getByRole('button', { name: 'Help Cy' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Help Di' })).toBeInTheDocument();
+  });
+
+  it('offers no Help without a way to ask', () => {
+    render(panel(undefined));
+    expect(screen.queryByRole('button', { name: /^Help / })).toBeNull();
+  });
+
+  it('shows one swapped row at a time: Help closes a Remove question and the other way round', () => {
+    render(panel(vi.fn()));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Ana' }));
+    expect(screen.getByText(/^Remove Ana\?/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Ana' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Help Cy' }));
+    expect(screen.queryByText(/^Remove Ana\?/)).toBeNull();
+    expect(screen.getByText('Ask Cy to:')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Help Cy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Ana' }));
+    expect(screen.queryByText('Ask Cy to:')).toBeNull();
+    expect(screen.getByText(/^Remove Ana\?/)).toBeInTheDocument();
+  });
+
+  it('opens from the call screen and hands the ask to the room', () => {
+    hook.mutePeer = vi.fn();
+    hook.askPeer = vi.fn().mockReturnValue(true);
+    render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Help Bo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+    expect(hook.askPeer).toHaveBeenCalledTimes(1);
+    expect(hook.askPeer).toHaveBeenCalledWith('p-bo', 'reconnect');
+  });
+});
+
+describe('the person asked to restart their connection', () => {
+  const question = 'The host asks you to restart your connection. The call drops for a few seconds.';
+
+  beforeEach(() => {
+    Object.assign(state, { role: 'guest', helpAsk: 'reconnect' });
+  });
+
+  it('reads the question, restarts only on Restart, and drops it on Not now', () => {
+    hook.restartConnection = vi.fn();
+    hook.dismissHelpAsk = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByText(question)).toBeInTheDocument();
+    expect(screen.queryByText(/Your recording goes on/)).toBeNull();
+    expect(hook.restartConnection).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(hook.dismissHelpAsk).toHaveBeenCalledTimes(1);
+    expect(hook.restartConnection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    expect(hook.restartConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts Restart before Not now', () => {
+    render(<RoomView slug="abc-defg-hij" />);
+    const restart = screen.getByRole('button', { name: 'Restart' });
+    const notNow = screen.getByRole('button', { name: 'Not now' });
+    expect(restart.compareDocumentPosition(notNow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // At least 44 px tall below the sm width.
+    expect(restart).toHaveClass('min-h-11');
+    expect(notNow).toHaveClass('min-h-11');
+  });
+
+  it('says during a take that the recording goes on', () => {
+    Object.assign(state, { phase: 'recording' });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText(`${question} Your recording goes on.`)).toBeInTheDocument();
+  });
+
+  it('is not drawn while the take is being finished, nor when nothing was asked', () => {
+    Object.assign(state, { phase: 'finalizing' });
+    const { unmount } = render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(question)).toBeNull();
+    unmount();
+
+    Object.assign(state, { phase: 'in-call', helpAsk: null });
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(question)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull();
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isClientMessage, isServerMessage } from '../src/ws-messages.js';
+import { isClientMessage, isHelpAsk, isServerMessage } from '../src/ws-messages.js';
 import { WS_CLOSE_REMOVED } from '../src/constants.js';
 
 describe('host controls on the wire', () => {
@@ -15,5 +15,19 @@ describe('host controls on the wire', () => {
 
   it('defines WS_CLOSE_REMOVED as 4007', () => {
     expect(WS_CLOSE_REMOVED).toBe(4007);
+  });
+});
+
+describe('the host asks a guest for help on the wire', () => {
+  it('identifies peer-help on both the client and server unions', () => {
+    expect(isClientMessage({ type: 'peer-help', peerId: 'p1', ask: 'reconnect' })).toBe(true);
+    expect(isServerMessage({ type: 'peer-help', ask: 'reconnect' })).toBe(true);
+  });
+
+  it('takes reconnect as an ask and refuses anything else', () => {
+    expect(isHelpAsk('reconnect')).toBe(true);
+    expect(isHelpAsk('mute')).toBe(false);
+    expect(isHelpAsk(1)).toBe(false);
+    expect(isHelpAsk(undefined)).toBe(false);
   });
 });

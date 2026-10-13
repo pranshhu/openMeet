@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useState } from 'react';
+import type { HelpAsk } from '@openmeet/protocol';
 import type { RemotePeer } from '@/hooks/useRoom';
 import { Icon } from './Icon';
 
@@ -17,6 +18,7 @@ export function PeoplePanel({
   recording = false,
   onMute,
   onRemove,
+  onAsk,
   onClose,
 }: {
   people: RemotePeer[];
@@ -26,11 +28,17 @@ export function PeoplePanel({
   onMute: (peerId: string) => void;
   /** Remove this person from the room. Without it no row offers Remove. */
   onRemove?: ((peerId: string) => void) | undefined;
+  /** Ask this person to do something about their connection. True when it went out. Without it no row offers Help. */
+  onAsk?: ((peerId: string, ask: HelpAsk) => boolean) | undefined;
   onClose: () => void;
 }) {
   // The person whose removal is being asked about, by peer id. Asked in the
   // row: a blocking dialog would stall this tab, which writes the take.
   const [asking, setAsking] = useState<string | null>(null);
+  // The person the host is choosing an ask for, by peer id, and the line that
+  // says what became of the last ask. Only one row is swapped at a time.
+  const [helping, setHelping] = useState<string | null>(null);
+  const [askedLine, setAskedLine] = useState<string | null>(null);
   const questionId = useId();
   return (
     <section
@@ -97,6 +105,41 @@ export function PeoplePanel({
               </li>
             );
           }
+          if (onAsk && helping === p.peerId) {
+            return (
+              <li key={p.peerId} className="py-1.5 text-sm text-white">
+                <p id={questionId} className="text-xs text-[#fdd663] wrap-anywhere">
+                  {`Ask ${name} to:`}
+                </p>
+                <div className="mt-1 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    aria-describedby={questionId}
+                    onClick={() => {
+                      setHelping(null);
+                      setAskedLine(
+                        onAsk(p.peerId, 'reconnect')
+                          ? `Asked ${name}. They answer on their own screen.`
+                          : `Could not ask ${name}. Try again.`
+                      );
+                    }}
+                    className={`${rowButton} hover:bg-white/10`}
+                  >
+                    Restart connection
+                  </button>
+                  <button
+                    type="button"
+                    autoFocus
+                    aria-describedby={questionId}
+                    onClick={() => setHelping(null)}
+                    className={`${rowButton} hover:bg-white/10`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </li>
+            );
+          }
           return (
             <li key={p.peerId} className="flex min-h-11 items-center gap-2 text-sm text-white">
               <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -112,11 +155,27 @@ export function PeoplePanel({
                   {micOn ? 'Mute' : 'Muted'}
                 </button>
               )}
+              {onAsk && (
+                <button
+                  type="button"
+                  aria-label={`Help ${name}`}
+                  onClick={() => {
+                    setAsking(null);
+                    setHelping(p.peerId);
+                  }}
+                  className={`${rowButton} hover:bg-white/10`}
+                >
+                  Help
+                </button>
+              )}
               {onRemove && (
                 <button
                   type="button"
                   aria-label={`Remove ${name}`}
-                  onClick={() => setAsking(p.peerId)}
+                  onClick={() => {
+                    setHelping(null);
+                    setAsking(p.peerId);
+                  }}
                   className={`${rowButton} hover:bg-white/10`}
                 >
                   Remove
@@ -126,6 +185,11 @@ export function PeoplePanel({
           );
         })}
       </ul>
+      {askedLine && (
+        <p role="status" className="mt-1 text-xs text-[#fdd663] wrap-anywhere">
+          {askedLine}
+        </p>
+      )}
     </section>
   );
 }

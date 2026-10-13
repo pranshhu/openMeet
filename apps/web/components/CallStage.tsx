@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { BrowserNote, Listening, Role } from '@openmeet/protocol';
+import type { BrowserNote, HelpAsk as HelpAskCode, Listening, Role } from '@openmeet/protocol';
 import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
+import { HelpAsk } from './HelpAsk';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
@@ -174,7 +175,11 @@ export function CallStage({
   notRecorded,
   onSetPeerRecorded,
   hostMuted = false,
+  helpAsk = null,
+  onRestartConnection,
+  onDismissHelpAsk,
   onMutePeer,
+  onAskPeer,
   onRemovePeer,
   countdownEndsAt = null,
 }: {
@@ -306,8 +311,16 @@ export function CallStage({
   onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
   /** The host turned this viewer's microphone off, and it is still off. */
   hostMuted?: boolean;
+  /** The host asked this viewer to restart their connection, and they have not answered. */
+  helpAsk?: HelpAskCode | null;
+  /** The viewer chose to restart their connection. */
+  onRestartConnection?: () => void;
+  /** The viewer turned the host's ask down. */
+  onDismissHelpAsk?: () => void;
   /** Host: ask for one person's microphone to be turned off. */
   onMutePeer?: (peerId: string) => void;
+  /** Host: ask one person to do something about their connection. False when it did not go out. */
+  onAskPeer?: (peerId: string, ask: HelpAskCode) => boolean;
   /** Host: remove one person from the room. */
   onRemovePeer?: (peerId: string) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
@@ -920,6 +933,14 @@ export function CallStage({
             : 'The host muted your microphone. Turn it back on when you want to speak.'}
         </p>
       )}
+      {helpAsk && phase !== 'finalizing' && (
+        <HelpAsk
+          ask={helpAsk}
+          recording={phase === 'recording'}
+          onRestart={() => onRestartConnection?.()}
+          onDismiss={() => onDismissHelpAsk?.()}
+        />
+      )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {recordUnavailableReason}
@@ -1191,6 +1212,7 @@ export function CallStage({
                 people={remotePeers}
                 recording={takeActive || Boolean(resumeOffer)}
                 onMute={onMutePeer}
+                onAsk={onAskPeer}
                 onRemove={onRemovePeer}
                 onClose={closePeople}
               />

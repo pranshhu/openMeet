@@ -12,6 +12,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host can ask a participant to restart their connection from **People**.
+  The participant sees the request and decides; nothing restarts without their
+  press.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.

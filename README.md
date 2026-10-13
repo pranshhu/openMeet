@@ -71,7 +71,8 @@ retention policy to trust, because there's nothing retained.
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
 - Host controls in **People**: turn a participant's microphone off for the call (they
-  are told, and turn it back on themselves), or remove someone from the room
+  are told, and turn it back on themselves), ask someone to restart their connection
+  (they decide on their own screen), or remove someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
@@ -492,7 +493,9 @@ it** (all-party-consent jurisdictions, GDPR).
 The host can turn a participant's microphone off from **People** in the call. That
 person is told at once and turns it back on with their own microphone button. While
 it is off their recording has no sound from the microphone, exactly as when they turn
-it off themselves; nobody can turn another person's microphone on.
+it off themselves; nobody can turn another person's microphone on. The host can also
+ask a participant to restart their connection, and that person decides on their own
+screen.
 
 The host can also remove a participant from **People**. That person is told the host
 removed them. What they recorded before the removal stays in the host's folder and

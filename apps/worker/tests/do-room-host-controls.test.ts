@@ -316,3 +316,89 @@ describe('Room DO — host controls during a take', () => {
     [h.ws, b.ws, late.ws].forEach((w) => w.close());
   });
 });
+
+describe('Room DO — the host asks a participant for help', () => {
+  const ask = { type: 'peer-help', ask: 'reconnect' };
+
+  it("passes on only the host's ask, only to the person named, as the bare shape", async () => {
+    const slug = 'hch-host-aaa';
+    await seedRoom(slug, 'tok-hch-host');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-host' });
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+    const p = await enter(slug, 'P', { producer: true });
+
+    // Neither a guest's word nor a producer's counts, whoever it names.
+    b.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+    p.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+    await settle();
+    for (const w of [h, a, b, p]) expect(ofType(w.heard, 'peer-help')).toEqual([]);
+
+    h.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId, extra: 'x', device: 'cam' }));
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    await settle();
+    expect(ofType(a.heard, 'peer-help')).toEqual([ask]);
+    for (const w of [h, b, p]) expect(ofType(w.heard, 'peer-help')).toEqual([]);
+
+    [h.ws, a.ws, b.ws, p.ws].forEach((w) => w.close());
+  });
+
+  it('passes on nothing for an ask that is not on the list', async () => {
+    const slug = 'hch-asks-aaa';
+    await seedRoom(slug, 'tok-hch-ask');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-ask' });
+    const a = await enter(slug, 'A');
+
+    h.ws.send(JSON.stringify({ type: 'peer-help', peerId: a.me.peerId }));
+    for (const bad of ['mute', 1, null, ['reconnect'], {}]) {
+      h.ws.send(JSON.stringify({ type: 'peer-help', peerId: a.me.peerId, ask: bad }));
+    }
+    h.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    await settle();
+    expect(ofType(a.heard, 'peer-help')).toEqual([ask]);
+    expect(ofType(h.heard, 'error')).toEqual([]);
+
+    [h.ws, a.ws].forEach((w) => w.close());
+  });
+
+  it('ignores an ask that names nobody else in the room, without closing the socket', async () => {
+    const slug = 'hch-ignr-aaa';
+    await seedRoom(slug, 'tok-hch-ignore');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-ignore' });
+    const a = await enter(slug, 'A');
+    let hostClosed = false;
+    h.ws.addEventListener('close', () => (hostClosed = true));
+
+    for (const peerId of [7, null, '', 'nobody', h.me.peerId]) {
+      h.ws.send(JSON.stringify({ ...ask, peerId }));
+    }
+    h.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    await settle();
+    expect(ofType(a.heard, 'peer-help')).toEqual([ask]);
+    expect(ofType(h.heard, 'peer-help')).toEqual([]);
+    expect(hostClosed).toBe(false);
+
+    [h.ws, a.ws].forEach((w) => w.close());
+  });
+
+  it('passes it on while a take runs', async () => {
+    const slug = 'hch-take-aaa';
+    await seedRoom(slug, 'tok-hch-take');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-take' });
+    const a = await enter(slug, 'A');
+    h.ws.send(
+      JSON.stringify({ type: 'recording-started', recordingId: 'rec-1', kind: 'camera', filename: 'host_rec-1.mp4' })
+    );
+    await until(() => ofType(a.heard, 'recording-started').length > 0);
+
+    h.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    expect(ofType(a.heard, 'peer-help')).toEqual([ask]);
+
+    [h.ws, a.ws].forEach((w) => w.close());
+  });
+});

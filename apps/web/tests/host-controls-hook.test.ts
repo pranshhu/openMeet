@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { phaseOnConnectionStateChange, phaseOnFatalClose, useRoom } from '@/hooks/useRoom';
+import { SignalClient } from '@/lib/signal';
 
 /**
  * The host's controls as the hook sees them: the real useRoom, with the
@@ -9,6 +10,7 @@ import { phaseOnConnectionStateChange, phaseOnFatalClose, useRoom } from '@/hook
 
 let handlers: Record<string, ((m: unknown) => void)[]> = {};
 let sent: unknown[] = [];
+let sendResult = true;
 
 vi.mock('@/lib/api', () => ({
   getRoom: vi.fn().mockResolvedValue({ slug: 'abc-defg-hij', expires_at: Date.now() + 60_000 }),
@@ -31,7 +33,10 @@ vi.mock('@/lib/signal', () => ({
     connect: vi.fn(),
     close: vi.fn(),
     reconnect: vi.fn(),
-    send: vi.fn((m: unknown) => sent.push(m)),
+    send: vi.fn((m: unknown) => {
+      sent.push(m);
+      return sendResult;
+    }),
     on: vi.fn((type: string, h: (m: unknown) => void) => {
       (handlers[type] ??= []).push(h);
     }),
@@ -90,6 +95,7 @@ const presences = () => sent.filter((m) => (m as { type?: string }).type === 'pr
 beforeEach(() => {
   handlers = {};
   sent = [];
+  sendResult = true;
 });
 
 describe('a microphone the host mutes', () => {
@@ -164,5 +170,74 @@ describe('removed by the host (close code 4007)', () => {
 
   it('is not pulled back into the call by a connection that comes up late', () => {
     expect(phaseOnConnectionStateChange('removed', 'connected')).toBe('removed');
+  });
+});
+
+describe('the host asks a person to restart their connection', () => {
+  const signal = () => vi.mocked(SignalClient).mock.results.at(-1)!.value as { reconnect: ReturnType<typeof vi.fn> };
+
+  it('holds the ask for the guest and restarts nothing until the guest presses Restart', async () => {
+    const { result } = await joinAs('guest');
+    expect(result.current.state.helpAsk).toBeNull();
+
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+    expect(result.current.state.helpAsk).toBe('reconnect');
+    expect(signal().reconnect).not.toHaveBeenCalled();
+  });
+
+  it('restarts the connection once on Restart, and the ask is gone', async () => {
+    const { result } = await joinAs('guest');
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+
+    act(() => result.current.restartConnection());
+    expect(signal().reconnect).toHaveBeenCalledTimes(1);
+    expect(result.current.state.helpAsk).toBeNull();
+  });
+
+  it('drops the ask on Not now and restarts nothing', async () => {
+    const { result } = await joinAs('guest');
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+
+    act(() => result.current.dismissHelpAsk());
+    expect(result.current.state.helpAsk).toBeNull();
+    expect(signal().reconnect).not.toHaveBeenCalled();
+  });
+
+  it('keeps nothing for an ask it does not know', async () => {
+    const { result } = await joinAs('guest');
+    for (const ask of ['mute', 1, null, undefined, ['reconnect'], {}]) emit('peer-help', { type: 'peer-help', ask });
+    expect(result.current.state.helpAsk).toBeNull();
+  });
+
+  it('keeps nothing when this page is the host', async () => {
+    const { result } = await joinAs('host');
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+    expect(result.current.state.helpAsk).toBeNull();
+  });
+
+  it("sends the host's ask for one person to the room and returns whether it went out", async () => {
+    const { result } = await joinAs('host');
+    sent = [];
+    let went = false;
+    act(() => {
+      went = result.current.askPeer('p-other', 'reconnect');
+    });
+    expect(went).toBe(true);
+    expect(sent).toContainEqual({ type: 'peer-help', peerId: 'p-other', ask: 'reconnect' });
+
+    sendResult = false;
+    act(() => {
+      went = result.current.askPeer('p-other', 'reconnect');
+    });
+    expect(went).toBe(false);
+  });
+
+  it('returns false for an ask made before there is a socket', () => {
+    const { result } = renderHook(() => useRoom('abc-defg-hij'));
+    let went = true;
+    act(() => {
+      went = result.current.askPeer('p-other', 'reconnect');
+    });
+    expect(went).toBe(false);
   });
 });
