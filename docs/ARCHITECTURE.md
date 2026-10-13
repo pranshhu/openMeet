@@ -86,7 +86,10 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
   when it is one of those codes, and the page that receives it checks again.
   `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
-  when it is exactly `true`, and a page reads nothing else as a raised hand.
+  when it is exactly `true`, and a page reads nothing else as a raised hand. It also
+  carries `title`, the sender's own text for their name tag: the Room passes it on, trimmed,
+  only when `titleFrom` accepts it (a string of 1 to `MAX_TITLE_LENGTH` = 60 units once
+  trimmed), and a page checks it again.
   `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
   stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -205,7 +208,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
 - `presence` is relayed with `handRaised: true` only when the sender's field is exactly
-  `true`; any other value is left out. Nothing is kept.
+  `true`; any other value is left out. `title` goes on, trimmed, only when `titleFrom`
+  accepts it, and a presence with a bad title is still relayed without the field. Nothing
+  is kept.
 - `reaction` is relayed to every other joined peer (`broadcastExcept`, stamped
   `from`/`fromPeerId`) when its code is one of `REACTIONS`, and dropped otherwise; only
   `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
@@ -327,7 +332,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
   preview is back; Try again asks for the microphone alone when Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
-  form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
+  form, so Enter joins). Directly under it the main join form has an optional **title** field
+  (`maxLength` `MAX_TITLE_LENGTH`; not on the producer or Present-only screens, and hidden with
+  the form on the check page); Join does not depend on it. It also has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
   (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
   `om_listening`). **Speakers, echo cancellation on** opens the microphone again with
@@ -470,6 +477,20 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   person's own tile the same mark. The names of the people who have a tile and a raised
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
+- **Name tag title** — the text from the lobby's title field. `Lobby` hands it to
+  `chooseTitle` (`lib/name-tag.ts`, held in a module value like `lib/listening.ts` and typed
+  per visit, kept nowhere); `joinedTitle()` gives `CallStage` the text for the person's own
+  tile, and `titleField()` is spread into the `presence` that `sendPresence` sends, so it
+  goes again to everyone who joins and after a reconnect. A page keeps what it receives on
+  that person's `RemotePeer.title`, read through `titleFrom` by `applyRemotePeerPresence` on
+  every presence, so a presence without a valid title leaves the person with none.
+  `CallStage` gives each camera feed its title (`StageFeed.title`, passed on by `feedProps`);
+  a screen tile has none. `VideoTile` draws it as a second line of its own inside the name
+  tag, smaller and dimmer, and the tile is a CSS container: below 224 px wide (the corner
+  picture, a phone's floating picture, the narrow side column) the line is hidden by a
+  container query, with no measuring in script. The tag's tooltip holds the name and the
+  title. The title is drawn only as text, and reaches no file, the People panel, chat or the
+  waiting room.
 - **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
   incoming video** (`CallStage`; not for the host, whose files are written directly, and
   not for a guest the host set as not recorded or whose browser cannot record, who have
@@ -1939,3 +1960,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
+- **A title is not remembered and cannot be changed in the call.** It is typed in the lobby
+  for one visit; a person who wants another leaves and joins again.
+- **A producer and a Present-only device have no title.** Their lobby has no field and they
+  have no tile to show it on.
+- **A small tile shows the name alone.** In a tile narrower than 224 px the title is hidden;
+  its owner's tag still holds it in the tooltip.
+- **A title is its owner's own text and nobody checks it.** Only its type and length are
+  checked, and it is not in any file.

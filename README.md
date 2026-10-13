@@ -122,6 +122,8 @@ retention policy to trust, because there's nothing retained.
 - **Raise hand**: one click puts a mark on your tile for everyone, so a panel can take
   turns without talking over the recording (a phone held upright shows the hands and
   has no button)
+- **A title under your name**: type it in the lobby and it shows as a second line on your
+  name tag, on your tile and on everyone's screen
 - Quick reactions (thumbs up, applause, laugh, heart) from the arrow beside **Raise
   hand**: the picture shows on your tile for a few seconds, silently, for everyone
 - Screen kept awake during a take, REC badge when the tab is hidden, and

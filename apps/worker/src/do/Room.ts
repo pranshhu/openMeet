@@ -11,6 +11,7 @@ import {
   WS_CLOSE_REPLACED,
   isListening,
   isReaction,
+  titleFrom,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -533,6 +534,10 @@ export class Room implements DurableObject {
           // A raised hand travels only as a real `true`: the field is the
           // sender's, and every other screen draws what is passed on here.
           ...(parsed.handRaised === true ? { handRaised: true } : {}),
+          // The title is the sender's own text: it goes on only when it is
+          // one, and as the trimmed text, so no page draws more than it is
+          // allowed to hold.
+          ...(titleFrom(parsed.title) ? { title: titleFrom(parsed.title) } : {}),
           from: p.role,
           fromPeerId: p.peerId,
           ...(p.displayName ? { fromName: p.displayName } : {}),

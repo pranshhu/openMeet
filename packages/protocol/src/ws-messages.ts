@@ -1,3 +1,5 @@
+import { MAX_TITLE_LENGTH } from './constants';
+
 /**
  * `producer` is present but never recorded and never publishes media: a
  * technical operator who watches the session so the host can focus on the
@@ -82,6 +84,8 @@ export type ClientPresence = {
   screenSharing: boolean;
   /** This person has a hand raised: they are waiting to speak. Sent only while true. */
   handRaised?: boolean;
+  /** The sender's own title, shown under their name. Absent when they gave none. */
+  title?: string;
 };
 /**
  * A quick reaction, drawn for a moment on its sender's tile. A code, not a
@@ -93,6 +97,17 @@ export type Reaction = (typeof REACTIONS)[number];
 
 export function isReaction(v: unknown): v is Reaction {
   return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+/**
+ * A person's title as text to show, or '' when `v` is not one: not a string,
+ * blank, or longer than MAX_TITLE_LENGTH once trimmed. Used by the Room and
+ * by the page, because the field is another participant's.
+ */
+export function titleFrom(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  const t = v.trim();
+  return t.length <= MAX_TITLE_LENGTH ? t : '';
 }
 
 export type ClientReaction = { type: 'reaction'; reaction: Reaction };
@@ -296,6 +311,8 @@ export type ServerPresence = {
   screenSharing: boolean;
   /** The sender has a hand raised. The Room passes it on only when it is exactly true. */
   handRaised?: boolean;
+  /** The sender's title. The Room passes it on only when `titleFrom` accepts it. */
+  title?: string;
   from: Role;
   fromPeerId?: string;
   fromName?: string;

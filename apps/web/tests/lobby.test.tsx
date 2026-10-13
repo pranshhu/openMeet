@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within, cleanup } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck, folderCheck } from '@/lib/preflight';
@@ -13,6 +13,7 @@ import {
   presetById,
 } from '@/lib/quality';
 import { formatBytes } from '@/lib/sync-report';
+import { chooseTitle, titleField } from '@/lib/name-tag';
 import type { TakeJournal } from '@/lib/take-journal';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
 
@@ -2389,5 +2390,69 @@ describe('Lobby', () => {
         );
       });
     });
+  });
+});
+
+describe('Lobby: a title under the name', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+  });
+
+  afterEach(() => {
+    chooseTitle('');
+    vi.unstubAllGlobals();
+  });
+
+  it('has a title field under the name in the main form, for any phone to type in', () => {
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    const title = screen.getByLabelText('Your title, optional') as HTMLInputElement;
+    const name = screen.getByLabelText('Your name') as HTMLInputElement;
+    expect(title.tagName).toBe('INPUT');
+    expect(title.placeholder).toBe('Title or company (optional)');
+    expect(title.maxLength).toBe(60);
+    expect(title.autocomplete).toBe('organization-title');
+    expect(title.className).toBe(name.className);
+    expect(name.form).toBe(title.form);
+    expect(name.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('has no title field for a producer, on the Present-only screen, or on the check page', () => {
+    const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+    expect(screen.queryByLabelText('Your title, optional')).toBeNull();
+    unmount();
+
+    const present = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+    expect(screen.queryByLabelText('Your title, optional')).toBeNull();
+    present.unmount();
+
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly />);
+    const hidden = screen.getByLabelText('Your title, optional', { selector: 'input' }) as HTMLInputElement;
+    expect(hidden.closest('form')).toHaveAttribute('hidden');
+  });
+
+  it('joins with the title typed, and with none when it was left empty', async () => {
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    fireEvent.change(screen.getByLabelText('Your title, optional'), { target: { value: '  Founder, Acme ' } });
+    fireEvent.submit(screen.getByLabelText('Your title, optional').closest('form')!);
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+    expect(titleField()).toEqual({ title: 'Founder, Acme' });
+    cleanup();
+
+    const again = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={again} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    fireEvent.submit(screen.getByLabelText('Your title, optional').closest('form')!);
+    await waitFor(() => expect(again).toHaveBeenCalledTimes(1));
+    expect(titleField()).toEqual({});
   });
 });

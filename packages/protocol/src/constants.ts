@@ -140,6 +140,12 @@ export const MAX_RECORDED_PEERS = 4;
  */
 export const MAX_SCRIPT_LENGTH = 50_000;
 
+/**
+ * The longest title a person can give under their name, in UTF-16 units
+ * (`String.length`). A longer one is dropped, never cut.
+ */
+export const MAX_TITLE_LENGTH = 60;
+
 export const WS_CLOSE_CAPACITY_FULL = 4001;
 export const WS_CLOSE_INVALID_SLUG = 4002;
 export const WS_CLOSE_EXPIRED_SLUG = 4003;

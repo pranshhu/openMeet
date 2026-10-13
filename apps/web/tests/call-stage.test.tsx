@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
+import { chooseTitle } from '@/lib/name-tag';
 
 const baseProps = {
   role: 'host' as const,
@@ -2944,5 +2945,59 @@ describe('CallStage: the pop-up of a line for everyone starts with the page’s 
     const popup = screen.getByRole('status');
     expect(popup.textContent).toBe('To everyone: Private · from HostAnasend it to me');
     expect(popup.querySelector('[data-private-mark]')).toBeNull();
+  });
+});
+
+describe('CallStage: a title under a name', () => {
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const eve = { peerId: 'p-eve', name: 'Eve', stream: null, role: 'guest' as const, title: 'Founder, Acme' };
+  const fay = { peerId: 'p-fay', name: 'Fay', stream: null, role: 'guest' as const };
+
+  it('puts a remote person’s title on their tile, and leaves a one-line tag for one without', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[eve]} />);
+    const tag = document.querySelector('[title^="Eve"]') as HTMLElement;
+    expect(tag.title).toBe('Eve\nFounder, Acme');
+    expect(Array.from(tag.children).map((c) => c.textContent)).toEqual(['Eve', 'Founder, Acme']);
+    cleanup();
+
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[fay]} />);
+    const plain = document.querySelector('[title="Fay"]') as HTMLElement;
+    expect(plain.children).toHaveLength(0);
+  });
+
+  it('puts the title on every tile of a mesh call, the first and the others', () => {
+    const gus = { peerId: 'p-gus', name: 'Gus', stream: null, role: 'guest' as const, title: 'Producer' };
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[eve, gus, fay]} />);
+    expect((document.querySelector('[title^="Eve"]') as HTMLElement).title).toBe('Eve\nFounder, Acme');
+    expect((document.querySelector('[title^="Gus"]') as HTMLElement).title).toBe('Gus\nProducer');
+    expect((document.querySelector('[title="Fay"]') as HTMLElement).children).toHaveLength(0);
+  });
+
+  it('puts the title this tab joined with on its own tile, and none on a screen tile', () => {
+    chooseTitle('Host, Acme');
+    try {
+      render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[fay]} remoteScreenStream={stream()} />);
+      const own = document.querySelector('[title^="Alice (You)"]') as HTMLElement;
+      expect(own.title).toBe('Alice (You)\nHost, Acme');
+      expect(Array.from(own.children).map((c) => c.textContent)).toEqual(['Alice (You)', 'Host, Acme']);
+      expect(screen.queryAllByText('Host, Acme')).toHaveLength(1);
+    } finally {
+      chooseTitle('');
+    }
+  });
+
+  it('keeps the host’s capability note after the name, with the title as the second line', () => {
+    const noted = { ...eve, role: 'guest' as const };
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={stream()}
+        remotePeers={[noted]}
+        capabilities={{ 'p-eve': { mp4: true, wav: true, listening: 'speakers' } }}
+      />
+    );
+    const tag = document.querySelector('[title^="Eve"]') as HTMLElement;
+    expect(tag.children[0]!.textContent).toBe('Eve — on speakers');
+    expect(tag.children[1]!.textContent).toBe('Founder, Acme');
   });
 });

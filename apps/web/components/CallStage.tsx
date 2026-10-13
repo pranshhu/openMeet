@@ -29,6 +29,7 @@ import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { LISTENING_TAG } from '@/lib/listening';
+import { joinedTitle } from '@/lib/name-tag';
 import { isPhone } from '@/lib/switchable-media';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
@@ -651,6 +652,7 @@ export function CallStage({
   const local: StageFeed = {
     stream: localStream,
     name: localName ? `${localName} (You)` : 'You',
+    ...(joinedTitle() ? { title: joinedTitle() } : {}),
     muted: true,
     camOff: !camOn || rearCameraEndsFace,
     // A self-view reads mirrored, as in the lobby; a rear camera shows the world.
@@ -694,6 +696,7 @@ export function CallStage({
         stream: remoteStream,
         volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
+        ...(firstRemote?.title ? { title: firstRemote.title } : {}),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
         presence: (
@@ -1137,6 +1140,7 @@ export function CallStage({
                   stream: r.stream,
                   volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
+                  ...(r.title ? { title: r.title } : {}),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
                   presence: (

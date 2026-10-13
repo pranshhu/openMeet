@@ -12,6 +12,7 @@ import {
   WS_CLOSE_REPLACED,
   recordingChannelKind,
   isListening,
+  titleFrom,
   type BrowserNote,
   type Listening,
   type Role,
@@ -36,6 +37,7 @@ import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
 import { hostTagNote } from '@/lib/browser-guidance';
 import { listeningField } from '@/lib/listening';
+import { titleField } from '@/lib/name-tag';
 import { isStagePeer } from '@/lib/stage-peers';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
@@ -129,6 +131,8 @@ export interface PeerPresence {
 export interface RemotePeer {
   peerId: string;
   name: string | null;
+  /** The person's own title, from their latest presence; absent when they gave none. */
+  title?: string | undefined;
   stream: MediaStream | null;
   presence?: PeerPresence | undefined;
   role?: Role | undefined;
@@ -139,7 +143,7 @@ export interface RemotePeer {
 
 export function applyRemotePeerPresence(
   remotePeers: RemotePeer[],
-  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean }
+  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean; title?: unknown }
 ): RemotePeer[] {
   const presence: PeerPresence = {
     micOn: m.micOn,
@@ -148,6 +152,8 @@ export function applyRemotePeerPresence(
     // Another participant's field, so only a real `true` is a raised hand.
     ...(m.handRaised === true ? { handRaised: true } : {}),
   };
+  // Another participant's text too, so it is checked here as the Room checks it.
+  const title = titleFrom(m.title) || undefined;
   const targetPeerId = m.fromPeerId ?? remotePeers[0]?.peerId;
   if (!targetPeerId) return remotePeers;
   const exists = remotePeers.some((r) => r.peerId === targetPeerId);
@@ -157,6 +163,7 @@ export function applyRemotePeerPresence(
         ? {
             ...r,
             presence,
+            title,
             ...(m.fromName && !r.name ? { name: m.fromName } : {}),
           }
         : r
@@ -169,6 +176,7 @@ export function applyRemotePeerPresence(
       name: m.fromName ?? null,
       stream: null,
       presence,
+      title,
     },
   ];
 }
@@ -806,6 +814,7 @@ export function useRoom(slug: string) {
       screenSharing: screenSharingRef.current,
       // Absent while the hand is down, like every optional field on the wire.
       ...(handRaisedRef.current ? { handRaised: true } : {}),
+      ...titleField(),
     });
   }, []);
 
