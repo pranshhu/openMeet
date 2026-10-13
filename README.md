@@ -143,6 +143,9 @@ retention policy to trust, because there's nothing retained.
   00:00, downloaded from the summary
 - Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
   lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
+- One `ffmpeg` command that mixes a take with two or more people into a single video:
+  the cameras in a grid and everyone's audio mixed. It re-encodes, so it is slow, and
+  openMeet renders nothing itself
 - `chapters.txt` if anyone dropped markers
 
 **Optional**
@@ -534,6 +537,11 @@ the screen that follows offers them too.
    ignores it still needs the offset. Call-audio copies are listed under
    `callCopies.files`, each with its own `offsetMs`; they were recorded on the host, so
    no clock sync applies.
+   Or run the one program command (`program` in `sync.json`, the last row under Editor
+   commands, for a take with two or more people): it writes a single `_program.mp4` with
+   every camera in a grid and everyone's audio mixed, each file placed by its offset. It
+   re-encodes, so it is slow. It leaves out screen recordings, call-audio copies and a
+   person whose start is unknown; `program.leftOut` lists each file it does not read.
    `clock` in `sync.json` says, for each guest, when the estimate behind its offset was
    taken and the round trip of the exchange it came from; the offset can be wrong by up to
    half of that plus 2 ms.

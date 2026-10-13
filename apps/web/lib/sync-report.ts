@@ -1,6 +1,7 @@
 import { RECORDING_FRAME_RATE, WAV_BIT_DEPTH, WAV_SAMPLE_RATE, type Role } from '@openmeet/protocol';
 import { clockSection, type ClockReading } from './clock-drift';
 import { cleanFps } from './quality';
+import { programMix, type ProgramMix } from './program-mix';
 import type { NoticeRecord } from './notice-log';
 
 export interface ChapterMarker {
@@ -764,6 +765,15 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   }));
   screenSegments.forEach((s, i) => align(s.file, s.offsetMs, `Screen segment ${i + 1}`));
 
+  // A companion like the clock section: a failure here must not cost the take
+  // its sync file.
+  let program: ProgramMix | null = null;
+  try {
+    program = programMix(input, alignedFiles, fileList);
+  } catch {
+    // The report is written without the section.
+  }
+
   // Every WAV master this report lists is a row of kind audio: the host's, each
   // guest's, and the host's file from before a reload. A call-audio copy is not
   // one: it was never lossless.
@@ -786,6 +796,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     ...combineCommands,
     ...alignCommands,
     ...flacCommands,
+    ...(program ? [program.row] : []),
   ];
 
   const audioOnlyFiles = [hostFile, ...guests.map((g) => g.file)].filter(
@@ -872,6 +883,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
     },
     ...(clock ? { clock } : {}),
     ...(flacFiles.length > 0 ? { flac: { note: FLAC_NOTE, files: flacFiles } } : {}),
+    ...(program ? { program: program.section } : {}),
     frameRate: {
       note: FRAME_RATE_NOTE,
       requestedFps: RECORDING_FRAME_RATE,

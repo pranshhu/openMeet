@@ -278,6 +278,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   disk. The page reads "Paused", and **Continue** records the next part as a new take
   in the same folder, after the usual countdown and with the recording notice shown
   again. A paused session is one take per part, not one file with a gap in it.
+- After a take with two or more people, the summary and `sync.json` give one `ffmpeg`
+  command that mixes the take into a single video: the cameras in a grid and everyone's
+  audio mixed, each placed by its start offset.
 
 ### Changed
 
