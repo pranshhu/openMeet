@@ -371,16 +371,21 @@ function slotNameForPeer(h: RecordingHandles, peerId: string): string | undefine
   return undefined;
 }
 
+/**
+ * `host_screen_<id>.mp4` for the first segment of the first take, `_2` and so on
+ * for later segments, and `_take<n>` last from the second take on, as every
+ * other file of a take ends.
+ */
 function screenFileName(
   role: 'host' | 'guest',
   recordingId: string,
   segment: number,
+  take: number,
   name?: unknown
 ): string {
   const who = roleWithName(role, name);
-  return segment <= 1
-    ? `${who}_screen_${recordingId}.mp4`
-    : `${who}_screen_${recordingId}_${segment}.mp4`;
+  const base = segment <= 1 ? `${who}_screen_${recordingId}` : `${who}_screen_${recordingId}_${segment}`;
+  return take <= 1 ? `${base}.mp4` : `${base}_take${take}.mp4`;
 }
 
 /**
@@ -1933,7 +1938,7 @@ export async function startScreenRecording(
       // already there; a fresh take's id is new, so it never probes.
       const free = await freeNumber(
         h.dir,
-        (n) => screenFileName('host', h.recordingId, n, h.hostName),
+        (n) => screenFileName('host', h.recordingId, n, h.take ?? 1, h.hostName),
         segment
       );
       if (free === null) {
@@ -1947,7 +1952,7 @@ export async function startScreenRecording(
       h.screenSegment = segment;
     }
     const writer = new FileWriter();
-    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment, h.hostName));
+    await writer.openIn(h.dir, screenFileName('host', h.recordingId, segment, h.take ?? 1, h.hostName));
     if (screen.getVideoTracks()[0]?.readyState === 'ended') {
       await writer.close();
       rollback();
@@ -2103,14 +2108,14 @@ export async function bindHostScreenChannel(
     // A number the folder already holds is given up for the next unclaimed one,
     // which keeps a segment saved before the crash from being opened over. A
     // fresh take reuses its own number.
-    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n), segment, claim);
+    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n, h.take ?? 1), segment, claim);
   }
   if (segment === null) {
     refuseScreenSegment(h, 'guest', onError);
     return;
   }
   const writer = new FileWriter();
-  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment));
+  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment, h.take ?? 1));
   // The share can stop while the file is opening. Its close event has fired by
   // now, so nothing below would ever close this file or drop its row.
   if (channel.readyState === 'closed') {

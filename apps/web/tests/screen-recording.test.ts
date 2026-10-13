@@ -579,6 +579,16 @@ describe('screen recording', () => {
     expect(segments[1]?.sharer).toBe('Bob');
   });
 
+  it("ends a guest's screen files of a later take in _take<n>", async () => {
+    files.length = 0;
+    const h: RecordingHandles = { recordingId: 'rec-take2', dir: fakeDir(), take: 2 };
+
+    await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-b');
+    await bindHostScreenChannel(new EventTarget() as unknown as RTCDataChannel, h, undefined, 'peer-c');
+
+    expect(files).toEqual(['guest_screen_rec-take2_take2.mp4', 'guest_screen_rec-take2_2_take2.mp4']);
+  });
+
   it('two channels bound in the same tick get two files', async () => {
     files.length = 0;
     const h: RecordingHandles = { recordingId: 'rec-same-tick', dir: fakeDir() };

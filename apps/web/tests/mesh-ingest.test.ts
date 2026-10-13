@@ -1927,6 +1927,21 @@ describe('a take resumed from its journal', () => {
     expect(probes).toEqual(['guest_screen_rec_3.mp4', 'guest_screen_rec_4.mp4']);
   });
 
+  it('probes a resumed later take for a free screen segment under that take\'s names', async () => {
+    const opened: string[] = [];
+    const probes: string[] = [];
+    const h = {
+      recordingId: 'rec',
+      take: 2,
+      resumed: true,
+      dir: fakeDir(opened, [], [], ['guest_screen_rec_take2.mp4'], probes),
+    } as RecordingHandles;
+
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h);
+    expect(probes).toEqual(['guest_screen_rec_take2.mp4', 'guest_screen_rec_2_take2.mp4']);
+    expect(opened).toEqual(['guest_screen_rec_2_take2.mp4']);
+  });
+
   it('leaves a fresh take to open its own screen segment number', async () => {
     const opened: string[] = [];
     const probes: string[] = [];

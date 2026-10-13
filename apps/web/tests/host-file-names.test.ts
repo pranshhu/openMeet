@@ -96,6 +96,57 @@ describe('host file names', () => {
     await endHostRecording(handles);
   });
 
+  it("ends each of the host's screen files of a later take in _take<n>", async () => {
+    const screen = () => {
+      const track = { readyState: 'live', getSettings: () => ({ width: 2560, height: 1440 }) };
+      return { getVideoTracks: () => [track], getAudioTracks: () => [], getTracks: () => [track] } as unknown as MediaStream;
+    };
+    for (const [take, tail] of [[2, '_take2'], [3, '_take3']] as const) {
+      const opened: string[] = [];
+      const handles = await startHostRecording({
+        recordingId: 'rec1',
+        localStream: noMedia,
+        dir: namedDir(opened) as never,
+        hostName: 'Ana',
+        take,
+      });
+      opened.length = 0;
+      await startScreenRecording(handles, screen(), 'host', null);
+      await stopScreenRecording(handles);
+      await startScreenRecording(handles, screen(), 'host', null);
+      await stopScreenRecording(handles);
+      expect(opened).toEqual([`host-ana_screen_rec1${tail}.mp4`, `host-ana_screen_rec1_2${tail}.mp4`]);
+      await endHostRecording(handles);
+    }
+  });
+
+  it('probes a resumed later take with the name it will open', async () => {
+    const opened: string[] = [];
+    const held = new Set(['host-ana_screen_rec1_take2.mp4']);
+    const dir = {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (opts?.create) {
+          if (held.has(name)) throw new Error(`would replace ${name}`);
+          opened.push(name);
+        } else if (!held.has(name)) {
+          throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+        }
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      },
+    };
+    const track = { readyState: 'live', getSettings: () => ({ width: 2560, height: 1440 }) };
+    const screen = {
+      getVideoTracks: () => [track],
+      getAudioTracks: () => [],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    const handles = { recordingId: 'rec1', dir, hostName: 'Ana', resumed: true, take: 2 } as never;
+
+    await startScreenRecording(handles, screen, 'host', null);
+    expect(opened).toEqual(['host-ana_screen_rec1_2_take2.mp4']);
+    await stopScreenRecording(handles);
+  });
+
   it('probes the folder with the same name it will open after a resume', async () => {
     const opened: string[] = [];
     const held = new Set(['host-ana_screen_rec1.mp4']);
