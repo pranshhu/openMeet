@@ -652,8 +652,11 @@ sends `peer-mute`, and the panel follows that person's `presence`.
 `SwitchableMedia`, which is read from `switchableMediaRef` when the ask arrives; a newer ask
 replaces it). `askPeer(peerId, ask)` is the host's side: it sends
 `peer-help` and returns whether the send went out. `dismissHelpAsk()` clears `helpAsk` and nothing
-else; `restartConnection()` clears it and calls `signal.reconnect()`, the path a second `failed`
-connection takes, which does nothing after a terminal close.
+else; `restartConnection()` clears it, starts the cooldown of the automatic rebuild
+(`lastIceReconnectRef`), and calls `signal.reconnect()`, the path a second `failed`
+connection takes, which does nothing after a terminal close. A `reconnect` ask is also taken
+down when `role-assigned` arrives again on a socket the page opened again by itself; a
+`microphone` or `camera` ask stays.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
@@ -1977,7 +1980,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   The page keeps it and shows it when its call screen appears.
 - **A restart gives that person a new id.** A screen they present starts a new file, and their
   Levels fader and the chat's **To** are forgotten, as on every reconnect.
-- **A page that does not know `peer-help` shows nothing.**
+- **A page that does not know `peer-help` shows nothing.** A Worker deployed before this
+  message drops it too. In both cases the host's line still reads that the person was asked.
+- **Nothing limits how often the host asks.** After **Not now** the same question can be sent
+  again at once.
 - **The host does not see which device a person is on or what they have.** The microphone and
   camera asks name no device, and the host names the one it wants by voice.
 - **A person who joined with the microphone only gets the camera ask.** Their camera menu then

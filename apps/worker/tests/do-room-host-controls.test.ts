@@ -385,6 +385,32 @@ describe('Room DO — the host asks a participant for help', () => {
     [h.ws, a.ws].forEach((w) => w.close());
   });
 
+  it('does not ask a socket that is connected but was not admitted to the room', async () => {
+    const slug = 'hch-unjo-aaa';
+    await seedRoom(slug, 'tok-hch-unjoined');
+    const h = await enter(slug, 'H', { hostToken: 'tok-hch-unjoined' });
+    const a = await enter(slug, 'A');
+    const lurker = await openWs(slug);
+    const idle: unknown[] = [];
+    lurker.addEventListener('message', (e) => idle.push(JSON.parse(e.data as string)));
+    const lurkerId = await runInDurableObject(env.ROOM_DO.get(env.ROOM_DO.idFromName(slug)), async (_i, state) =>
+      state
+        .getWebSockets()
+        .map((ws) => (ws.deserializeAttachment() as { peerId: string }).peerId)
+        .find((id) => id !== h.me.peerId && id !== a.me.peerId)!
+    );
+
+    h.ws.send(JSON.stringify({ ...ask, peerId: lurkerId }));
+    h.ws.send(JSON.stringify({ ...ask, peerId: a.me.peerId }));
+    await until(() => ofType(a.heard, 'peer-help').length > 0);
+    await settle();
+    expect(ofType(a.heard, 'peer-help')).toEqual([ask]);
+    expect(idle).toEqual([]);
+
+    [h.ws, a.ws].forEach((w) => w.close());
+    lurker.close();
+  });
+
   it('passes on a microphone ask without the device id sent with it', async () => {
     const slug = 'hch-mics-aaa';
     await seedRoom(slug, 'tok-hch-mic');

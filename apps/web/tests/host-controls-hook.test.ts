@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { phaseOnConnectionStateChange, phaseOnFatalClose, useRoom } from '@/hooks/useRoom';
 import { SignalClient } from '@/lib/signal';
+import { SwitchableMedia } from '@/lib/switchable-media';
 
 /**
  * The host's controls as the hook sees them: the real useRoom, with the
@@ -11,6 +12,7 @@ import { SignalClient } from '@/lib/signal';
 let handlers: Record<string, ((m: unknown) => void)[]> = {};
 let sent: unknown[] = [];
 let sendResult = true;
+let peerOptions: { onConnectionStateChange: (state: string) => void }[] = [];
 
 vi.mock('@/lib/api', () => ({
   getRoom: vi.fn().mockResolvedValue({ slug: 'abc-defg-hij', expires_at: Date.now() + 60_000 }),
@@ -44,19 +46,22 @@ vi.mock('@/lib/signal', () => ({
 }));
 
 vi.mock('@/lib/peer', () => ({
-  PeerConnection: vi.fn().mockImplementation(() => ({
-    start: vi.fn(),
-    close: vi.fn(),
-    setLocalStream: vi.fn(),
-    setLocalStreamAfterFirstOffer: vi.fn(),
-    createControlChannel: vi.fn(),
-    addTransceiver: vi.fn(),
-    restartIce: vi.fn(),
-    connectionState: 'new',
-    rawConnection: null,
-    setPeerCount: vi.fn(),
-    whenConnected: vi.fn().mockResolvedValue(undefined),
-  })),
+  PeerConnection: vi.fn().mockImplementation((options) => {
+    peerOptions.push(options);
+    return {
+      start: vi.fn(),
+      close: vi.fn(),
+      setLocalStream: vi.fn(),
+      setLocalStreamAfterFirstOffer: vi.fn(),
+      createControlChannel: vi.fn(),
+      addTransceiver: vi.fn(),
+      restartIce: vi.fn(),
+      connectionState: 'new',
+      rawConnection: null,
+      setPeerCount: vi.fn(),
+      whenConnected: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
 }));
 
 function emit(type: string, m: unknown) {
@@ -96,6 +101,7 @@ beforeEach(() => {
   handlers = {};
   sent = [];
   sendResult = true;
+  peerOptions = [];
 });
 
 describe('a microphone the host mutes', () => {
@@ -194,6 +200,40 @@ describe('the host asks a person to restart their connection', () => {
     expect(result.current.state.helpAsk).toBeNull();
   });
 
+  it('counts a restart the person made as the one automatic rebuild of the cooldown', async () => {
+    const { result } = await joinAs('guest');
+    act(() => result.current.restartConnection());
+    expect(signal().reconnect).toHaveBeenCalledTimes(1);
+
+    const { onConnectionStateChange } = peerOptions.at(-1)!;
+    act(() => onConnectionStateChange('failed'));
+    act(() => onConnectionStateChange('failed'));
+    expect(signal().reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the restart ask down when the socket was opened again by itself, and keeps a device ask', async () => {
+    const { result } = await joinAs('guest');
+    const again = {
+      type: 'role-assigned',
+      role: 'guest',
+      peerId: 'p-me',
+      ordinal: 2,
+      peers: [{ peerId: 'p-other', ordinal: 1, role: 'host', displayName: 'Bo' }],
+      recording: false,
+    };
+
+    emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
+    emit('role-assigned', again);
+    expect(result.current.state.helpAsk).toBeNull();
+
+    emit('peer-help', { type: 'peer-help', ask: 'microphone' });
+    emit('role-assigned', again);
+    expect(result.current.state.helpAsk).toBe('microphone');
+    emit('peer-help', { type: 'peer-help', ask: 'camera' });
+    emit('role-assigned', again);
+    expect(result.current.state.helpAsk).toBe('camera');
+  });
+
   it('drops the ask on Not now and restarts nothing', async () => {
     const { result } = await joinAs('guest');
     emit('peer-help', { type: 'peer-help', ask: 'reconnect' });
@@ -247,15 +287,28 @@ describe('the host asks a person to switch microphone or camera', () => {
     vi.mocked(SignalClient).mock.results.at(-1)!.value as { reconnect: ReturnType<typeof vi.fn> };
 
   it('holds the ask for a guest and switches nothing', async () => {
-    const { result } = await joinAs('guest');
-    const before = result.current.state.localStream;
+    const getUserMedia = vi.fn().mockRejectedValue(new Error('no device'));
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
+    const switchMic = vi.spyOn(SwitchableMedia.prototype, 'switchMic').mockResolvedValue(undefined);
+    const switchCamera = vi.spyOn(SwitchableMedia.prototype, 'switchCamera').mockResolvedValue(undefined);
+    try {
+      const { result } = await joinAs('guest');
+      const before = result.current.state.localStream;
 
-    emit('peer-help', { type: 'peer-help', ask: 'microphone' });
-    expect(result.current.state.helpAsk).toBe('microphone');
-    emit('peer-help', { type: 'peer-help', ask: 'camera' });
-    expect(result.current.state.helpAsk).toBe('camera');
-    expect(result.current.state.localStream).toBe(before);
-    expect(signal().reconnect).not.toHaveBeenCalled();
+      emit('peer-help', { type: 'peer-help', ask: 'microphone' });
+      expect(result.current.state.helpAsk).toBe('microphone');
+      emit('peer-help', { type: 'peer-help', ask: 'camera' });
+      expect(result.current.state.helpAsk).toBe('camera');
+      expect(result.current.state.localStream).toBe(before);
+      expect(signal().reconnect).not.toHaveBeenCalled();
+      expect(switchMic).not.toHaveBeenCalled();
+      expect(switchCamera).not.toHaveBeenCalled();
+      expect(getUserMedia).not.toHaveBeenCalled();
+    } finally {
+      switchMic.mockRestore();
+      switchCamera.mockRestore();
+      Reflect.deleteProperty(navigator, 'mediaDevices');
+    }
   });
 
   it('drops a device ask on a page that joined as a producer, and still takes a restart', async () => {

@@ -404,6 +404,7 @@ describe('the person asked to restart their connection', () => {
     render(<RoomView slug="abc-defg-hij" />);
 
     expect(screen.getByText(question)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(question);
     expect(screen.queryByText(/Your recording goes on/)).toBeNull();
     expect(hook.restartConnection).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(document.body);

@@ -1703,6 +1703,9 @@ export function useRoom(slug: string) {
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
+          // The socket was opened again, which is what a restart ask wanted.
+          // A device ask is about a device, which a new socket does not change.
+          helpAsk: s.helpAsk === 'reconnect' ? null : s.helpAsk,
         }));
         sendPresence();
         // The Room drops its recording flag with the host's socket, and tells a
@@ -2662,6 +2665,9 @@ export function useRoom(slug: string) {
   /** The person accepted the host's ask: the socket is dropped and opened again, and joining rebuilds the rest. */
   const restartConnection = useCallback(() => {
     setState((s) => ({ ...s, helpAsk: null }));
+    // The restart is the rebuild of this cooldown: a second failed connection
+    // right after it must not tear every connection down again.
+    lastIceReconnectRef.current = Date.now();
     signalRef.current?.reconnect();
   }, []);
 
