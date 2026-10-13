@@ -240,19 +240,15 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   resumed after a reload goes on with its rundown.
 - **Microphone only**, under the lobby's preview: join with your microphone and no
   camera. For a person who has no camera, whose camera is blocked or busy, or whose
-  computer struggles with video. Pressing it again opens the camera as well.
-  It is off while the camera and microphone are still being opened.
+  computer struggles with video. Pressing it again opens the camera as well. It is off
+  while the camera and microphone are still being opened.
 - A person who joined with the microphone only is heard by everyone and shown by their
-  initial. Their camera button is off for that call, and its menu says how to get a
-  camera: leave and join again.
-- A person who joined with the microphone only is recorded like everyone else: the WAV
-  master, and an MP4 under the usual name that holds their compressed audio and no
-  picture. Their in-browser backup is the same pair.
-- The session summary lists a host's own file recorded with no camera as "Audio only,
-  no camera", and `sync.json` names such files under `audioOnly` and prints no pairing
-  or frame-rate command for them.
-- The session summary and `sync.json` name a guest's file recorded with no camera as
-  audio only too, once that guest's recording has finished cleanly.
+  initial, and is recorded like everyone else: the WAV master, and an MP4 under the usual
+  name that holds their compressed audio and no picture; their in-browser backup is the
+  same pair. Their camera button is off for that call, and its menu says how to
+  get a camera: leave and join again. The session summary and `sync.json` (`audioOnly`)
+  name such files as audio only, print no pairing or frame-rate command for them, and
+  name a guest's once that guest's recording has finished cleanly.
 - `sync.json` gains a `clock` section: for each guest, the clock estimate its start
   offset comes from, the round trip that bounds its error and when the host received it.
 - A guest's browser measures the clock difference to the host again as its recording
@@ -305,6 +301,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- The lobby lets go of a camera or microphone that arrives after Join or Present
+  only, and of one opened twice in development. After Microphone only, answering
+  "Headphones or speakers?" does not bring back the camera error from the first try.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.

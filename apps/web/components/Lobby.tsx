@@ -344,6 +344,12 @@ export function Lobby({
     setPreviewError(null);
     mm.acquire(deviceConstraints('', '', quality, fps, echo))
       .then(async (s) => {
+        // The lobby was left for the call, or this run of the effect was
+        // cleaned up: nobody owns this capture, so it is let go.
+        if (handedOffRef.current || mmRef.current !== mm) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
         setStream(s);
         // Device labels are only populated after permission is granted.
         const d = await mm.listDevices().catch(() => EMPTY_DEVICES);
@@ -385,6 +391,7 @@ export function Lobby({
     startPreview(mm, saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
+      mmRef.current = null;
     };
   }, []);
 
@@ -427,6 +434,7 @@ export function Lobby({
       setStream(s);
       // A switch that works makes any earlier failed one moot.
       setError(null);
+      setPreviewError(null);
       setMicId(nextMic);
       setCamId(nextCam);
       setQualityId(nextQuality);
@@ -959,7 +967,11 @@ export function Lobby({
               <button type="submit" disabled={!stream || !name.trim()} className={`w-full ${primaryBtn}`}>
                 Join now
               </button>
-              {!stream && <p className="text-sm text-[#5f6368]">Join opens once your camera and mic are on.</p>}
+              {!stream && (
+                <p className="text-sm text-[#5f6368]">
+                  Join opens once your {camId === NO_CAMERA ? 'microphone is' : 'camera and mic are'} on.
+                </p>
+              )}
               {/* A quiet alternative, not a twin of Join: picked by mistake, it
                   joins a guest unrecorded. What it does is said on screen, not
                   only in a tooltip a phone never shows. */}

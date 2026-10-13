@@ -315,7 +315,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   A capture that `reacquire` was still opening when the stream was handed over is stopped as
   it arrives and the handed-over stream is left alone, and Join hands over the capture the
   `MediaManager` holds at that moment, so the call never gets a stream the lobby stops and no
-  capture stays open behind it.
+  capture stays open behind it. A capture that the first preview, Try again or `reacquire` was
+  still opening is stopped as it arrives after any hand-over (Join or Present only), and so is
+  one that arrives for a run of the mount effect that was cleaned up (`mmRef` is cleared then).
   `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
@@ -330,7 +332,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   opened and none has failed (`!stream && !previewError`), and Try again does nothing while
   `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
   microphone, quality, frame rate or echo cancellation made while another is being opened is not
-  taken (`reopeningRef`), so no capture is asked for beside one on its way. The select shows what the
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
