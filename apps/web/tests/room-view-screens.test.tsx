@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
+import { fakeBoard } from './board-fakes';
 
 /**
  * RoomView's screens for states that are slow to reach through the real hook
@@ -1017,5 +1018,27 @@ describe('chat', () => {
     fireEvent.submit(screen.getByTestId('chat-form'));
     expect(hook.sendChat).toHaveBeenCalledTimes(1);
     expect(hook.sendChat).toHaveBeenCalledWith('the number is 4411');
+  });
+
+  it('keeps the media board it made after everyone else left, so showing it in the next take is not making it', () => {
+    const board = fakeBoard();
+    hook.openMediaBoard = vi.fn(() => board);
+    Object.assign(state, inCall, { role: 'host', localStream: empty });
+    const { rerender } = render(<RoomView slug="abc-defg-hij" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Media board' }));
+    expect(hook.openMediaBoard).toHaveBeenCalledTimes(1);
+
+    Object.assign(state, { phase: 'peer-left' });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('Everyone else left')).toBeInTheDocument();
+
+    Object.assign(state, { phase: 'recording' });
+    rerender(<RoomView slug="abc-defg-hij" />);
+    expect(screen.queryByText(/Load intros, stingers or ad reads/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Media board' }));
+
+    expect(screen.getByText(/Load intros, stingers or ad reads/)).toBeInTheDocument();
+    expect(hook.openMediaBoard).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/This take keeps your mic only/)).toBeNull();
   });
 });
