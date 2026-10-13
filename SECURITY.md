@@ -98,7 +98,10 @@ they're already known:
   the tab the host removed until everyone has left, but the invite link is still the
   only credential: a new tab, a private window or another browser joins again. A
   host's mute is a request the muted person's own page carries out; it can turn no
-  microphone on, and a page that ignores it stays unmuted.
+  microphone on, and a page that ignores it stays unmuted. The host can also lock the room
+  against new joins: the Room then refuses any tab it has not seated in this session, but
+  the lock ends with the session, and a tab that was seated can reconnect. It removes no one
+  who is already in the call.
 
 ## Scope
 

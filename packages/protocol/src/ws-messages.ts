@@ -162,6 +162,14 @@ export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
  */
 export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
 
+/**
+ * The host locks or unlocks the room. Acted on only from the host, and only
+ * when `locked` is exactly a boolean. While locked, the Room refuses any join
+ * from a tab it did not seat in this session, with WS_CLOSE_NOT_ADMITTED.
+ * Locking closes nobody.
+ */
+export type ClientRoomAccess = { type: 'room-access'; locked?: boolean };
+
 export type ClientMessage =
   | ClientJoin
   | ClientWebrtcOffer
@@ -182,7 +190,8 @@ export type ClientMessage =
   | ClientRecordingCapability
   | ClientPeerMute
   | ClientPeerRemove
-  | ClientPeerRecorded;
+  | ClientPeerRecorded
+  | ClientRoomAccess;
 
 export interface PeerInfo {
   peerId: string;
@@ -358,6 +367,12 @@ export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; record
  */
 export type ServerPeerMute = { type: 'peer-mute' };
 
+/**
+ * Whether the room is locked, sent to every host in the room: right after its
+ * `role-assigned`, and again after each change. Guests are never told.
+ */
+export type ServerRoomAccess = { type: 'room-access'; locked: boolean };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -380,7 +395,8 @@ export type ServerMessage =
   | ServerError
   | ServerRecordingCapability
   | ServerPeerMute
-  | ServerPeerRecorded;
+  | ServerPeerRecorded
+  | ServerRoomAccess;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -403,6 +419,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'peer-mute',
   'peer-remove',
   'peer-recorded',
+  'room-access',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -428,6 +445,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-capability',
   'peer-mute',
   'peer-recorded',
+  'room-access',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {

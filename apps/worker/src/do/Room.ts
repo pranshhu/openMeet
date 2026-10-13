@@ -7,6 +7,7 @@ import {
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
+  WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   isListening,
@@ -71,6 +72,8 @@ interface SessionRow {
   recordingCount?: number;
   notRecorded?: string[];
   removed?: string[];
+  locked?: boolean;
+  admitted?: string[];
 }
 
 /**
@@ -99,6 +102,10 @@ const MAX_NOT_RECORDED_CLIENTS = 16;
 // Tabs the host removed, kept so the same tab stays out until the session
 // ends. Past the bound the oldest is forgotten and can join again.
 const MAX_REMOVED_CLIENTS = 16;
+// Tabs seated in this session, kept so that a tab that was in the room can come
+// back while it is locked. Past the bound, a tab that has left is forgotten
+// before one that is still here.
+const MAX_ADMITTED_CLIENTS = 32;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -124,6 +131,11 @@ export class Room implements DurableObject {
   // Client ids of the tabs the host removed in this session. By client id for
   // the same reason: it is what a tab presents again on its next socket.
   private removed: string[] = [];
+  // The host locked the room: a tab not in `admitted` is refused until it is
+  // unlocked or the session ends.
+  private locked = false;
+  // Client ids of the tabs seated in this session that are not a host's.
+  private admitted: string[] = [];
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -150,6 +162,8 @@ export class Room implements DurableObject {
         this.recordingCount = session.recordingCount ?? 0;
         this.notRecorded = session.notRecorded ?? [];
         this.removed = session.removed ?? [];
+        this.locked = session.locked === true;
+        this.admitted = session.admitted ?? [];
       }
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
@@ -197,6 +211,8 @@ export class Room implements DurableObject {
       recordingCount: this.recordingCount,
       notRecorded: this.notRecorded,
       removed: this.removed,
+      locked: this.locked,
+      admitted: this.admitted,
     } satisfies SessionRow);
   }
 
@@ -365,6 +381,16 @@ export class Room implements DurableObject {
           }
           return;
         }
+        // A locked room seats nobody it has not seated already in this session.
+        // A host is never refused, and the link is the same for every role.
+        if (this.locked && p.role !== 'host' && !(p.clientId && this.admitted.includes(p.clientId))) {
+          try {
+            ws.close(WS_CLOSE_NOT_ADMITTED, 'locked');
+          } catch {
+            // already gone
+          }
+          return;
+        }
         // Now the role is known: enforce per-role caps.
         // A companion does not count toward MAX_RECORDED_PEERS; it counts with
         // producers toward the 2 unrecorded slots.
@@ -398,6 +424,15 @@ export class Room implements DurableObject {
         // this seat: a socket refused above never becomes part of the room.
         p.joined = true;
         this.save(ws, p);
+        if (p.role !== 'host' && p.clientId && !this.admitted.includes(p.clientId)) {
+          const next = [...this.admitted, p.clientId];
+          if (next.length > MAX_ADMITTED_CLIENTS) {
+            const here = new Set(this.joinedPeers().map(({ p: pp }) => pp.clientId));
+            next.splice(Math.max(next.findIndex((id) => !here.has(id)), 0), 1);
+          }
+          this.admitted = next;
+          await this.saveSession();
+        }
         // Reusable rooms: every join pushes the expiry out, so a weekly show
         // keeps one link alive. Unused rooms still lapse on their own.
         if (this.slug) {
@@ -460,6 +495,7 @@ export class Room implements DurableObject {
               ...(this.isNotRecorded(pp) ? { notRecorded: true } : {}),
             })),
         });
+        if (p.role === 'host') this.send(ws, { type: 'room-access', locked: this.locked });
         this.broadcastExcept(ws, {
           type: 'peer-joined',
           role: p.role,
@@ -709,6 +745,17 @@ export class Room implements DurableObject {
         await this.onClose(target.ws, 'removed');
         break;
       }
+      case 'room-access': {
+        // Only the host locks, and only with a real boolean. Nobody is closed
+        // by it: the lock decides the joins that come after.
+        if (p.role !== 'host' || typeof parsed.locked !== 'boolean') break;
+        this.locked = parsed.locked;
+        await this.saveSession();
+        for (const { ws: to, p: pp } of this.joinedPeers()) {
+          if (pp.role === 'host') this.send(to, { type: 'room-access', locked: this.locked });
+        }
+        break;
+      }
       case 'peer-recorded': {
         // The host's choice for the takes that follow. Refused from anyone else,
         // and while a take is running, so who is recorded never changes under a
@@ -823,6 +870,8 @@ export class Room implements DurableObject {
       this.recordingCount = 0;
       this.notRecorded = [];
       this.removed = [];
+      this.locked = false;
+      this.admitted = [];
       await this.saveSession();
     }
   }

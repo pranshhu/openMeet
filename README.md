@@ -500,6 +500,10 @@ ends there; the rest is in their own browser's backup, which is never deleted fo
 them. If a take was running, their browser keeps recording into that backup until
 they press **Stop and save**; their page then offers the backup as a download, and
 the lobby in that browser lists it afterwards.
+
+The host can also tick **Lock the room** in **People**. Nobody new can join until it is
+unticked; the people already in the call can reconnect. The lock ends with the session,
+and it does not remove anyone who is already in the call.
 Each take's `sync_<id>.json` holds a record of who was told (`recordingNotice`): when the
 host's browser announced the take, everyone the room listed then or who joined while it
 ran, and for each of them the moment their own recording channel reached the host. A
@@ -711,7 +715,9 @@ Known gaps, listed below:
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
   removed tab until everyone has left, but the invite link is the only credential: a new
-  tab or another browser joins again.
+  tab or another browser joins again. The host can lock the room against new joins, which
+  keeps out a new tab for as long as it is locked; the lock ends with the session, and a
+  tab that was in the call can still reconnect.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 

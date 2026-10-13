@@ -65,7 +65,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (20 variants) ↔ `ServerMessage` (22).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (21 variants) ↔ `ServerMessage` (23).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -75,6 +75,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
+  `room-access` (`locked`) is in both unions, and is not a relay: the Room acts on it only from the
+  host and only when `locked` is a boolean, and answers every joined host with its own, `locked`
+  alone and no `from`; a guest is never sent one.
   `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
   the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
   `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
@@ -135,7 +138,8 @@ host: the same channel and messages, with the file's own name in its `backup_off
 WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
-host removed this participant, and the same tab is refused until the session ends).
+host removed this participant, and the same tab is refused until the session ends), `4008` not
+admitted (the host locked the room, and this tab was not seated in this session).
 
 ---
 
@@ -184,8 +188,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
-  as not recorded, at most 16, emptied when the session ends, and those of the tabs the host
-  removed, kept the same way) and reloaded in the constructor via
+  as not recorded, at most 16, emptied when the session ends, those of the tabs the host
+  removed, kept the same way, whether the host locked the room, and the client ids of the tabs
+  seated in this session that are not a host's, at most 32, emptied with the rest) and reloaded in
+  the constructor via
   `blockConcurrencyWhile`, so a woken instance picks up exactly where the evicted one left off.
   The client's `{"type":"ping"}` heartbeat is answered `{"type":"pong"}` by
   `setWebSocketAutoResponse` without waking the DO; the `ping` case in the message switch stays as
@@ -243,6 +249,15 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
   everyone else gets `peer-left` with that reason. A later `join` that presents a remembered id is
   closed with the same code before it is seated; one that proves the host token is never refused.
+- `room-access` is **acted on only from the host**, and only when `locked` is exactly a boolean;
+  anything else is dropped without an answer. The Room keeps it in `session.locked` and sends
+  `{type:'room-access', locked}` to every joined host, and to a host right after its own
+  `role-assigned`. Locking closes nobody. While the room is locked, a `join` that is not a host
+  and whose client id is not in `session.admitted` (every id a non-host `join` was seated with in
+  this session, the newest 32, a tab that has left forgotten before one still here) is closed with
+  `WS_CLOSE_NOT_ADMITTED`/`'locked'` after the removed check and before the caps, and is never
+  seated. A guest, a producer link and a Present-only link are treated alike, and a `join` with no
+  client id has nothing to be admitted by. The lock and the list end with the session.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -296,7 +311,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
-  `replaced` (4006: another tab/device took the host seat), `removed` (4007: the host removed
+  `replaced` (4006: another tab/device took the host seat), `refused` (4008: the room is locked,
+  "This room is locked" with Try again + Back to home; a reason other than `locked` reads "You
+  can’t join this room right now"), `removed` (4007: the host removed
   this participant; Back to the lobby + Back to home, plus **Download your backup** and
   **Download your WAV backup** when this tab holds the backup of a recording it saved, drawn by
   the same `FileLinks` as the `left` screen's), `left` (Rejoin + Back to home, plus
@@ -603,7 +620,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
-(+ `not-found|peer-left|left|full|replaced|removed|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
+(+ `not-found|peer-left|left|full|replaced|removed|refused|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
@@ -623,6 +640,10 @@ off until they turn it back on: the handler does what `setMic(false)` does (trac
 already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
 sends `peer-mute`, and the panel follows that person's `presence`.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
+`setRoomAccess(change)` only sends `room-access`; `state.access` (null until the Room sends one, kept
+only in a host tab, read through `readRoomAccess`) follows the Room's answer, so a tick the Room did
+not get never shows. `phaseOnFatalClose` turns `4008` into `refused`, and `state.refusal` is
+`'locked'` only for the close reason `locked`.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
 close also sets `peerRecording` to false: the host's `recording-stop` cannot reach a closed tab, so
@@ -1622,6 +1643,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   cannot be remembered, and a browser that blocks session storage sends a new id on every load,
   so that tab gets back in by reloading. The list is the session's: when the last person leaves,
   or a host who is alone in the room reloads, it is emptied and the removed tab can join again.
+- **A lock is by tab, and ends with the session.** A person the Room seated before the lock
+  presents the same client id on a reload and gets back in. One whose browser blocks session
+  storage sends a new id on every load, so after a reload in a locked room they read "This
+  room is locked" until the host unlocks. When every connection drops at the same moment the
+  session ends and the lock with it, and the room is open again.
 - **A mute is a request.** The Room passes it on and the muted person's own page carries it out;
   a page that does not know the message, or was changed to ignore it, stays unmuted. Removal is
   what the Room enforces.

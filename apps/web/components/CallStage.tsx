@@ -8,6 +8,8 @@ import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
 import { PeoplePanel } from './PeoplePanel';
+import { RoomAccess } from './RoomAccess';
+import type { RoomAccess as Access } from '@/lib/room-access';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -176,6 +178,8 @@ export function CallStage({
   hostMuted = false,
   onMutePeer,
   onRemovePeer,
+  roomAccess,
+  onRoomAccess,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -310,6 +314,10 @@ export function CallStage({
   onMutePeer?: (peerId: string) => void;
   /** Host: remove one person from the room. */
   onRemovePeer?: (peerId: string) => void;
+  /** Host: whether the room is locked, as the Room last said; absent until it has. */
+  roomAccess?: Access | null;
+  /** Host: lock or unlock the room. */
+  onRoomAccess?: (change: { locked?: boolean }) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -1193,7 +1201,9 @@ export function CallStage({
                 onMute={onMutePeer}
                 onRemove={onRemovePeer}
                 onClose={closePeople}
-              />
+              >
+                {roomAccess && onRoomAccess && <RoomAccess access={roomAccess} onChange={onRoomAccess} />}
+              </PeoplePanel>
             )}
             {popupEl}
           </main>

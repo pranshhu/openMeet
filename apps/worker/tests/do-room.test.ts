@@ -818,9 +818,15 @@ describe('Room DO — heartbeat', () => {
     ws.send(JSON.stringify({ type: 'join', displayName: 'H', userAgent: 'ua' }));
     await waitForMessage(ws);
 
+    // A host is also sent `room-access` after its role-assigned, so wait for the pong itself.
+    const pong = new Promise<ServerMessage>((resolve) => {
+      ws.addEventListener('message', (e) => {
+        const m = JSON.parse(e.data as string) as ServerMessage;
+        if (m.type === 'pong') resolve(m);
+      });
+    });
     ws.send(JSON.stringify({ type: 'ping' }));
-    const msg = await waitForMessage(ws);
-    expect(msg.type).toBe('pong');
+    expect((await pong).type).toBe('pong');
     ws.close();
   });
 });

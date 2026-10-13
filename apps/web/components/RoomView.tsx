@@ -112,7 +112,7 @@ function FileLinks({ files }: { files: readonly (readonly [string | null, string
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    mutePeer, removePeer,
+    mutePeer, removePeer, setRoomAccess,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
@@ -214,6 +214,19 @@ export function RoomView({ slug }: { slug: string }) {
           ? 'Your backup copies stay in this browser — download them now, or later from the lobby.'
           : 'If you were being recorded, your backup copy stays in this browser — the lobby lists it.'}
         {files.length > 0 && <FileLinks files={files} />}
+      </StatusScreen>
+    );
+  }
+  if (state.phase === 'refused') {
+    return (
+      <StatusScreen
+        title={state.refusal === 'locked' ? 'This room is locked' : 'You can’t join this room right now'}
+        action="Try again"
+        secondary={{ label: 'Back to home', href: '/' }}
+      >
+        {state.refusal === 'locked'
+          ? 'The host locked it, so nobody new can join. Ask the host to unlock it, then try again.'
+          : 'Ask the host, then try again.'}
       </StatusScreen>
     );
   }
@@ -428,6 +441,8 @@ export function RoomView({ slug }: { slug: string }) {
       hostMuted={state.hostMuted}
       onMutePeer={mutePeer}
       onRemovePeer={removePeer}
+      roomAccess={state.access}
+      onRoomAccess={setRoomAccess}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}

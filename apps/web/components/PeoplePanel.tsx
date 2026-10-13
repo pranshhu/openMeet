@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { RemotePeer } from '@/hooks/useRoom';
 import { Icon } from './Icon';
 
@@ -18,6 +18,7 @@ export function PeoplePanel({
   onMute,
   onRemove,
   onClose,
+  children,
 }: {
   people: RemotePeer[];
   /** A take is running or can still be resumed, so removing a recorded person ends their files here. */
@@ -27,6 +28,8 @@ export function PeoplePanel({
   /** Remove this person from the room. Without it no row offers Remove. */
   onRemove?: ((peerId: string) => void) | undefined;
   onClose: () => void;
+  /** Drawn above the list. */
+  children?: ReactNode;
 }) {
   // The person whose removal is being asked about, by peer id. Asked in the
   // row: a blocking dialog would stall this tab, which writes the take.
@@ -50,6 +53,7 @@ export function PeoplePanel({
           <Icon name="close" className="h-4 w-4" />
         </button>
       </div>
+      {children}
       <ul className="max-h-[40dvh] overflow-y-auto">
         {people.map((p) => {
           const name = p.name || 'Guest';
