@@ -9,6 +9,7 @@ import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
 import { downloadNamesFor } from '@/lib/file-names';
 import { isStagePeer } from '@/lib/stage-peers';
+import type { MediaBoard } from '@/lib/media-board';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
@@ -126,6 +127,10 @@ export function RoomView({ slug }: { slug: string }) {
   // person chosen before everyone left is still the choice when the call
   // screen is back, or a message written for them would go to everyone.
   const [chatTo, setChatTo] = useState('');
+  // The media board this page made, held here for the same reason: a board
+  // made before everyone left is still in the mix when the call screen is
+  // back, so showing it again is not making it during a take.
+  const [board, setBoard] = useState<MediaBoard | null>(null);
   const producer = isProducerLink();
   const present = isPresentLink();
   const check = isCheckLink();
@@ -364,6 +369,8 @@ export function RoomView({ slug }: { slug: string }) {
       chatNumbers={chatNumbers}
       chatTo={chatTo}
       onChatTo={setChatTo}
+      board={board}
+      onBoard={setBoard}
       peerPresence={state.remotePeers.find(isStagePeer)?.presence ?? null}
       screenShareSupported={isScreenShareSupported()}
       backupUrl={state.backupBlobUrl}
