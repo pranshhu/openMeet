@@ -65,13 +65,15 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (20 variants) ↔ `ServerMessage` (22).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (21 variants) ↔ `ServerMessage` (23).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `look` (`accent`, one of `LOOK_ACCENTS`) is in both unions as well: the Room passes on only the
+  host's, to everyone else, with no `from`.
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
@@ -236,6 +238,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   script. It is **passed on only from the host**, to every other joined peer and with no
   `from`, and only when `text` is a string of at most `MAX_SCRIPT_LENGTH` (50,000) UTF-16
   units. Nothing is kept, so a peer that joins later is not sent it.
+- `look` (`accent`, in both unions like `script`) is the host's accent colour for the name
+  tags. It is **passed on only from the host**, to every other joined peer and with no `from`,
+  as `{type:'look'}` plus `accent` only when it is one of `LOOK_ACCENTS`; no other field of the
+  message travels. Nothing is kept, so the host's page sends it again to each person who joins.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -491,6 +497,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   container query, with no measuring in script. The tag's tooltip holds the name and the
   title. The title is drawn only as text, and reaches no file, the People panel, chat or the
   waiting room.
+- **Show look** — the colour of the name tags. `ShowLook`, a **Name tag colour** select in
+  the host's lobby (not on the check page), saves the choice at once with `saveLook`
+  (`lib/look.ts`) under `om_look_<slug>` in `localStorage` and in a module value, for a
+  browser that blocks storage. The host's call page reads it with `readLook` and sends it as
+  `look` from its `role-assigned` and `peer-joined` handlers beside `sendPresence()`, also
+  when it is plain, so a colour the host took away is taken away for everyone. Every other
+  page keeps what arrives in `RoomState.look`, read through `lookFrom`. `RoomView` hands it to
+  `CallStage`, which sets the custom property `--om-tag-bar` on its root element from
+  `ACCENT_HEX` (the colour is the page's own constant, never the sender's text), and
+  `VideoTile`'s name tag draws a left bar from it. No file holds the look.
 - **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
   incoming video** (`CallStage`; not for the host, whose files are written directly, and
   not for a guest the host set as not recorded or whose browser cannot record, who have
@@ -1978,3 +1994,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   title.
 - **`nameTags` leaves some people out.** A guest set as not recorded, a producer and a
   Present-only device have no file of their own, so they are not listed.
+- **The look can only be chosen in the host's lobby.** A change needs the host to leave and
+  join again, which ends the host's part of a running take.
+- **While the host is away, a person who joins sees the plain look.** The people already there
+  keep the last one.
+- **The waiting room and the lobby preview have the plain look.**
+- **The look is the host's in one browser.** Another browser starts without it.
+- **A Worker deployed before `look` passes nothing on.** Guests then see the plain look.

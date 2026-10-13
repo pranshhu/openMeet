@@ -422,6 +422,7 @@ export function RoomView({ slug }: { slug: string }) {
       onLeave={leave}
       onSendChat={sendChat}
       incomingScript={state.incomingScript}
+      look={state.look}
       onSendScript={sendScript}
       onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}

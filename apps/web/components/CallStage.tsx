@@ -9,6 +9,7 @@ import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
+import { ACCENT_HEX, type Look } from '@/lib/look';
 import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
@@ -135,6 +136,7 @@ export function CallStage({
   onDiscardTake,
   onOpenMediaBoard,
   incomingScript = null,
+  look,
   onSendScript,
   onDismissScript,
   onToggleScreen,
@@ -246,6 +248,8 @@ export function CallStage({
   onOpenMediaBoard: () => MediaBoard | null;
   /** A script the host sent that this person has not answered; null when none. */
   incomingScript?: string | null;
+  /** The host's look for the room: its accent colour is drawn as a bar on every name tag. */
+  look?: Look;
   /** Host: offer the teleprompter script to everyone else. False when it did not go out. */
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
@@ -782,7 +786,10 @@ export function CallStage({
   ) : null;
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden bg-[#202124] text-white [color-scheme:dark]">
+    <div
+      className="relative flex h-[100dvh] flex-col overflow-hidden bg-[#202124] text-white [color-scheme:dark]"
+      style={look?.accent ? ({ '--om-tag-bar': `3px solid ${ACCENT_HEX[look.accent]}` } as React.CSSProperties) : undefined}
+    >
       {/* Top status bar. aria-live so a screen-reader user is told when
           recording starts, stops, or fails — for a recording tool, "am I
           recording" is the one status that must not be silent. */}

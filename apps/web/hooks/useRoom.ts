@@ -25,6 +25,7 @@ import { PeerConnection, ConnectionTimeoutError } from '@/lib/peer';
 import { MediaManager } from '@/lib/media';
 import { SwitchableMedia, isPhone } from '@/lib/switchable-media';
 import { buildIceServers } from '@/lib/ice';
+import { lookFrom, readLook, type Look } from '@/lib/look';
 import { getScreenStream, presentFile, presentRearCamera } from '@/lib/screen';
 import { pickRecordingMime, UnsupportedCodecError } from '@/lib/recorder';
 import { BackupRecorder } from '@/lib/backup-recorder';
@@ -291,6 +292,8 @@ export interface RoomState {
    * it or turns it down; null when none is waiting.
    */
   incomingScript: string | null;
+  /** The host's look for the room, drawn on the call screen; plain until the host sends one. */
+  look: Look;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt: number | null;
 }
@@ -687,6 +690,7 @@ export function useRoom(slug: string) {
     takeNotice: null,
     recoveryBusy: false,
     incomingScript: null,
+    look: {},
     countdownEndsAt: null,
   });
   // Peer ids whose camera recording channel has arrived for the take in
@@ -1712,6 +1716,11 @@ export function useRoom(slug: string) {
           notRecorded: m.notRecorded === true,
         }));
         sendPresence();
+        if (m.role === 'host') {
+          const look = readLook(slug);
+          setState((s) => ({ ...s, look }));
+          signal.send({ type: 'look', ...look });
+        }
         // The Room drops its recording flag with the host's socket, and tells a
         // host that comes back `recording: false` while the files are still
         // open. A guest who joined from then on would never be started.
@@ -1772,6 +1781,8 @@ export function useRoom(slug: string) {
           );
         }
         sendPresence();
+        // Sent also when plain, so a look the host took away is taken away for everyone.
+        if (roleRef.current === 'host') signal.send({ type: 'look', ...readLook(slug) });
         setState((s) => ({
           ...s,
           remotePeers: s.remotePeers.some((r) => r.peerId === m.peerId)
@@ -1882,6 +1893,14 @@ export function useRoom(slug: string) {
       signal.on('script', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_SCRIPT_LENGTH || !m.text.trim()) return;
         setState((s) => ({ ...s, incomingScript: m.text }));
+      });
+
+      // The host's look for the room. Only the host's is passed on by the
+      // Room; what this page keeps is checked here again. The host's own page
+      // keeps the look it chose.
+      signal.on('look', (m) => {
+        if (roleRef.current === 'host') return;
+        setState((s) => ({ ...s, look: lookFrom(m) }));
       });
 
       signal.on('marker', (m) => {

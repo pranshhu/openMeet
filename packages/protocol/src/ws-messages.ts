@@ -70,6 +70,8 @@ export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * most MAX_SCRIPT_LENGTH long.
  */
 export type ClientScript = { type: 'script'; text: string };
+/** The host's look for the room. No `accent` means the plain look. */
+export type ClientLook = { type: 'look'; accent?: LookAccent };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 /**
  * A chat line for one person. `to` is that person's peerId. A type of its
@@ -97,6 +99,18 @@ export type Reaction = (typeof REACTIONS)[number];
 
 export function isReaction(v: unknown): v is Reaction {
   return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The accent colour a host picks for the room's name tags. A code, never CSS:
+ * each page draws its own colour for it, and the Room drops anything not on
+ * this list.
+ */
+export const LOOK_ACCENTS = ['blue', 'red', 'green', 'yellow', 'purple', 'pink'] as const;
+export type LookAccent = (typeof LOOK_ACCENTS)[number];
+
+export function isLookAccent(v: unknown): v is LookAccent {
+  return (LOOK_ACCENTS as readonly unknown[]).includes(v);
 }
 
 /**
@@ -187,6 +201,7 @@ export type ClientMessage =
   | ClientRecordingStop
   | ClientRecordingCountdown
   | ClientScript
+  | ClientLook
   | ClientChat
   | ClientPrivateMessage
   | ClientPresence
@@ -341,6 +356,11 @@ export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * host's is passed on, so it carries no `from`.
  */
 export type ServerScript = { type: 'script'; text: string };
+/**
+ * The host's ClientLook, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerLook = { type: 'look'; accent?: LookAccent };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -391,6 +411,7 @@ export type ServerMessage =
   | ServerRecordingStop
   | ServerRecordingCountdown
   | ServerScript
+  | ServerLook
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
@@ -409,6 +430,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'chat',
   'private-message',
   'presence',
@@ -438,6 +460,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'recording-ack',
   'room-closed',
   'pong',

@@ -10,6 +10,7 @@ import {
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   isListening,
+  isLookAccent,
   isReaction,
   titleFrom,
   type ClientMessage,
@@ -668,6 +669,16 @@ export class Room implements DurableObject {
           break;
         }
         this.broadcastExcept(ws, { type: 'script', text: parsed.text });
+        break;
+      case 'look':
+        // The host's accent colour for the name tags. Only the host's is
+        // passed on, with an accent only when it is on the list. Nothing is
+        // kept, so a person who joins later is sent it by the host's page.
+        if (p.role !== 'host') break;
+        this.broadcastExcept(ws, {
+          type: 'look',
+          ...(isLookAccent(parsed.accent) ? { accent: parsed.accent } : {}),
+        });
         break;
       case 'recording-capability':
         // Relay only, like presence — a live UI hint for the host, not room

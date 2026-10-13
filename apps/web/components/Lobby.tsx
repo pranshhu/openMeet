@@ -43,6 +43,7 @@ import { FramingGuide } from './FramingGuide';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { CalendarInvite } from './CalendarInvite';
+import { ShowLook } from './ShowLook';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
@@ -1209,6 +1210,7 @@ export function Lobby({
             </p>
           )}
           {!checkOnly && keysSwitch}
+          {isHost && !checkOnly && <ShowLook slug={slug} />}
           {/* Last in the panel: nothing a guest or a host needs after a crash
               moves down for it. The check page joins no call and leaves it out. */}
           {isHost && !checkOnly && <CalendarInvite slug={slug} />}

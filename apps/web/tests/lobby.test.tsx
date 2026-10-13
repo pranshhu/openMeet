@@ -2456,3 +2456,67 @@ describe('Lobby: a title under the name', () => {
     expect(titleField()).toEqual({});
   });
 });
+
+describe('Lobby: the host picks a name tag colour', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    localStorage.setItem('om_host_xyz-look-pqr', 'host-tok');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('om_host_xyz-look-pqr');
+    localStorage.removeItem('om_look_xyz-look-pqr');
+    localStorage.removeItem('om_look_xyz-other-pqr');
+    vi.unstubAllGlobals();
+  });
+
+  it('has a colour select for the host, with its seven choices and the hint under it', async () => {
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    const select = (await screen.findByLabelText('Name tag colour')) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'No colour',
+      'Blue',
+      'Red',
+      'Green',
+      'Yellow',
+      'Purple',
+      'Pink',
+    ]);
+    expect(select).toHaveValue('');
+    expect(screen.getByText('Everyone in the call sees it. To change it, leave and join again.')).toBeInTheDocument();
+    expect(select.closest('label')!.className).toContain('min-h-11');
+    const calendar = screen.getByRole('button', { name: /add to calendar/i });
+    expect(select.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('has none for a guest and none on the check page', async () => {
+    const guest = render(<Lobby slug="xyz-other-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Name tag colour')).toBeNull();
+    guest.unmount();
+
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} checkOnly />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Name tag colour')).toBeNull();
+  });
+
+  it('saves the colour chosen for that room at once, and shows it again next time', async () => {
+    const first = render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    const select = (await screen.findByLabelText('Name tag colour')) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'red' } });
+    expect(localStorage.getItem('om_look_xyz-look-pqr')).toBe('{"accent":"red"}');
+    expect(localStorage.getItem('om_look_xyz-other-pqr')).toBeNull();
+    first.unmount();
+
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    expect(await screen.findByLabelText('Name tag colour')).toHaveValue('red');
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: '' } });
+    expect(localStorage.getItem('om_look_xyz-look-pqr')).toBe('{}');
+  });
+});

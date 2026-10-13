@@ -3001,3 +3001,32 @@ describe('CallStage: a title under a name', () => {
     expect(tag.children[1]!.textContent).toBe('Founder, Acme');
   });
 });
+
+describe('CallStage: the name tag colour', () => {
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const root = () => document.querySelector('.h-\\[100dvh\\]') as HTMLElement;
+
+  it('sets the tag bar on the root in the colour of the look, and draws it on a tag', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} look={{ accent: 'red' }} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('3px solid #f28b82');
+    const tag = document.querySelector('[title="Alice (You)"]') as HTMLElement;
+    expect(tag.className).toContain('[border-left:var(--om-tag-bar,none)]');
+  });
+
+  it('has a light tint for each of the six codes', () => {
+    const hex = { blue: '#8ab4f8', red: '#f28b82', green: '#81c995', yellow: '#fdd663', purple: '#c58af9', pink: '#ff8bcb' };
+    for (const [accent, tint] of Object.entries(hex)) {
+      const { unmount } = render(<CallStage {...baseProps} look={{ accent: accent as keyof typeof hex }} />);
+      expect(root().style.getPropertyValue('--om-tag-bar')).toBe(`3px solid ${tint}`);
+      unmount();
+    }
+  });
+
+  it('sets nothing for the plain look, or when no look is handed over', () => {
+    const { rerender } = render(<CallStage {...baseProps} look={{}} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('');
+    expect(root().getAttribute('style')).toBeNull();
+    rerender(<CallStage {...baseProps} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('');
+  });
+});

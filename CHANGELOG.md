@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host can pick a colour for the show in the lobby; everyone's name tags carry it
+  during the call.
 - The sync file lists each recorded person's name and title with their files, ready for
   lower thirds.
 - A title under your name: type it in the lobby and everyone in the call sees it on

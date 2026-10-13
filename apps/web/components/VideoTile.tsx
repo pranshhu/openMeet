@@ -100,7 +100,7 @@ export function VideoTile({
       )}
       <span
         title={title ? `${label}\n${title}` : label}
-        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
+        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm [border-left:var(--om-tag-bar,none)] sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
       >
         {title ? (
           <>
