@@ -15,6 +15,7 @@ import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
 import { KnockNotice } from './KnockNotice';
 import { RoomAccess } from './RoomAccess';
+import { PasscodeForm } from './PasscodeForm';
 import { StatusScreen } from './StatusScreen';
 
 /**
@@ -116,13 +117,14 @@ const REFUSALS = {
   locked: ['This room is locked', 'The host locked it, so nobody new can join. Ask the host to unlock it, then try again.'],
   refused: ['The host didn’t let you in', 'Ask the host, then try again.'],
   busy: ['Too many people are waiting', 'The room’s waiting list is full. Try again in a minute.'],
+  passcode: ['Too many wrong passcodes', 'Wait ten minutes, then try again, or ask the host.'],
   other: ['You can’t join this room right now', 'Ask the host, then try again.'],
 } as const;
 
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    mutePeer, removePeer, setRoomAccess, admitPeer,
+    mutePeer, removePeer, setRoomAccess, sendPasscode, admitPeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
@@ -285,6 +287,26 @@ export function RoomView({ slug }: { slug: string }) {
           ),
         }
       : {};
+  // The room asks for a passcode before it seats anyone: one field, and no
+  // spinner, as nothing is connecting yet.
+  if (
+    (state.door === 'passcode' || state.door === 'wrong-passcode') &&
+    (state.phase === 'connecting' || state.phase === 'waiting' || state.phase === 'peer-left')
+  ) {
+    return (
+      <WaitingRoom
+        role={state.role}
+        localStream={state.localStream}
+        localName={state.localName}
+        onLeave={leave}
+        onToggleMic={setMic}
+        onToggleCam={setCam}
+        title="This room needs a passcode"
+        note="Ask the host for it."
+        extra={<PasscodeForm wrong={state.door === 'wrong-passcode'} onSubmit={sendPasscode} />}
+      />
+    );
+  }
   // The Room has the join and the host has not answered it: nothing is
   // connecting, so no spinner.
   if (

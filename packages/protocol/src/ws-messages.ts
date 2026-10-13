@@ -27,6 +27,11 @@ export type ClientJoin = {
   companion?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
+  /**
+   * What the guest typed when the room asked for a passcode. Sent only after
+   * the Room's `door` message with state `passcode`, and on each join after.
+   */
+  passcode?: string;
 };
 // `to` addresses a specific peer. Omitted means 'the other one', which is
 // still correct in a two-person room and keeps the 1:1 path unchanged.
@@ -169,8 +174,17 @@ export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
  * in this session, with WS_CLOSE_NOT_ADMITTED. Locking closes nobody. With the
  * waiting room on, such a join is held until the host answers it with
  * ClientAdmit; turning it off lets in everyone who waits.
+ *
+ * A string `passcode` of MIN_PASSCODE_LENGTH to MAX_PASSCODE_LENGTH units sets
+ * the passcode a guest gives before it joins; `null` removes it. Any other
+ * value is ignored. Setting or removing one closes nobody.
  */
-export type ClientRoomAccess = { type: 'room-access'; locked?: boolean; waitingRoom?: boolean };
+export type ClientRoomAccess = {
+  type: 'room-access';
+  locked?: boolean;
+  waitingRoom?: boolean;
+  passcode?: string | null;
+};
 
 /**
  * The host answers one waiting person. Acted on only from the host, with a
@@ -389,20 +403,24 @@ export type WaitingPerson = {
  * Whether the room is locked, whether its waiting room is on, and who waits
  * (at most eight, in the order they arrived), sent to every host in the room:
  * right after its `role-assigned`, and again after each change. Guests are
- * never told.
+ * never told. `passcode` says whether one is set, never what it is.
  */
 export type ServerRoomAccess = {
   type: 'room-access';
   locked: boolean;
   waitingRoom: boolean;
+  passcode: boolean;
   waiting: WaitingPerson[];
 };
 
 /**
- * Sent to a person the waiting room is holding: its join was received and the
- * host has not answered. It is followed by `role-assigned` or by a close.
+ * Sent to a person who is not in the room yet. State `waiting`: its join was
+ * received and the host has not answered; it is followed by `role-assigned` or
+ * by a close. State `passcode`: the room asks for a passcode, and `wrong` is
+ * true when the join carried one that is not right; the socket stays open for
+ * another `join`.
  */
-export type ServerDoor = { type: 'door'; state: 'waiting' };
+export type ServerDoor = { type: 'door'; state: 'waiting' } | { type: 'door'; state: 'passcode'; wrong?: boolean };
 
 export type ServerMessage =
   | ServerRoleAssigned

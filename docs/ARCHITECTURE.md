@@ -75,11 +75,18 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
-  `room-access` (`locked`, `waitingRoom`) is in both unions, and is not a relay: the Room acts on it
-  only from the host and each field only when it is a boolean, and answers every joined host with
-  its own, carrying `locked`, `waitingRoom` and `waiting` (the people at the door, at most eight)
-  and no `from`; a guest is never sent one. `admit` (`peerId`, `admit`) is client-only and
-  host-only. `door` (`state`) is server-only: the Room sends it to a person it is holding.
+  `room-access` (`locked`, `waitingRoom`, `passcode`) is in both unions, and is not a relay: the
+  Room acts on it only from the host, each of the first two only when it is a boolean and
+  `passcode` only when it is `null` or a string of 6 to 64 UTF-16 units
+  (`MIN_PASSCODE_LENGTH`, `MAX_PASSCODE_LENGTH`), and answers every joined host with its own,
+  carrying `locked`, `waitingRoom`, `passcode` (a boolean: whether one is set, never what it
+  is) and `waiting` (the people at the door, at most eight) and no `from`; a guest is never
+  sent one. `admit` (`peerId`, `admit`) is client-only and host-only. `door` (`state`) is
+  server-only: the Room sends it to a person it is holding, with state `waiting`, or with state
+  `passcode` (and `wrong: true` after a passcode that was not right) to one it asks for a
+  passcode. `join` also carries `displayName`, `userAgent`, and optionally `hostToken`,
+  `producer`, `companion`, `clientId` and `passcode`; the Room checks the type and length of
+  each before it uses it.
   `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
   the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
   `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
@@ -142,7 +149,8 @@ WS close codes: `4001` capacity-full,
 `4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
 host removed this participant, and the same tab is refused until the session ends), `4008` not
 admitted (the host locked the room and this tab was not seated in this session, the host refused
-it from the waiting room, or eight people were already waiting).
+it from the waiting room, eight people were already waiting, or the room's passcode was given
+wrong five times on one socket or twenty times in the room, reason `passcode`).
 
 ---
 
@@ -192,8 +200,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   waiting room (below), and is outside the room the same way; one flagged `left` (replaced, or after its own `leave`)
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
-  `room`, `session`, `access`, `nextOrdinal`; `access` holds whether the waiting room is on, and
-  belongs to the room, not the session, so it stays when everyone has left; `session` also holds the client ids of the guests the host set
+  `room`, `session`, `access`, `passFails`, `nextOrdinal`; `access` holds whether the waiting room
+  is on and, when the host set a passcode, `passcodeHash` (the lowercase hex SHA-256 of
+  `<slug>:<passcode>`; the passcode itself is written to no storage, D1 row or log, and sent to
+  no socket), and belongs to the room, not the session, so it stays when everyone has left;
+  `passFails` is `{count, since}`, the wrong passcodes counted in the window that began at
+  `since`; `session` also holds the client ids of the guests the host set
   as not recorded, at most 16, emptied when the session ends, those of the tabs the host
   removed, kept the same way, whether the host locked the room, and the client ids of the tabs
   seated in this session that are not a host's, at most 32, emptied with the rest) and reloaded in
@@ -265,7 +277,7 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   seated. A guest, a producer link and a Present-only link are treated alike, and a `join` with no
   client id has nothing to be admitted by. The lock and the list end with the session.
 - **The waiting room** (`access.waitingRoom`, set by a host's `room-access` with a boolean
-  `waitingRoom`) holds a newcomer at the door. Right after the lock gate, a `join` that is not a
+  `waitingRoom`) holds a newcomer at the door. After the lock gate and the passcode gate, a `join` that is not a
   host's, whose client id is not in `session.admitted` and whose attachment does not say `admitted`
   is not seated: with eight sockets already waiting (`MAX_WAITING`) it is closed with
   `WS_CLOSE_NOT_ADMITTED`/`'busy'`; otherwise its attachment gets `waiting: true`, it is sent
@@ -275,6 +287,21 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `waitingRoom` and `waiting`: the waiting sockets, in ordinal order, as `{peerId, displayName,
   role, companion?}`. A waiting socket that closes, and a socket the host answers, leave the list
   and the hosts are told.
+- **The passcode** (`access.passcodeHash`, set by a host's `room-access` with a string `passcode`
+  of 6 to 64 units, removed by `null`; either change empties `passFails`, closes nobody and is
+  answered to every joined host) is the gate between the lock gate and the waiting-room gate. A
+  `join` that is not a host's, whose client id is not in `session.admitted` and whose attachment
+  does not say `admitted` is not seated while a digest is stored: with no `passcode`, or one that is
+  not a string of 1 to 64 units, the socket is sent `{type:'door', state:'passcode'}` and nothing is
+  counted; with one the Room hashes and compares with `timingSafeEqualHex`, and a wrong one is
+  counted in the socket's attachment (`passFails`) and in the room's `passFails`, and is answered
+  `{type:'door', state:'passcode', wrong:true}`; the fifth wrong one on a socket closes it with
+  `WS_CLOSE_NOT_ADMITTED`/`'passcode'`. While the room has counted 20 wrong passcodes in the ten
+  minutes after the first, a `join` that carries a passcode is closed the same way without being
+  compared and adds nothing; the window starts afresh ten minutes after `since`. The socket stays
+  unseated and may send `join` again; a right passcode goes on to the waiting-room gate and the
+  caps. A host is never asked, a seated tab's reconnect is not asked, and a producer link and a
+  Present-only link are asked like a guest.
 - `admit` is **acted on only from the host**, with a boolean `admit` and a `peerId` that names a
   waiting socket. Let in: the attachment gets `waiting: false, admitted: true` and the Room runs
   its own `join` path for that socket again, from the name and user agent the attachment holds, so
@@ -336,11 +363,14 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`; while `state.door` is `'waiting'` it reads
   "Waiting for the host to let you in", without a spinner, in `connecting`, `waiting` and
-  `peer-left`) / CallStage, plus light status screens
+  `peer-left`; while it is `'passcode'` or `'wrong-passcode'` it reads "This room needs a
+  passcode" with `PasscodeForm` as the `extra`, in the same three phases) / CallStage, plus light
+  status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
   `replaced` (4006: another tab/device took the host seat), `refused` (4008: the room is locked,
   "This room is locked" with Try again + Back to home; `refused` reads "The host didn’t let you
-  in" and `busy` "Too many people are waiting"; a reason other than these reads "You
+  in", `busy` "Too many people are waiting" and `passcode` "Too many wrong passcodes"; a reason
+  other than these reads "You
   can’t join this room right now"), `removed` (4007: the host removed
   this participant; Back to the lobby + Back to home, plus **Download your backup** and
   **Download your WAV backup** when this tab holds the backup of a recording it saved, drawn by
@@ -416,7 +446,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
-  each person at the door and the lock and waiting room checkboxes (`RoomView` passes them as
+  each person at the door and the lock and waiting room checkboxes and the passcode field or the
+  line saying one is set (`RoomView` passes them as
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
@@ -681,12 +712,15 @@ sends `peer-mute`, and the panel follows that person's `presence`.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 `setRoomAccess(change)` only sends `room-access`; `state.access` (null until the Room sends one, kept
 only in a host tab, read through `readRoomAccess`) follows the Room's answer, so a tick the Room did
-not get never shows; it also takes `waitingRoom`, and `state.access` holds `waitingRoom` and the
+not get never shows; it also takes `waitingRoom` and `passcode` (a string, or `null` to remove it),
+and `state.access` holds `waitingRoom`, `passcode` (true only for `true`) and the
 people at the door, read by `readRoomAccess` (the first eight with a usable `peerId`, names cut
 to 64). `admitPeer(peerId, admit)` only sends `admit`. `state.door` is `'waiting'` from the Room's
-`door` message until `role-assigned` or a terminal close. `phaseOnFatalClose` turns `4008` into
-`refused`, and `state.refusal` is `'locked'`, `'refused'` or `'busy'` for those close reasons and
-null for any other.
+`door` message until `role-assigned` or a terminal close; it is also `'passcode'`, or
+`'wrong-passcode'` when the message says `wrong: true`, while the Room asks for a passcode, and
+`sendPasscode(code)` calls `SignalClient.rejoin`. `phaseOnFatalClose` turns `4008` into
+`refused`, and `state.refusal` is `'locked'`, `'refused'`, `'busy'` or `'passcode'` for those close
+reasons and null for any other.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
 close also sets `peerRecording` to false: the host's `recording-stop` cannot reach a closed tab, so
@@ -756,7 +790,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
-  It returns whether the message went out.
+  It returns whether the message went out. `rejoin(passcode)` keeps the passcode and sends `join`
+  again on the open socket, and every later `join` (a reconnect) carries it; a `door` message
+  with state `passcode` makes the client forget it, so a wrong one is never sent twice.
   After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
   `useRoom` calls on a connection's second `failed`, returns at once.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
@@ -1512,6 +1548,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   in `sync.json` shows it: align by waveform a clip that sits wrong by a second or more.
   A clock set between a guest's two estimates does not move the offset of that guest's
   camera file and WAV.
+- **A room's passcode is given at the door and shown nowhere.** The host cannot read it back: a
+  host who forgot it removes it and sets another. After 20 wrong tries everyone new, also someone
+  with the right passcode, reads "Too many wrong passcodes" for up to ten minutes; the host and
+  the people in the call are not affected, and the host can remove the passcode to let people in
+  at once. The invite link does not carry the passcode, so the host sends it separately. A person
+  asked for the passcode during their own running capture (their id was forgotten) keeps the call
+  screen and sees no field: their backup keeps recording, and a reload after the take brings the
+  field. The passcode does not hide that the room exists and does not stop TURN credentials
+  being minted with the link.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials

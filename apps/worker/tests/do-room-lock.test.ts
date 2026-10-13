@@ -165,7 +165,7 @@ describe('Room DO — the host locks the room', () => {
     await settle();
 
     expect(ofType(h.heard, 'room-access')).toEqual([
-      { type: 'room-access', locked: false, waitingRoom: false, waiting: [] },
+      { type: 'room-access', locked: false, waitingRoom: false, passcode: false, waiting: [] },
     ]);
     for (const w of [a, p]) expect(ofType(w.heard, 'room-access')).toEqual([]);
     const next = await knock(slug, { clientId: 'tab-next' });
@@ -194,7 +194,7 @@ describe('Room DO — the host locks the room', () => {
     const back = await enter(slug, 'H', { hostToken: 'tok-rlk-tell' });
     await until(() => ofType(back.heard, 'room-access').length > 0);
     expect(ofType(back.heard, 'room-access')).toEqual([
-      { type: 'room-access', locked: true, waitingRoom: false, waiting: [] },
+      { type: 'room-access', locked: true, waitingRoom: false, passcode: false, waiting: [] },
     ]);
 
     [back.ws, a.ws].forEach((w) => w.close());

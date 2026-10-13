@@ -4,10 +4,14 @@ const MAX_WAITING = 8;
 const MAX_PEER_ID_LENGTH = 64;
 const MAX_NAME_LENGTH = 64;
 
-/** What the Room last said about who may join: the lock, the waiting room and the people at its door. */
+/**
+ * What the Room last said about who may join: the lock, the waiting room,
+ * whether a passcode is set and the people at its door.
+ */
 export interface RoomAccess {
   locked: boolean;
   waitingRoom: boolean;
+  passcode: boolean;
   waiting: WaitingPerson[];
 }
 
@@ -29,8 +33,13 @@ function readWaiting(v: unknown): WaitingPerson[] {
   return people;
 }
 
-/** The Room's `room-access`, read where it arrives: only a real `true` is a lock or a waiting room. */
+/** The Room's `room-access`, read where it arrives: only a real `true` is a lock, a waiting room or a passcode. */
 export function readRoomAccess(m: unknown): RoomAccess {
   const o = typeof m === 'object' && m !== null ? (m as Record<string, unknown>) : {};
-  return { locked: o.locked === true, waitingRoom: o.waitingRoom === true, waiting: readWaiting(o.waiting) };
+  return {
+    locked: o.locked === true,
+    waitingRoom: o.waitingRoom === true,
+    passcode: o.passcode === true,
+    waiting: readWaiting(o.waiting),
+  };
 }

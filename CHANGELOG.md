@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A room passcode: the host sets one in the room controls, and anyone joining with the
+  invite link is asked for it first.
 - A waiting room: with it on, a person who opens the invite link waits until the host
   lets them in or refuses them. The host sees who is waiting on the call screen and
   while waiting alone.

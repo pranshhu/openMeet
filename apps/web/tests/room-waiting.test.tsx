@@ -123,16 +123,17 @@ const person = (over: Partial<WaitingPerson> = {}): WaitingPerson => ({
 
 describe('readRoomAccess, the waiting room part', () => {
   it('reads the waiting room only from a message that says waitingRoom: true', () => {
-    expect(readRoomAccess({ locked: false, waitingRoom: true, waiting: [] })).toEqual({
+    expect(readRoomAccess({ locked: false, waitingRoom: true, passcode: false, waiting: [] })).toEqual({
       locked: false,
       waitingRoom: true,
+      passcode: false,
       waiting: [],
     });
     for (const v of [false, 1, 'true', null, undefined, [true]]) {
       expect(readRoomAccess({ locked: false, waitingRoom: v, waiting: [] }).waitingRoom).toBe(false);
     }
-    expect(readRoomAccess(null)).toEqual({ locked: false, waitingRoom: false, waiting: [] });
-    expect(readRoomAccess({ locked: true })).toEqual({ locked: true, waitingRoom: false, waiting: [] });
+    expect(readRoomAccess(null)).toEqual({ locked: false, waitingRoom: false, passcode: false, waiting: [] });
+    expect(readRoomAccess({ locked: true })).toEqual({ locked: true, waitingRoom: false, passcode: false, waiting: [] });
   });
 
   it('keeps the first eight people and drops the rest', () => {
@@ -229,8 +230,8 @@ describe('the waiting room in the hook', () => {
   it('keeps the waiting room and the list a host is told', async () => {
     const result = await joinAs();
     seatAs('host');
-    emit('room-access', { type: 'room-access', locked: false, waitingRoom: true, waiting: [person()] });
-    expect(result.current.state.access).toEqual({ locked: false, waitingRoom: true, waiting: [person()] });
+    emit('room-access', { type: 'room-access', locked: false, waitingRoom: true, passcode: false, waiting: [person()] });
+    expect(result.current.state.access).toEqual({ locked: false, waitingRoom: true, passcode: false, waiting: [person()] });
   });
 
   it('sends `admit` with the id and the answer, and `room-access` with the waiting room', async () => {
@@ -320,7 +321,7 @@ describe('the screens of a person at the door', () => {
 describe('Waiting room in the People panel', () => {
   it('is a second box, ticked from what the Room said, and a click asks for the opposite', () => {
     const onChange = vi.fn();
-    render(<RoomAccess access={{ locked: true, waitingRoom: true, waiting: [] }} onChange={onChange} />);
+    render(<RoomAccess access={{ locked: true, waitingRoom: true, passcode: false, waiting: [] }} onChange={onChange} />);
     const box = screen.getByRole('checkbox', { name: 'Waiting room' });
     expect(box).toBeChecked();
     expect(box).toHaveAccessibleDescription('New people wait until you let them in.');
@@ -334,7 +335,7 @@ describe('Waiting room in the People panel', () => {
 
   it('is unticked while people walk in, and asks for the waiting room', () => {
     const onChange = vi.fn();
-    render(<RoomAccess access={{ locked: false, waitingRoom: false, waiting: [] }} onChange={onChange} />);
+    render(<RoomAccess access={{ locked: false, waitingRoom: false, passcode: false, waiting: [] }} onChange={onChange} />);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Waiting room' }));
     expect(onChange).toHaveBeenCalledWith({ waitingRoom: true });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Lock the room' }));
@@ -443,7 +444,7 @@ describe('CallStage and the notice', () => {
     onToggleScreen: vi.fn(),
     capabilities: {},
   };
-  const access = { locked: false, waitingRoom: true, waiting: [person()] };
+  const access = { locked: false, waitingRoom: true, passcode: false, waiting: [person()] };
 
   it('draws the row for a host, and passes the answer on', () => {
     const onAdmit = vi.fn();

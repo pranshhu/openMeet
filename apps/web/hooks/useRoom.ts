@@ -245,11 +245,15 @@ export interface RoomState {
    */
   notRecorded: boolean;
   /** Why the Room turned this tab away; null for a reason this page does not know. */
-  refusal: 'locked' | 'refused' | 'busy' | null;
+  refusal: 'locked' | 'refused' | 'busy' | 'passcode' | null;
   /** Host: the lock, the waiting room and who waits, as the Room last said; null until it has. */
   access: RoomAccess | null;
-  /** The Room is holding this tab until the host lets it in; null once it is seated or closed. */
-  door: 'waiting' | null;
+  /**
+   * The Room is holding this tab: until the host lets it in, or until it is
+   * given the passcode (`wrong-passcode` after one that was not right). Null
+   * once it is seated or closed.
+   */
+  door: 'waiting' | 'passcode' | 'wrong-passcode' | null;
   /**
    * This device sends everyone a smaller live picture, to leave more of its
    * processor for the recording. The files are not affected.
@@ -338,8 +342,8 @@ export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
 }
 
 /** The reason the Room gave for a refused join, when this page has words for it. */
-function refusalOf(reason: string): 'locked' | 'refused' | 'busy' | null {
-  return reason === 'locked' || reason === 'refused' || reason === 'busy' ? reason : null;
+function refusalOf(reason: string): 'locked' | 'refused' | 'busy' | 'passcode' | null {
+  return reason === 'locked' || reason === 'refused' || reason === 'busy' || reason === 'passcode' ? reason : null;
 }
 
 /**
@@ -1964,10 +1968,14 @@ export function useRoom(slug: string) {
         if (roleRef.current !== 'host') return;
         setState((s) => ({ ...s, access: readRoomAccess(m) }));
       });
-      // The Room is holding this tab until the host answers. Only the one
-      // state it knows is kept.
+      // The Room is holding this tab: for the host's answer, or for a passcode.
+      // Only the states it knows are kept.
       signal.on('door', (m) => {
         if (m.state === 'waiting') setState((s) => ({ ...s, door: 'waiting' }));
+        else if (m.state === 'passcode') {
+          const door = m.wrong === true ? 'wrong-passcode' : 'passcode';
+          setState((s) => ({ ...s, door }));
+        }
       });
       // The host asked for this microphone to be off. This page does it, with
       // the steps of its own mic switch, so the person sees it and can turn it
@@ -2666,9 +2674,17 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
   }, []);
 
-  /** Host: lock or unlock the room, or turn its waiting room on or off. Changes nothing here: the Room's `room-access` answer does. */
-  const setRoomAccess = useCallback((change: { locked?: boolean; waitingRoom?: boolean }) => {
+  /**
+   * Host: lock or unlock the room, turn its waiting room on or off, or set or
+   * remove its passcode. Changes nothing here: the Room's `room-access` answer does.
+   */
+  const setRoomAccess = useCallback((change: { locked?: boolean; waitingRoom?: boolean; passcode?: string | null }) => {
     signalRef.current?.send({ type: 'room-access', ...change });
+  }, []);
+
+  /** Answer the Room's request for a passcode. Its next `door` or `role-assigned` is the answer. */
+  const sendPasscode = useCallback((code: string) => {
+    signalRef.current?.rejoin(code);
   }, []);
 
   /** Host: let one waiting person in, or refuse them. Their `role-assigned` or close is the answer. */
@@ -3333,6 +3349,7 @@ export function useRoom(slug: string) {
     mutePeer,
     removePeer,
     setRoomAccess,
+    sendPasscode,
     admitPeer,
     toggleScreenShare,
     startRecording,

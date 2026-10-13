@@ -31,7 +31,7 @@ const person = (over: Partial<WaitingPerson> = {}): WaitingPerson => ({
   ...over,
 });
 
-const access = (waiting: WaitingPerson[] = [person()]) => ({ locked: false, waitingRoom: true, waiting });
+const access = (waiting: WaitingPerson[] = [person()]) => ({ locked: false, waitingRoom: true, passcode: false, waiting });
 
 beforeEach(() => {
   hook = { admitPeer: vi.fn(), setRoomAccess: vi.fn() };

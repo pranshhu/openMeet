@@ -1,7 +1,9 @@
 import {
   BROWSER_NOTES,
+  MAX_PASSCODE_LENGTH,
   MAX_RECORDED_PEERS,
   MAX_SCRIPT_LENGTH,
+  MIN_PASSCODE_LENGTH,
   ROOM_TTL_MS,
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_EXPIRED_SLUG,
@@ -64,6 +66,8 @@ interface PeerAttachment {
   waiting?: boolean;
   /** The host let this socket in, so neither the lock nor the waiting room holds it again. */
   admitted?: boolean;
+  /** Wrong passcodes this socket has given, so one socket cannot guess without end. */
+  passFails?: number;
 }
 
 interface RoomRow {
@@ -114,6 +118,12 @@ const MAX_ADMITTED_CLIENTS = 32;
 // Sockets the waiting room holds at once, and so the most a host is shown. The
 // names are chosen by anyone with the link, so the list is bounded.
 const MAX_WAITING = 8;
+// Wrong passcodes one socket may give before it is closed, and the room as a
+// whole in a window that starts at the first of them. The passcode is as short
+// as six characters, so guesses are bounded per socket and across sockets.
+const MAX_PASSCODE_TRIES_PER_SOCKET = 5;
+const MAX_PASSCODE_TRIES_PER_ROOM = 20;
+const PASSCODE_WINDOW_MS = 10 * 60_000;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -147,6 +157,8 @@ export class Room implements DurableObject {
   // New people wait until the host lets them in. A setting of the room, not of
   // the session: it stays when everyone leaves, so it is kept under its own key.
   private waitingRoom = false;
+  // Lowercase hex SHA-256 of `<slug>:<passcode>`; the passcode itself is never kept.
+  private passcodeHash: string | null = null;
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -176,8 +188,9 @@ export class Room implements DurableObject {
         this.locked = session.locked === true;
         this.admitted = session.admitted ?? [];
       }
-      const access = await this.state.storage.get<{ waitingRoom?: boolean }>('access');
+      const access = await this.state.storage.get<{ waitingRoom?: boolean; passcodeHash?: string }>('access');
       this.waitingRoom = access?.waitingRoom === true;
+      this.passcodeHash = typeof access?.passcodeHash === 'string' ? access.passcodeHash : null;
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
         this.nextOrdinal = nextOrdinal;
@@ -229,6 +242,7 @@ export class Room implements DurableObject {
       type: 'room-access',
       locked: this.locked,
       waitingRoom: this.waitingRoom,
+      passcode: this.passcodeHash !== null,
       waiting: this.waitingPeers().map(({ p }) => ({
         peerId: p.peerId,
         displayName: p.displayName ?? '',
@@ -236,6 +250,24 @@ export class Room implements DurableObject {
         ...(p.companion ? { companion: true } : {}),
       })),
     };
+  }
+
+  private async saveAccess(): Promise<void> {
+    await this.state.storage.put('access', {
+      waitingRoom: this.waitingRoom,
+      ...(this.passcodeHash ? { passcodeHash: this.passcodeHash } : {}),
+    });
+  }
+
+  private async passcodeDigest(passcode: string): Promise<string> {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${this.slug}:${passcode}`));
+    return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** The wrong passcodes the room has counted, or null once their window has passed. */
+  private async passcodeFails(): Promise<{ count: number; since: number } | null> {
+    const fails = await this.state.storage.get<{ count: number; since: number }>('passFails');
+    return fails && Date.now() - fails.since < PASSCODE_WINDOW_MS ? fails : null;
   }
 
   private tellHosts(): void {
@@ -433,6 +465,46 @@ export class Room implements DurableObject {
             // already gone
           }
           return;
+        }
+        // A room with a passcode seats nobody who has not given it, on the same
+        // terms as the lock. The socket stays open and unseated, and may send
+        // `join` again with another try.
+        if (this.passcodeHash && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          const given = parsed.passcode;
+          if (typeof given !== 'string' || given.length === 0 || given.length > MAX_PASSCODE_LENGTH) {
+            this.send(ws, { type: 'door', state: 'passcode' });
+            return;
+          }
+          const spent = await this.passcodeFails();
+          if (spent && spent.count >= MAX_PASSCODE_TRIES_PER_ROOM) {
+            try {
+              ws.close(WS_CLOSE_NOT_ADMITTED, 'passcode');
+            } catch {
+              // already gone
+            }
+            return;
+          }
+          const digest = await this.passcodeDigest(given);
+          // The awaits above let this socket's other messages run; whatever
+          // they did to its attachment, or to the passcode, is what counts.
+          const now = this.peer(ws);
+          if (now.joined || now.waiting || now.left) return;
+          if (this.passcodeHash && !timingSafeEqualHex(digest, this.passcodeHash)) {
+            const fails = (await this.passcodeFails()) ?? { count: 0, since: Date.now() };
+            await this.state.storage.put('passFails', { count: fails.count + 1, since: fails.since });
+            p.passFails = (now.passFails ?? 0) + 1;
+            this.save(ws, p);
+            if (p.passFails >= MAX_PASSCODE_TRIES_PER_SOCKET) {
+              try {
+                ws.close(WS_CLOSE_NOT_ADMITTED, 'passcode');
+              } catch {
+                // already gone
+              }
+              return;
+            }
+            this.send(ws, { type: 'door', state: 'passcode', wrong: true });
+            return;
+          }
         }
         // With the waiting room on, a newcomer is held until the host answers:
         // it is not seated, and so creates no row, extends no expiry and is
@@ -807,22 +879,32 @@ export class Room implements DurableObject {
         break;
       }
       case 'room-access': {
-        // Only the host changes these, and each only with a real boolean. Nobody
-        // is closed by the lock: it decides the joins that come after. Turning
-        // the waiting room off lets in everyone who waits.
+        // Only the host changes these, and each only with a real boolean (the
+        // passcode with `null` or a string of the allowed length). Nobody is
+        // closed by the lock or the passcode: they decide the joins that come
+        // after. Turning the waiting room off lets in everyone who waits.
         const lock = typeof parsed.locked === 'boolean';
         const door = typeof parsed.waitingRoom === 'boolean';
-        if (p.role !== 'host' || !(lock || door)) break;
+        const code = parsed.passcode;
+        const pass =
+          code === null ||
+          (typeof code === 'string' && code.length >= MIN_PASSCODE_LENGTH && code.length <= MAX_PASSCODE_LENGTH);
+        if (p.role !== 'host' || !(lock || door || pass)) break;
         if (lock) {
           this.locked = parsed.locked === true;
           await this.saveSession();
         }
         if (door) {
           this.waitingRoom = parsed.waitingRoom === true;
-          await this.state.storage.put('access', { waitingRoom: this.waitingRoom });
+          await this.saveAccess();
           if (!this.waitingRoom) {
             for (const target of this.waitingPeers()) await this.answerWaiting(target.ws, true);
           }
+        }
+        if (pass) {
+          this.passcodeHash = typeof code === 'string' ? await this.passcodeDigest(code) : null;
+          await this.saveAccess();
+          await this.state.storage.delete('passFails');
         }
         this.tellHosts();
         break;

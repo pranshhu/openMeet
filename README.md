@@ -715,10 +715,13 @@ Known gaps, listed below:
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
   removed tab until everyone has left, but the invite link is the only credential for joining
-  (unless the host has turned the waiting room on): a new tab or another browser joins again.
+  (unless the host has set a passcode or turned the waiting room on): a new tab or another
+  browser joins again.
   The host can lock the room against new joins, which keeps out a new tab for as long as it is
   locked; the lock ends with the session, and a tab that was in the call can still reconnect.
   With the waiting room on, a new tab waits until the host lets it in or refuses it.
+  With a passcode set, a new tab is asked for it before it joins; the Room keeps only a digest
+  of it, limits the tries, and the passcode does not gate the TURN credentials a link mints.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 

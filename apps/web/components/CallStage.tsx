@@ -318,8 +318,8 @@ export function CallStage({
   onRemovePeer?: (peerId: string) => void;
   /** Host: the lock, the waiting room and who waits, as the Room last said; absent until it has. */
   roomAccess?: Access | null;
-  /** Host: lock or unlock the room, or turn its waiting room on or off. */
-  onRoomAccess?: (change: { locked?: boolean; waitingRoom?: boolean }) => void;
+  /** Host: lock or unlock the room, turn its waiting room on or off, or set or remove its passcode. */
+  onRoomAccess?: (change: { locked?: boolean; waitingRoom?: boolean; passcode?: string | null }) => void;
   /** Host: let one waiting person in, or refuse them. */
   onAdmit?: (peerId: string, admit: boolean) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
