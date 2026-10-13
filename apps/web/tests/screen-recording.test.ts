@@ -424,9 +424,10 @@ describe('screen recording', () => {
 
     // A camera receiver that has finished, a guest screen segment with four
     // bytes written, and a stream whose close rejects when it is called twice.
-    async function presenting() {
+    async function presenting(sendsBytes = true) {
       installMediaRecorder();
       let closes = 0;
+      const removed: string[] = [];
       const writable = {
         write: async () => {},
         close: async () => {
@@ -437,6 +438,7 @@ describe('screen recording', () => {
       };
       const dir = {
         getFileHandle: async (name: string) => ({ name, createWritable: async () => writable }),
+        removeEntry: async (name: string) => { removed.push(name); },
       } as unknown as NonNullable<RecordingHandles['dir']>;
       const camera = new ChunkReceiver({
         recordingId: 'r',
@@ -454,9 +456,11 @@ describe('screen recording', () => {
       const onError = vi.fn();
       await bindHostScreenChannel(channel, h, onError, 'peer-bob');
       const screen = (h.screenReceivers as Map<number, ChunkReceiver>).get(1)!;
-      await screen.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }));
-      await screen.handleMessage(new ArrayBuffer(4));
-      return { h, channel, camera, screen, onError, closes: () => closes };
+      if (sendsBytes) {
+        await screen.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }));
+        await screen.handleMessage(new ArrayBuffer(4));
+      }
+      return { h, channel, camera, screen, onError, removed, closes: () => closes };
     }
 
     it('keeps the screen file open until its own finish message arrives', async () => {
@@ -538,6 +542,68 @@ describe('screen recording', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('stops waiting for a screen file when its channel closes during the wait', async () => {
+      // Removal that must fail this test: ending the receiver's wait in the screen channel's close listener.
+      vi.useFakeTimers();
+      try {
+        const { h, channel, camera } = await presenting();
+        await camera.handleMessage(finished('r'));
+        let ended = false;
+        const done = endHostRecording(h).then(() => { ended = true; });
+
+        await vi.advanceTimersByTimeAsync(50);
+        channel.dispatchEvent(new Event('close'));
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(ended, 'kept waiting for a channel that closed').toBe(true);
+        await done;
+        expect(collectScreenSegments(h)).toEqual([
+          { file: 'guest_screen_r.mp4', offsetMs: 0, endedEarly: true, sharer: 'peer-bob' },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops the empty file of a share whose channel closes during the wait, and lists it nowhere', async () => {
+      // Removal that must fail this test: ending the receiver's wait in the screen channel's close listener.
+      vi.useFakeTimers();
+      try {
+        const { h, channel, camera, removed } = await presenting(false);
+        await camera.handleMessage(finished('r'));
+        let ended = false;
+        const done = endHostRecording(h).then(() => { ended = true; });
+
+        await vi.advanceTimersByTimeAsync(50);
+        channel.dispatchEvent(new Event('close'));
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(ended, 'kept waiting for a channel that closed').toBe(true);
+        await done;
+        expect(removed).toEqual(['guest_screen_r.mp4']);
+        expect(h.screenWriters).toEqual([]);
+        expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual([]);
+        expect(collectScreenSegments(h)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not list an empty share file that was removed while another file was still awaited', async () => {
+      // Removal that must fail this test: skipping the segments whose file is gone when marking ended early.
+      const { h, channel, camera, removed } = await presenting(false);
+      const done = endHostRecording(h);
+      await new Promise((r) => setTimeout(r, 20));
+
+      channel.dispatchEvent(new Event('close'));
+      await vi.waitFor(() => expect(removed).toEqual(['guest_screen_r.mp4']));
+      await camera.handleMessage(finished('r'));
+      await done;
+
+      expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual([]);
+      expect(collectScreenSegments(h)).toEqual([]);
     });
 
     it('lists a guest who is still sending a screen file until it is finished', async () => {

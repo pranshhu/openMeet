@@ -1022,8 +1022,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
    still open is waited for the same way; one whose channel has closed is not, and its writer was
-   closed by that event. A screen file that gave no finish signal within the limits is listed as
-   ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
+   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   file that gave no finish signal within the limits, or whose channel closed without one, is
+   listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
    so the channel's close and the end of the take can both ask for it.
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.

@@ -1750,9 +1750,12 @@ export async function endHostRecording(
   );
 
   // A screen file that never finished within the limits is ended early, as the
-  // close of its channel would mark it.
+  // close of its channel would mark it. An empty file that close already
+  // removed is not listed.
   for (const r of liveScreens) {
-    if (!r.receivedFinalized) (h.screenEndedEarlyByFile ??= new Set()).add(r.fileName);
+    if (r.receivedFinalized) continue;
+    if (!h.screenWriters?.some((w) => w.fileName === r.fileName)) continue;
+    (h.screenEndedEarlyByFile ??= new Set()).add(r.fileName);
   }
 
   h.receiver?.flushAck();
@@ -2174,6 +2177,9 @@ export async function bindHostScreenChannel(
   };
   channel.addEventListener('close', () => {
     h.screenLive?.delete(segment);
+    // A closed channel delivers nothing more, so a take being saved stops
+    // waiting for this file's finish message.
+    receiver.resolveEarly();
     if (!receiver.receivedFinalized) {
       (h.screenEndedEarlyByFile ??= new Set()).add(writer.fileName);
     }

@@ -34,6 +34,28 @@ describe('FileWriter', () => {
     expect(writable.close).toHaveBeenCalledOnce();
   });
 
+  it('close() waits for a write that was not awaited', async () => {
+    // Removal that must fail this test: the wait for queued writes in close().
+    const order: string[] = [];
+    const writable = {
+      write: vi.fn().mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        order.push('write finished');
+      }),
+      close: vi.fn().mockImplementation(async () => {
+        order.push('close');
+      }),
+    };
+    const handle = { createWritable: vi.fn().mockResolvedValue(writable), name: 'h.mp4' };
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue(handle) });
+    await fw.openFile('h.mp4');
+
+    void fw.write(0, new Uint8Array([1]).buffer);
+    await fw.close();
+
+    expect(order).toEqual(['write finished', 'close']);
+  });
+
   it('two close() calls at the same moment close the stream once and both resolve', async () => {
     // Removal that must fail this test: the shared promise, so each call
     // reaches the stream's own close.
