@@ -424,4 +424,111 @@ describe('Lobby: microphone only, the rest of its behaviour', () => {
     });
     await waitFor(() => expect(micOnlyButton()).toBeEnabled());
   });
+
+  it('keeps the preview that was joined with, and lets go of a capture that arrives after Join', async () => {
+    const preview = streamOf(micTrack(), camTrack());
+    const late = streamOf(micTrack());
+    let open!: (s: MediaStream) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      c.video === false
+        ? new Promise<MediaStream>((resolve) => {
+            open = resolve;
+          })
+        : Promise.resolve(preview)
+    );
+    stubMedia(getUserMedia);
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ana' } });
+
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: /join now/i }));
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(preview, 'Ana', false, undefined, false));
+
+    await act(async () => {
+      open(late);
+    });
+    for (const t of preview.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+    for (const t of late.getTracks()) expect(t.stop).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets go of a camera that arrives after a microphone-only person has joined', async () => {
+    const micAlone = streamOf(micTrack());
+    const late = streamOf(micTrack(), camTrack());
+    let open!: (s: MediaStream) => void;
+    let asked = 0;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) => {
+      asked += 1;
+      if (asked === 1) return Promise.resolve(streamOf(micTrack(), camTrack()));
+      if (c.video === false) return Promise.resolve(micAlone);
+      return new Promise<MediaStream>((resolve) => {
+        open = resolve;
+      });
+    });
+    stubMedia(getUserMedia);
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ana' } });
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+    fireEvent.click(screen.getByRole('button', { name: /join now/i }));
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(micAlone, 'Ana', false, undefined, false));
+
+    await act(async () => {
+      open(late);
+    });
+    for (const t of micAlone.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+    for (const t of late.getTracks()) expect(t.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins with the capture that arrived while the join was being answered', async () => {
+    const preview = streamOf(micTrack(), camTrack());
+    const arrived = streamOf(micTrack());
+    let open!: (s: MediaStream) => void;
+    let answerSeat!: (held: boolean) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      c.video === false
+        ? new Promise<MediaStream>((resolve) => {
+            open = resolve;
+          })
+        : Promise.resolve(preview)
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue(DEVICES) },
+      // The question "is another tab recording this room", held open.
+      locks: {
+        request: () =>
+          new Promise<boolean>((resolve) => {
+            answerSeat = resolve;
+          }),
+      },
+    });
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ana' } });
+
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: /join now/i }));
+    await act(async () => {
+      open(arrived);
+    });
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    await act(async () => {
+      answerSeat(false);
+    });
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(arrived, 'Ana', false, undefined, false));
+    for (const t of preview.getTracks()) expect(t.stop).toHaveBeenCalledTimes(1);
+    for (const t of arrived.getTracks()) expect(t.stop).not.toHaveBeenCalled();
+  });
 });

@@ -311,7 +311,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   Record, the countdown, the teleprompter and the media board are there with nobody else in
   the room. The hook's phase is not changed by it.
   `Lobby` uses a `handedOffRef` so unmount doesn't stop the MediaStream handed to `useRoom`
-  (ownership transfer — load-bearing). `Lobby` **requires a name** (Join gated; the name field is a
+  (ownership transfer — load-bearing).
+  A capture that `reacquire` was still opening when the stream was handed over is stopped as
+  it arrives and the handed-over stream is left alone, and Join hands over the capture the
+  `MediaManager` holds at that moment, so the call never gets a stream the lobby stops and no
+  capture stays open behind it.
+  `Lobby` **requires a name** (Join gated; the name field is a
   form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
   (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as

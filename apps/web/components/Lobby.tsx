@@ -415,6 +415,12 @@ export function Lobby({
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
       const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
+      // Joined while this capture was being opened: the call keeps the stream
+      // it was given, and the capture that arrived late is let go.
+      if (handedOffRef.current) {
+        s.getTracks().forEach((t) => t.stop());
+        return;
+      }
       old?.getTracks().forEach((t) => t.stop());
       mm.setAudioEnabled(micOn);
       mm.setVideoEnabled(camOn);
@@ -918,7 +924,9 @@ export function Lobby({
               chooseListening(shownListening);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
-              onJoin(stream, name.trim(), false, undefined, stereo);
+              // The capture that is open at this moment: one that arrived while
+              // the seat was being asked about has replaced the preview read above.
+              onJoin(mmRef.current?.getStream() ?? stream, name.trim(), false, undefined, stereo);
             }}
           >
             {nameField}

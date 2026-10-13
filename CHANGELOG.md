@@ -421,6 +421,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- Pressing **Join now** while the lobby was still opening a camera or microphone you
+  had just asked for joined you with a stream that went silent a moment later, and left
+  the new capture open. You join with what is open at that moment, and nothing stays
+  open behind you.
 
 ### Security
 
