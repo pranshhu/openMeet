@@ -615,7 +615,7 @@ one answer never covers the other kind.
 unfinished send to each new connection to the host.
 A guest's `endRecording` calls it too, with the backups of the take that just ended
 (`takeBackupFiles` in `hooks/backup-return.ts`: the camera's, the WAV master's and each screen
-stretch's, only those kept in browser storage, eight at most), when the host's
+stretch's, only those whose directory opened in browser storage, eight at most), when the host's
 `recording-stop` ended a take whose streams did not all drain and the host has not set this
 guest as not recorded. `state.backupQueued` says so,
 and the guest's done line reads "Your backup of this take holds all of it and was offered to
@@ -731,7 +731,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and screen senders and marks the handles `deferred`, which `startScreenRecording` reads
   for a share that starts later; it refuses when the camera backup has no directory in
   browser storage. The WAV and a screen stretch are each deferred only when their own
-  backup has a directory there; one whose backup lives in memory goes on being streamed.
+  backup has a directory there; one whose backup has none goes on being streamed.
 - `chunk-receiver.ts` (host ingress): pairs binary frame with prior string header; a live receiver
   takes only the next wire index — a lower one is a replay and is dropped, a higher one is dropped
   and `resume_offset` is sent so the guest resends from the last fragment written, at most once
@@ -771,7 +771,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
   backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   A failed write is retried once and then the rest of the take continues in RAM with a warning
-  banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. After a
+  banner. `stop()` returns the disk-backed `File` assembled from chunk Files by reference. A
+  backup whose directory opened and whose chunks could not be written there is returned from
+  memory as a `File` under that directory's name, so it can still be offered to the host; one
+  that got no directory is a `Blob` with no name. After a
   clean host take (no recording error or connection warning, and neither the host's camera file nor
   its WAV master came out empty) `markFinalized()` drops a `finalized` marker and the next lobby's
   `findBackups()` deletes that directory. Guest backups are **never** auto-deleted (a guest can't know
@@ -1639,7 +1642,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   leaves or closes the tab before the host has saved it, or the host answers **Not now**,
   the backup is only in that guest's lobby. If browser storage fails during such a take,
   the backup goes on in memory under the existing warning, and from there on that guest's
-  camera and WAV are held nowhere else.
+  camera and WAV are held nowhere else. A screen recording of such a take is held in memory
+  the same way, with no warning and no download link of its own: until the host has saved the
+  offer, closing the tab loses it.
 - **When every guest sends later, a host reload leaves no take to resume.** The crash copy
   writes its notes with the guests' bytes, and none arrived, so the host is offered neither
   **Unsaved recording** nor **Resume recording**. When the host is back the guests' pages

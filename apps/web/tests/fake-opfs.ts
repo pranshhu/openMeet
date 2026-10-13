@@ -118,3 +118,26 @@ export class FakeDirectoryHandle {
     }
   }
 }
+
+/** Storage that has run out of room: a directory still opens, and no write is taken. */
+export class FullDirectoryHandle extends FakeDirectoryHandle {
+  override async getDirectoryHandle(name: string): Promise<FakeDirectoryHandle> {
+    const dir = new FullDirectoryHandle(name);
+    this.entries.set(name, dir);
+    return dir;
+  }
+
+  override async getFileHandle(name: string): Promise<FakeFileHandle> {
+    const file = new FakeFileHandle(name);
+    file.createWritable = async () => ({
+      write: async () => {
+        const err = new Error('no room');
+        err.name = 'QuotaExceededError';
+        throw err;
+      },
+      close: async () => {},
+    });
+    this.entries.set(name, file);
+    return file;
+  }
+}

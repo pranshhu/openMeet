@@ -879,8 +879,9 @@ export async function attachBackupSends(
 /**
  * The backups of the take that just ended on this device, as the files a
  * guest can return to the host: the camera's, the WAV master's, then each
- * screen stretch's. Only a backup kept in browser storage, under a backup's
- * name, can travel; one that lived in memory has no name. Bounded by what
+ * screen stretch's. Only a backup that has a backup's name can travel: one
+ * whose directory opened in browser storage. One that got no directory has
+ * no name. Bounded by what
  * one sender may have waiting. Never rejects: a screen backup that fails to
  * stop is left out, and it stays listed in the lobby.
  */

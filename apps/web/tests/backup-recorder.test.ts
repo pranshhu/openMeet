@@ -5,7 +5,7 @@ import { wavHeader } from '@/lib/wav';
 import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
 import { presetById } from '@/lib/quality';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
-import { FakeDirectoryHandle, FakeFileHandle } from './fake-opfs';
+import { FakeDirectoryHandle, FakeFileHandle, FullDirectoryHandle } from './fake-opfs';
 
 function fakeFrame(samples: number[], sampleRate = 48000, channels = 1): PcmFrame {
   const data = Float32Array.from(samples);
@@ -461,6 +461,64 @@ describe('BackupRecorder — failure handling and memory boundedness', () => {
     failRead = true; // on-disk part cannot be read back
     const backup = await br.stop();
     expect(backup).toBeNull();
+  });
+
+  it('returns the copy held in memory under the backup’s name when its directory took no chunk', async () => {
+    const br = new BackupRecorder({
+      stream: new EventTarget() as unknown as MediaStream,
+      mrFactory: () => new FakeMR() as unknown as MediaRecorder,
+      mimeType: 'video/mp4',
+      room: 'abc-defg-hij',
+      opfsRoot: async () => new FullDirectoryHandle('root') as never,
+    });
+    br.start();
+    await br.whenOpen();
+    expect(br.dirName).not.toBeNull();
+    FakeMR.last!.emit(150);
+    FakeMR.last!.emit(250);
+    const backup = await br.stop();
+    expect(backup).toBeInstanceOf(File);
+    expect((backup as File).name).toBe(`${br.dirName}.mp4`);
+    expect(parseBackupName((backup as File).name)).not.toBeNull();
+    expect(backup?.size).toBe(400);
+  });
+
+  it('returns a WAV held in memory under the backup’s name when its directory took no chunk', async () => {
+    const br = new BackupRecorder({
+      stream: new EventTarget() as unknown as MediaStream,
+      mimeType: 'audio/wav',
+      fileName: 'openmeet-backup-audio',
+      opfsRoot: async () => new FullDirectoryHandle('root') as never,
+    });
+    br.start();
+    await br.whenOpen();
+    expect(br.dirName).not.toBeNull();
+    br.writeChunk(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 0));
+    br.writeChunk(new Uint8Array(144).buffer as ArrayBuffer);
+    const backup = await br.stop();
+    expect(backup).toBeInstanceOf(File);
+    expect((backup as File).name).toBe(`${br.dirName}.wav`);
+    expect(backup?.type).toBe('audio/wav');
+    expect(backup?.size).toBe(44 + 144);
+  });
+
+  it('returns a nameless copy when storage gave it no directory', async () => {
+    const br = new BackupRecorder({
+      stream: new EventTarget() as unknown as MediaStream,
+      mrFactory: () => new FakeMR() as unknown as MediaRecorder,
+      mimeType: 'video/mp4',
+      room: 'abc-defg-hij',
+      opfsRoot: async () => {
+        throw new Error('SecurityError');
+      },
+    });
+    br.start();
+    await br.whenOpen();
+    expect(br.dirName).toBeNull();
+    FakeMR.last!.emit(120);
+    const backup = await br.stop();
+    expect(backup).not.toBeInstanceOf(File);
+    expect(backup?.size).toBe(120);
   });
 });
 

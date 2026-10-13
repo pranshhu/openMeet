@@ -5,7 +5,8 @@ import {
   stopScreenRecording,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
-import { FakeDirectoryHandle } from './fake-opfs';
+import { takeBackupFiles } from '@/hooks/backup-return';
+import { FakeDirectoryHandle, FullDirectoryHandle } from './fake-opfs';
 
 const ON_DISK = 'openmeet-backup-1700000000000-abc-defg-hij';
 
@@ -159,5 +160,56 @@ describe('a screen share that starts during a take', () => {
     expect(h.screenSender?.isAbandoned).toBe(false);
     expect(sent).toEqual([]);
     await stopScreenRecording(h);
+  });
+
+  it('is streamed when the take is, also when the share’s backup is kept on disk', async () => {
+    installMediaRecorder();
+    const { channel, sent } = screenChannel();
+    const h: RecordingHandles = { recordingId: 'rec-live-disk' };
+
+    const root = new FakeDirectoryHandle();
+    Object.defineProperty(globalThis.navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => root },
+    });
+    try {
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+      await h.screenBackup!.whenOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(h.screenBackup!.dirName).not.toBeNull();
+      expect(h.screenSender?.isAbandoned).toBe(false);
+      expect(sent).toEqual([]);
+      await stopScreenRecording(h);
+    } finally {
+      delete (globalThis.navigator as { storage?: unknown }).storage;
+    }
+  });
+
+  it('is offered after a take sent afterwards when storage opened its directory and took no chunk', async () => {
+    installMediaRecorder();
+    const { channel } = screenChannel();
+    const h: RecordingHandles = { recordingId: 'rec-full', deferred: true, room: 'abc-defg-hij' };
+
+    const root = new FullDirectoryHandle();
+    Object.defineProperty(globalThis.navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => root },
+    });
+    try {
+      await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: () => channel });
+      await h.screenBackup!.whenOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(h.screenSender?.isAbandoned).toBe(true);
+      // What the stretch's recorder hands its backup for each chunk.
+      h.screenBackup!.writeChunk(new Uint8Array(1000).buffer);
+      await stopScreenRecording(h);
+
+      const files = await takeBackupFiles(null, null, h.screenBackups);
+      expect(files).toHaveLength(1);
+      expect(files[0]!.size).toBe(1000);
+      expect(files[0]!.name).toMatch(/^openmeet-backup-screen-\d{13}-abc-defg-hij\.mp4$/);
+    } finally {
+      delete (globalThis.navigator as { storage?: unknown }).storage;
+    }
   });
 });

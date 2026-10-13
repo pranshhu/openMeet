@@ -460,11 +460,11 @@ export class BackupRecorder {
       if (patched) {
         result = onDiskFile
           ? new File(patched, onDiskFile.name, { type: 'audio/wav', lastModified: onDiskFile.lastModified })
-          : new Blob(patched, { type: 'audio/wav' });
+          : this.inMemory(patched, 'audio/wav');
       } else {
         result = onDiskFile
           ? (this.parts.length > 0 ? new File([onDiskFile, ...this.parts], onDiskFile.name, { type: onDiskFile.type, lastModified: Date.now() }) : onDiskFile)
-          : new Blob(this.parts, { type: this.opts.mimeType ?? RECORDING_MIME });
+          : this.inMemory(this.parts, this.opts.mimeType ?? RECORDING_MIME);
       }
 
       this.stoppedResult = result;
@@ -556,6 +556,17 @@ export class BackupRecorder {
 
     const blob = chunk instanceof Blob ? chunk : new Blob([chunk]);
     this.parts.push(blob);
+  }
+
+  /**
+   * The copy held in memory. A backup whose directory opened has a name, also
+   * when none of its chunks could be written there, and is handed over under
+   * it, so it can still be returned to the host. One with no directory has none.
+   */
+  private inMemory(parts: BlobPart[], type: string): Blob {
+    return this.backupDirName
+      ? new File(parts, `${this.backupDirName}.${this.ext()}`, { type })
+      : new Blob(parts, { type });
   }
 
   private ext(): string {
