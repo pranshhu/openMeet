@@ -83,7 +83,7 @@ export interface FileCheck {
     | {
         /** The sender said it had sent everything. */
         finalized: boolean;
-        /** The sender gave up because its upload fell too far behind. */
+        /** The sender's upload stopped before the end: it gave up, or the sender kept it back. */
         abandoned: boolean;
         /** Digest of what the sender sent, as the sender reported it. */
         sha256Sent?: string | undefined;
@@ -433,7 +433,7 @@ export function fileVerdict(
   if (!r) return { status: 'complete', text: 'Complete. Recorded on this computer.' };
   if (r.abandoned) {
     return incomplete(
-      `Incomplete. The upload from ${who} fell too far behind and stopped, so this file ends early. ${ask}`
+      `Incomplete. The upload from ${who} stopped before the end, so this file ends early. Their backup has the rest.`
     );
   }
   if (r.sha256Sent) {

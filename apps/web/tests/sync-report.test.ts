@@ -230,7 +230,9 @@ describe('post-session report', () => {
     const integrity = (JSON.parse(behind.json) as { guests: { integrity: { ok: boolean; text: string } }[] })
       .guests[0]?.integrity;
     expect(integrity?.ok).toBe(false);
-    expect(integrity?.text).toContain('fell too far behind');
+    expect(integrity?.text).toBe(
+      'Incomplete. The upload from Bob stopped before the end, so this file ends early. Their backup has the rest.'
+    );
   });
 
   it('does not call a camera file ok when it was not verified', () => {
@@ -1246,7 +1248,7 @@ describe('verification and file sizes', () => {
       { bytes: 10, received: received({ abandoned: true, sha256Sent: 'same', sha256Written: 'same' }) },
       {
         status: 'incomplete',
-        text: 'Incomplete. The upload from Priya fell too far behind and stopped, so this file ends early. Ask Priya for the backup their browser kept; it is listed in the lobby on their device.',
+        text: 'Incomplete. The upload from Priya stopped before the end, so this file ends early. Their backup has the rest.',
       },
     ],
     [

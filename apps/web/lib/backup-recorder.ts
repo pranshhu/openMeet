@@ -38,6 +38,12 @@ export const BACKUP_PREFIX = 'openmeet-backup';
 // clutter. A crash never writes it, so crash backups are never cleared.
 const FINALIZED_MARK = 'finalized';
 
+// How long a recorder waits for the browser's storage to open. Storage that has
+// not answered by then is treated as refused: a stop must not wait on it.
+const OPEN_LIMIT_MS = 5_000;
+
+const MEMORY_ONLY_WARNING = 'Local storage is unavailable — backup lives in memory only.';
+
 /** The room a backup was recorded in, or null for older backups that don't say. */
 export function backupRoom(name: string): string | null {
   return /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
@@ -336,6 +342,7 @@ export class BackupRecorder {
   private writeTail: Promise<void> = Promise.resolve();
   private opfsOk = false;
   private opfsWrote = false;
+  private openGivenUp = false;
   private warnedStorageFailure = false;
   private stoppedResult: Blob | null | undefined = undefined;
   private stopPromise: Promise<Blob | null> | null = null;
@@ -347,6 +354,11 @@ export class BackupRecorder {
   /** The OPFS directory this backup writes its parts into, or null before the open finished or when storage was unusable. */
   get dirName(): string | null {
     return this.backupDirName;
+  }
+
+  /** Whether any chunk reached the disk: false for a backup whose directory opened and took none. */
+  get wroteToDisk(): boolean {
+    return this.opfsWrote;
   }
 
   /** Resolves when the storage probe finished, whether or not storage was usable. */
@@ -368,7 +380,7 @@ export class BackupRecorder {
     if (typeof navigator !== 'undefined') {
       void (navigator as { storage?: { persist?: () => Promise<boolean> } }).storage?.persist?.();
     }
-    this.openPromise = this.tryOpenOpfs();
+    this.openPromise = this.openWithinLimit();
 
     if (this.isWav()) {
       if (this.opts.stream && (isPcmCaptureSupported() || this.opts.frameSource) && this.opts.stream.getAudioTracks().length > 0) {
@@ -461,11 +473,11 @@ export class BackupRecorder {
       if (patched) {
         result = onDiskFile
           ? new File(patched, onDiskFile.name, { type: 'audio/wav', lastModified: onDiskFile.lastModified })
-          : new Blob(patched, { type: 'audio/wav' });
+          : this.inMemory(patched, 'audio/wav');
       } else {
         result = onDiskFile
           ? (this.parts.length > 0 ? new File([onDiskFile, ...this.parts], onDiskFile.name, { type: onDiskFile.type, lastModified: Date.now() }) : onDiskFile)
-          : new Blob(this.parts, { type: this.opts.mimeType ?? RECORDING_MIME });
+          : this.inMemory(this.parts, this.opts.mimeType ?? RECORDING_MIME);
       }
 
       this.stoppedResult = result;
@@ -483,13 +495,28 @@ export class BackupRecorder {
     await this.backupDir?.getFileHandle(FINALIZED_MARK, { create: true }).catch(() => {});
   }
 
+  /** Resolves when storage has opened or been refused, or when it has not answered within the limit. */
+  private openWithinLimit(): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.openGivenUp = true;
+        this.opts.onWarn?.(MEMORY_ONLY_WARNING);
+        resolve();
+      }, OPEN_LIMIT_MS);
+      void this.tryOpenOpfs().then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
   private async tryOpenOpfs(): Promise<void> {
     const getRoot = this.opts.opfsRoot ?? defaultOpfsRoot();
     if (!getRoot) {
       this.opfsOk = false;
       this.backupDir = null;
       this.backupDirName = null;
-      this.opts.onWarn?.('Local storage is unavailable — backup lives in memory only.');
+      this.opts.onWarn?.(MEMORY_ONLY_WARNING);
       return;
     }
     try {
@@ -512,14 +539,20 @@ export class BackupRecorder {
       }
       await dir.removeEntry?.('.probe').catch(() => {});
 
+      // The answer came after the recorder gave up: no backup is kept in this directory.
+      if (this.openGivenUp) {
+        await root.removeEntry?.(dirName, { recursive: true }).catch(() => {});
+        return;
+      }
       this.backupDir = dir;
       this.backupDirName = dirName;
       this.opfsOk = true;
     } catch {
+      if (this.openGivenUp) return;
       this.opfsOk = false;
       this.backupDir = null;
       this.backupDirName = null;
-      this.opts.onWarn?.('Local storage is unavailable — backup lives in memory only.');
+      this.opts.onWarn?.(MEMORY_ONLY_WARNING);
     }
   }
 
@@ -557,6 +590,17 @@ export class BackupRecorder {
 
     const blob = chunk instanceof Blob ? chunk : new Blob([chunk]);
     this.parts.push(blob);
+  }
+
+  /**
+   * The copy held in memory. A backup whose directory opened has a name, also
+   * when none of its chunks could be written there, and is handed over under
+   * it, so it can still be returned to the host. One with no directory has none.
+   */
+  private inMemory(parts: BlobPart[], type: string): Blob {
+    return this.backupDirName
+      ? new File(parts, `${this.backupDirName}.${this.ext()}`, { type })
+      : new Blob(parts, { type });
   }
 
   private ext(): string {

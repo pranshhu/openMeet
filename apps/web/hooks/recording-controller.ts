@@ -196,6 +196,8 @@ export interface RecordingHandles {
   guestPcm?: PcmRecorder;
   wavSender?: ChunkSender;
   wavChannel?: RTCDataChannel;
+  /** Guest: this take is not streamed to the host. Its backups hold all of it and are sent after it ends. */
+  deferred?: boolean;
 
   // --- Screen capture, recorded as its own track ---
   // A screen share can start and stop several times in one recording, so each
@@ -1318,6 +1320,7 @@ export function startGuestRecording(args: StartGuestArgs): RecordingHandles {
     ...(wavSender ? { wavSender } : {}),
     ...(args.audioChannel ? { wavChannel: args.audioChannel } : {}),
     ...(args.room ? { room: args.room } : {}),
+    ...(onWarn ? { onWarn } : {}),
     ...(args.onHostTakeId ? { onHostTakeId: args.onHostTakeId } : {}),
     videoFps: args.localStream.getVideoTracks()[0]?.getSettings?.().frameRate,
     ...(args.localStream.getAudioTracks().length > 0 && args.localStream.getVideoTracks().length === 0
@@ -1906,6 +1909,24 @@ function finalizeChannel(
   }
 }
 
+/**
+ * Stop streaming this guest's take to the host: the person chose to send it
+ * after the take. The backups go on recording and hold all of it. Refused,
+ * and the take goes on being streamed, when the camera backup is not kept
+ * on disk: a copy held in memory has no name to be returned under. For the
+ * same reason the WAV and the running screen stretch are each kept back
+ * only when their own backup is on disk; one that is not goes on being
+ * streamed, which is its only way to the host.
+ */
+export function deferGuestStreams(h: RecordingHandles): boolean {
+  if (!h.backup?.dirName) return false;
+  h.deferred = true;
+  h.sender?.defer();
+  if (h.wavBackup?.dirName) h.wavSender?.defer();
+  if (h.screenBackup?.dirName) h.screenSender?.defer();
+  return true;
+}
+
 export function rolePicker(role: Role | null): 'host' | 'guest' {
   return role === 'guest' ? 'guest' : 'host';
 }
@@ -1952,6 +1973,7 @@ export async function startScreenRecording(
     mimeType,
     fileName: 'openmeet-backup-screen',
     ...(h.room ? { room: h.room } : {}),
+    ...(h.onWarn ? { onWarn: h.onWarn } : {}),
   });
 
   if (role === 'host') {
@@ -2069,6 +2091,16 @@ export async function startScreenRecording(
       screenBackup.start();
       h.screenBackup = screenBackup;
       h.screenRecorder = rec;
+      // The take is being sent after it ends, and so is this stretch of it,
+      // once its own backup is known to be on disk: one held in memory
+      // cannot be sent afterwards, so that stretch is streamed. Not awaited:
+      // storage that never answers must not hold up the share.
+      if (h.deferred) {
+        void screenBackup.whenOpen().then(() => {
+          // A stretch that has begun to finish is told as finished, not kept back.
+          if (screenBackup.dirName && h.screenRecorder === rec) sender.defer();
+        });
+      }
     } catch (e) {
       try { channel.close(); } catch { /* already gone */ }
       await screenBackup.stop();

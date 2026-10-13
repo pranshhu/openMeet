@@ -52,6 +52,9 @@ export class ChunkSender {
   private readonly hash = new StreamingSha256();
   private paused = false;
   private held = false;
+  // The far end is told that this stream stopped, and told again whenever it
+  // says where its file stands. Not set by giveUp(), which has nobody to tell.
+  private announced = false;
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
   // Wire-level index. Independent of the recorder's, because one recorded chunk
   // becomes several frames on the wire.
@@ -120,6 +123,23 @@ export class ChunkSender {
     this.queue = [];
   }
 
+  /**
+   * The person chose to send this file after the take. Nothing more is sent
+   * and nothing is kept: what was not acknowledged is let go too, because
+   * nothing is replayed after this. The far end is told, so it stops waiting
+   * for an ending. Unlike the backlog cap this is no failure and nothing is
+   * reported: the take's backup, which holds all of it, travels afterwards.
+   */
+  defer(): void {
+    if (this._abandoned) return;
+    this._abandoned = true;
+    this.announced = true;
+    this.needSendAbandoned = true;
+    this.queue = [];
+    this.buffer.truncate(Infinity);
+    this.sendAbandonedMessage();
+  }
+
   digestHex(): Promise<string> {
     return this.hash.digestHex();
   }
@@ -173,6 +193,7 @@ export class ChunkSender {
     if (this._abandoned) return;
     this._abandoned = true;
     this.needSendAbandoned = true;
+    this.announced = true;
     this.queue = [];
     this.sendAbandonedMessage();
     this.onAbandon?.();
@@ -275,7 +296,10 @@ export class ChunkSender {
    */
   resume(lastIdx: number): void {
     if (this._abandoned) {
-      if (this.needSendAbandoned) this.sendAbandonedMessage();
+      // The far end said where its file stands, so it is listening. A
+      // stream that stopped answers that every time: the receiver can be a
+      // new one, in a host page that reloaded, which never heard it.
+      if (this.announced) this.sendAbandonedMessage();
       return;
     }
     const byIdx = new Map<number, Chunk>();

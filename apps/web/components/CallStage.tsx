@@ -111,6 +111,8 @@ export function CallStage({
   syncReportUrl,
   sidecarsSaved,
   drained = true,
+  backupQueued = false,
+  backupInMemory = false,
   onToggleMic,
   onToggleCam,
   onRecord,
@@ -149,6 +151,8 @@ export function CallStage({
   onSetLowPower,
   incomingVideoOff = false,
   onSetIncomingVideoOff,
+  sendLater = false,
+  onSetSendLater,
   handRaised = false,
   onSetHandRaised,
   reactions,
@@ -204,6 +208,10 @@ export function CallStage({
   sidecarsSaved?: boolean;
   /** Guest: every chunk of the last take reached the host before the drain cap. */
   drained?: boolean;
+  /** Guest: the last take's backups were offered to the host, because not all of it arrived while it recorded. */
+  backupQueued?: boolean;
+  /** Guest: the last take's camera backup is held in memory only, so no lobby lists it. */
+  backupInMemory?: boolean;
   // Non-fatal: shown as a banner without ending the call.
   recordingError: string | null;
   micWarning?: MicWarning | null;
@@ -260,6 +268,9 @@ export function CallStage({
   /** This device has stopped taking everyone else's video; it still hears the call. */
   incomingVideoOff?: boolean;
   onSetIncomingVideoOff?: (off: boolean) => void;
+  /** Guest: takes stay on this device while they record and are sent to the host afterwards. */
+  sendLater?: boolean;
+  onSetSendLater?: (on: boolean) => void;
   /** This person has a hand raised, which everyone in the call sees on their tile. */
   handRaised?: boolean;
   onSetHandRaised?: (raised: boolean) => void;
@@ -331,6 +342,8 @@ export function CallStage({
   const micNote = micWarning && !micDismissed.includes(micWarning) ? micWarning : null;
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   const isTakeActive = phase === 'recording' || phase === 'finalizing';
+  // A guest who is not recorded has nothing of its own to hold back.
+  const sendLaterOffered = role === 'guest' && !notRecorded && !recordBlocked;
   const { backgroundNote, dismissBackgroundNote, batteryNote } = useTakeGuard(isTakeActive);
   const overloaded = useOverloadWatch(phase === 'recording', readLoad, lowPower);
 
@@ -825,11 +838,17 @@ export function CallStage({
               <span className="text-[#fdd663]">Saving didn’t finish.</span>
             ) : drained ? (
               <span className="text-[#81c995]">Sent to the host.</span>
+            ) : backupQueued ? (
+              // Not all of it arrived while the take ran. The backup that
+              // holds all of it has its own rows below, which say where it is.
+              <span className="text-[#fdd663]">
+                Your backup of this take holds all of it and was offered to the host.
+              </span>
             ) : (
               // The drain hit its cap or the sender gave up: the host's copy may
               // be short, and only this guest's backup has the rest.
               <span className="text-[#fdd663]">
-                {`Some of your recording may not have reached the host${backupUrl ? ' — rejoin and press Send to host on your backup, or download it.' : '.'}`}
+                {`Some of your recording may not have reached the host${backupUrl ? (backupInMemory ? ' — download your backup.' : ' — rejoin and press Send to host on your backup, or download it.') : '.'}`}
               </span>
             )}
             {!(isHost && summary) && backupUrl && (
@@ -1005,6 +1024,16 @@ export function CallStage({
             Show video
           </button>
         </div>
+      )}
+
+      {sendLater && sendLaterOffered && (
+        <p
+          role="status"
+          className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-white/80"
+        >
+          Your recording stays on this device during a take and goes to the host after it. Keep
+          this tab open until the host has saved it. You can turn this off between takes.
+        </p>
       )}
 
       <BackupNotice
@@ -1313,6 +1342,24 @@ export function CallStage({
                           >
                             <span>Stop incoming video</span>
                             {incomingVideoOff && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
+                          </button>
+                        )}
+                        {onSetSendLater && sendLaterOffered && (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={sendLater}
+                            // A take that was deferred cannot be streamed again, and the
+                            // choice is not changed while a take is being saved.
+                            disabled={phase === 'finalizing' || (sendLater && phase === 'recording')}
+                            onClick={() => {
+                              setCamMenuOpen(false);
+                              onSetSendLater(!sendLater);
+                            }}
+                            className="mb-1 flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border-b border-white/10 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <span>Send my recording later</span>
+                            {sendLater && <Icon name="check" size={16} className="shrink-0 text-[#8ab4f8]" />}
                           </button>
                         )}
                         {!phone && !incomingVideoOff && canPopOut() &&

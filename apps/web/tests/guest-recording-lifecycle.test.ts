@@ -1549,6 +1549,11 @@ describe('host backup after a take in useRoom', () => {
     expect(startGuestRecording).not.toHaveBeenCalled();
     expect(startScreenRecording).toHaveBeenCalled();
     expect(result.current.state.phase).toBe('recording');
+
+    // The screen backup of a presenter-only device warns on the page, as a camera backup does.
+    const handles = vi.mocked(startScreenRecording).mock.calls[0]![0];
+    act(() => handles.onWarn!('Local storage is unavailable — backup lives in memory only.'));
+    expect(result.current.state.recordingError).toBe('Local storage is unavailable — backup lives in memory only.');
   });
 
   it('drives a host take to its end with a fake directory, writing sync and chat sidecars and setting sidecarsSaved: true', async () => {

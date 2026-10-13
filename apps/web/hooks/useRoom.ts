@@ -53,6 +53,7 @@ import {
   startGuestRecording,
   endHostRecording,
   endGuestRecording,
+  deferGuestStreams,
   requestResume,
   allWriters,
   bindHostGuestChannel,
@@ -86,6 +87,7 @@ import {
   BackupIntake,
   BackupSend,
   refuseBackup,
+  takeBackupFiles,
   type BackupTransfer,
 } from './backup-return';
 
@@ -214,6 +216,10 @@ export interface RoomState {
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
   drained: boolean;
+  /** Guest: the last take did not all reach the host, and this page offered its backups to the host. */
+  backupQueued: boolean;
+  /** Guest: the last take's camera backup is held in memory only, under no name. */
+  backupInMemory: boolean;
   // Host-only: editor alignment + seekability companion for the finished pair.
   syncReportUrl: string | null;
   sidecarsSaved: boolean;
@@ -244,6 +250,11 @@ export interface RoomState {
    * no recording is affected.
    */
   incomingVideoOff: boolean;
+  /**
+   * Guest: takes are not streamed to the host while they record. The backup in
+   * this browser holds all of a take and is what the host is sent when it ends.
+   */
+  sendLater: boolean;
   /** This person has a hand raised. Everyone in the call sees it on their tile. */
   handRaised: boolean;
   /** The reaction each tile is showing, by peer id; this person's own under OWN_REACTION. */
@@ -448,6 +459,10 @@ export async function handleGuestRecordingStarted(opts: {
   await opts.beginGuestRecording();
 }
 
+/** Why a take could not be deferred: only a backup on disk can be sent after it. */
+const SEND_LATER_REFUSED =
+  'This browser can’t keep your recording on disk, so it is sent to the host while it records.';
+
 // Turn a recording failure into something the user can act on. Anything not
 // recognised still surfaces its message rather than being swallowed.
 export function recordingErrorMessage(e: unknown): string {
@@ -641,6 +656,8 @@ export function useRoom(slug: string) {
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
     drained: true,
+    backupQueued: false,
+    backupInMemory: false,
     syncReportUrl: null,
     sidecarsSaved: false,
     markers: [],
@@ -651,6 +668,7 @@ export function useRoom(slug: string) {
     notRecorded: false,
     lowPower: false,
     incomingVideoOff: false,
+    sendLater: false,
     handRaised: false,
     reactions: new Map(),
     capabilities: {},
@@ -722,6 +740,8 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
+  // Written by setSendLater itself: a take that starts before the next render reads it.
+  const sendLaterRef = useRef(false);
   // Written by setHandRaised itself: sendPresence reads it, and a join or a
   // reconnect may send presence before the next render.
   const handRaisedRef = useRef(false);
@@ -937,13 +957,14 @@ export function useRoom(slug: string) {
     // The host set this guest as not recorded. Every way a guest's capture can
     // start comes through here, so this is the one place that decides.
     if (notRecordedRef.current) return;
+    const onWarn = (msg: string) => setState((s) => ({ ...s, recordingError: msg }));
     if (companionRef.current) {
       if (!peerRef.current || recordingRef.current) return;
       const recordingId = crypto.randomUUID();
       takeTroubleRef.current = false;
       fatalCloseRef.current = false;
       setState((s) => ({ ...s, recordingError: null, markers: [] }));
-      const handles: RecordingHandles = { recordingId, room: slug };
+      const handles: RecordingHandles = { recordingId, room: slug, onWarn };
       recordingRef.current = handles;
       const activeScreen = screenStreamRef.current;
       if (activeScreen && peerRef.current) {
@@ -975,7 +996,6 @@ export function useRoom(slug: string) {
       setState((s) => ({ ...s, recordingError: recordingErrorMessage(new UnsupportedCodecError()) }));
       return;
     }
-    const onWarn = (msg: string) => setState((s) => ({ ...s, recordingError: msg }));
     const backup = new BackupRecorder({ mimeType, stream: localStream, room: slug, onWarn });
     backup.start();
 
@@ -1072,6 +1092,19 @@ export function useRoom(slug: string) {
         },
       });
       recordingRef.current = handles;
+      // Chosen before this take, so none of it is streamed. Only a backup
+      // kept on disk can be sent afterwards, so the camera's and the WAV's
+      // storage are asked first; without the camera's the take is streamed
+      // and the choice is taken back.
+      if (sendLaterRef.current) {
+        await Promise.all([backup.whenOpen(), wavBackup?.whenOpen()]);
+        // A take that ended while storage answered must start nothing more.
+        if (recordingRef.current !== handles) return;
+        if (sendLaterRef.current && !deferGuestStreams(handles)) {
+          sendLaterRef.current = false;
+          setState((s) => ({ ...s, sendLater: false, recordingError: SEND_LATER_REFUSED }));
+        }
+      }
       if (canCapturePcm && !audioReady) {
         setState((s) => ({
           ...s,
@@ -2479,6 +2512,28 @@ export function useRoom(slug: string) {
   }, []);
 
   /**
+   * Guest: keep takes on this device while they record and send them to the
+   * host afterwards, or go back to streaming them. Turned on during a take it
+   * stops that take's streams at once. A take that was not streamed cannot be
+   * streamed again, so it stays on until that take has ended. Nothing changes
+   * while a take is being saved.
+   */
+  const setSendLater = useCallback((on: boolean) => {
+    // A host writes its own files, and a present-only device has no camera backup.
+    if (roleRef.current !== 'guest' || companionRef.current) return;
+    // A take that is being saved has already decided what is streamed and what is kept.
+    if (phaseRef.current === 'finalizing') return;
+    const h = recordingRef.current;
+    if (!on && h?.deferred) return;
+    if (on && h?.sender && !deferGuestStreams(h)) {
+      setState((s) => ({ ...s, recordingError: SEND_LATER_REFUSED }));
+      return;
+    }
+    sendLaterRef.current = on;
+    setState((s) => ({ ...s, sendLater: on }));
+  }, []);
+
+  /**
    * Raise or lower this person's hand. It travels with presence, which is sent
    * again to everyone who joins and after a reconnect, so nobody misses it.
    */
@@ -2878,6 +2933,28 @@ export function useRoom(slug: string) {
           // forever, and the guest silently sat out take 2 and every take after it.
           // The channels and recorders in here are already stopped and drained.
           recordingRef.current = null;
+          // The host's stop ended a take that did not all reach it, and
+          // both are still in the call. The backup holds all of it, so it
+          // is offered from here: nothing is written until the host
+          // accepts. Not for a guest the host set as not recorded, whose
+          // page must send nothing of them by itself. A failure must not
+          // keep the take from ending; the backup stays on this device
+          // and in its lobby either way.
+          let backupQueued = false;
+          if (
+            !drained &&
+            !notRecordedRef.current &&
+            typeof opts === 'object' &&
+            opts.from === 'recording-stop'
+          ) {
+            try {
+              const files = await takeBackupFiles(backup, wavBackup, h.screenBackups);
+              sendBackups(files);
+              backupQueued = files.length > 0;
+            } catch {
+              // Send to host in the lobby does the same by hand.
+            }
+          }
           setState((s) => ({
             ...s,
             // A removed tab has no call to go back to. Its take is saved, so
@@ -2888,6 +2965,8 @@ export function useRoom(slug: string) {
               ? { recordingError: null }
               : {}),
             drained,
+            backupQueued,
+            backupInMemory: !!backup && !h.backup?.wroteToDisk,
             backupBlobUrl,
             wavBackupBlobUrl,
           }));
@@ -3062,14 +3141,16 @@ export function useRoom(slug: string) {
           finalizingGuests: [],
           backupBlobUrl,
           wavBackupBlobUrl,
-          ...(guest ? { drained: false } : {}),
+          ...(guest
+            ? { drained: false, backupQueued: false, backupInMemory: !!backup && !h.backup?.wroteToDisk }
+            : {}),
           recordingError: guest
             ? `Sending your recording didn’t finish (${reason}).`
             : `Saving didn’t finish (${reason}). Some files in your recording folder may be incomplete.`,
         }));
       }
     },
-    [slug]
+    [slug, sendBackups]
   );
 
   // Close the seam the signal handlers registered in join() reach through.
@@ -3225,6 +3306,7 @@ export function useRoom(slug: string) {
     readLoad,
     setLowPower,
     setIncomingVideoOff,
+    setSendLater,
     setHandRaised,
     sendReaction,
   };

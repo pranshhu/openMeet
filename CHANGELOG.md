@@ -238,6 +238,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- When part of a guest's recording did not reach the host during a take, the guest's
+  page offers its backup to the host as soon as the host ends the take, with no
+  rejoin; the host gets the usual **Save to folder** question.
+- **Send my recording later**, in a guest's camera menu, for a weak connection: the
+  take stays on the guest's device while it records, so it does not compete with the
+  call, and is offered to the host when the take ends.
 - **Microphone only**, under the lobby's preview: join with your microphone and no
   camera. For a person who has no camera, whose camera is blocked or busy, or whose
   computer struggles with video. Pressing it again opens the camera as well. It is off
@@ -309,6 +315,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- Browser storage that does not answer cannot hold up a guest's stop:
+  the backup waits five seconds for it, then continues in memory with the usual
+  warning. A screen backup held in memory says so as the camera backup does, and
+  a guest whose backup is in memory only is told to download it, not to rejoin.
 - The lobby lets go of a camera or microphone that arrives after Join, Present
   only or leaving the page, and of one opened twice in development. After
   Microphone only, answering "Headphones or speakers?" does not bring back the
@@ -464,6 +474,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   background. A host tab that was taken over during a take stays out instead of
   taking the call back, and a guest in that state who presses **Stop and save** gets
   their backup links instead of a "Recording" label that never cleared.
+- After the host reloads and resumes a take, **End & save** does not wait for a guest
+  whose stream had stopped because it fell too far behind: the guest's page says so
+  again when the host's page asks, and the file reads as stopped, not as missing its end.
 - A guest's WAV that was cut off (a take saved after the host's browser crashed, or a
   guest who dropped out) declares whole samples only, because a header that counts part
   of a last sample makes `ffmpeg` print `Invalid PCM packet` for every command run on

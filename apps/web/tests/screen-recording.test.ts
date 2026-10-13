@@ -6,6 +6,7 @@ import {
   collectTrackHealth,
   collectFileChecks,
   resumeHostRecording,
+  startGuestRecording,
   startScreenRecording,
   stopScreenRecording,
   type HealthPeer,
@@ -129,6 +130,42 @@ describe('screen recording', () => {
     await stopScreenRecording(h);
     expect(stopSpy).toHaveBeenCalled();
     expect(h.screenBackup).toBeUndefined();
+  });
+
+  it('a screen backup that cannot use browser storage warns through the take’s callback', async () => {
+    installMediaRecorder();
+    const onWarn = vi.fn();
+    const h: RecordingHandles = { recordingId: 'rec-warn', dir: fakeDir(), onWarn };
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => { throw new Error('denied'); } } });
+    try {
+      await startScreenRecording(h, fakeScreen(), 'host', null);
+      await h.screenBackup!.whenOpen();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(onWarn.mock.calls).toEqual([['Local storage is unavailable — backup lives in memory only.']]);
+  });
+
+  it('a guest’s screen backup warns through the callback its camera backup warns through', async () => {
+    installMediaRecorder();
+    const onWarn = vi.fn();
+    const channel = () =>
+      ({ readyState: 'open', addEventListener: vi.fn(), send: vi.fn(), close: vi.fn() }) as unknown as RTCDataChannel;
+    const h = startGuestRecording({
+      recordingId: 'rec-guest-warn',
+      localStream: fakeScreen(),
+      channel: channel(),
+      onWarn,
+    });
+    expect(onWarn).toHaveBeenCalledTimes(1);
+
+    await startScreenRecording(h, fakeScreen(), 'guest', { createRecordingScreenChannel: channel });
+
+    expect(h.screenBackup).toBeDefined();
+    expect(onWarn.mock.calls).toEqual([
+      ['Local storage is unavailable — backup lives in memory only.'],
+      ['Local storage is unavailable — backup lives in memory only.'],
+    ]);
   });
 
   it('records each stretch start time for the sync sidecar', async () => {

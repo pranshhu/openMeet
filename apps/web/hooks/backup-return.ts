@@ -885,3 +885,23 @@ export async function attachBackupSends(
     if (!send.settled) send.attach(peer.createBackupChannel(send.item.id));
   }
 }
+
+/**
+ * The backups of the take that just ended on this device, as the files a
+ * guest can return to the host: the camera's, the WAV master's, then each
+ * screen stretch's. Only a backup that has a backup's name can travel: one
+ * whose directory opened in browser storage. One that got no directory has
+ * no name. Bounded by what
+ * one sender may have waiting. Never rejects: a screen backup that fails to
+ * stop is left out, and it stays listed in the lobby.
+ */
+export async function takeBackupFiles(
+  camera: Blob | null | undefined,
+  wav: Blob | null | undefined,
+  screens: readonly { stop(): Promise<Blob | null> }[] = []
+): Promise<File[]> {
+  const stopped = await Promise.all(screens.map((s) => s.stop().catch(() => null)));
+  return [camera, wav, ...stopped]
+    .filter((b): b is File => b instanceof File && b.size > 0 && parseBackupName(b.name) !== null)
+    .slice(0, MAX_BACKUP_OFFERS_PER_PEER);
+}

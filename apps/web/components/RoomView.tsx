@@ -118,6 +118,7 @@ export function RoomView({ slug }: { slug: string }) {
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
     resumeRecording, saveRecordingFromCall, setIncomingVideoOff, setHandRaised, sendReaction,
     declineFiles, sendFile,
+    setSendLater,
   } = useRoom(slug);
   // The numbers this page gave people under To. Held here because the call
   // screen is unmounted while everyone else is away and the chat lines are
@@ -386,6 +387,8 @@ export function RoomView({ slug }: { slug: string }) {
       syncReportUrl={state.syncReportUrl}
       sidecarsSaved={state.sidecarsSaved}
       drained={state.drained}
+      backupQueued={state.backupQueued}
+      backupInMemory={state.backupInMemory}
       readLoad={readLoad}
       readTrackHealth={readTrackHealth}
       lowPower={state.lowPower}
@@ -393,6 +396,8 @@ export function RoomView({ slug }: { slug: string }) {
       onSetLowPower={setLowPower}
       incomingVideoOff={state.incomingVideoOff}
       onSetIncomingVideoOff={setIncomingVideoOff}
+      sendLater={state.sendLater}
+      onSetSendLater={setSendLater}
       handRaised={state.handRaised}
       onSetHandRaised={setHandRaised}
       reactions={state.reactions}
