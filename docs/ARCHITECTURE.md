@@ -985,6 +985,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   connections in `told` that the room still lists, and `saveRecoveredTake` writes the
   list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
+- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
@@ -1939,3 +1940,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
+- **A deck takes pictures only.** The Present menu's **Slides (pictures)** picker offers
+  images. A PDF or a slides file picked anyway is left out, and when nothing is left nothing
+  is presented and the menu closes. The slides are turned with the two buttons; there are
+  no keys for it.
+- **A picture that cannot be decoded is a black slide.** `show` still moves to it, and the
+  count includes it.
+- **The Previous and Next row is not always on screen.** While the presenter waits alone
+  ("Everyone else left") the call screen is unmounted and there are no buttons; the deck
+  keeps its slide and the row is back, on that slide, when the call is. On a phone, while
+  chat covers the stage, the row is hidden with the control bar.
+- **Only the presenter turns the slides.** Nobody else in the call can, and a slide change
+  drops no chapter marker.

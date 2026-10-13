@@ -12,6 +12,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Present a deck as slides: pick one picture per slide and turn them with Previous and
+  Next. Everyone sees the slide, and during a recording the deck is saved like any
+  presented screen.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.

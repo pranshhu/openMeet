@@ -7,9 +7,11 @@ import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
+import { SlideControls } from './SlideControls';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
-import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
+import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
+import type { PresentedSlides } from '@/lib/slides';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
 import { ChatPanel, chatSenderLabel, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
@@ -145,6 +147,7 @@ export function CallStage({
   activeCamId,
   isFallbackMedia = false,
   presentingRearCamera = false,
+  slides = null,
   readLoad,
   readTrackHealth,
   lowPower = false,
@@ -249,7 +252,7 @@ export function CallStage({
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
   onDismissScript?: () => void;
-  onToggleScreen: (source?: File | 'rear-camera') => void;
+  onToggleScreen: (source?: PresentSource) => void;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
@@ -258,6 +261,8 @@ export function CallStage({
   activeCamId?: string | undefined;
   isFallbackMedia?: boolean;
   presentingRearCamera?: boolean;
+  /** The deck this page presents, turned with Previous and Next; null or absent when there is none. */
+  slides?: PresentedSlides | null;
   /** One reading of how this device is coping; polled only while a take records. */
   readLoad?: () => Promise<LoadSample>;
   /** Read on a timer by the track panel; it must keep its identity between renders. */
@@ -1214,6 +1219,7 @@ export function CallStage({
                 onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
               />
             )}
+            {slides && <SlideControls key={slides.stream.id} slides={slides} />}
             {/* Mounted while hidden too: its place in the show must survive
                 hiding the strip in the middle of a take. */}
             {hasRundown && (
@@ -1515,6 +1521,24 @@ export function CallStage({
                               if (!file) return;
                               setPresentMenuOpen(false);
                               onToggleScreen(file);
+                            }}
+                          />
+                        </label>
+                        <label
+                          role="menuitem"
+                          className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
+                        >
+                          <span>Slides (pictures)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="sr-only"
+                            onChange={(e) => {
+                              const files = e.target.files;
+                              if (!files || files.length === 0) return;
+                              setPresentMenuOpen(false);
+                              onToggleScreen(Array.from(files));
                             }}
                           />
                         </label>
