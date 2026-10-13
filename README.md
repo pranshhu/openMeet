@@ -61,6 +61,8 @@ retention policy to trust, because there's nothing retained.
 - Host-driven: the host presses Record once and everyone in the room is captured,
   except anyone the host has set as not recorded
 - A three-second countdown on everyone's screen before each take
+- No camera needed: **Microphone only** in the lobby joins a person with their
+  microphone alone
 - Record alone: a host with nobody else in the room presses **Continue alone** and
   records from the call screen; anyone who joins during the take is recorded from then on
 
@@ -448,6 +450,9 @@ the convenience copy; the WAV is the master.
 take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
 holds its start on the host's clock (`timeline.hostStartUnixMs`), which places the parts
 on one timeline with the real breaks between them.
+A person who joined with **Microphone only** has the same two files under the same
+names. Their `.mp4` holds the compressed audio and no picture; the WAV is the master,
+as for everyone.
 
 Codec is probed at runtime, never assumed. H.264 + AAC where available; on Linux there
 is no AAC encoder in any Chrome build, so H.264 + Opus is used instead. Both are MP4,

@@ -110,6 +110,7 @@ export class ChunkReceiver {
   private _clockEnd: ClockReading | null = null;
   private _senderSha256: string | null = null;
   private _senderFrameRate: number | null = null;
+  private _senderAudioOnly = false;
   private _abandoned = false;
   private _timedOut = false;
   private _receivedFinalHeader = false;
@@ -241,6 +242,11 @@ export class ChunkReceiver {
     return this._senderFrameRate;
   }
 
+  /** The sender said this file holds sound and no picture, once it finalizes. */
+  get senderAudioOnly(): boolean {
+    return this._senderAudioOnly;
+  }
+
   /** The file this receiver writes into. */
   get fileName(): string {
     return this.writer.fileName;
@@ -318,6 +324,8 @@ export class ChunkReceiver {
           }
           const fps = cleanFps((parsed as ChunkRecordingFinalized).frameRate);
           if (fps !== null) this._senderFrameRate = fps;
+          // The sender's word, kept as a label for the report: nothing but `true` counts.
+          if ((parsed as ChunkRecordingFinalized).audioOnly === true) this._senderAudioOnly = true;
           this.finalizeResolve?.();
         } else if (t === 'stream-abandoned') {
           this._abandoned = true;

@@ -238,6 +238,17 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   counts against it and says by how much the segment is over.
   Any segment can be started next from the list beside the button, which is how a take
   resumed after a reload goes on with its rundown.
+- **Microphone only**, under the lobby's preview: join with your microphone and no
+  camera. For a person who has no camera, whose camera is blocked or busy, or whose
+  computer struggles with video. Pressing it again opens the camera as well. It is off
+  while the camera and microphone are still being opened.
+- A person who joined with the microphone only is heard by everyone and shown by their
+  initial, and is recorded like everyone else: the WAV master, and an MP4 under the usual
+  name that holds their compressed audio and no picture; their in-browser backup is the
+  same pair. Their camera button is off for that call, and its menu says how to
+  get a camera: leave and join again. The session summary and `sync.json` (`audioOnly`)
+  name such files as audio only, print no pairing or frame-rate command for them, and
+  name a guest's once that guest's recording has finished cleanly.
 - A lossless **FLAC copy** of each WAV master, usually a smaller file: `sync.json` (`flac`)
   and the session summary give an `ffmpeg` command per WAV that writes a FLAC beside
   it, and one that checks the copy against the WAV (two equal MD5 lines) before the
@@ -298,6 +309,13 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- The lobby lets go of a camera or microphone that arrives after Join, Present
+  only or leaving the page, and of one opened twice in development. After
+  Microphone only, answering "Headphones or speakers?" does not bring back the
+  camera error from the first try, and Try again asks for the microphone alone.
+  Join is off while any capture change is being opened, and a press of Join
+  that came before the change waits: press it again once the preview is back.
+  While the microphone reopens, the lobby keeps showing Microphone only.
 - The WAV recording from a computer that stalls during a take stays as long as
   the MP4. Frames that were only late used to get silence added in front of
   them, which made the WAV longer than the take.
@@ -454,6 +472,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - **M** and **N** do nothing while a list has the keyboard. A letter typed to choose from a
   list, the chat's **To** list among them, used to add a chapter marker or open the note
   field as well.
+- Pressing **Join now** while the lobby was still opening a camera or microphone you
+  had just asked for joined you with a stream that went silent a moment later, and left
+  the new capture open. You join with what is open at that moment, and nothing stays
+  open behind you.
 - A guest's WAV in a take that was resumed after a reload declares all the audio the
   file holds when that guest never sent again. A header that counts only the part the
   crash copy held makes players, editors and the FLAC copy stop a few seconds early.

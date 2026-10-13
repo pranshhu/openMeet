@@ -12,6 +12,7 @@ import {
   MediaDeviceMissingError,
   MediaManager,
   MediaPermissionError,
+  NO_CAMERA,
   RECORDING_CONSTRAINTS,
   deviceConstraints,
   recordedChannels,
@@ -107,7 +108,7 @@ function previewProblem(e: unknown): { title: string; body: string } {
   if (e instanceof MediaDeviceMissingError) {
     return {
       title: 'No camera or mic found',
-      body: 'openMeet needs both a camera and a microphone. Connect them, then try again.',
+      body: 'Connect a camera and a microphone, then try again. With a microphone and no camera, press Microphone only.',
     };
   }
   if (e instanceof Error && e.name === 'NotReadableError') {
@@ -214,6 +215,11 @@ export function Lobby({
   // for beside it is never stopped by anyone, and whichever lands last decides
   // the device and the headphones answer, so a change made meanwhile is not taken.
   const reopeningRef = useRef(false);
+  // The same fact for the page to draw from: Join is off while a capture change is under way.
+  const [reopening, setReopening] = useState(false);
+  // Set while a capture change has stopped the microphone before asking for the
+  // new one, so the stream the lobby holds has no live microphone to hand over.
+  const micStoppedRef = useRef(false);
   // From the chosen folder to the end of the rebuild, which can take minutes:
   // Save and Delete wait, so neither runs under it.
   const [saving, setSaving] = useState(false);
@@ -339,10 +345,16 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, quality: string, fps: number, echo: boolean) {
+  function startPreview(mm: MediaManager, cam: string, quality: string, fps: number, echo: boolean) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', '', quality, fps, echo))
+    mm.acquire(deviceConstraints('', cam, quality, fps, echo))
       .then(async (s) => {
+        // The lobby was left for the call, or this run of the effect was
+        // cleaned up: nobody owns this capture, so it is let go.
+        if (handedOffRef.current || mmRef.current !== mm) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
         setStream(s);
         // Device labels are only populated after permission is granted.
         const d = await mm.listDevices().catch(() => EMPTY_DEVICES);
@@ -350,12 +362,15 @@ export function Lobby({
         const micSettings = s.getAudioTracks()[0]?.getSettings?.() ?? {};
         const camSettings = s.getVideoTracks()[0]?.getSettings?.() ?? {};
         setMicId(micSettings.deviceId ?? d.audioInputs[0]?.deviceId ?? '');
-        setCamId(camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? '');
+        setCamId(cam === NO_CAMERA ? cam : (camSettings.deviceId ?? d.videoInputs[0]?.deviceId ?? ''));
         setActual(describeTrack(s.getVideoTracks()[0]));
         const outputs = await listSpeakers();
         if (outputs.length > 0) setSpeakers(outputs);
       })
-      .catch((e: unknown) => setPreviewError(previewProblem(e)));
+      .catch((e: unknown) => {
+        // A run of the effect that was cleaned up has no preview to explain.
+        if (mmRef.current === mm) setPreviewError(previewProblem(e));
+      });
   }
 
   useEffect(() => {
@@ -381,9 +396,10 @@ export function Lobby({
     setQualityId(saved);
     setFrameRate(savedFps);
     setListening(savedListening);
-    startPreview(mm, saved, savedFps, savedListening === 'speakers-ec');
+    startPreview(mm, '', saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
+      mmRef.current = null;
     };
   }, []);
 
@@ -397,6 +413,7 @@ export function Lobby({
     const mm = mmRef.current;
     if (!mm || reopeningRef.current) return;
     reopeningRef.current = true;
+    setReopening(true);
     const old = stream;
     const echo = nextListening === 'speakers-ec';
     // Echo cancellation belongs to the open microphone, and a browser can give
@@ -404,6 +421,7 @@ export function Lobby({
     // change the microphone is let go before it is asked for; the camera stays.
     const released = echo !== (listening === 'speakers-ec');
     if (released) {
+      micStoppedRef.current = true;
       old?.getAudioTracks().forEach((t) => t.stop());
       // A preview whose microphone is stopped must not be joined. Taking it
       // down turns Join and the question off until the new one is open.
@@ -414,12 +432,19 @@ export function Lobby({
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
       const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
+      // Joined, or left, while this capture was being opened: the call keeps
+      // the stream it was given, and the capture that arrived late is let go.
+      if (handedOffRef.current || mmRef.current !== mm) {
+        s.getTracks().forEach((t) => t.stop());
+        return;
+      }
       old?.getTracks().forEach((t) => t.stop());
       mm.setAudioEnabled(micOn);
       mm.setVideoEnabled(camOn);
       setStream(s);
       // A switch that works makes any earlier failed one moot.
       setError(null);
+      setPreviewError(null);
       setMicId(nextMic);
       setCamId(nextCam);
       setQualityId(nextQuality);
@@ -447,6 +472,8 @@ export function Lobby({
       setError(e instanceof Error ? e.message : 'Could not switch device.');
     } finally {
       reopeningRef.current = false;
+      setReopening(false);
+      micStoppedRef.current = false;
     }
   }
 
@@ -502,6 +529,18 @@ export function Lobby({
     const next = !camOn;
     setCamOn(next);
     mmRef.current?.setVideoEnabled(next);
+  }
+
+  /**
+   * Open the microphone alone, or the camera with it again. For a person with
+   * no camera, one that is blocked or busy, or a computer that struggles with
+   * video: they join as a recorded participant with their microphone.
+   */
+  async function chooseMicOnly(on: boolean) {
+    await reacquire(micId, on ? NO_CAMERA : (devices.videoInputs[0]?.deviceId ?? ''), qualityId, frameRate);
+    // The first preview may never have started, and device names come with permission.
+    const mm = mmRef.current;
+    if (mm) setDevices(await mm.listDevices().catch(() => EMPTY_DEVICES));
   }
 
   function copyLink() {
@@ -727,6 +766,9 @@ export function Lobby({
   const shownBitrate = levels.some((l) => l.id === bitrateId) ? bitrateId : DEFAULT_BITRATE_ID;
   // A self-view reads naturally mirrored; a rear camera shows the world, not you.
   const rearCamera = stream?.getVideoTracks()[0]?.getSettings?.().facingMode === 'environment';
+  // The preview holds the microphone alone: there is no picture to show, pick or size.
+  // With no preview the mode is the one chosen, as the line under Join reads it.
+  const micOnly = stream ? stream.getVideoTracks().length === 0 : camId === NO_CAMERA;
   // What the camera reports, which can fall short of the ask at this resolution.
   // Half a frame of slack: 29.97 asked and 30 reported is the same camera mode.
   const deliveredFps = cleanFps(stream?.getVideoTracks()[0]?.getSettings?.().frameRate);
@@ -765,14 +807,14 @@ export function Lobby({
               stream={stream}
               muted
               label={name.trim() || 'You'}
-              camOff={!camOn}
+              camOff={!camOn || micOnly}
               mirror={!rearCamera}
               // Ends left of the centred mic/cam pair, so a long name truncates
               // instead of running under it.
               tagClassName="max-w-[calc(50%-4.5rem)]"
             />
             {/* Only over a picture: with the camera off there is nothing to frame. */}
-            {stream && camOn && <FramingGuide />}
+            {stream && camOn && !micOnly && <FramingGuide />}
             {stream ? (
               /* Overlaid mic / cam controls */
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center gap-4 sm:bottom-4">
@@ -787,6 +829,7 @@ export function Lobby({
                 </button>
                 <button
                   type="button"
+                  hidden={micOnly}
                   onClick={toggleCam}
                   aria-label={camOn ? 'Turn off camera' : 'Turn on camera'}
                   title={camOn ? 'Turn off camera' : 'Turn on camera'}
@@ -809,7 +852,12 @@ export function Lobby({
                     <button
                       type="button"
                       onClick={() => {
-                        if (mmRef.current) startPreview(mmRef.current, qualityId, frameRate, listening === 'speakers-ec');
+                        // Not beside a capture that is still being opened.
+                        if (mmRef.current && !reopeningRef.current) {
+                          // What the person chose: no camera after Microphone only.
+                          const cam = camId === NO_CAMERA ? NO_CAMERA : '';
+                          startPreview(mmRef.current, cam, qualityId, frameRate, listening === 'speakers-ec');
+                        }
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                     >
@@ -818,12 +866,35 @@ export function Lobby({
                   </div>
                 ) : (
                   <>
-                    <p className="text-base font-medium">Allow camera and mic</p>
+                    <p className="text-base font-medium">{micOnly ? 'Allow microphone' : 'Allow camera and mic'}</p>
                     <p className="text-sm text-white/80">Choose Allow if your browser asks.</p>
                   </>
                 )}
               </div>
             )}
+          </div>
+          {/* Under the preview and outside the form, where a person whose camera
+              did not start is looking. One control for no camera, a blocked or
+              busy one, and a computer that struggles with video. */}
+          <div className="mt-3 flex flex-col items-center gap-1">
+            <button
+              type="button"
+              aria-pressed={micOnly}
+              aria-describedby="mic-only-hint"
+              // Off while a preview is being opened and none has failed: a press
+              // then would ask for a second capture beside it, and whichever of
+              // the two the preview did not keep would stay open.
+              disabled={!stream && !previewError}
+              onClick={() => void chooseMicOnly(!micOnly)}
+              className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
+            >
+              Microphone only
+            </button>
+            <span id="mic-only-hint" className="text-center text-xs text-[#5f6368]">
+              {micOnly
+                ? 'You’ll join with sound only: your audio is recorded, with no video. Press again to use your camera.'
+                : 'No camera, or a slow computer? Join with sound only.'}
+            </span>
           </div>
           {error && (
             <p role="alert" className="mt-4 text-center text-sm text-[#b3261e]">
@@ -872,13 +943,21 @@ export function Lobby({
             hidden={checkOnly}
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!stream || !name.trim()) return;
+              if (!stream || !name.trim() || reopeningRef.current) return;
               if (!(await okToTakeSeat())) return;
+              // A capture change that began while the seat was being asked
+              // about may have stopped the microphone: Join again once it is back.
+              if (micStoppedRef.current) {
+                joiningRef.current = false;
+                return;
+              }
               chooseBitrate(shownBitrate);
               chooseListening(shownListening);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
-              onJoin(stream, name.trim(), false, undefined, stereo);
+              // The capture that is open at this moment: one that arrived while
+              // the seat was being asked about has replaced the preview read above.
+              onJoin(mmRef.current?.getStream() ?? stream, name.trim(), false, undefined, stereo);
             }}
           >
             {nameField}
@@ -908,10 +987,18 @@ export function Lobby({
               </p>
             </div>
             <div className="flex w-full flex-col gap-3">
-              <button type="submit" disabled={!stream || !name.trim()} className={`w-full ${primaryBtn}`}>
+              <button
+                type="submit"
+                disabled={!stream || !name.trim() || reopening}
+                className={`w-full ${primaryBtn}`}
+              >
                 Join now
               </button>
-              {!stream && <p className="text-sm text-[#5f6368]">Join opens once your camera and mic are on.</p>}
+              {(!stream || reopening) && (
+                <p className="text-sm text-[#5f6368]">
+                  Join opens once your {camId === NO_CAMERA ? 'microphone is' : 'camera and mic are'} on.
+                </p>
+              )}
               {/* A quiet alternative, not a twin of Join: picked by mistake, it
                   joins a guest unrecorded. What it does is said on screen, not
                   only in a tooltip a phone never shows. */}
@@ -1112,7 +1199,7 @@ export function Lobby({
         <div className="w-full max-w-2xl lg:col-start-1 lg:row-start-2">
           {(devices.videoInputs.length > 0 || devices.audioInputs.length > 0) && (
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {devices.videoInputs.length > 0 && (
+              {!micOnly && devices.videoInputs.length > 0 && (
                 <label className={picker}>
                   <Icon name="videocam" size={18} className="shrink-0" />
                   <select
@@ -1182,7 +1269,7 @@ export function Lobby({
                   </select>
                 </label>
               )}
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Recording quality"
@@ -1198,7 +1285,7 @@ export function Lobby({
                   ))}
                 </select>
               </label>
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Recording bitrate"
@@ -1213,7 +1300,7 @@ export function Lobby({
                   ))}
                 </select>
               </label>
-              <label className={`${picker} sm:col-span-2`}>
+              <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
                   aria-label="Frame rate"

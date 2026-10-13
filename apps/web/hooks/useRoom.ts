@@ -1159,8 +1159,7 @@ export function useRoom(slug: string) {
     ) => {
       companionRef.current = asCompanion;
       // A present-only companion or a producer has no camera or mic: wrapping its empty
-      // stream would conjure a blank generator track and a silent audio track (which a
-      // companion would then send, and a producer would show as a black self-tile).
+      // stream would conjure a silent audio track, which a companion would then send.
       const switchableMedia = asCompanion || asProducer
         ? null
         : new SwitchableMedia(lobbyStream, {
