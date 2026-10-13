@@ -3030,3 +3030,44 @@ describe('CallStage: the name tag colour', () => {
     expect(root().style.getPropertyValue('--om-tag-bar')).toBe('');
   });
 });
+
+describe('CallStage: the host logo', () => {
+  const LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const imgs = () => Array.from(screen.getByTestId('stage-main').querySelectorAll('img'));
+
+  it('draws one picture inside the stage with that source and an empty alt', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} look={{ accent: 'red', logo: LOGO }} />);
+    expect(imgs()).toHaveLength(1);
+    expect(imgs()[0]!.getAttribute('src')).toBe(LOGO);
+    expect(imgs()[0]!.getAttribute('alt')).toBe('');
+  });
+
+  it('draws none without a logo, for the plain look or when no look is handed over', () => {
+    const { rerender } = render(<CallStage {...baseProps} look={{ accent: 'red' }} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} look={{}} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} look={{ logo: LOGO }} />);
+    expect(imgs()).toHaveLength(1);
+  });
+
+  it('puts it top left, 32 px high on a phone and 40 px from sm up, at most 96 px wide, and lets taps through', () => {
+    render(<CallStage {...baseProps} look={{ logo: LOGO }} />);
+    const cls = imgs()[0]!.className.split(' ');
+    for (const c of ['absolute', 'top-3', 'left-3', 'h-8', 'sm:h-10', 'max-w-24', 'object-contain', 'pointer-events-none']) {
+      expect(cls).toContain(c);
+    }
+  });
+
+  it('is drawn under the recording notice, the countdown and the marker note', () => {
+    render(<CallStage {...baseProps} roomRecording look={{ logo: LOGO }} />);
+    const z = (el: Element) => Number(/(?:^| )z-(\d+)/.exec(el.className)?.[1]);
+    const notice = screen.getByTestId('stage-main').querySelector('.pointer-events-none.absolute.inset-x-0')!;
+    expect(z(notice)).toBe(30);
+    expect(z(imgs()[0]!)).toBeLessThan(z(notice));
+    expect(z(imgs()[0]!)).toBeGreaterThan(0);
+  });
+});

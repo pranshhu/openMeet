@@ -248,7 +248,7 @@ export function CallStage({
   onOpenMediaBoard: () => MediaBoard | null;
   /** A script the host sent that this person has not answered; null when none. */
   incomingScript?: string | null;
-  /** The host's look for the room: its accent colour is drawn as a bar on every name tag. */
+  /** The host's look for the room: its accent colour is drawn as a bar on every name tag, its logo in a corner of the stage. */
   look?: Look;
   /** Host: offer the teleprompter script to everyone else. False when it did not go out. */
   onSendScript?: (text: string) => boolean;
@@ -1179,6 +1179,15 @@ export function CallStage({
               onStopPresenting={() => onToggleScreen()}
               onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
+            {/* Under the notices (z-30) and over the tiles. Only a value the page
+                accepted as a logo reaches here, and it is only ever an image source. */}
+            {look?.logo && (
+              <img
+                src={look.logo}
+                alt=""
+                className="pointer-events-none absolute left-3 top-3 z-10 h-8 w-auto max-w-24 object-contain sm:h-10"
+              />
+            )}
             {prompterOpen && (
               <Teleprompter
                 slug={slug}

@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host can add a logo in the lobby; it sits in a corner of the call for everyone. It
+  is not drawn into any recording.
 - The host can pick a colour for the show in the lobby; everyone's name tags carry it
   during the call.
 - The sync file lists each recorded person's name and title with their files, ready for

@@ -2520,3 +2520,162 @@ describe('Lobby: the host picks a name tag colour', () => {
     expect(localStorage.getItem('om_look_xyz-look-pqr')).toBe('{}');
   });
 });
+
+describe('Lobby: the host adds a logo', () => {
+  // A room of its own for each test: the page keeps its own copy of a saved look.
+  let SLUG = '';
+  let rooms = 0;
+  const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  // The first 24 bytes of a PNG: signature, the IHDR chunk header, width, height.
+  const logoOf = (width: number, height: number) =>
+    'data:image/png;base64,' +
+    btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...be32(13), 0x49, 0x48, 0x44, 0x52, ...be32(width), ...be32(height))) +
+    'AAAA';
+  const pick = (input: HTMLElement, name = 'logo.png') =>
+    fireEvent.change(input, { target: { files: [new File(['x'], name, { type: 'image/png' })] } });
+
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    SLUG = `xyz-logo${++rooms}-pqr`;
+    localStorage.setItem(`om_host_${SLUG}`, 'host-tok');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(`om_host_${SLUG}`);
+    localStorage.removeItem(`om_look_${SLUG}`);
+    localStorage.removeItem('om_look_xyz-other-pqr');
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('has an Add a logo button for the host, under the colour select, and none for a guest', async () => {
+    const guest = render(<Lobby slug="xyz-other-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Add a logo')).toBeNull();
+    guest.unmount();
+
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const input = (await screen.findByLabelText('Add a logo')) as HTMLInputElement;
+    expect(input.type).toBe('file');
+    expect(input.accept).toBe('image/png,image/jpeg,image/webp');
+    expect(input.closest('label')!.className).toContain('min-h-11');
+    expect(screen.queryByRole('button', { name: 'Remove logo' })).toBeNull();
+    expect(screen.queryByAltText('Your logo')).toBeNull();
+    const select = screen.getByLabelText('Name tag colour');
+    expect(select.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows the picture, Change logo and Remove logo for a saved logo, and Remove clears it', async () => {
+    const logo = logoOf(160, 80);
+    localStorage.setItem(`om_look_${SLUG}`, JSON.stringify({ accent: 'red', logo }));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const img = (await screen.findByAltText('Your logo')) as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe(logo);
+    expect(img.className).toContain('h-10');
+    expect(screen.getByLabelText('Change logo')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Add a logo')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove logo' }));
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'red' });
+    expect(screen.queryByAltText('Your logo')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove logo' })).toBeNull();
+    expect(screen.getByLabelText('Add a logo')).toBeInTheDocument();
+  });
+
+  it('saves a picked picture, redrawn, at once and keeps the colour', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 320, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockImplementation(function (this: HTMLCanvasElement) {
+      return logoOf(this.width, this.height);
+    });
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Name tag colour'), { target: { value: 'green' } });
+    pick(await screen.findByLabelText('Add a logo'));
+
+    const img = await screen.findByAltText('Your logo');
+    expect(img.getAttribute('src')).toBe(logoOf(160, 80));
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'green', logo: logoOf(160, 80) });
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: '' } });
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ logo: logoOf(160, 80) });
+  });
+
+  it('keeps the logo for this visit when storage refuses the save', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 40, height: 40, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(40, 40));
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const first = render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Add a logo'));
+    await screen.findByAltText('Your logo');
+    expect(localStorage.getItem(`om_look_${SLUG}`)).toBeNull();
+    first.unmount();
+
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    expect((await screen.findByAltText('Your logo')).getAttribute('src')).toBe(logoOf(40, 40));
+  });
+
+  it('keeps a colour picked while a picture is still being read', async () => {
+    let decoded!: (bitmap: { width: number; height: number; close: () => void }) => void;
+    vi.stubGlobal('createImageBitmap', vi.fn().mockReturnValue(new Promise((resolve) => (decoded = resolve))));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(30, 30));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Add a logo'));
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: 'blue' } });
+    decoded({ width: 30, height: 30, close: vi.fn() });
+
+    await screen.findByAltText('Your logo');
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'blue', logo: logoOf(30, 30) });
+    expect(screen.getByLabelText('Name tag colour')).toHaveValue('blue');
+  });
+
+  it('lets the same file be picked again', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('no')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const input = (await screen.findByLabelText('Add a logo')) as HTMLInputElement;
+    const file = new File(['x'], 'logo.png', { type: 'image/png' });
+    Object.defineProperty(input, 'value', { writable: true, value: 'C:\\fakepath\\logo.png' });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole('alert');
+    expect(input.value).toBe('');
+  });
+
+  it('does nothing when the picker is closed without a file', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('no')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Add a logo'), { target: { files: [] } });
+    await act(async () => {});
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Add a logo')).toBeInTheDocument();
+  });
+
+  it('says so, and keeps what was there, for a picture that cannot be used', async () => {
+    const logo = logoOf(50, 50);
+    localStorage.setItem(`om_look_${SLUG}`, JSON.stringify({ logo }));
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('not a picture')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Change logo'), 'x.svg');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not use that picture. Try a PNG or a JPEG.');
+    expect(screen.getByAltText('Your logo').getAttribute('src')).toBe(logo);
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ logo });
+
+    // The line goes when a picture works.
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 20, height: 20, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(20, 20));
+    pick(screen.getByLabelText('Change logo'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByAltText('Your logo').getAttribute('src')).toBe(logoOf(20, 20));
+  });
+});

@@ -98,3 +98,61 @@ describe('Room DO: the host sends a look', () => {
     [h.ws, a.ws].forEach((w) => w.close());
   });
 });
+
+// The first 24 bytes of a PNG: signature, the IHDR chunk header, width, height.
+function logoOf(width: number, height: number): string {
+  const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const head = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...be32(13), 0x49, 0x48, 0x44, 0x52, ...be32(width), ...be32(height)];
+  return 'data:image/png;base64,' + btoa(String.fromCharCode(...head)) + 'AAAA';
+}
+
+describe('Room DO: the host sends a logo with the look', () => {
+  it('passes a good logo on to a guest, and keeps nothing', async () => {
+    const slug = 'lok-logo-aaa';
+    await seedRoom(slug, 'tok-lok-logo');
+    const h = await enter(slug, 'H', { hostToken: 'tok-lok-logo' });
+    const a = await enter(slug, 'A');
+
+    const logo = logoOf(160, 80);
+    h.ws.send(JSON.stringify({ type: 'look', accent: 'red', logo }));
+    await until(() => looks(a.heard).length > 0);
+    await settle();
+    expect(looks(a.heard)).toEqual([{ type: 'look', accent: 'red', logo }]);
+
+    const late = await enter(slug, 'L');
+    await settle();
+    expect(looks(late.heard)).toEqual([]);
+
+    [h.ws, a.ws, late.ws].forEach((w) => w.close());
+  });
+
+  it('passes the look on without a logo whose header says 20000 wide, or that is no PNG', async () => {
+    const slug = 'lok-logo-bad';
+    await seedRoom(slug, 'tok-lok-lbad');
+    const h = await enter(slug, 'H', { hostToken: 'tok-lok-lbad' });
+    const a = await enter(slug, 'A');
+
+    h.ws.send(JSON.stringify({ type: 'look', accent: 'blue', logo: logoOf(20000, 20000) }));
+    h.ws.send(JSON.stringify({ type: 'look', logo: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' }));
+    h.ws.send(JSON.stringify({ type: 'look', logo: 7 }));
+    await until(() => looks(a.heard).length >= 3);
+    await settle();
+    expect(looks(a.heard)).toEqual([{ type: 'look', accent: 'blue' }, { type: 'look' }, { type: 'look' }]);
+
+    [h.ws, a.ws].forEach((w) => w.close());
+  });
+
+  it("passes on nobody's logo but the host's", async () => {
+    const slug = 'lok-logo-gst';
+    await seedRoom(slug, 'tok-lok-lgst');
+    const h = await enter(slug, 'H', { hostToken: 'tok-lok-lgst' });
+    const a = await enter(slug, 'A');
+    const b = await enter(slug, 'B');
+
+    a.ws.send(JSON.stringify({ type: 'look', logo: logoOf(10, 10) }));
+    await settle();
+    for (const w of [h, a, b]) expect(looks(w.heard)).toEqual([]);
+
+    [h.ws, a.ws, b.ws].forEach((w) => w.close());
+  });
+});

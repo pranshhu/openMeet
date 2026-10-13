@@ -1,12 +1,14 @@
 /**
- * The look a host gives the show: for now one accent colour for the name tags.
- * Kept in this browser, one per room, and sent to the others only while the
- * call runs. No file holds it.
+ * The look a host gives the show: an accent colour for the name tags and a
+ * logo. Kept in this browser, one per room, and sent to the others only while
+ * the call runs. No file holds it.
  */
-import { isLookAccent, type LookAccent } from '@openmeet/protocol';
+import { LOGO_MAX_PX, isLogo, isLookAccent, type LookAccent } from '@openmeet/protocol';
 
 export interface Look {
   accent?: LookAccent;
+  /** A small PNG as `data:` text, always one that isLogo accepted. */
+  logo?: string;
 }
 
 /** One light tint per code, so it reads on the dark tile. */
@@ -24,10 +26,32 @@ const key = (slug: string) => `om_look_${slug}`;
 // What this page saved, for a browser that blocks storage.
 const held = new Map<string, Look>();
 
-/** The look in `v`: the accent when it is on the list, else the plain look. */
+/** The look in `v`: the accent when it is on the list and the logo when isLogo accepts it. */
 export function lookFrom(v: unknown): Look {
-  const accent = typeof v === 'object' && v !== null ? (v as { accent?: unknown }).accent : undefined;
-  return isLookAccent(accent) ? { accent } : {};
+  const { accent, logo } = typeof v === 'object' && v !== null ? (v as { accent?: unknown; logo?: unknown }) : {};
+  return { ...(isLookAccent(accent) ? { accent } : {}), ...(isLogo(logo) ? { logo } : {}) };
+}
+
+/**
+ * The picture in `file` redrawn as a PNG no larger than LOGO_MAX_PX on a side,
+ * never scaled up, or null when it cannot be decoded or the result is not a
+ * logo. Only the redrawn picture is kept or sent, never the file's own bytes.
+ */
+export async function logoFrom(file: File): Promise<string | null> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, LOGO_MAX_PX / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const url = canvas.toDataURL('image/png');
+    return ctx && isLogo(url) ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 export function readLook(slug: string): Look {

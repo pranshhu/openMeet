@@ -124,8 +124,9 @@ retention policy to trust, because there's nothing retained.
   has no button)
 - **A title under your name**: type it in the lobby and it shows as a second line on your
   name tag, on your tile and on everyone's screen
-- **A colour for the show**: the host picks it in the lobby and every name tag in the
-  call carries a bar in it
+- **A colour and a logo for the show**: the host picks a colour in the lobby and every
+  name tag in the call carries a bar in it; the host can also add a logo, which sits in
+  the top left corner of the call for everyone and is not drawn into any recording
 - Quick reactions (thumbs up, applause, laugh, heart) from the arrow beside **Raise
   hand**: the picture shows on your tile for a few seconds, silently, for everyone
 - Screen kept awake during a take, REC badge when the tab is hidden, and

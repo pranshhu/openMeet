@@ -171,3 +171,62 @@ describe('useRoom: the look of the show', () => {
     expect(result.current.state.look).toEqual({ accent: 'yellow' });
   });
 });
+
+// The first 24 bytes of a PNG: signature, the IHDR chunk header, width, height.
+function logoOf(width: number, height: number): string {
+  const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const head = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...be32(13), 0x49, 0x48, 0x44, 0x52, ...be32(width), ...be32(height)];
+  return 'data:image/png;base64,' + btoa(String.fromCharCode(...head)) + 'AAAA';
+}
+
+describe('useRoom: the logo of the show', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sends a host with a saved logo to the room in look, on joining and to each person who joins later', async () => {
+    const logo = logoOf(160, 80);
+    saveLook(SLUG, { accent: 'red', logo });
+    const { result } = await joinRoom('host', []);
+    expect(looks()).toEqual([{ type: 'look', accent: 'red', logo }]);
+    expect(result.current.state.look).toEqual({ accent: 'red', logo });
+
+    act(() => {
+      emitSignal('peer-joined', joined);
+    });
+    expect(looks()).toEqual([
+      { type: 'look', accent: 'red', logo },
+      { type: 'look', accent: 'red', logo },
+    ]);
+  });
+
+  it('takes a good logo from the host into the state, and replaces it with each look', async () => {
+    const { result } = await joinRoom('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+    const logo = logoOf(40, 40);
+    act(() => {
+      emitSignal('look', { accent: 'green', logo });
+    });
+    expect(result.current.state.look).toEqual({ accent: 'green', logo });
+
+    act(() => {
+      emitSignal('look', { accent: 'green' });
+    });
+    expect(result.current.state.look).toEqual({ accent: 'green' });
+  });
+
+  it('drops a bad logo and keeps the accent of the same message', async () => {
+    const { result } = await joinRoom('guest', [{ peerId: 'h', ordinal: 1, role: 'host' }]);
+    for (const bad of [logoOf(20000, 20000), 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=', 'url(x)', 7, null, {}]) {
+      act(() => {
+        emitSignal('look', { accent: 'pink', logo: bad });
+      });
+      expect(result.current.state.look).toEqual({ accent: 'pink' });
+    }
+  });
+});
