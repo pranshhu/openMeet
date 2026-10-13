@@ -1159,10 +1159,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   consumers.
 - **WAV master padding (`lib/pcm-recorder.ts`)**: `PcmRecorder` pads silence only for whole frames that
   both the jump in a frame's timestamp and the file's standing against the track's timestamps (`lagUs`)
-  say are missing. A gap smaller than a twentieth of a frame is the two clocks drifting and is not
-  counted; every other gap is, and a surplus is remembered for up to one second (`MAX_SURPLUS_FRAMES`).
-  Silence added where nothing was missing is therefore bounded by the largest lateness the timestamps
-  reach, so the WAV does not outgrow the take on a page that stalls.
+  say are missing. The recorded track's timestamps do not drift against its samples; they step in
+  render quanta, so a frame can be stamped up to 8 ms late and the next one early, and those steps
+  cancel only when every gap is counted. A surplus is remembered for up to one second
+  (`MAX_SURPLUS_FRAMES`). Silence added where nothing was missing is therefore bounded by the
+  largest lateness the timestamps reach, so the WAV does not outgrow the take on a page that stalls.
 - **Stable stream for mid-take device switching (`lib/switchable-media.ts`)**:
   Removing or adding a track on a `MediaStream` that a running `MediaRecorder` is recording throws
   `InvalidModificationError` and kills the take. Furthermore, Chrome's AAC MP4 muxer and our `PcmRecorder`
@@ -1698,3 +1699,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   browser closes again.** The receivers a resume builds do not write to the crash copy's
   notes, so a save after that second crash says to align that guest by waveform. A crash
   copy never holds a second estimate either: a take saved from one has no `end` in `clock`.
+- **A real loss can be filled one frame short.** A gap is measured against the frame before it, and
+  that frame's own timestamp can be up to 8 ms late. Measured in Chrome, 30 stalls that each lost 5
+  frames got 135 of 150 frames of silence, so after many stalls the WAV is a little shorter than the
+  MP4.
+- **Where a track's timestamps run steadily early against its samples, real gaps go unfilled for a
+  while.** The track the app records from showed no such drift. Where it happens, the surplus that
+  builds up absorbs real gaps until it is used up, a second at most.

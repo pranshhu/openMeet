@@ -291,8 +291,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 ### Fixed
 
 - The WAV recording from a computer that stalls during a take stays as long as
-  the MP4. Frames that were only a little late used to get silence added in
-  front of them, which made the WAV longer than the take.
+  the MP4. Frames that were only late used to get silence added in front of
+  them, which made the WAV longer than the take.
 - A guest's own backup stops recording the moment a take ends. When the
   guest's stream to the host had died, the backup used to keep recording for up
   to 30 seconds after the take while the stream waited to be sent.

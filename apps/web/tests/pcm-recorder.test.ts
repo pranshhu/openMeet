@@ -308,6 +308,41 @@ describe('PcmRecorder', () => {
       expect(await pad([0, 10_000, 20_000, 30_000, 40_000])).toEqual({ silentFrames: 0, droppedMs: 0 });
     });
 
+    // The stamps Chrome gives the recorded track: they step in render quanta, 0 for four frames,
+    // then 2.667 ms late for four, 5.333 for four, 8 for four, then back to 0. `extra(i)` adds
+    // what a case needs on top of the pattern.
+    const quanta = (count: number, extra: (i: number) => number = () => 0) =>
+      Array.from({ length: count }, (_, i) => i * FRAME_US + Math.floor((i % 16) / 4) * 2667 + extra(i));
+
+    it('adds no silence for the stepping pattern alone', async () => {
+      expect(await pad(quanta(10_000))).toEqual({ silentFrames: 0, droppedMs: 0 });
+    });
+
+    it('adds at most 1 frame of silence when a frame is 5.3 ms late and the next 2.6 ms early, every 200 frames', async () => {
+      const late = (i: number) => (i % 16 === 14 && i % 200 < 16 ? 5_300 : 0);
+      const early = (i: number) => (i > 0 && late(i - 1) ? -2_600 : 0);
+      const out = await pad(quanta(20_000, (i) => late(i) + early(i)));
+      expect(out.silentFrames).toBeLessThanOrEqual(1);
+    });
+
+    it('fills each loss of 5 frames with 4 or 5 frames of silence', async () => {
+      const losses = 30;
+      const lost = (i: number) => Math.floor((i + 100) / 200) * 5 * FRAME_US;
+      const out = await pad(quanta(6_000, lost));
+      expect(out.silentFrames).toBeGreaterThanOrEqual(losses * 4);
+      expect(out.silentFrames).toBeLessThanOrEqual(losses * 5);
+    });
+
+    it('fills at least 90 in 100 real losses of one frame, one every 97 frames', async () => {
+      const losses = Math.floor(20_000 / 97);
+      // A few tenths of a millisecond of noise on top, as in the logs.
+      let seed = 7;
+      const noise = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+      const out = await pad(quanta(20_000, (i) => Math.floor(i / 97) * FRAME_US + Math.round(noise() * 600 - 300)));
+      expect(out.silentFrames).toBeGreaterThanOrEqual(Math.ceil(losses * 0.9));
+      expect(out.silentFrames).toBeLessThanOrEqual(losses);
+    });
+
     it('adds silence at most once when frames alternate 6 ms late and 6 ms early', async () => {
       const stamps: number[] = [0];
       let t = 0;
@@ -341,10 +376,10 @@ describe('PcmRecorder', () => {
       expect(await pad(stamps)).toEqual({ silentFrames: 0, droppedMs: 0 });
     });
 
-    it('does not let a long early drift hide a real gap afterwards', async () => {
+    it('lets a surplus built by timestamps that run early absorb a real gap, up to the second that is remembered', async () => {
       const stamps = Array.from({ length: 20_000 }, (_, i) => i * (FRAME_US - 2));
       stamps.push(stamps[stamps.length - 1]! + 4 * FRAME_US - 2);
-      expect(await pad(stamps)).toEqual({ silentFrames: 3, droppedMs: 30 });
+      expect(await pad(stamps)).toEqual({ silentFrames: 0, droppedMs: 0 });
     });
 
     it.each([
@@ -363,10 +398,11 @@ describe('PcmRecorder', () => {
       expect((await pad(stamps)).silentFrames).toBeLessThanOrEqual(2);
     });
 
-    it('does not count 2 us of drift either way, so a real gap of one frame adds exactly one', async () => {
+    it('adds no silence for 2 us of drift either way, and the surplus left by the early half absorbs a real gap', async () => {
       const stamps = fromGaps([...Array(100_000).fill(2), ...Array(100_000).fill(-2)]);
+      expect((await pad(stamps)).silentFrames).toBe(0);
       stamps.push(stamps[stamps.length - 1]! + 2 * FRAME_US);
-      expect(await pad(stamps)).toEqual({ silentFrames: 1, droppedMs: 10 });
+      expect(await pad(stamps)).toEqual({ silentFrames: 0, droppedMs: 0 });
     });
 
     it('takes back a late frame and its early partner once each, around a real gap', async () => {
