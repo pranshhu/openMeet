@@ -26,6 +26,7 @@ import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
 import { singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
 import { FileNotice } from './FileNotice';
+import { KnockNotice } from './KnockNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -180,6 +181,7 @@ export function CallStage({
   onRemovePeer,
   roomAccess,
   onRoomAccess,
+  onAdmit,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -314,10 +316,12 @@ export function CallStage({
   onMutePeer?: (peerId: string) => void;
   /** Host: remove one person from the room. */
   onRemovePeer?: (peerId: string) => void;
-  /** Host: whether the room is locked, as the Room last said; absent until it has. */
+  /** Host: the lock, the waiting room and who waits, as the Room last said; absent until it has. */
   roomAccess?: Access | null;
-  /** Host: lock or unlock the room. */
-  onRoomAccess?: (change: { locked?: boolean }) => void;
+  /** Host: lock or unlock the room, or turn its waiting room on or off. */
+  onRoomAccess?: (change: { locked?: boolean; waitingRoom?: boolean }) => void;
+  /** Host: let one waiting person in, or refuse them. */
+  onAdmit?: (peerId: string, admit: boolean) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -1062,6 +1066,7 @@ export function CallStage({
         onDismiss={onDismissBackup}
         onStop={onStopBackup}
       />
+      <KnockNotice role={role} waiting={roomAccess?.waiting ?? []} onAdmit={onAdmit} />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the

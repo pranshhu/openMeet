@@ -163,12 +163,21 @@ export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
 export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
 
 /**
- * The host locks or unlocks the room. Acted on only from the host, and only
- * when `locked` is exactly a boolean. While locked, the Room refuses any join
- * from a tab it did not seat in this session, with WS_CLOSE_NOT_ADMITTED.
- * Locking closes nobody.
+ * The host locks or unlocks the room, or turns the waiting room on or off.
+ * Acted on only from the host, and each field only when it is exactly a
+ * boolean. While locked, the Room refuses any join from a tab it did not seat
+ * in this session, with WS_CLOSE_NOT_ADMITTED. Locking closes nobody. With the
+ * waiting room on, such a join is held until the host answers it with
+ * ClientAdmit; turning it off lets in everyone who waits.
  */
-export type ClientRoomAccess = { type: 'room-access'; locked?: boolean };
+export type ClientRoomAccess = { type: 'room-access'; locked?: boolean; waitingRoom?: boolean };
+
+/**
+ * The host answers one waiting person. Acted on only from the host, with a
+ * `peerId` that names a waiting socket and a boolean `admit`: true seats it as
+ * if it had just joined, false closes it with WS_CLOSE_NOT_ADMITTED.
+ */
+export type ClientAdmit = { type: 'admit'; peerId: string; admit: boolean };
 
 export type ClientMessage =
   | ClientJoin
@@ -191,7 +200,8 @@ export type ClientMessage =
   | ClientPeerMute
   | ClientPeerRemove
   | ClientPeerRecorded
-  | ClientRoomAccess;
+  | ClientRoomAccess
+  | ClientAdmit;
 
 export interface PeerInfo {
   peerId: string;
@@ -367,11 +377,32 @@ export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; record
  */
 export type ServerPeerMute = { type: 'peer-mute' };
 
+/** A person held at the door of a room with a waiting room, as its hosts are told. */
+export type WaitingPerson = {
+  peerId: string;
+  displayName: string;
+  role: 'guest' | 'producer';
+  companion?: boolean;
+};
+
 /**
- * Whether the room is locked, sent to every host in the room: right after its
- * `role-assigned`, and again after each change. Guests are never told.
+ * Whether the room is locked, whether its waiting room is on, and who waits
+ * (at most eight, in the order they arrived), sent to every host in the room:
+ * right after its `role-assigned`, and again after each change. Guests are
+ * never told.
  */
-export type ServerRoomAccess = { type: 'room-access'; locked: boolean };
+export type ServerRoomAccess = {
+  type: 'room-access';
+  locked: boolean;
+  waitingRoom: boolean;
+  waiting: WaitingPerson[];
+};
+
+/**
+ * Sent to a person the waiting room is holding: its join was received and the
+ * host has not answered. It is followed by `role-assigned` or by a close.
+ */
+export type ServerDoor = { type: 'door'; state: 'waiting' };
 
 export type ServerMessage =
   | ServerRoleAssigned
@@ -396,7 +427,8 @@ export type ServerMessage =
   | ServerRecordingCapability
   | ServerPeerMute
   | ServerPeerRecorded
-  | ServerRoomAccess;
+  | ServerRoomAccess
+  | ServerDoor;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -420,6 +452,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'peer-remove',
   'peer-recorded',
   'room-access',
+  'admit',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -446,6 +479,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'peer-mute',
   'peer-recorded',
   'room-access',
+  'door',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {

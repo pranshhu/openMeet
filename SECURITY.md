@@ -93,15 +93,18 @@ they're already known:
   (10 per minute per IP, `ROOM_CREATE_LIMITER`), and fails open if the binding
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
-  joining a room as a guest. Treat an invite link as a secret.
+  joining a room as a guest, unless the host has turned the waiting room on. Treat an invite
+  link as a secret.
 - **Removing a participant keeps out that tab, not that person.** The room refuses
   the tab the host removed until everyone has left, but the invite link is still the
-  only credential: a new tab, a private window or another browser joins again. A
+  only credential for joining, unless the host has turned the waiting room on: a new tab, a
+  private window or another browser joins again. A
   host's mute is a request the muted person's own page carries out; it can turn no
   microphone on, and a page that ignores it stays unmuted. The host can also lock the room
   against new joins: the Room then refuses any tab it has not seated in this session, but
   the lock ends with the session, and a tab that was seated can reconnect. It removes no one
-  who is already in the call.
+  who is already in the call. With the waiting room on, a new tab is held until the host lets
+  it in; anyone with the link can fill its eight places with names of their choosing.
 
 ## Scope
 

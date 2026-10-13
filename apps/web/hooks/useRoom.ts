@@ -245,9 +245,11 @@ export interface RoomState {
    */
   notRecorded: boolean;
   /** Why the Room turned this tab away; null for a reason this page does not know. */
-  refusal: 'locked' | null;
-  /** Host: whether the room is locked, as the Room last said; null until it has. */
+  refusal: 'locked' | 'refused' | 'busy' | null;
+  /** Host: the lock, the waiting room and who waits, as the Room last said; null until it has. */
   access: RoomAccess | null;
+  /** The Room is holding this tab until the host lets it in; null once it is seated or closed. */
+  door: 'waiting' | null;
   /**
    * This device sends everyone a smaller live picture, to leave more of its
    * processor for the recording. The files are not affected.
@@ -333,6 +335,11 @@ const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', '
 
 export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
   return phase === 'recording' || phase === 'finalizing' || phase === 'done' ? phase : 'peer-left';
+}
+
+/** The reason the Room gave for a refused join, when this page has words for it. */
+function refusalOf(reason: string): 'locked' | 'refused' | 'busy' | null {
+  return reason === 'locked' || reason === 'refused' || reason === 'busy' ? reason : null;
 }
 
 /**
@@ -678,6 +685,7 @@ export function useRoom(slug: string) {
     notRecorded: false,
     refusal: null,
     access: null,
+    door: null,
     lowPower: false,
     incomingVideoOff: false,
     sendLater: false,
@@ -1312,7 +1320,9 @@ export function useRoom(slug: string) {
             for (const s of [h?.sender, h?.wavSender, h?.screenSender]) s?.giveUp();
           }
           const settle = () =>
-            setState((s) => {
+            setState((held) => {
+              // Whatever the Room closed, it is no longer holding this tab.
+              const s = { ...held, door: null };
               const next = phaseOnFatalClose(s.phase, code);
               if (!next) {
                 fatalCloseRef.current = true;
@@ -1333,7 +1343,7 @@ export function useRoom(slug: string) {
               return {
                 ...s,
                 ...next,
-                ...(code === WS_CLOSE_NOT_ADMITTED ? { refusal: reason === 'locked' ? ('locked' as const) : null } : {}),
+                ...(code === WS_CLOSE_NOT_ADMITTED ? { refusal: refusalOf(reason) } : {}),
               };
             });
           // Ended here, backup kept, before the terminal screen shows: that
@@ -1714,6 +1724,7 @@ export function useRoom(slug: string) {
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
+          door: null,
         }));
         sendPresence();
         // The Room drops its recording flag with the host's socket, and tells a
@@ -1952,6 +1963,11 @@ export function useRoom(slug: string) {
       signal.on('room-access', (m) => {
         if (roleRef.current !== 'host') return;
         setState((s) => ({ ...s, access: readRoomAccess(m) }));
+      });
+      // The Room is holding this tab until the host answers. Only the one
+      // state it knows is kept.
+      signal.on('door', (m) => {
+        if (m.state === 'waiting') setState((s) => ({ ...s, door: 'waiting' }));
       });
       // The host asked for this microphone to be off. This page does it, with
       // the steps of its own mic switch, so the person sees it and can turn it
@@ -2650,9 +2666,14 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
   }, []);
 
-  /** Host: lock or unlock the room. Changes nothing here: the Room's `room-access` answer does. */
-  const setRoomAccess = useCallback((change: { locked?: boolean }) => {
+  /** Host: lock or unlock the room, or turn its waiting room on or off. Changes nothing here: the Room's `room-access` answer does. */
+  const setRoomAccess = useCallback((change: { locked?: boolean; waitingRoom?: boolean }) => {
     signalRef.current?.send({ type: 'room-access', ...change });
+  }, []);
+
+  /** Host: let one waiting person in, or refuse them. Their `role-assigned` or close is the answer. */
+  const admitPeer = useCallback((peerId: string, admit: boolean) => {
+    signalRef.current?.send({ type: 'admit', peerId, admit });
   }, []);
 
   /** Host: ask for one person's microphone to be turned off. Their page does it, and their presence shows it. */
@@ -3312,6 +3333,7 @@ export function useRoom(slug: string) {
     mutePeer,
     removePeer,
     setRoomAccess,
+    admitPeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,

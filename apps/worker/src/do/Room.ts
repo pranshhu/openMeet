@@ -15,6 +15,7 @@ import {
   type ClientMessage,
   type Role,
   type ServerMessage,
+  type ServerRoomAccess,
 } from '@openmeet/protocol';
 import type { Env } from '../env.js';
 import { parseHostTokenCookie } from '../lib/cookie.js';
@@ -59,6 +60,10 @@ interface PeerAttachment {
   left?: boolean;
   clientId?: string;
   companion?: boolean;
+  /** Held at the door by the waiting room: connected, and not part of the room. */
+  waiting?: boolean;
+  /** The host let this socket in, so neither the lock nor the waiting room holds it again. */
+  admitted?: boolean;
 }
 
 interface RoomRow {
@@ -106,6 +111,9 @@ const MAX_REMOVED_CLIENTS = 16;
 // back while it is locked. Past the bound, a tab that has left is forgotten
 // before one that is still here.
 const MAX_ADMITTED_CLIENTS = 32;
+// Sockets the waiting room holds at once, and so the most a host is shown. The
+// names are chosen by anyone with the link, so the list is bounded.
+const MAX_WAITING = 8;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -136,6 +144,9 @@ export class Room implements DurableObject {
   private locked = false;
   // Client ids of the tabs seated in this session that are not a host's.
   private admitted: string[] = [];
+  // New people wait until the host lets them in. A setting of the room, not of
+  // the session: it stays when everyone leaves, so it is kept under its own key.
+  private waitingRoom = false;
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -165,6 +176,8 @@ export class Room implements DurableObject {
         this.locked = session.locked === true;
         this.admitted = session.admitted ?? [];
       }
+      const access = await this.state.storage.get<{ waitingRoom?: boolean }>('access');
+      this.waitingRoom = access?.waitingRoom === true;
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
         this.nextOrdinal = nextOrdinal;
@@ -202,6 +215,34 @@ export class Room implements DurableObject {
    */
   private joinedPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
     return this.allPeers().filter(({ p }) => p.joined);
+  }
+
+  /** The sockets the waiting room holds, in the order they arrived. */
+  private waitingPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
+    return this.allPeers()
+      .filter(({ p }) => p.waiting)
+      .sort((a, b) => a.p.ordinal - b.p.ordinal);
+  }
+
+  private accessMessage(): ServerRoomAccess {
+    return {
+      type: 'room-access',
+      locked: this.locked,
+      waitingRoom: this.waitingRoom,
+      waiting: this.waitingPeers().map(({ p }) => ({
+        peerId: p.peerId,
+        displayName: p.displayName ?? '',
+        role: p.role === 'producer' ? ('producer' as const) : ('guest' as const),
+        ...(p.companion ? { companion: true } : {}),
+      })),
+    };
+  }
+
+  private tellHosts(): void {
+    const msg = this.accessMessage();
+    for (const { ws, p } of this.joinedPeers()) {
+      if (p.role === 'host') this.send(ws, msg);
+    }
   }
 
   private async saveSession(): Promise<void> {
@@ -329,8 +370,9 @@ export class Room implements DurableObject {
     switch (parsed.type) {
       case 'join':
         // A repeat would insert another participant row per message and
-        // announce the same peer again.
-        if (p.joined) break;
+        // announce the same peer again; a waiting socket's name is the one the
+        // host was shown.
+        if (p.joined || p.waiting) break;
         if (typeof parsed.displayName !== 'string' || typeof parsed.userAgent !== 'string') {
           this.send(ws, {
             type: 'error',
@@ -383,12 +425,31 @@ export class Room implements DurableObject {
         }
         // A locked room seats nobody it has not seated already in this session.
         // A host is never refused, and the link is the same for every role.
-        if (this.locked && p.role !== 'host' && !(p.clientId && this.admitted.includes(p.clientId))) {
+        const seatedBefore = !!p.clientId && this.admitted.includes(p.clientId);
+        if (this.locked && p.role !== 'host' && !p.admitted && !seatedBefore) {
           try {
             ws.close(WS_CLOSE_NOT_ADMITTED, 'locked');
           } catch {
             // already gone
           }
+          return;
+        }
+        // With the waiting room on, a newcomer is held until the host answers:
+        // it is not seated, and so creates no row, extends no expiry and is
+        // reached by nothing that goes to the room.
+        if (this.waitingRoom && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          if (this.waitingPeers().length >= MAX_WAITING) {
+            try {
+              ws.close(WS_CLOSE_NOT_ADMITTED, 'busy');
+            } catch {
+              // already gone
+            }
+            return;
+          }
+          p.waiting = true;
+          this.save(ws, p);
+          this.send(ws, { type: 'door', state: 'waiting' });
+          this.tellHosts();
           return;
         }
         // Now the role is known: enforce per-role caps.
@@ -495,7 +556,7 @@ export class Room implements DurableObject {
               ...(this.isNotRecorded(pp) ? { notRecorded: true } : {}),
             })),
         });
-        if (p.role === 'host') this.send(ws, { type: 'room-access', locked: this.locked });
+        if (p.role === 'host') this.send(ws, this.accessMessage());
         this.broadcastExcept(ws, {
           type: 'peer-joined',
           role: p.role,
@@ -746,14 +807,34 @@ export class Room implements DurableObject {
         break;
       }
       case 'room-access': {
-        // Only the host locks, and only with a real boolean. Nobody is closed
-        // by it: the lock decides the joins that come after.
-        if (p.role !== 'host' || typeof parsed.locked !== 'boolean') break;
-        this.locked = parsed.locked;
-        await this.saveSession();
-        for (const { ws: to, p: pp } of this.joinedPeers()) {
-          if (pp.role === 'host') this.send(to, { type: 'room-access', locked: this.locked });
+        // Only the host changes these, and each only with a real boolean. Nobody
+        // is closed by the lock: it decides the joins that come after. Turning
+        // the waiting room off lets in everyone who waits.
+        const lock = typeof parsed.locked === 'boolean';
+        const door = typeof parsed.waitingRoom === 'boolean';
+        if (p.role !== 'host' || !(lock || door)) break;
+        if (lock) {
+          this.locked = parsed.locked === true;
+          await this.saveSession();
         }
+        if (door) {
+          this.waitingRoom = parsed.waitingRoom === true;
+          await this.state.storage.put('access', { waitingRoom: this.waitingRoom });
+          if (!this.waitingRoom) {
+            for (const target of this.waitingPeers()) await this.answerWaiting(target.ws, true);
+          }
+        }
+        this.tellHosts();
+        break;
+      }
+      case 'admit': {
+        // Only the host answers, for a socket that waits (a `peerId` that is not
+        // a string names none) and with a real boolean.
+        if (p.role !== 'host' || typeof parsed.admit !== 'boolean') break;
+        const target = this.waitingPeers().find(({ p: pp }) => pp.peerId === parsed.peerId);
+        if (!target) break;
+        await this.answerWaiting(target.ws, parsed.admit);
+        this.tellHosts();
         break;
       }
       case 'peer-recorded': {
@@ -831,6 +912,32 @@ export class Room implements DurableObject {
     await this.onClose(ws);
   }
 
+  /**
+   * Let a waiting socket in, or refuse it. Letting in runs the `join` path
+   * again from what the socket's attachment holds (its role, companion flag and
+   * client id are there already), so the caps, the rows, the `role-assigned`
+   * and the `peer-joined` are the ones every join gets.
+   */
+  private async answerWaiting(ws: WebSocket, admit: boolean): Promise<void> {
+    const p = this.peer(ws);
+    if (admit) {
+      p.waiting = false;
+      p.admitted = true;
+      this.save(ws, p);
+      await this.webSocketMessage(
+        ws,
+        JSON.stringify({ type: 'join', displayName: p.displayName ?? '', userAgent: p.userAgent ?? '' })
+      );
+      return;
+    }
+    try {
+      ws.close(WS_CLOSE_NOT_ADMITTED, 'refused');
+    } catch {
+      // already gone
+    }
+    await this.onClose(ws, 'refused');
+  }
+
   private async onClose(ws: WebSocket, reason = 'disconnect'): Promise<void> {
     const p = this.peer(ws);
     if (!p || p.left) return;
@@ -842,6 +949,7 @@ export class Room implements DurableObject {
     if (p.joined) {
       this.broadcastExcept(ws, { type: 'peer-left', role: p.role, reason, peerId: p.peerId });
     }
+    if (p.waiting) this.tellHosts();
     // The host owns the recording, so its socket closing ends it. Otherwise a
     // crashed host leaves the room advertising `recording: true`, and the next
     // guest to join starts capturing into a host that is no longer there.

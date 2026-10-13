@@ -174,13 +174,21 @@ describe('phaseOnFatalClose for a refused join (4008)', () => {
 
 describe('readRoomAccess', () => {
   it('reads a lock only from a message that says locked: true', () => {
-    expect(readRoomAccess({ type: 'room-access', locked: true })).toEqual({ locked: true });
-    expect(readRoomAccess({ type: 'room-access', locked: false })).toEqual({ locked: false });
-    expect(readRoomAccess(null)).toEqual({ locked: false });
-    expect(readRoomAccess('locked')).toEqual({ locked: false });
-    expect(readRoomAccess({ locked: 1 })).toEqual({ locked: false });
-    expect(readRoomAccess({ locked: 'true' })).toEqual({ locked: false });
-    expect(readRoomAccess(undefined)).toEqual({ locked: false });
+    expect(readRoomAccess({ type: 'room-access', locked: true })).toEqual({
+      locked: true,
+      waitingRoom: false,
+      waiting: [],
+    });
+    expect(readRoomAccess({ type: 'room-access', locked: false })).toEqual({
+      locked: false,
+      waitingRoom: false,
+      waiting: [],
+    });
+    expect(readRoomAccess(null)).toEqual({ locked: false, waitingRoom: false, waiting: [] });
+    expect(readRoomAccess('locked')).toEqual({ locked: false, waitingRoom: false, waiting: [] });
+    expect(readRoomAccess({ locked: 1 })).toEqual({ locked: false, waitingRoom: false, waiting: [] });
+    expect(readRoomAccess({ locked: 'true' })).toEqual({ locked: false, waitingRoom: false, waiting: [] });
+    expect(readRoomAccess(undefined)).toEqual({ locked: false, waitingRoom: false, waiting: [] });
   });
 });
 
@@ -190,11 +198,11 @@ describe('the lock in the hook', () => {
     expect(result.current.state.access).toBeNull();
 
     emit('room-access', { type: 'room-access', locked: true });
-    expect(result.current.state.access).toEqual({ locked: true });
+    expect(result.current.state.access).toEqual({ locked: true, waitingRoom: false, waiting: [] });
     emit('room-access', { type: 'room-access', locked: false });
-    expect(result.current.state.access).toEqual({ locked: false });
+    expect(result.current.state.access).toEqual({ locked: false, waitingRoom: false, waiting: [] });
     emit('room-access', { type: 'room-access', locked: 'yes' });
-    expect(result.current.state.access).toEqual({ locked: false });
+    expect(result.current.state.access).toEqual({ locked: false, waitingRoom: false, waiting: [] });
   });
 
   it('does not keep it for a guest', async () => {
@@ -210,7 +218,7 @@ describe('the lock in the hook', () => {
 
     act(() => result.current.setRoomAccess({ locked: true }));
     expect(sent).toEqual([{ type: 'room-access', locked: true }]);
-    expect(result.current.state.access).toEqual({ locked: false });
+    expect(result.current.state.access).toEqual({ locked: false, waitingRoom: false, waiting: [] });
   });
 
   it('shows the locked screen for a refusal that says locked, and the plain one for any other reason', async () => {
@@ -267,7 +275,7 @@ describe('the refused screen', () => {
 describe('Lock the room in the People panel', () => {
   const bo: RemotePeer = { peerId: 'p-bo', name: 'Bo', stream: null, role: 'guest' };
 
-  const hostCall = (access: { locked: boolean } | null) => ({
+  const hostCall = (access: { locked: boolean; waitingRoom: boolean; waiting: never[] } | null) => ({
     phase: 'in-call',
     role: 'host',
     companion: false,
@@ -300,7 +308,7 @@ describe('Lock the room in the People panel', () => {
     const onChange = vi.fn();
     render(
       <PeoplePanel people={[bo]} onMute={vi.fn()} onClose={vi.fn()}>
-        <RoomAccess access={{ locked: true }} onChange={onChange} />
+        <RoomAccess access={{ locked: true, waitingRoom: false, waiting: [] }} onChange={onChange} />
       </PeoplePanel>
     );
     const box = screen.getByRole('checkbox', { name: 'Lock the room' });
@@ -317,7 +325,7 @@ describe('Lock the room in the People panel', () => {
     const onChange = vi.fn();
     render(
       <PeoplePanel people={[bo]} onMute={vi.fn()} onClose={vi.fn()}>
-        <RoomAccess access={{ locked: false }} onChange={onChange} />
+        <RoomAccess access={{ locked: false, waitingRoom: false, waiting: [] }} onChange={onChange} />
       </PeoplePanel>
     );
     const box = screen.getByRole('checkbox', { name: 'Lock the room' });
@@ -335,7 +343,7 @@ describe('Lock the room in the People panel', () => {
   it('is drawn by the call screen for a host who has been told, and sends the change', () => {
     const setRoomAccess = vi.fn();
     fake = {
-      state: hostCall({ locked: false }),
+      state: hostCall({ locked: false, waitingRoom: false, waiting: [] }),
       hook: { mutePeer: vi.fn(), setRoomAccess },
     };
     render(<RoomView slug="abc-defg-hij" />);

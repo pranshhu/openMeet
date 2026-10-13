@@ -65,7 +65,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (21 variants) ↔ `ServerMessage` (23).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (22 variants) ↔ `ServerMessage` (24).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -75,9 +75,11 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
-  `room-access` (`locked`) is in both unions, and is not a relay: the Room acts on it only from the
-  host and only when `locked` is a boolean, and answers every joined host with its own, `locked`
-  alone and no `from`; a guest is never sent one.
+  `room-access` (`locked`, `waitingRoom`) is in both unions, and is not a relay: the Room acts on it
+  only from the host and each field only when it is a boolean, and answers every joined host with
+  its own, carrying `locked`, `waitingRoom` and `waiting` (the people at the door, at most eight)
+  and no `from`; a guest is never sent one. `admit` (`peerId`, `admit`) is client-only and
+  host-only. `door` (`state`) is server-only: the Room sends it to a person it is holding.
   `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
   the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
   `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
@@ -139,7 +141,8 @@ WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
 host removed this participant, and the same tab is refused until the session ends), `4008` not
-admitted (the host locked the room, and this tab was not seated in this session).
+admitted (the host locked the room and this tab was not seated in this session, the host refused
+it from the waiting room, or eight people were already waiting).
 
 ---
 
@@ -178,16 +181,19 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
-  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
+  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`, `clientId`, `companion`, `waiting`,
+  `admitted`) lives in a `PeerAttachment` on each
   WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
   instance `Map`; `allPeers()` derives the live socket list from `state.getWebSockets()` (skipping
   sockets flagged `left: true`) instead, and `joinedPeers()` narrows it to the sockets whose `join`
   was admitted — the room itself, which is all that relays, broadcasts and `peerCount` look at, and
   what session end counts. A socket that hasn't joined, or was refused at the cap, gets its own
-  `join`/`ping` answered and nothing else; one flagged `left` (replaced, or after its own `leave`)
+  `join`/`ping` answered and nothing else; a socket can also be held before it is seated, by the
+  waiting room (below), and is outside the room the same way; one flagged `left` (replaced, or after its own `leave`)
   has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
-  `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
+  `room`, `session`, `access`, `nextOrdinal`; `access` holds whether the waiting room is on, and
+  belongs to the room, not the session, so it stays when everyone has left; `session` also holds the client ids of the guests the host set
   as not recorded, at most 16, emptied when the session ends, those of the tabs the host
   removed, kept the same way, whether the host locked the room, and the client ids of the tabs
   seated in this session that are not a host's, at most 32, emptied with the rest) and reloaded in
@@ -258,6 +264,25 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `WS_CLOSE_NOT_ADMITTED`/`'locked'` after the removed check and before the caps, and is never
   seated. A guest, a producer link and a Present-only link are treated alike, and a `join` with no
   client id has nothing to be admitted by. The lock and the list end with the session.
+- **The waiting room** (`access.waitingRoom`, set by a host's `room-access` with a boolean
+  `waitingRoom`) holds a newcomer at the door. Right after the lock gate, a `join` that is not a
+  host's, whose client id is not in `session.admitted` and whose attachment does not say `admitted`
+  is not seated: with eight sockets already waiting (`MAX_WAITING`) it is closed with
+  `WS_CLOSE_NOT_ADMITTED`/`'busy'`; otherwise its attachment gets `waiting: true`, it is sent
+  `{type:'door', state:'waiting'}` and every joined host is sent `room-access`. It extends no
+  expiry and creates no session or participant row, and a further `join` from it is ignored, so
+  the name the host was shown cannot change. Every `room-access` the Room sends carries `locked`,
+  `waitingRoom` and `waiting`: the waiting sockets, in ordinal order, as `{peerId, displayName,
+  role, companion?}`. A waiting socket that closes, and a socket the host answers, leave the list
+  and the hosts are told.
+- `admit` is **acted on only from the host**, with a boolean `admit` and a `peerId` that names a
+  waiting socket. Let in: the attachment gets `waiting: false, admitted: true` and the Room runs
+  its own `join` path for that socket again, from the name and user agent the attachment holds, so
+  the caps, the session and participant rows, `role-assigned` (with `recording` as it stands) and
+  `peer-joined` are the code every join runs; `admitted` passes the lock gate too. Refuse: the
+  socket is closed with `WS_CLOSE_NOT_ADMITTED`/`'refused'` and `onClose` runs for it. Turning the
+  waiting room off lets in everyone who waits, the same way. The room's expiry `alarm()` closes a
+  waiting socket like any other.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -309,10 +334,13 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   DENY`, `Referrer-Policy`, `nosniff`, `Permissions-Policy` (camera/mic/display-capture/fullscreen
   self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change.
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
-  and any connection warning, and for `peer-left`) / CallStage, plus light status screens
+  and any connection warning, and for `peer-left`; while `state.door` is `'waiting'` it reads
+  "Waiting for the host to let you in", without a spinner, in `connecting`, `waiting` and
+  `peer-left`) / CallStage, plus light status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
   `replaced` (4006: another tab/device took the host seat), `refused` (4008: the room is locked,
-  "This room is locked" with Try again + Back to home; a reason other than `locked` reads "You
+  "This room is locked" with Try again + Back to home; `refused` reads "The host didn’t let you
+  in" and `busy` "Too many people are waiting"; a reason other than these reads "You
   can’t join this room right now"), `removed` (4007: the host removed
   this participant; Back to the lobby + Back to home, plus **Download your backup** and
   **Download your WAV backup** when this tab holds the backup of a recording it saved, drawn by
@@ -438,6 +466,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+  `components/KnockNotice.tsx` is the host's row for each person at the door of a room with a
+  waiting room, right after `FileNotice`: the name in a `<bdi>` that truncates ("Guest" when empty,
+  with " (Producer)" or " (Presenting)" as the People panel writes them), "wants to join", **Let
+  in** and **Refuse**, at most three rows and then "and N more waiting". It is drawn in a take
+  too, and for no one but a host. The two buttons answer with `admitPeer`.
   `components/FileNotice.tsx` does the same for a file a participant picked to send the host
   (`kind: 'file'`), in words of its own: the host's question names the senders, each file as
   it will be called in the folder and the total size, and its Save to folder and Not now
@@ -642,8 +675,12 @@ sends `peer-mute`, and the panel follows that person's `presence`.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 `setRoomAccess(change)` only sends `room-access`; `state.access` (null until the Room sends one, kept
 only in a host tab, read through `readRoomAccess`) follows the Room's answer, so a tick the Room did
-not get never shows. `phaseOnFatalClose` turns `4008` into `refused`, and `state.refusal` is
-`'locked'` only for the close reason `locked`.
+not get never shows; it also takes `waitingRoom`, and `state.access` holds `waitingRoom` and the
+people at the door, read by `readRoomAccess` (the first eight with a usable `peerId`, names cut
+to 64). `admitPeer(peerId, admit)` only sends `admit`. `state.door` is `'waiting'` from the Room's
+`door` message until `role-assigned` or a terminal close. `phaseOnFatalClose` turns `4008` into
+`refused`, and `state.refusal` is `'locked'`, `'refused'` or `'busy'` for those close reasons and
+null for any other.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
 close also sets `peerRecording` to false: the host's `recording-stop` cannot reach a closed tab, so
@@ -1638,11 +1675,22 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Alt+R and Alt+S have not been run on a Mac.** They rely on Option+R and Option+S reaching
   the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.44 and 8.45).
 - **A removed participant can come back in another tab.** The Room remembers the tab's id
-  (`lib/client-id.ts`, session storage), and the invite link is still the only credential: a new
+  (`lib/client-id.ts`, session storage), and the invite link is still the only credential for
+  joining unless the host has turned the waiting room on: a new
   tab, a private window or another browser is a new id, a client that sends no id is closed but
   cannot be remembered, and a browser that blocks session storage sends a new id on every load,
   so that tab gets back in by reloading. The list is the session's: when the last person leaves,
   or a host who is alone in the room reloads, it is emptied and the removed tab can join again.
+- **A waiting room is by tab too, and the host sees it only on the call screen.** A host alone in
+  the waiting screen ("Waiting for others to join") sees no row: the row is on the call screen,
+  which **Continue alone** opens. A host in a browser without the room's host token is a guest and
+  waits like one; nobody can let it in from there. Anyone with the link can fill the eight
+  waiting places with names of their choosing, and others then read "Too many people are waiting";
+  the host refuses them or locks the room. A refused person can knock again, and their second
+  device waits like anyone. A person whose reconnect is held while their own capture runs (their
+  id was forgotten: everyone dropped at once) keeps the call screen and is told nothing until the
+  host lets them in; their backup keeps recording. A page older than this Worker stays on
+  "Connecting…" while it waits; a reload fixes it.
 - **A lock is by tab, and ends with the session.** A person the Room seated before the lock
   presents the same client id on a reload and gets back in. One whose browser blocks session
   storage sends a new id on every load, so after a reload in a locked room they read "This

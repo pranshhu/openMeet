@@ -109,10 +109,18 @@ function FileLinks({ files }: { files: readonly (readonly [string | null, string
   );
 }
 
+/** What a refused person reads, by the reason the Room gave. */
+const REFUSALS = {
+  locked: ['This room is locked', 'The host locked it, so nobody new can join. Ask the host to unlock it, then try again.'],
+  refused: ['The host didn’t let you in', 'Ask the host, then try again.'],
+  busy: ['Too many people are waiting', 'The room’s waiting list is full. Try again in a minute.'],
+  other: ['You can’t join this room right now', 'Ask the host, then try again.'],
+} as const;
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    mutePeer, removePeer, setRoomAccess,
+    mutePeer, removePeer, setRoomAccess, admitPeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
@@ -218,15 +226,10 @@ export function RoomView({ slug }: { slug: string }) {
     );
   }
   if (state.phase === 'refused') {
+    const [title, text] = (state.refusal && REFUSALS[state.refusal]) || REFUSALS.other;
     return (
-      <StatusScreen
-        title={state.refusal === 'locked' ? 'This room is locked' : 'You can’t join this room right now'}
-        action="Try again"
-        secondary={{ label: 'Back to home', href: '/' }}
-      >
-        {state.refusal === 'locked'
-          ? 'The host locked it, so nobody new can join. Ask the host to unlock it, then try again.'
-          : 'Ask the host, then try again.'}
+      <StatusScreen title={title} action="Try again" secondary={{ label: 'Back to home', href: '/' }}>
+        {text}
       </StatusScreen>
     );
   }
@@ -267,6 +270,25 @@ export function RoomView({ slug }: { slug: string }) {
   // go on to the call screen without waiting for anyone: Record is there.
   const goAlone =
     record.canRecord && !state.companion ? { onContinueAlone: () => setAlone(true) } : {};
+  // The Room has the join and the host has not answered it: nothing is
+  // connecting, so no spinner.
+  if (
+    state.door === 'waiting' &&
+    (state.phase === 'connecting' || state.phase === 'waiting' || state.phase === 'peer-left')
+  ) {
+    return (
+      <WaitingRoom
+        role={state.role}
+        localStream={state.localStream}
+        localName={state.localName}
+        onLeave={leave}
+        onToggleMic={setMic}
+        onToggleCam={setCam}
+        title="Waiting for the host to let you in"
+        note="The host lets people in one at a time. Keep this tab open."
+      />
+    );
+  }
   if (state.phase === 'waiting' && !alone) {
     const note = companionNote ?? offeredNote;
     return (
@@ -443,6 +465,7 @@ export function RoomView({ slug }: { slug: string }) {
       onRemovePeer={removePeer}
       roomAccess={state.access}
       onRoomAccess={setRoomAccess}
+      onAdmit={admitPeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       onSwitchMic={switchMic}

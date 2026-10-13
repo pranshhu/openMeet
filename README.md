@@ -714,10 +714,11 @@ Known gaps, listed below:
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
-  removed tab until everyone has left, but the invite link is the only credential: a new
-  tab or another browser joins again. The host can lock the room against new joins, which
-  keeps out a new tab for as long as it is locked; the lock ends with the session, and a
-  tab that was in the call can still reconnect.
+  removed tab until everyone has left, but the invite link is the only credential for joining
+  (unless the host has turned the waiting room on): a new tab or another browser joins again.
+  The host can lock the room against new joins, which keeps out a new tab for as long as it is
+  locked; the lock ends with the session, and a tab that was in the call can still reconnect.
+  With the waiting room on, a new tab waits until the host lets it in or refuses it.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 
