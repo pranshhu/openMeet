@@ -2480,13 +2480,13 @@ describe('Lobby: the host picks a name tag colour', () => {
     render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
     const select = (await screen.findByLabelText('Name tag colour')) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      'No colour',
-      'Blue',
-      'Red',
-      'Green',
-      'Yellow',
-      'Purple',
-      'Pink',
+      'Name tag colour: No colour',
+      'Name tag colour: Blue',
+      'Name tag colour: Red',
+      'Name tag colour: Green',
+      'Name tag colour: Yellow',
+      'Name tag colour: Purple',
+      'Name tag colour: Pink',
     ]);
     expect(select).toHaveValue('');
     expect(screen.getByText('Everyone in the call sees it. To change it, leave and join again.')).toBeInTheDocument();

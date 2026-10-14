@@ -45,10 +45,10 @@ export function ShowLook({ slug }: { slug: string }) {
           onChange={(e) => change({ accent: isLookAccent(e.target.value) ? e.target.value : undefined })}
           className="w-full min-w-0 bg-transparent text-[#202124] outline-none"
         >
-          <option value="">No colour</option>
+          <option value="">Name tag colour: No colour</option>
           {LOOK_ACCENTS.map((a) => (
             <option key={a} value={a}>
-              {LABEL[a]}
+              {`Name tag colour: ${LABEL[a]}`}
             </option>
           ))}
         </select>
