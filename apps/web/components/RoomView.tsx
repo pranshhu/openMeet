@@ -508,6 +508,7 @@ export function RoomView({ slug }: { slug: string }) {
       onAdmit={admitPeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
+      slides={state.slides}
       onSwitchMic={switchMic}
       onSwitchCamera={switchCamera}
       activeMicId={state.activeMicId}

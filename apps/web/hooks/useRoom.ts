@@ -26,6 +26,7 @@ import { MediaManager } from '@/lib/media';
 import { SwitchableMedia, isPhone } from '@/lib/switchable-media';
 import { buildIceServers } from '@/lib/ice';
 import { getScreenStream, presentFile, presentRearCamera } from '@/lib/screen';
+import { presentSlides, type PresentedSlides } from '@/lib/slides';
 import { pickRecordingMime, UnsupportedCodecError } from '@/lib/recorder';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
@@ -204,6 +205,8 @@ export interface RoomState {
   localName: string;
   screenSharing: boolean; // local user is sharing their screen
   presentingRearCamera?: boolean;
+  /** The deck this page presents; null when it presents none. */
+  slides: PresentedSlides | null;
   error: string | null;
   // Recording-specific failure, surfaced as a banner INSIDE the call rather than
   // as phase:'error'. Switching phase unmounts CallStage, which takes the
@@ -310,7 +313,7 @@ export interface LoadSample {
   cpuLimited: boolean;
 }
 
-export type PresentSource = File | 'rear-camera';
+export type PresentSource = File | File[] | 'rear-camera';
 
 /**
  * What THIS browser can actually record. Sent as `recording-capability` right
@@ -666,6 +669,7 @@ export function useRoom(slug: string) {
     remotePeers: [],
     remoteScreenStream: null,
     localScreenStream: null,
+    slides: null,
     localName: '',
     screenSharing: false,
     error: null,
@@ -861,7 +865,13 @@ export function useRoom(slug: string) {
     }
     if (!screenSharingRef.current) return; // already stopped (avoid double presence)
     screenSharingRef.current = false;
-    setState((s) => ({ ...s, screenSharing: false, presentingRearCamera: false, localScreenStream: null }));
+    setState((s) => ({
+      ...s,
+      screenSharing: false,
+      presentingRearCamera: false,
+      localScreenStream: null,
+      slides: null,
+    }));
     sendPresence();
   }, [sendPresence]);
 
@@ -2703,7 +2713,7 @@ export function useRoom(slug: string) {
   }, []);
 
   const toggleScreenShare = useCallback(
-    async (source?: File | 'rear-camera') => {
+    async (source?: PresentSource) => {
       const peer = peerRef.current;
       // A guest's screen recording travels over its connection to the host.
       // The host writes its own to the folder, so it can present with nobody
@@ -2713,6 +2723,7 @@ export function useRoom(slug: string) {
         let screen: MediaStream;
         let isRearCamera = false;
         let customStop: (() => void) | null = null;
+        let deck: PresentedSlides | null = null;
         try {
           if (source === 'rear-camera') {
             screen = await presentRearCamera();
@@ -2724,6 +2735,10 @@ export function useRoom(slug: string) {
             const res = await presentFile(source, !isPhone() && !companionRef.current);
             screen = res.stream;
             customStop = res.stop;
+          } else if (Array.isArray(source)) {
+            deck = await presentSlides(source);
+            screen = deck.stream;
+            customStop = deck.stop;
           } else {
             screen = await getScreenStream();
           }
@@ -2789,7 +2804,8 @@ export function useRoom(slug: string) {
           ...s,
           screenSharing: true,
           presentingRearCamera: isRearCamera,
-          localScreenStream: isRearCamera || source instanceof File ? screen : null,
+          localScreenStream: isRearCamera || source instanceof File || deck ? screen : null,
+          slides: deck,
         }));
         sendPresence();
       } else {
@@ -3281,6 +3297,7 @@ export function useRoom(slug: string) {
       remotePeers: [],
       remoteScreenStream: null,
       localScreenStream: null,
+      slides: null,
       screenSharing: false,
       connectionWarning: null,
     }));

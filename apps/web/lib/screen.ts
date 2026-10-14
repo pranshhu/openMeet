@@ -19,10 +19,10 @@ export async function presentRearCamera(): Promise<MediaStream> {
   });
 }
 
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
+export const CANVAS_WIDTH = 1920;
+export const CANVAS_HEIGHT = 1080;
 
-function drawLetterboxed(
+export function drawLetterboxed(
   ctx: CanvasRenderingContext2D,
   source: CanvasImageSource,
   srcWidth: number,
