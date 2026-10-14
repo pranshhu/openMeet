@@ -1200,6 +1200,8 @@ export function useRoom(slug: string) {
       initialScreenStream?: MediaStream,
       stereo = false
     ) => {
+      // Read once, here: this stream never gets a video track during the call.
+      const audioOnly = !asProducer && !asCompanion && lobbyStream.getVideoTracks().length === 0;
       companionRef.current = asCompanion;
       // A present-only companion or a producer has no camera or mic: wrapping its empty
       // stream would conjure a silent audio track, which a companion would then send.
@@ -1287,6 +1289,7 @@ export function useRoom(slug: string) {
         slug,
         ...(asProducer ? { producer: true } : {}),
         ...(asCompanion ? { companion: true } : {}),
+        ...(audioOnly ? { audioOnly: true } : {}),
         wsBase: WS_BASE,
         displayName,
         userAgent: navigator.userAgent,

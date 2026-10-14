@@ -126,7 +126,7 @@ describe('terminal status screens', () => {
     expect(screen.getByRole('heading', { name: 'This room is full' })).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Up to 4 people on camera, plus 2 producers or present‑only screens. Try again once someone leaves.'
+        'A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers or present‑only screens. Try again once someone leaves.'
       )
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();

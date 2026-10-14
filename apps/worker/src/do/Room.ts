@@ -1,5 +1,6 @@
 import {
   BROWSER_NOTES,
+  MAX_AUDIO_ONLY_PEERS,
   MAX_RECORDED_PEERS,
   MAX_SCRIPT_LENGTH,
   ROOM_TTL_MS,
@@ -58,6 +59,8 @@ interface PeerAttachment {
   left?: boolean;
   clientId?: string;
   companion?: boolean;
+  /** The join said `audioOnly: true`. Fixed for the socket; meaningful for recorded seats only. */
+  audioOnly?: boolean;
 }
 
 interface RoomRow {
@@ -354,6 +357,10 @@ export class Room implements DurableObject {
         if (parsed.companion === true) {
           p.companion = true;
         }
+        // Only the literal `true` is a claim; anything else is a seat with a camera.
+        if (parsed.audioOnly === true) {
+          p.audioOnly = true;
+        }
         this.save(ws, p);
         // A tab the host removed stays out until the session ends. A host is
         // never refused: the token outranks whatever id its tab presents.
@@ -382,10 +389,12 @@ export class Room implements DurableObject {
             return;
           }
         } else {
-          const recorded = this.allPeers().filter(
+          const others = this.allPeers().filter(
             ({ ws: pws, p: pp }) => pws !== ws && pp.joined && pp.role !== 'producer' && !pp.companion
-          ).length;
-          if (recorded >= MAX_RECORDED_PEERS) {
+          );
+          // Past four seats only when nobody in the room has a camera.
+          const audioOnlyRoom = p.audioOnly === true && others.every(({ p: pp }) => pp.audioOnly === true);
+          if (others.length >= (audioOnlyRoom ? MAX_AUDIO_ONLY_PEERS : MAX_RECORDED_PEERS)) {
             try {
               ws.close(WS_CLOSE_CAPACITY_FULL, 'room_full');
             } catch {

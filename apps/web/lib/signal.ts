@@ -36,6 +36,8 @@ export interface SignalClientOpts {
   producer?: boolean;
   /** Join as a screen-sharing companion. */
   companion?: boolean;
+  /** Join with the microphone only: this seat sends no camera for as long as the socket is in the room. */
+  audioOnly?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
   // Invoked when the server closes with a terminal code (room full / invalid /
@@ -77,6 +79,7 @@ export class SignalClient {
         ...(this.opts.hostToken ? { hostToken: this.opts.hostToken } : {}),
         ...(this.opts.producer ? { producer: true } : {}),
         ...(this.opts.companion ? { companion: true } : {}),
+        ...(this.opts.audioOnly ? { audioOnly: true } : {}),
         ...(this.opts.clientId ? { clientId: this.opts.clientId } : {}),
       });
       this.startHeartbeat();

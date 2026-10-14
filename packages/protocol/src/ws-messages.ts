@@ -25,6 +25,8 @@ export type ClientJoin = {
   producer?: boolean;
   /** Join as an unrecorded screen-share companion. Takes no recorded seat. */
   companion?: boolean;
+  /** Join with the microphone only: this seat sends no camera for as long as the socket is in the room. */
+  audioOnly?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
 };

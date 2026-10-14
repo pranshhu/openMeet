@@ -67,7 +67,8 @@ retention policy to trust, because there's nothing retained.
   records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
-- Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
+- Up to **4 recorded participants**, or **8** when everyone recorded, the host too,
+  joined with **Microphone only**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
 - Host controls in **People**: turn a participant's microphone off for the call (they
@@ -417,8 +418,8 @@ switched during the call is opened the same way as the one chosen in the lobby.
 
 ### Producers and Present only
 
-A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are
-shared by these two:
+A room has 4 recorded seats (8 when every recorded person joined with **Microphone
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or

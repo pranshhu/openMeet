@@ -1,7 +1,7 @@
 # openMeet — Architecture and contributor guide
 
 Open-source, self-hostable, studio-quality remote recording. Riverside.fm alternative for
-**up to 4 recorded participants + 2 unrecorded producers** (full mesh, no SFU). Pure browser P2P WebRTC; each peer's local track is recorded
+**up to 4 recorded participants (8 when all of them joined with the microphone only) + 2 unrecorded producers** (full mesh, no SFU). Pure browser P2P WebRTC; each peer's local track is recorded
 and the bytes are written to the **host's local disk** (File System Access API). Recording
 bytes never touch any server — zero cloud-storage cost. Runs entirely on a free Cloudflare
 account (Pages + Worker + Durable Object + D1). MIT licensed.
@@ -98,7 +98,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
   no remote audio, and shares the 2 unrecorded slots with producers (does not use a recorded seat;
-  role is still host/guest); the DO enforces the per-role caps at `join`. "Present only" is never
+  role is still host/guest); `join.audioOnly` (a recorded seat that sends no camera for as long as
+  the socket is in the room) lifts the recorded cap from 4 to 8 when every recorded seat claimed it;
+  the DO enforces the per-role caps at `join`. "Present only" is never
   offered to a producer: `?producer=1` wins over `?present=1`. `role-assigned` (peers)
   and `peer-joined` echo `companion?: boolean` and `notRecorded?: boolean` (the host set that guest
   as not recorded; `role-assigned` carries it for the joining connection too).
@@ -170,11 +172,11 @@ host removed this participant, and the same tab is refused until the session end
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
-looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
-  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
+  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`, `audioOnly`) lives in a `PeerAttachment` on each
   WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
   instance `Map`; `allPeers()` derives the live socket list from `state.getWebSockets()` (skipping
   sockets flagged `left: true`) instead, and `joinedPeers()` narrows it to the sockets whose `join`
@@ -1137,7 +1139,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 1. **Room create/join/auth** — New Room → `POST /api/rooms` (token+cookie) → nav `/r/slug/` →
    `getRoom` → lobby → join → WS → DO assigns host (cookie match or token in join) / guest (invite link, no token)
-   → `role-assigned` + `peer-joined`. Peer past capacity → close 4001.
+   → `role-assigned` + `peer-joined`. Peer past capacity → close 4001 (a recorded seat with a camera past the fourth, or any recorded seat past the eighth).
 2. **WebRTC signaling** — perfect negotiation over WS relay; guest creates DataChannel, host
    `ondatachannel`; ICE trickled in parallel; DO never inspects SDP.
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
@@ -1218,7 +1220,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
+  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most fourteen guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
@@ -1357,6 +1359,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
+- **A room of five to eight people is for the microphone only, and its pieces are still sized for
+  four.** A person who joined with the microphone only and reloads lands in a lobby with the
+  camera on, and joining that way a room of five or more ends on "This room is full". The lobby's
+  size figures and the take's 50 call-copy files (`CALL_COPY_MAX_FILES`) are still those of a
+  four-person room.
 - **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt

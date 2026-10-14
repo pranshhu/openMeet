@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A room seats up to 8 recorded people when everyone joins with **Microphone only**; with a
+  camera in the room it seats 4, as before.
 - Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
   presentation clicker sends.
 - Present a deck as slides: pick one picture per slide and turn them with Previous and

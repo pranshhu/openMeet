@@ -179,8 +179,8 @@ export function RoomView({ slug }: { slug: string }) {
   if (state.phase === 'full') {
     return (
       <StatusScreen title="This room is full" action="Try again">
-        Up to 4 people on camera, plus 2 producers or present‑only screens. Try again once someone
-        leaves.
+        A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers or
+        present‑only screens. Try again once someone leaves.
       </StatusScreen>
     );
   }

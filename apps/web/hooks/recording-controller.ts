@@ -35,8 +35,8 @@ export const CALL_COPY_MAX_FILES = 50;
  */
 export const CALL_COPY_MAX_PER_PEER = 12;
 
-/** Guest files one take opens: three recorded guests plus a reloaded tab each, and a ceiling a guest cannot pass. */
-export const MAX_GUEST_SLOTS = 8;
+/** Guest files one take opens: seven recorded guests plus a reloaded tab each, and a ceiling a guest cannot pass. */
+export const MAX_GUEST_SLOTS = 14;
 
 /** New keys one connection may introduce in one take: its own, and one more for a tab that reloaded. */
 export const MAX_GUEST_SLOTS_PER_PEER = 2;
