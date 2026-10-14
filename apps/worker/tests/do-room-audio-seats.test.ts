@@ -311,3 +311,50 @@ describe('Room DO: the host is held to the same seat rules', () => {
     closeAll(opened);
   });
 });
+
+describe('Room DO: a microphone-only seat let in from the waiting room', () => {
+  const until = async (cond: () => boolean) => {
+    for (let i = 0; i < 80 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
+  };
+
+  /** Five microphone-only seats, the host first, then the waiting room is turned on. */
+  async function roomOfFiveBehindAWaitingRoom(slug: string, opened: WebSocket[]) {
+    await seedRoom(slug, `tok-${slug}`);
+    expect((await join(slug, { hostToken: `tok-${slug}`, audioOnly: true }, opened)).kind).toBe('role-assigned');
+    await joinAll(slug, 4, { audioOnly: true }, opened);
+    const host = opened[0]!;
+    const waiting: { peerId: string }[] = [];
+    let waitingRoomIsOn = false;
+    host.addEventListener('message', (e) => {
+      const m = JSON.parse(e.data as string) as ServerMessage;
+      if (m.type !== 'room-access') return;
+      waitingRoomIsOn = m.waitingRoom;
+      waiting.splice(0, waiting.length, ...m.waiting);
+    });
+    host.send(JSON.stringify({ type: 'room-access', waitingRoom: true }));
+    await until(() => waitingRoomIsOn);
+    return {
+      /** The sixth person knocks, the host lets them in, and the Room says what became of them. */
+      async knockAndAdmit(extra: Record<string, unknown>): Promise<Outcome> {
+        const outcome = join(slug, extra, opened);
+        await until(() => waiting.length === 1);
+        host.send(JSON.stringify({ type: 'admit', peerId: waiting[0]!.peerId, admit: true }));
+        return outcome;
+      },
+    };
+  }
+
+  it('seats a sixth person who joined with the microphone only', async () => {
+    const opened: WebSocket[] = [];
+    const room = await roomOfFiveBehindAWaitingRoom('aud-wait-mic', opened);
+    expect((await room.knockAndAdmit({ audioOnly: true })).kind).toBe('role-assigned');
+    closeAll(opened);
+  });
+
+  it('refuses a sixth person who joined with a camera', async () => {
+    const opened: WebSocket[] = [];
+    const room = await roomOfFiveBehindAWaitingRoom('aud-wait-cam', opened);
+    expect(await room.knockAndAdmit({})).toEqual(refused);
+    closeAll(opened);
+  });
+});

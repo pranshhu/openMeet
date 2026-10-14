@@ -2175,11 +2175,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   size fields are 32 bits and cannot hold its length, so they declare the most they can
   hold, more than the file has, and the FLAC commands, like any other command on that
   file, report it.
-- **Microphone only is not remembered.** A person with no camera presses it on every
-  visit. While it is pressed the lobby's storage and folder figures still count a camera
-  file, so they overstate what that person's recording needs. A person whose camera
-  never started gets no Speaker row in the lobby after pressing it; the call's microphone
-  menu has one.
+- **Microphone only is kept per room, not across rooms or browsers.** The choice is
+  stored in this browser under `om_mic_only_<slug>`, so a person with no camera presses it
+  once for each room. While it is pressed the lobby's storage and folder figures still
+  count a camera file, so they overstate what that person's recording needs. A person
+  whose camera never started gets no Speaker row in the lobby after pressing it; the
+  call's microphone menu has one.
 - **A person who joined with the microphone only cannot turn a camera on in that call.**
   A running recorder cannot be given a video track, so the stream keeps the shape it was
   joined with. They leave and join again with a camera. The host is not told before a take
