@@ -3187,4 +3187,3 @@ describe('CallStage: every screen is on the stage', () => {
     expect(screen.getAllByText('What you’re presenting')).toHaveLength(1);
   });
 });
-
