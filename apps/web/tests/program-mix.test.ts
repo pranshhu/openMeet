@@ -56,12 +56,13 @@ const NOTE =
   'is placed by its padMs under aligned: a person who started later is black and silent until then, and a person ' +
   'whose file ends first stays as a still picture. It re-encodes to H.264 and AAC, so it is slow and not lossless. ' +
   'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
-  'leftOut names every file of the take that cmd does not read, and why. If ffmpeg says a stream specifier matches ' +
+  "leftOut names every file of the take that cmd does not read, and why. If ffmpeg says that ':a' matches " +
   'no streams, a file in audio has no sound track: take its input and its adelay out. ' +
   "If ffmpeg says that ':v' matches no streams, a file in video has no picture (a person recorded without a " +
   'camera whose take did not finish cleanly, or a take saved from its crash copy): ' +
-  "take that file's input and its chain out of the filter, lower xstack's inputs by one, and add the file to the " +
-  'audio mix, or ask for the take again.';
+  "keep its input, take its [k:v] chain out of the filter and its label out of xstack, and lower xstack's " +
+  'inputs by one; if one camera is left, replace the xstack filter and its pad with pad=1920:1080:-1:-1. ' +
+  'Its sound is already in the mix. Or ask for the take again.';
 
 const LABEL_TWO = "Program file: the 2 cameras in a grid with everyone's audio mixed (re-encodes, slow)";
 const LEFT_OUT_SENTENCE = ' The sync file lists the files it leaves out.';
@@ -381,7 +382,10 @@ describe('programMix: the note of a camera take', () => {
   it('says what to do when ffmpeg stops on a file that has no picture', () => {
     const note = programOf(withChecks(take))?.note ?? '';
     expect(note).toContain("If ffmpeg says that ':v' matches no streams, a file in video has no picture");
-    expect(note).toContain("take that file's input and its chain out of the filter, lower xstack's inputs by one");
+    expect(note).toContain("If ffmpeg says that ':a' matches no streams");
+    expect(note).toContain('keep its input, take its [k:v] chain out of the filter and its label out of xstack');
+    expect(note).toContain('if one camera is left, replace the xstack filter and its pad with pad=1920:1080:-1:-1');
+    expect(note).toContain('Its sound is already in the mix');
     expect(note).toContain('a file in audio has no sound track: take its input and its adelay out.');
   });
 });
