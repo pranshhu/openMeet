@@ -8,6 +8,7 @@ import {
   MAX_SCRIPT_LENGTH,
   RECORD_COUNTDOWN_S,
   WS_CLOSE_CAPACITY_FULL,
+  WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
@@ -37,6 +38,7 @@ import { getHostToken } from '@/lib/host-token';
 import { journalSpaceCheck } from '@/lib/preflight';
 import { presetForTrack } from '@/lib/quality';
 import { getOrCreateClientId } from '@/lib/client-id';
+import { readRoomAccess, type RoomAccess } from '@/lib/room-access';
 import { hostTagNote } from '@/lib/browser-guidance';
 import { listeningField } from '@/lib/listening';
 import { isStagePeer } from '@/lib/stage-peers';
@@ -118,6 +120,9 @@ export type RoomPhase =
   // The host removed this participant (4007). The Room refuses this tab until
   // the session ends, so the screen offers the lobby and a way home.
   | 'removed'
+  // The room is locked and this tab was not in it (4008). The Room refuses
+  // the same tab until the host unlocks, so the screen offers the lobby again.
+  | 'refused'
   | 'error';
 
 export type { ChatMessage };
@@ -256,6 +261,16 @@ export interface RoomState {
    * It stays in the call as before, and `peerRecording` still drives the pill.
    */
   notRecorded: boolean;
+  /** Why the Room turned this tab away; null for a reason this page does not know. */
+  refusal: 'locked' | 'refused' | 'busy' | 'passcode' | null;
+  /** Host: the lock, the waiting room and who waits, as the Room last said; null until it has. */
+  access: RoomAccess | null;
+  /**
+   * The Room is holding this tab: until the host lets it in, or until it is
+   * given the passcode (`wrong-passcode` after one that was not right). Null
+   * once it is seated or closed.
+   */
+  door: 'waiting' | 'passcode' | 'wrong-passcode' | null;
   /**
    * This device sends everyone a smaller live picture, to leave more of its
    * processor for the recording. The files are not affected.
@@ -337,10 +352,15 @@ export function computeRecordingCapability(ua?: string): { mp4: boolean; wav: bo
  * full hook harness; it is the highest-consequence branch in the file.
  */
 /** Phases a live media event must never drag the room out of. */
-const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'removed', 'error']);
+const TERMINAL_PHASES = new Set<RoomPhase>(['recording', 'finalizing', 'done', 'left', 'full', 'replaced', 'removed', 'refused', 'error']);
 
 export function phaseOnPeerLeft(phase: RoomPhase): RoomPhase {
   return phase === 'recording' || phase === 'finalizing' || phase === 'done' ? phase : 'peer-left';
+}
+
+/** The reason the Room gave for a refused join, when this page has words for it. */
+function refusalOf(reason: string): 'locked' | 'refused' | 'busy' | 'passcode' | null {
+  return reason === 'locked' || reason === 'refused' || reason === 'busy' || reason === 'passcode' ? reason : null;
 }
 
 /**
@@ -356,6 +376,7 @@ export function phaseOnFatalClose(phase: RoomPhase, code: number): { phase: Room
   if (phase === 'recording' || phase === 'finalizing') return null;
   if (code === WS_CLOSE_REPLACED) return { phase: 'replaced' };
   if (code === WS_CLOSE_REMOVED) return { phase: 'removed' };
+  if (code === WS_CLOSE_NOT_ADMITTED) return { phase: 'refused' };
   return code === WS_CLOSE_CAPACITY_FULL
     ? { phase: 'full' }
     : { phase: 'not-found' }; // invalid (4002) or expired (4003) slug
@@ -686,6 +707,9 @@ export function useRoom(slug: string) {
     takes: [],
     peerRecording: false,
     notRecorded: false,
+    refusal: null,
+    access: null,
+    door: null,
     lowPower: false,
     incomingVideoOff: false,
     sendLater: false,
@@ -1315,7 +1339,7 @@ export function useRoom(slug: string) {
         // closes the file handles — the same trap peer-left and room-closed
         // both guard against with phaseOnPeerLeft. This path had no guard, so a
         // 4001/4002/4003 mid-recording left every file at 0 bytes.
-        onFatalClose: (code) => {
+        onFatalClose: (code, reason) => {
           if (code === WS_CLOSE_REMOVED) {
             removedRef.current = true;
             // Every other page closes its side of the connection to a removed
@@ -1326,7 +1350,9 @@ export function useRoom(slug: string) {
             for (const s of [h?.sender, h?.wavSender, h?.screenSender]) s?.giveUp();
           }
           const settle = () =>
-            setState((s) => {
+            setState((held) => {
+              // Whatever the Room closed, it is no longer holding this tab.
+              const s = { ...held, door: null };
               const next = phaseOnFatalClose(s.phase, code);
               if (!next) {
                 fatalCloseRef.current = true;
@@ -1344,7 +1370,11 @@ export function useRoom(slug: string) {
                         : 'The connection to the room ended. Press End & save to keep this recording.',
                 };
               }
-              return { ...s, ...next };
+              return {
+                ...s,
+                ...next,
+                ...(code === WS_CLOSE_NOT_ADMITTED ? { refusal: refusalOf(reason) } : {}),
+              };
             });
           // Ended here, backup kept, before the terminal screen shows: that
           // screen must never sit over a camera that is still being recorded.
@@ -1725,6 +1755,7 @@ export function useRoom(slug: string) {
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
+          door: null,
           // The socket was opened again, which is what a restart ask wanted.
           // A device ask is about a device, which a new socket does not change.
           helpAsk: s.helpAsk === 'reconnect' ? null : s.helpAsk,
@@ -1961,6 +1992,20 @@ export function useRoom(slug: string) {
           ...s,
           remotePeers: s.remotePeers.map((r) => (r.peerId === m.peerId ? { ...r, notRecorded } : r)),
         }));
+      });
+      // Only a host is told, and what it is told is read, not trusted.
+      signal.on('room-access', (m) => {
+        if (roleRef.current !== 'host') return;
+        setState((s) => ({ ...s, access: readRoomAccess(m) }));
+      });
+      // The Room is holding this tab: for the host's answer, or for a passcode.
+      // Only the states it knows are kept.
+      signal.on('door', (m) => {
+        if (m.state === 'waiting') setState((s) => ({ ...s, door: 'waiting' }));
+        else if (m.state === 'passcode') {
+          const door = m.wrong === true ? 'wrong-passcode' : 'passcode';
+          setState((s) => ({ ...s, door }));
+        }
       });
       // The host asked for this microphone to be off. This page does it, with
       // the steps of its own mic switch, so the person sees it and can turn it
@@ -2670,6 +2715,24 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-recorded', peerId, recorded });
   }, []);
 
+  /**
+   * Host: lock or unlock the room, turn its waiting room on or off, or set or
+   * remove its passcode. Changes nothing here: the Room's `room-access` answer does.
+   */
+  const setRoomAccess = useCallback((change: { locked?: boolean; waitingRoom?: boolean; passcode?: string | null }) => {
+    signalRef.current?.send({ type: 'room-access', ...change });
+  }, []);
+
+  /** Answer the Room's request for a passcode. Its next `door` or `role-assigned` is the answer. */
+  const sendPasscode = useCallback((code: string) => {
+    signalRef.current?.rejoin(code);
+  }, []);
+
+  /** Host: let one waiting person in, or refuse them. Their `role-assigned` or close is the answer. */
+  const admitPeer = useCallback((peerId: string, admit: boolean) => {
+    signalRef.current?.send({ type: 'admit', peerId, admit });
+  }, []);
+
   /** Host: ask for one person's microphone to be turned off. Their page does it, and their presence shows it. */
   const mutePeer = useCallback((peerId: string) => {
     signalRef.current?.send({ type: 'peer-mute', peerId });
@@ -3256,7 +3319,7 @@ export function useRoom(slug: string) {
   // 'finalizing', and a take still starting up (handles set, phase not yet
   // 'recording') keeps its tracks too.
   useEffect(() => {
-    const terminal = ['full', 'replaced', 'removed', 'not-found', 'error'].includes(state.phase);
+    const terminal = ['full', 'replaced', 'removed', 'refused', 'not-found', 'error'].includes(state.phase);
     if (terminal && !recordingRef.current) release();
   }, [state.phase, release]);
 
@@ -3357,6 +3420,9 @@ export function useRoom(slug: string) {
     dismissHelpAsk,
     restartConnection,
     removePeer,
+    setRoomAccess,
+    sendPasscode,
+    admitPeer,
     toggleScreenShare,
     startRecording,
     recordWithCountdown,

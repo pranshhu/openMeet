@@ -11,6 +11,8 @@ import { CameraSettings } from './CameraSettings';
 import { SlideControls } from './SlideControls';
 import { HelpAsk } from './HelpAsk';
 import { PeoplePanel } from './PeoplePanel';
+import { RoomAccess } from './RoomAccess';
+import type { RoomAccess as Access } from '@/lib/room-access';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
 import type { PresentedSlides } from '@/lib/slides';
@@ -28,6 +30,7 @@ import { BackupNotice } from './BackupNotice';
 import { Shortcuts } from './Shortcuts';
 import { singleKeysOn, useSingleKeys } from '@/hooks/use-single-keys';
 import { FileNotice } from './FileNotice';
+import { KnockNotice } from './KnockNotice';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
@@ -188,6 +191,9 @@ export function CallStage({
   onMutePeer,
   onAskPeer,
   onRemovePeer,
+  roomAccess,
+  onRoomAccess,
+  onAdmit,
   countdownEndsAt = null,
 }: {
   role: Role | null;
@@ -334,6 +340,12 @@ export function CallStage({
   onAskPeer?: (peerId: string, ask: HelpAskCode) => boolean;
   /** Host: remove one person from the room. */
   onRemovePeer?: (peerId: string) => void;
+  /** Host: the lock, the waiting room and who waits, as the Room last said; absent until it has. */
+  roomAccess?: Access | null;
+  /** Host: lock or unlock the room, turn its waiting room on or off, or set or remove its passcode. */
+  onRoomAccess?: (change: { locked?: boolean; waitingRoom?: boolean; passcode?: string | null }) => void;
+  /** Host: let one waiting person in, or refuse them. */
+  onAdmit?: (peerId: string, admit: boolean) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt?: number | null;
 }) {
@@ -662,6 +674,7 @@ export function CallStage({
 
   const peerFallback = role === 'host' ? 'Guest' : 'Host';
   const isHost = role === 'host';
+  const waitingCount = roomAccess?.waiting.length ?? 0;
   // A rundown is stepped through during a take, so it is offered only where
   // one can be started: to a host who can record.
   const hasRundown = isHost && canRecord;
@@ -1111,6 +1124,7 @@ export function CallStage({
         onDismiss={onDismissBackup}
         onStop={onStopBackup}
       />
+      <KnockNotice role={role} waiting={roomAccess?.waiting ?? []} onAdmit={onAdmit} />
 
       {/* Recording failures render HERE, inside the call, rather than switching
           the app to an error screen. Unmounting this component would take the
@@ -1256,7 +1270,7 @@ export function CallStage({
                 onClose={() => setBoardOpen(false)}
               />
             )}
-            {peopleOpen && isHost && onMutePeer && remotePeers.length > 0 && (
+            {peopleOpen && isHost && onMutePeer && (remotePeers.length > 0 || roomAccess) && (
               <PeoplePanel
                 people={remotePeers}
                 recording={takeActive || Boolean(resumeOffer)}
@@ -1264,7 +1278,9 @@ export function CallStage({
                 onAsk={onAskPeer}
                 onRemove={onRemovePeer}
                 onClose={closePeople}
-              />
+              >
+                {roomAccess && onRoomAccess && <RoomAccess access={roomAccess} onChange={onRoomAccess} />}
+              </PeoplePanel>
             )}
             {popupEl}
           </main>
@@ -1652,10 +1668,17 @@ export function CallStage({
                 variant={chatOpen ? 'active' : 'default'}
                 onClick={() => openChat(!chatOpen)}
               />
-              {isHost && onMutePeer && remotePeers.length > 0 && (
+              {isHost && onMutePeer && (remotePeers.length > 0 || roomAccess) && (
                 <ControlButton
                   icon="people"
-                  label={peopleOpen ? 'Hide people' : 'People'}
+                  label={
+                    peopleOpen
+                      ? 'Hide people'
+                      : waitingCount > 0
+                        ? `People, ${waitingCount} waiting to join`
+                        : 'People'
+                  }
+                  badge={waitingCount > 0}
                   variant={peopleOpen ? 'active' : 'default'}
                   onClick={() => {
                     setPeopleOpen((o) => !o);
