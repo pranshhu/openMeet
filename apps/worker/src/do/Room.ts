@@ -212,6 +212,21 @@ export class Room implements DurableObject {
     ws.serializeAttachment(p);
   }
 
+  /**
+   * Close a socket the Room refuses to seat. It is flagged left first: the
+   * close takes effect later, and what the socket has sent by then must not be
+   * acted on as from a live one.
+   */
+  private refuse(ws: WebSocket, p: PeerAttachment, code: number, reason: string): void {
+    p.left = true;
+    this.save(ws, p);
+    try {
+      ws.close(code, reason);
+    } catch {
+      // already gone
+    }
+  }
+
   private allPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
     return this.state
       .getWebSockets()
@@ -412,11 +427,7 @@ export class Room implements DurableObject {
             message: 'join requires string displayName and userAgent',
           });
           console.error('room:invalid_join');
-          try {
-            ws.close(WS_CLOSE_INVALID_MESSAGE, 'invalid_join');
-          } catch {
-            // already gone
-          }
+          this.refuse(ws, p, WS_CLOSE_INVALID_MESSAGE, 'invalid_join');
           return;
         }
         parsed.displayName = truncate(parsed.displayName, MAX_DISPLAY_NAME_LENGTH);
@@ -448,28 +459,24 @@ export class Room implements DurableObject {
         // A tab the host removed stays out until the session ends. A host is
         // never refused: the token outranks whatever id its tab presents.
         if (p.role !== 'host' && p.clientId && this.removed.includes(p.clientId)) {
-          try {
-            ws.close(WS_CLOSE_REMOVED, 'removed');
-          } catch {
-            // already gone
-          }
+          this.refuse(ws, p, WS_CLOSE_REMOVED, 'removed');
           return;
         }
         // A locked room seats nobody it has not seated already in this session.
         // A host is never refused, and the link is the same for every role.
         const seatedBefore = !!p.clientId && this.admitted.includes(p.clientId);
         if (this.locked && p.role !== 'host' && !p.admitted && !seatedBefore) {
-          try {
-            ws.close(WS_CLOSE_NOT_ADMITTED, 'locked');
-          } catch {
-            // already gone
-          }
+          this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'locked');
           return;
         }
         // A room with a passcode seats nobody who has not given it, on the same
         // terms as the lock. The socket stays open and unseated, and may send
         // `join` again with another try.
         if (this.passcodeHash && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          if ((this.peer(ws).passFails ?? 0) >= MAX_PASSCODE_TRIES_PER_SOCKET) {
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
+            return;
+          }
           const given = parsed.passcode;
           if (typeof given !== 'string' || given.length === 0 || given.length > MAX_PASSCODE_LENGTH) {
             this.send(ws, { type: 'door', state: 'passcode' });
@@ -477,11 +484,7 @@ export class Room implements DurableObject {
           }
           const spent = await this.passcodeFails();
           if (spent && spent.count >= MAX_PASSCODE_TRIES_PER_ROOM) {
-            try {
-              ws.close(WS_CLOSE_NOT_ADMITTED, 'passcode');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
             return;
           }
           const digest = await this.passcodeDigest(given);
@@ -495,11 +498,7 @@ export class Room implements DurableObject {
             p.passFails = (now.passFails ?? 0) + 1;
             this.save(ws, p);
             if (p.passFails >= MAX_PASSCODE_TRIES_PER_SOCKET) {
-              try {
-                ws.close(WS_CLOSE_NOT_ADMITTED, 'passcode');
-              } catch {
-                // already gone
-              }
+              this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
               return;
             }
             this.send(ws, { type: 'door', state: 'passcode', wrong: true });
@@ -511,11 +510,7 @@ export class Room implements DurableObject {
         // reached by nothing that goes to the room.
         if (this.waitingRoom && p.role !== 'host' && !p.admitted && !seatedBefore) {
           if (this.waitingPeers().length >= MAX_WAITING) {
-            try {
-              ws.close(WS_CLOSE_NOT_ADMITTED, 'busy');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'busy');
             return;
           }
           p.waiting = true;
@@ -533,11 +528,7 @@ export class Room implements DurableObject {
             ({ ws: pws, p: pp }) => pws !== ws && pp.joined && (pp.role === 'producer' || pp.companion === true)
           ).length;
           if (unrecorded >= MAX_PRODUCERS) {
-            try {
-              ws.close(WS_CLOSE_CAPACITY_FULL, 'room_full');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_CAPACITY_FULL, 'room_full');
             return;
           }
         } else {
@@ -545,11 +536,7 @@ export class Room implements DurableObject {
             ({ ws: pws, p: pp }) => pws !== ws && pp.joined && pp.role !== 'producer' && !pp.companion
           ).length;
           if (recorded >= MAX_RECORDED_PEERS) {
-            try {
-              ws.close(WS_CLOSE_CAPACITY_FULL, 'room_full');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_CAPACITY_FULL, 'room_full');
             return;
           }
         }

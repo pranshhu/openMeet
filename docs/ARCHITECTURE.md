@@ -198,7 +198,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   what session end counts. A socket that hasn't joined, or was refused at the cap, gets its own
   `join`/`ping` answered and nothing else; a socket can also be held before it is seated, by the
   waiting room (below), and is outside the room the same way; one flagged `left` (replaced, or after its own `leave`)
-  has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
+  has every message dropped. Every refusal in `join` (invalid, removed, locked,
+  passcode, busy, full) flags the socket `left` before it closes it, so nothing the socket sent before or
+  after is acted on. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
   `room`, `session`, `access`, `passFails`, `nextOrdinal`; `access` holds whether the waiting room
   is on and, when the host set a passcode, `passcodeHash` (the lowercase hex SHA-256 of
@@ -296,7 +298,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   counted; with one the Room hashes and compares with `timingSafeEqualHex`, and a wrong one is
   counted in the socket's attachment (`passFails`) and in the room's `passFails`, and is answered
   `{type:'door', state:'passcode', wrong:true}`; the fifth wrong one on a socket closes it with
-  `WS_CLOSE_NOT_ADMITTED`/`'passcode'`. While the room has counted 20 wrong passcodes in the ten
+  `WS_CLOSE_NOT_ADMITTED`/`'passcode'`, and a socket that has reached five is refused the same way before
+  anything is compared. While the room has counted 20 wrong passcodes in the ten
   minutes after the first, a `join` that carries a passcode is closed the same way without being
   compared and adds nothing; the window starts afresh ten minutes after `since`. The socket stays
   unseated and may send `join` again; a right passcode goes on to the waiting-room gate and the

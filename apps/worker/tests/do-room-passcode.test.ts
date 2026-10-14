@@ -447,3 +447,80 @@ describe('Room DO: the passcode a guest gives before it joins', () => {
     h.ws.close();
   });
 });
+
+describe('Room DO: a socket closed for its passcode tries is never seated afterwards', () => {
+  it('does not seat a socket that sends five wrong passcodes and then the right one in one burst', async () => {
+    const slug = 'pcb-bust-aaa';
+    const h = await hostWithPasscode(slug);
+    const g = await connect(slug, {});
+    await until(() => doors(g.heard).length === 1);
+
+    for (let i = 1; i <= 5; i++) g.sendJoin({ passcode: 'wrong-' + i });
+    g.sendJoin({ passcode: PASS });
+    await until(() => g.close.code !== undefined);
+    await settle();
+    expect(g.close).toEqual({ code: 4008, reason: 'passcode' });
+    expect(ofType(g.heard, 'role-assigned')).toHaveLength(0);
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(0);
+
+    const later = await connect(slug, { clientId: 'tab-later', passcode: PASS });
+    await until(() => ofType(later.heard, 'role-assigned').length > 0);
+    expect(ofType(later.heard, 'role-assigned')[0]!.peerCount).toBe(2);
+
+    h.ws.close();
+    later.ws.close();
+  });
+
+  it('compares at most five passcodes from a socket that sends thirty wrong ones in one burst', async () => {
+    const slug = 'pcb-thir-aaa';
+    const h = await hostWithPasscode(slug);
+    const g = await connect(slug, {});
+    await until(() => doors(g.heard).length === 1);
+
+    for (let i = 0; i < 30; i++) g.sendJoin({ passcode: 'wrong-' + i });
+    await until(() => g.close.code !== undefined);
+    await settle();
+    expect(g.close).toEqual({ code: 4008, reason: 'passcode' });
+    expect((await passFails(slug))?.count).toBeLessThanOrEqual(5);
+
+    h.ws.close();
+  });
+
+  it('does not seat a socket closed for the room-wide limit when the host sets a new passcode and it joins again', async () => {
+    const slug = 'pcb-room-aaa';
+    const h = await hostWithPasscode(slug);
+    await wrongTries(slug, 20);
+
+    const late = await connect(slug, { clientId: 'tab-late', passcode: PASS });
+    await until(() => late.close.code !== undefined);
+    expect(late.close).toEqual({ code: 4008, reason: 'passcode' });
+    sendRaw(h.ws, { type: 'room-access', passcode: 'wednesday9' });
+    await until(async () => (await passFails(slug)) === undefined);
+    late.sendJoin({ clientId: 'tab-late', passcode: 'wednesday9' });
+    await settle();
+
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(0);
+    h.ws.close();
+  });
+
+  it('closes a socket that has used its five wrong passcodes without comparing the right one', async () => {
+    const slug = 'pcb-used-aaa';
+    const h = await hostWithPasscode(slug);
+    const g = await connect(slug, { clientId: 'tab-used' });
+    await until(() => doors(g.heard).length === 1);
+    await objectOf(slug, async (state) => {
+      const ws = state
+        .getWebSockets()
+        .find((x) => (x.deserializeAttachment() as { clientId?: string })?.clientId === 'tab-used')!;
+      ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), passFails: 5 });
+    });
+
+    g.sendJoin({ clientId: 'tab-used', passcode: PASS });
+    await until(() => g.close.code !== undefined);
+    await settle();
+
+    expect(g.close).toEqual({ code: 4008, reason: 'passcode' });
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(0);
+    h.ws.close();
+  });
+});

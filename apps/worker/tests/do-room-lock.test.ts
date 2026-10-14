@@ -333,3 +333,127 @@ describe('Room DO — the host locks the room', () => {
     [h.ws, a.ws].forEach((w) => w.close());
   }, 20_000);
 });
+
+describe('Room DO — a socket the Room has refused is never seated afterwards', () => {
+  const join = (ws: WebSocket, clientId: string, extra: Record<string, unknown> = {}) =>
+    sendRaw(ws, { type: 'join', displayName: 'A', userAgent: 'ua', clientId, ...extra });
+
+  it('does not seat a socket refused as locked that sends join again once the room is unlocked', async () => {
+    const slug = 'rlr-lock-aaa';
+    await seedRoom(slug, 'tok-rlr-lock');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-lock' });
+    lock(h.ws);
+    await until(() => ofType(h.heard, 'room-access').length > 1);
+
+    const refused = await knock(slug, { clientId: 'tab-new' });
+    expect(refused.answer).toBe(4008);
+    lock(h.ws, false);
+    await until(() => ofType(h.heard, 'room-access').length > 2);
+    join(refused.ws, 'tab-new');
+    await settle();
+
+    expect(ofType(refused.heard, 'role-assigned')).toHaveLength(0);
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(0);
+    h.ws.close();
+  });
+
+  it('does not seat a socket refused as full that sends join again once a seat is free', async () => {
+    const slug = 'rlr-full-aaa';
+    await seedRoom(slug, 'tok-rlr-full');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-full' });
+    const p1 = await enter(slug, 'P1', { producer: true, clientId: 'tab-p1' });
+    const p2 = await enter(slug, 'P2', { producer: true, clientId: 'tab-p2' });
+
+    const refused = await knock(slug, { producer: true, clientId: 'tab-p3' });
+    expect(refused.answer).toBe(4001);
+    p1.ws.close();
+    await until(() => ofType(h.heard, 'peer-left').length > 0);
+    join(refused.ws, 'tab-p3', { producer: true });
+    await settle();
+
+    expect(ofType(refused.heard, 'role-assigned')).toHaveLength(0);
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(2);
+    [h.ws, p2.ws].forEach((w) => w.close());
+  });
+
+  it('does not seat a socket refused as full in the recorded seats that sends join again once a seat is free', async () => {
+    const slug = 'rlr-recd-aaa';
+    await seedRoom(slug, 'tok-rlr-recd');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-recd' });
+    const guests = [];
+    for (let i = 0; i < 3; i++) guests.push(await enter(slug, `G${i}`, { clientId: `tab-g${i}` }));
+
+    const refused = await knock(slug, { clientId: 'tab-g3' });
+    expect(refused.answer).toBe(4001);
+    guests[0]!.ws.close();
+    await until(() => ofType(h.heard, 'peer-left').length > 0);
+    join(refused.ws, 'tab-g3');
+    await settle();
+
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(3);
+    [h.ws, ...guests.slice(1).map((g) => g.ws)].forEach((w) => w.close());
+  }, 20_000);
+
+  it('does not seat a socket the host removed that sends join with another client id', async () => {
+    const slug = 'rlr-remv-aaa';
+    await seedRoom(slug, 'tok-rlr-remv');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-remv' });
+    const a = await enter(slug, 'A', { clientId: 'tab-a' });
+    const gone = closed(a.ws);
+    h.ws.send(JSON.stringify({ type: 'peer-remove', peerId: a.me.peerId }));
+    await gone;
+    const joinsBefore = ofType(h.heard, 'peer-joined').length;
+
+    const ws = await openWs(slug);
+    const refused = closed(ws);
+    join(ws, 'tab-a');
+    join(ws, 'tab-other');
+    expect((await refused).code).toBe(4007);
+    await settle();
+
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(joinsBefore);
+    h.ws.close();
+  });
+
+  it('does not seat a socket whose first join was invalid when a valid join follows at once', async () => {
+    const slug = 'rlr-invl-aaa';
+    await seedRoom(slug, 'tok-rlr-invl');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-invl' });
+
+    const ws = await openWs(slug);
+    const refused = closed(ws);
+    sendRaw(ws, { type: 'join', displayName: 7, userAgent: 'ua' });
+    join(ws, 'tab-v');
+    expect((await refused).code).toBe(4005);
+    await settle();
+
+    expect(ofType(h.heard, 'peer-joined')).toHaveLength(0);
+    h.ws.close();
+  });
+
+  it('does not make a waiting row of a socket refused because the waiting room was full', async () => {
+    const slug = 'rlr-busy-aaa';
+    await seedRoom(slug, 'tok-rlr-busy');
+    const h = await enter(slug, 'H', { hostToken: 'tok-rlr-busy' });
+    sendRaw(h.ws, { type: 'room-access', waitingRoom: true });
+    await until(() => ofType(h.heard, 'room-access').at(-1)?.waitingRoom === true);
+
+    const waiting = [];
+    for (let i = 0; i < 8; i++) {
+      const w = await openWs(slug);
+      join(w, `tab-w${i}`);
+      waiting.push(w);
+    }
+    await until(() => ofType(h.heard, 'room-access').at(-1)?.waiting.length === 8);
+
+    const refused = await knock(slug, { clientId: 'tab-w8' });
+    expect(refused.answer).toBe(4008);
+    waiting[0]!.close();
+    await until(() => ofType(h.heard, 'room-access').at(-1)?.waiting.length === 7);
+    join(refused.ws, 'tab-w8');
+    await settle();
+
+    expect(ofType(h.heard, 'room-access').at(-1)?.waiting).toHaveLength(7);
+    [h.ws, ...waiting].forEach((w) => w.close());
+  }, 20_000);
+});
