@@ -474,6 +474,32 @@ describe('a screen share the host holds less of than it acknowledged', () => {
     expect(h.screenSegment).toBe(1);
   });
 
+  it('ends the stretch when only fragment 0 was acknowledged and the host holds nothing', async () => {
+    // Removal that must fail this test: the comparison with lastAckedIdx, loosened to one below it.
+    const { h, pc, next, recorder } = await reconnected(0);
+
+    next.onmessage?.(lowAnswer(-1));
+    await vi.waitFor(() => expect(pc.created).toHaveLength(2));
+    openChannel(pc.created[1]!);
+    await vi.waitFor(() => expect(h.screenSegment).toBe(2));
+
+    expect(chunkIdxs(next)).toEqual([]);
+    expect(recorder.stopAndFlush).toHaveBeenCalledTimes(1);
+    expect(h.screenKey).not.toBe('share-key');
+  });
+
+  it('continues the file when the host holds exactly fragment 0 and that was all it acknowledged', async () => {
+    // Removal that must fail this test: the strict comparison, replaced by one that also fires on equal values.
+    const { h, pc, next, recorder } = await reconnected(0);
+
+    next.onmessage?.(lowAnswer(0));
+
+    expect(chunkIdxs(next)).toEqual([1, 2, 3, 4, 5]);
+    expect(recorder.stopAndFlush).not.toHaveBeenCalled();
+    expect(pc.created).toHaveLength(1);
+    expect(h.screenSegment).toBe(1);
+  });
+
   it.each([['"0"', '0'], ['a fraction', 1.5], ['null', null]])(
     'ignores an answer that is not a whole number: %s',
     async (_why, lastIdx) => {
