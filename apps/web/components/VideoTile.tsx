@@ -47,6 +47,10 @@ export function VideoTile({
   // a band across its middle.
   const [tall, setTall] = useState(false);
   const whole = fit === 'contain' || tall;
+  const showVideo = !!stream && !camOff;
+  // The black box belongs to a picture that is shown; a tile with the camera off
+  // keeps the colour every such tile has.
+  const black = fit === 'contain' || (tall && showVideo);
 
   useEffect(() => {
     const el = ref.current;
@@ -83,15 +87,13 @@ export function VideoTile({
   const readShape = ({ currentTarget: v }: SyntheticEvent<HTMLVideoElement>) =>
     setTall(v.videoWidth > 0 && v.videoHeight > v.videoWidth);
 
-  const showVideo = !!stream && !camOff;
-
   useEffect(() => {
     if (ref.current) ref.current.volume = volume;
   }, [volume]);
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${whole ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
+      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${black ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
     >
       <video
         ref={ref}

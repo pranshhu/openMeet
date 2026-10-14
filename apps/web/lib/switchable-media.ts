@@ -88,10 +88,17 @@ export class SwitchableMedia {
       RECORDING_FRAME_RATE;
     // The shape rides on the track as well: a switched-to camera is asked for
     // the picture shape the lobby camera was, so the recording keeps one shape.
+    // Once a camera setting has been applied the constraints hold no size, and
+    // the delivered size says the shape instead.
     const askedSize = rawCamTrack?.getConstraints?.();
-    const askedWidth = ideal(askedSize?.width);
-    const askedHeight = ideal(askedSize?.height);
-    this.portrait = !!askedWidth && !!askedHeight && askedHeight > askedWidth;
+    let shapeWidth = ideal(askedSize?.width);
+    let shapeHeight = ideal(askedSize?.height);
+    if (!shapeWidth || !shapeHeight) {
+      const delivered = rawCamTrack?.getSettings?.();
+      shapeWidth = delivered?.width;
+      shapeHeight = delivered?.height;
+    }
+    this.portrait = !!shapeWidth && !!shapeHeight && shapeHeight > shapeWidth;
     // Read from the track like the frame rate, asked-for before delivered: a
     // switched-to microphone is processed the way the lobby's was, so what the
     // host was told about this person's audio stays true for the whole call.

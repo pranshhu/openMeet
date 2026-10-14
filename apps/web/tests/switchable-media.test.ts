@@ -755,10 +755,10 @@ describe.each([
     }
   }
   // A lobby camera that was asked for `asked`, and that delivers 1080 lines.
-  const lobbyCam = (asked: object) =>
-    Object.assign(createMockTrack('video', 'cam-1', { height: 1080 }), { getConstraints: () => asked });
-  const media = (asked: object) =>
-    new FakeStream([createMockTrack('audio', 'mic-1'), lobbyCam(asked)]) as unknown as MediaStream;
+  const lobbyCam = (asked: object, delivered: Record<string, unknown> = { height: 1080 }) =>
+    Object.assign(createMockTrack('video', 'cam-1', delivered), { getConstraints: () => asked });
+  const media = (asked: object, delivered?: Record<string, unknown>) =>
+    new FakeStream([createMockTrack('audio', 'mic-1'), lobbyCam(asked, delivered)]) as unknown as MediaStream;
   const sizeAsked = (call: unknown[]) => {
     const v = (call[0] as { video: MediaTrackConstraints }).video;
     return [v.width, v.height];
@@ -804,6 +804,20 @@ describe.each([
   it('is wide when the lobby camera was asked for no size', async () => {
     const getUserMedia = desktop();
     const sm = new SwitchableMedia(media({}));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it('reads the shape from the delivered size when the constraints carry none', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}, { width: 608, height: 1080 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('asks for a wide picture when the constraints carry none and the delivered size is wide', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}, { width: 1920, height: 1080 }));
     await sm.switchCamera('cam-2');
     expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
   });

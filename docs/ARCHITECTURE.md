@@ -1337,7 +1337,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     Real camera settings, constraints (`getConstraints()`) and requests for new constraints
     (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
     frame rate the lobby camera was asked for (read once from that track's `getConstraints()`), and
-    for its shape: portrait when the asked height is above the asked width.
+    for its shape: portrait when the asked height is above the asked width. When those
+    constraints carry no size (after a lobby Camera setting), the shape is read from the lobby
+    camera's settings instead.
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps

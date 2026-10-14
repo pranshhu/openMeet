@@ -82,6 +82,18 @@ describe('VideoTile with a picture taller than wide', () => {
     expect((container.firstChild as HTMLElement).className).toContain('bg-black');
   });
 
+  it('keeps the usual background while the camera is off, and goes black when it is on', () => {
+    const stream = newStream();
+    const { container, rerender } = render(<VideoTile stream={stream} muted={false} label="Bob" camOff />);
+    sized(container.querySelector('video')!, 608, 1080, 'resize');
+    const box = container.firstChild as HTMLElement;
+    expect(box.className).toContain('bg-[#3c4043]');
+    expect(box.className).not.toContain('bg-black');
+    rerender(<VideoTile stream={stream} muted={false} label="Bob" />);
+    expect(box.className).toContain('bg-black');
+    expect(box.className).not.toContain('bg-[#3c4043]');
+  });
+
   it('fills the tile again when the picture turns wide', () => {
     const { container } = render(tile(newStream()));
     const video = container.querySelector('video')!;

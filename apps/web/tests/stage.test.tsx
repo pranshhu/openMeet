@@ -408,6 +408,20 @@ describe('Stage: several screens', () => {
     expect(videoOf(container, first).muted).toBe(false);
   });
 
+  it('draws every screen after the first contained', () => {
+    const third = Object.assign(new EventTarget(), { id: 'third' }) as unknown as MediaStream;
+    const { container } = render(
+      stage([
+        { stream: second, label: "Cara's screen" },
+        { stream: third, label: "Dan's screen" },
+      ]),
+    );
+    for (const s of [second, third]) {
+      expect(videoOf(container, s).className).toContain('object-contain');
+      expect((videoOf(container, s).parentElement as HTMLElement).className).toContain('bg-black');
+    }
+  });
+
   it('stacks the screens below md and puts them side by side from md up', () => {
     const { container } = render(stage([{ stream: second, label: "Cara's screen" }]));
     const row = videoOf(container, second).closest('div.flex-col') as HTMLElement;
