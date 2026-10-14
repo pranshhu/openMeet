@@ -289,3 +289,25 @@ describe('Room DO: telling the other pages which seats are microphone only', () 
     closeAll(opened);
   });
 });
+
+describe('Room DO: the host is held to the same seat rules', () => {
+  it('refuses a host with a camera as the fifth once four microphone-only seats are taken', async () => {
+    const slug = 'aud-hosf-aaa';
+    await seedRoom(slug, 'tok-aud-hosf');
+    const opened: WebSocket[] = [];
+    await joinAll(slug, 4, { audioOnly: true }, opened);
+    expect(await join(slug, { hostToken: 'tok-aud-hosf' }, opened)).toEqual(refused);
+    closeAll(opened);
+  });
+
+  it('counts a host with a camera as a camera seat when a fifth microphone-only guest joins', async () => {
+    const slug = 'aud-hosc-aaa';
+    await seedRoom(slug, 'tok-aud-hosc');
+    const opened: WebSocket[] = [];
+    const host = await join(slug, { hostToken: 'tok-aud-hosc' }, opened);
+    expect(host.kind === 'role-assigned' && host.msg.role).toBe('host');
+    await joinAll(slug, 3, { audioOnly: true }, opened);
+    expect(await join(slug, { audioOnly: true }, opened)).toEqual(refused);
+    closeAll(opened);
+  });
+});

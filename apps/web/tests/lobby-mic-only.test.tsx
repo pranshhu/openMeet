@@ -1190,4 +1190,47 @@ describe('Lobby: a microphone-only link, and the choice kept per room', () => {
     expect(setItem.mock.calls.filter(([k]) => k === KEY)).toEqual([]);
     expect(localStorage.getItem(KEY)).toBe('1');
   });
+
+  it('keeps the choice of the capture handed to the call when it changed while the seat was being asked about', async () => {
+    const preview = streamOf(micTrack(), camTrack());
+    const arrived = streamOf(micTrack());
+    let open!: (s: MediaStream) => void;
+    let answerSeat!: (held: boolean) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      c.video === false
+        ? new Promise<MediaStream>((resolve) => {
+            open = resolve;
+          })
+        : Promise.resolve(preview)
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue(DEVICES) },
+      // The question "is another tab recording this room", held open.
+      locks: {
+        request: () =>
+          new Promise<boolean>((resolve) => {
+            answerSeat = resolve;
+          }),
+      },
+    });
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ana' } });
+
+    fireEvent.click(joinNow());
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      open(arrived);
+    });
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    await act(async () => {
+      answerSeat(false);
+    });
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(arrived, 'Ana', false, undefined, false));
+    expect(localStorage.getItem(KEY)).toBe('1');
+  });
 });

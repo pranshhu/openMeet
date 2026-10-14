@@ -89,9 +89,10 @@ const MAX_PRODUCERS = 2;
  * joins; both also sit in the socket attachment, which is limited to 2048
  * bytes at two bytes a character outside Latin-1. A recording id is a UUID
  * and a filename `host_<uuid>.mp4`, and a take is one row, so no honest
- * session comes near the other three. A room seats four recorded guests, so
- * sixteen remembered tabs is generous: past that, the oldest tab that has left
- * is forgotten and arrives as recorded the next time it connects.
+ * session comes near the other three. A room seats at most eight recorded
+ * people, so sixteen guests a session can set as not recorded is generous: past
+ * that, the oldest tab that has left is forgotten and arrives as recorded the
+ * next time it connects.
  */
 const MAX_DISPLAY_NAME_LENGTH = 64;
 const MAX_USER_AGENT_LENGTH = 512;

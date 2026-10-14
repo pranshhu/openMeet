@@ -445,7 +445,7 @@ All in the one folder the host picks, per take:
 |---|---|
 | `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
-| `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
+| `guest2_<id>.*`, `guest3_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8_` in a take, and higher numbers after reconnects |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
