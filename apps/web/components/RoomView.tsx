@@ -124,7 +124,7 @@ const REFUSALS = {
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    mutePeer, removePeer, setRoomAccess, sendPasscode, admitPeer,
+    mutePeer, askPeer, dismissHelpAsk, restartConnection, removePeer, setRoomAccess, sendPasscode, admitPeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
@@ -429,6 +429,7 @@ export function RoomView({ slug }: { slug: string }) {
       localStream={state.localStream}
       remoteStream={state.remoteStream}
       remotePeers={state.remotePeers}
+      remoteScreens={state.remoteScreens}
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}
@@ -501,7 +502,11 @@ export function RoomView({ slug }: { slug: string }) {
       onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
       hostMuted={state.hostMuted}
+      helpAsk={state.helpAsk}
+      onRestartConnection={restartConnection}
+      onDismissHelpAsk={dismissHelpAsk}
       onMutePeer={mutePeer}
+      onAskPeer={askPeer}
       onRemovePeer={removePeer}
       roomAccess={state.access}
       onRoomAccess={setRoomAccess}

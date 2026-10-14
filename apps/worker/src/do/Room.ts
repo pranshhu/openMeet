@@ -12,6 +12,7 @@ import {
   WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
+  isHelpAsk,
   isListening,
   isReaction,
   type ClientMessage,
@@ -842,6 +843,15 @@ export class Room implements DurableObject {
         if (p.role !== 'host' || typeof parsed.peerId !== 'string') break;
         const target = this.joinedPeers().find(({ ws: to, p: pp }) => to !== ws && pp.peerId === parsed.peerId);
         if (target) this.send(target.ws, { type: 'peer-mute' });
+        break;
+      }
+      case 'peer-help': {
+        // A question, passed on only from the host, only to the one person
+        // named, and only as the fixed shape. Their own page asks them and
+        // acts on their press alone; nothing is kept and no answer comes back.
+        if (p.role !== 'host' || typeof parsed.peerId !== 'string' || !isHelpAsk(parsed.ask)) break;
+        const target = this.joinedPeers().find(({ ws: to, p: pp }) => to !== ws && pp.peerId === parsed.peerId);
+        if (target) this.send(target.ws, { type: 'peer-help', ask: parsed.ask });
         break;
       }
       case 'peer-remove': {

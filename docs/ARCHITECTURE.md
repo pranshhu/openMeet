@@ -65,6 +65,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (21 variants) ↔ `ServerMessage` (23).
 - **WS signaling** (`ws-messages.ts`): `ClientMessage` (22 variants) ↔ `ServerMessage` (24).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
@@ -73,7 +74,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
-  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
+  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-help` (`peerId`,
+  `ask`, one of `HELP_ASKS`) is in both unions as well: the Room hands only the host's to that one
+  peer as `{type, ask}`, and that peer's own page asks them. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
   `room-access` (`locked`, `waitingRoom`, `passcode`) is in both unions, and is not a relay: the
   Room acts on it only from the host, each of the first two only when it is a boolean and
@@ -134,14 +137,16 @@ bitrate for the actual track via `presetForTrack`, and the camera `ChunkRecorder
 `BackupRecorder` via `cameraVideoBps`: that preset at the level picked in the lobby (`BITRATE_LEVELS`:
 Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`), times 1.5 when the track delivers
 more than 40 fps (`presetAt`), under the same ceiling; capture constraints in
-`lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
+`lib/media.ts` `RECORDING_CONSTRAINTS`; `cameraConstraints` takes `portrait` and then asks for the
+preset's height and a width of 9/16 of it, rounded to an even number, as `ideal` values: 608 x 1080
+at 1080p). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
 `cameraConstraints` asks the camera for it. The picker lists only the rates the camera's
 capabilities reach (`supportedFrameRates`), so 50 and 60 appear on few cameras. The
 lobby's size figures follow the rate the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
-`recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
+`recording-screen-<n>`, optionally keyed `recording-screen-<n>#<key>` (the host matches the prefix); `backup#<file name>` (one leftover backup
 going back to the host); `backup#file-<uuid>` (one file a participant picked to send the
 host: the same channel and messages, with the file's own name in its `backup_offer`).
 WS close codes: `4001` capacity-full,
@@ -264,6 +269,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `peer-mute` is **passed on only from the host**, to the one joined peer it names and never back
   to the sender, as `{type:'peer-mute'}`. Nothing is kept, a take changes nothing about it, and
   the Room turns no microphone on or off: the page that receives it does, and can turn it back on.
+- `peer-help` is **passed on only from the host**, when `peerId` is a string and `ask` is one of
+  `HELP_ASKS`, to the one joined peer it names and never back to the sender, as
+  `{type:'peer-help', ask}` and nothing else of what was sent. Anything else is dropped and no
+  socket is closed. Nothing is kept, a take changes nothing about it, and no answer comes back:
+  the page that receives it asks its person and acts only on their press.
 - `peer-remove` is **acted on only from the host**, for a joined peer that is not a host, during
   a take as outside one: the DO remembers that peer's client id (`session.removed`, the newest 16),
   closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
@@ -418,7 +428,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   opened and none has failed (`!stream && !previewError`), and Try again does nothing while
   `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
   microphone, quality, frame rate or echo cancellation made while another is being opened is not
-  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. Under the quality picker a
+  **Picture shape** picker (`om_portrait` in `localStorage`, `'1'` for portrait and anything else
+  landscape) opens the camera again like a change of quality and is passed to every capture the lobby
+  opens. It is not on a phone, which ignores a stored `'1'`, and it is hidden with the quality picker
+  for Microphone only. While portrait is chosen the Framing guide is not drawn, and a line says so
+  when the camera's track is not taller than wide. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
@@ -474,12 +489,32 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   **Cancel** focused and last, at the row's right end where Remove was; during a take, and
   while an interrupted take can still be resumed, the question says that a recorded
   person's recording here ends.
+  Between them each row has **Help** (given `onAsk`, which `CallStage` fills with `askPeer`),
+  for a producer's and a present-only device's row too: it swaps the row, as Remove does, for
+  "Ask <name> to:" with **Switch microphone**, **Switch camera** and **Restart connection**
+  (a producer's and a present-only device's row has **Restart connection** alone: they have
+  no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
+  time. A `role="status"` line below the list then says "Asked <name>.
+  They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
+  `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
+  **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
+  `microphone` and `camera` its text is "The host asks you to switch microphone." or "…camera."
+  and the first button is **Choose microphone** or **Choose camera**: it clears the ask, closes
+  chat if chat covers the control bar, opens the asked person's own menu for that device (the
+  other menus closed), and moves focus to its arrow button. The box is a `data-picker-container`,
+  so the press that opens the menu is not read as a click outside it. Nothing is switched by the
+  ask or by **Choose…**: a device changes only when the person presses an item of their own menu,
+  through the existing `handleSwitchMic` / `handleSwitchCamera`, and no device list leaves their
+  browser.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
-  floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
+  floating peer PiP on mobile; every presented screen is drawn in the spotlight, the first in
+  `remoteScreen` and the rest in `otherScreens`, stacked below 768 px and side by side above; a
+  desktop screen sharer sees a "You're presenting" placeholder with a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
-  feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
+  feed back as a viewfinder via `localScreenStream`, drawn beside other people's screens). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). While one other person is on the stage, their tile is drawn once their own camera
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
@@ -488,7 +523,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   full sheet with the control bar hidden while open. The bar's wrapper is one level above the
   stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
   menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  `className` to fill the spotlight or size a PiP. A picture taller than wide (a phone held
+  upright) is always drawn whole, as `contain` does, whatever `fit` says: the tile reads the
+  shape on the video element's `loadedmetadata` and `resize` events and starts again as not
+  tall when its stream changes. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
   every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
@@ -685,7 +723,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
   them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
-  where the preview shows a band of a tall picture.
+  where the preview draws a tall picture whole inside the wide box, so thirds of the box are
+  not thirds of the picture.
 - **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
   panel, in the browser that holds the room's host token (`Lobby`'s `isHost`), and not on the
   check page (`checkOnly`), which joins no call. The host picks a
@@ -719,7 +758,8 @@ guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `Room
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
 `notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
-backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
+backups, shown as offers on the host), `remoteScreens` (one screen per presenter, oldest
+first), `remoteScreenStream` (the first one's stream, or null), `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
@@ -732,6 +772,16 @@ off until they turn it back on: the handler does what `setMic(false)` does (trac
 `presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
 already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
 sends `peer-mute`, and the panel follows that person's `presence`.
+`helpAsk` holds the one ask a host's `peer-help` left on this page (nothing for a host or an ask
+`isHelpAsk` refuses, and nothing for a `microphone` or `camera` ask on a page with no
+`SwitchableMedia`, which is read from `switchableMediaRef` when the ask arrives; a newer ask
+replaces it). `askPeer(peerId, ask)` is the host's side: it sends
+`peer-help` and returns whether the send went out. `dismissHelpAsk()` clears `helpAsk` and nothing
+else; `restartConnection()` clears it, starts the cooldown of the automatic rebuild
+(`lastIceReconnectRef`), and calls `signal.reconnect()`, the path a second `failed`
+connection takes, which does nothing after a terminal close. A `reconnect` ask is also taken
+down when `role-assigned` arrives again on a socket the page opened again by itself; a
+`microphone` or `camera` ask stays.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 `setRoomAccess(change)` only sends `room-access`; `state.access` (null until the Room sends one, kept
 only in a host tab, read through `readRoomAccess`) follows the Room's answer, so a tick the Room did
@@ -828,7 +878,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
-  `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
+  `onRemoteScreenEnded`, given the stream that ended, on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
   `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
   `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is
@@ -1258,7 +1308,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
    still open is waited for the same way; one whose channel has closed is not, and its writer was
-   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   closed by that event, except that a keyed screen file which had bytes and no finish message is
+   kept open for the sharer's return and closed with the other files. A channel that closes during the wait ends the wait for its file. A screen
    file that gave no finish signal within the limits, or whose channel closed without one, is
    listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
    so the channel's close and the end of the take can both ask for it.
@@ -1288,9 +1339,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
    runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
    the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
-   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
-   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
-   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
+   a reconnect leaves the running share's recorder and its local OPFS backup alone: the
+   share's channel is recreated under the share's own key (`recording-screen-<n>#<key>`) and the
+   host continues the same file. A host that answers with less than it acknowledged does not hold
+   that file, so the sharer ends the stretch and starts a new numbered segment. Host rebinds new
+   channel to existing receiver, found by a stable key (see below), not by the DO's
+   fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -1425,7 +1479,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings, constraints (`getConstraints()`) and requests for new constraints
     (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
-    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
+    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`), and
+    for its shape: portrait when the asked height is above the asked width. When those
+    constraints carry no size (after a lobby Camera setting), the shape on a computer is read from
+    the lobby camera's settings instead; a phone is never offered portrait, so it stays wide.
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
@@ -1460,10 +1517,14 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
-- **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
-  (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
-  finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
-  connection, with each segment backed up locally in OPFS.
+- **A screen file can still end where the connection did.** A share continues in the same host
+  file across a reconnect, but one stopped while its connection is down, one on a page that
+  reloads, one whose stream was given up or is being sent later, one whose file the host no
+  longer holds because it started another take or reloaded and resumed, and a ninth file waiting
+  in one take end the file there and read incomplete on the host; the sharer's screen backup holds
+  all of it.
+- **A screen file whose sharer dropped and never came back stays open until the take ends.** The
+  host keeps it for a return, and closes it with the other files at End & save.
 - **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
   host's browser asks before it joins while a take is live. If the host joins there anyway,
   the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and
@@ -2124,3 +2185,29 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **The slide keys do nothing while a field, a fader or a list has the keyboard,** and a window
   narrower than 640 px has no shortcut list to read them in. They turn nothing while chat covers
   a phone's stage, as the row is hidden then.
+- **With incoming video stopped only the first screen carries the note and Show video.** The
+  other screens are black tiles under their names, which still play their sound. With four or
+  more screens on a phone each tile is small, and nothing enlarges one.
+- **A portrait picture is the middle of the camera's wide picture.** A 1080p camera gives
+  608 x 1080, not 1080 x 1920, and the lobby's "Capturing" line shows the real size. It is
+  encoded at the chosen quality's bitrate, which is more than that many pixels need. It is not
+  offered on a phone, has no framing guide, cannot be changed during a call, and was checked
+  with test cameras only.
+- **The host is not told the answer to a help request.** "Asked <name>" reads the same whatever
+  the person does; the host sees a restart as that person's tile leaving and returning.
+- **A help request reaches a page still on "Connecting…" but is drawn only on the call screen.**
+  The page keeps it and shows it when its call screen appears.
+- **A restart gives that person a new id.** A screen they present starts a new file, and their
+  Levels fader and the chat's **To** are forgotten, as on every reconnect.
+- **A page that does not know `peer-help` shows nothing.** A Worker deployed before this
+  message drops it too. In both cases the host's line still reads that the person was asked.
+- **Nothing limits how often the host asks.** After **Not now** the same question can be sent
+  again at once.
+- **The host does not see which device a person is on or what they have.** The microphone and
+  camera asks name no device, and the host names the one it wants by voice.
+- **A person who joined with the microphone only gets the camera ask.** Their camera menu then
+  reads "You joined without a camera. To use one, leave and join again."
+- **A producer and a present-only device are not asked about devices.** The host's row offers
+  them **Restart connection** alone, and a page without device menus drops a device ask.
+- **Where a browser cannot switch a device mid-take, the opened menu reads "Switch after this
+  take".**

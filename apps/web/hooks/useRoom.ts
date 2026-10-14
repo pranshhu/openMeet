@@ -12,8 +12,10 @@ import {
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
+  isHelpAsk,
   isListening,
   type BrowserNote,
+  type HelpAsk,
   type Listening,
   type Role,
   type ServerMessage,
@@ -85,6 +87,7 @@ import { isTakeLockHeld } from '@/lib/take-lock';
 import { saveRecoveredTake } from '@/lib/take-recovery';
 import { OWN_REACTION, takeReaction, type Reaction, type ShownReactions } from '@/lib/reactions';
 import { NoticeLog, peopleFromNotes } from '@/lib/notice-log';
+import { withScreen, withoutScreen, type RemoteScreen } from '@/lib/remote-screens';
 import {
   attachBackupSends,
   BackupIntake,
@@ -183,6 +186,12 @@ export function removeRemotePeer(remotePeers: RemotePeer[], peerId: string): Rem
   return remotePeers.filter((r) => r.peerId !== peerId);
 }
 
+/** The state holding this list of screens. `remoteScreenStream` is written here and nowhere else; an unchanged list is an unchanged state. */
+function withRemoteScreens(remoteScreens: RemoteScreen[], s: RoomState): RoomState {
+  if (remoteScreens === s.remoteScreens) return s;
+  return { ...s, remoteScreens, remoteScreenStream: remoteScreens[0]?.stream ?? null };
+}
+
 /** The host set this remote peer as not recorded: nothing it sends is saved. */
 export function isNotRecordedPeer(remotePeers: RemotePeer[], peerId: string | undefined): boolean {
   return remotePeers.some((r) => r.peerId === peerId && r.notRecorded === true);
@@ -200,6 +209,9 @@ export interface RoomState {
   remoteStream: MediaStream | null;
   /** Everyone else in the room. Length > 1 means a mesh call. */
   remotePeers: RemotePeer[];
+  /** One screen per presenter, oldest first. */
+  remoteScreens: RemoteScreen[];
+  /** The stream of the first entry of `remoteScreens`, or null. */
   remoteScreenStream: MediaStream | null;
   localScreenStream: MediaStream | null; // self-preview of the screen we're sharing
   localName: string;
@@ -220,6 +232,8 @@ export interface RoomState {
   micWarning: MicWarning | null;
   /** The host turned this participant's microphone off, and it has not been turned back on. */
   hostMuted: boolean;
+  /** The host asked this participant to do something about their connection; they have not answered. */
+  helpAsk: HelpAsk | null;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -667,6 +681,7 @@ export function useRoom(slug: string) {
     localStream: null,
     remoteStream: null,
     remotePeers: [],
+    remoteScreens: [],
     remoteScreenStream: null,
     localScreenStream: null,
     slides: null,
@@ -677,6 +692,7 @@ export function useRoom(slug: string) {
     connectionWarning: null,
     micWarning: null,
     hostMuted: false,
+    helpAsk: null,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -1476,9 +1492,10 @@ export function useRoom(slug: string) {
                 remoteStream: remotePeers.find(isStagePeer)?.stream ?? null,
               };
             }),
-          onRemoteScreen: (remoteScreenStream) =>
-            setState((s) => ({ ...s, remoteScreenStream })),
-          onRemoteScreenEnded: () => setState((s) => ({ ...s, remoteScreenStream: null })),
+          onRemoteScreen: (stream) =>
+            setState((s) => withRemoteScreens(withScreen(s.remoteScreens, remotePeerId, stream), s)),
+          onRemoteScreenEnded: (stream) =>
+            setState((s) => withRemoteScreens(withoutScreen(s.remoteScreens, remotePeerId, stream), s)),
           onNegotiationError: (e) => {
             console.error('openMeet: negotiation failed', e);
             setState((s) => ({
@@ -1721,7 +1738,7 @@ export function useRoom(slug: string) {
         if (anyoneHere) {
           setupJoinerNegotiation(started, asProducer, outgoing, screenStreamRef.current);
         }
-        setState((s) => ({
+        setState((s) => withRemoteScreens([], {
           ...s,
           role: m.role,
           remotePeers: peers.map((pp) => ({
@@ -1739,6 +1756,9 @@ export function useRoom(slug: string) {
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
           door: null,
+          // The socket was opened again, which is what a restart ask wanted.
+          // A device ask is about a device, which a new socket does not change.
+          helpAsk: s.helpAsk === 'reconnect' ? null : s.helpAsk,
         }));
         sendPresence();
         // The Room drops its recording flag with the host's socket, and tells a
@@ -2000,6 +2020,15 @@ export function useRoom(slug: string) {
         sendPresence();
         setState((s) => ({ ...s, hostMuted: true }));
       });
+      // The host asked this person to restart their connection or to switch
+      // a device. Only the question is kept, one at a time; nothing starts
+      // until their own press. A page with no device menus (a producer, a
+      // present-only device) has nothing to switch, so it is not asked.
+      signal.on('peer-help', (m) => {
+        if (roleRef.current === 'host' || !isHelpAsk(m.ask)) return;
+        if (m.ask !== 'reconnect' && !switchableMediaRef.current) return;
+        setState((s) => ({ ...s, helpAsk: m.ask }));
+      });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
         const msg: ChatMessage = {
@@ -2040,17 +2069,14 @@ export function useRoom(slug: string) {
       signal.on('presence', (m) =>
         setState((s) => {
           const remotePeers = applyRemotePeerPresence(s.remotePeers, m);
-          return {
-            ...s,
-            remotePeers,
-            // Belt-and-suspenders: clear the screen surface when the peer reports
-            // it stopped, in case the track 'ended' signal didn't fire.
-            remoteScreenStream: m.screenSharing
-              ? s.remoteScreenStream
-              : remotePeers.some((p) => p.presence?.screenSharing)
-                ? s.remoteScreenStream
-                : null,
-          };
+          // Belt-and-suspenders: drop the sender's screen when it reports it
+          // stopped, in case the track 'ended' signal didn't fire. Without a
+          // sender id there is no one to drop.
+          const screens =
+            m.screenSharing !== true && typeof m.fromPeerId === 'string'
+              ? withoutScreen(s.remoteScreens, m.fromPeerId)
+              : s.remoteScreens;
+          return withRemoteScreens(screens, { ...s, remotePeers });
         })
       );
 
@@ -2090,10 +2116,16 @@ export function useRoom(slug: string) {
           const capabilities = { ...s.capabilities };
           if (m.peerId) delete capabilities[m.peerId];
           // Others still present → the call continues; only an empty mesh ends it.
+          const screens = m.peerId ? withoutScreen(s.remoteScreens, m.peerId) : [];
           if (remotePeers.length > 0) {
-            return { ...s, remotePeers, capabilities, remoteStream: remotePeers.find(isStagePeer)?.stream ?? null };
+            return withRemoteScreens(screens, {
+              ...s,
+              remotePeers,
+              capabilities,
+              remoteStream: remotePeers.find(isStagePeer)?.stream ?? null,
+            });
           }
-          return {
+          return withRemoteScreens([], {
             ...s,
             remotePeers,
             capabilities,
@@ -2110,8 +2142,7 @@ export function useRoom(slug: string) {
                 }
               : {}),
             remoteStream: null,
-            remoteScreenStream: null,
-          };
+          });
         });
       });
       // Same guard as peer-left: never yank the call out from under a live
@@ -2707,6 +2738,26 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-mute', peerId });
   }, []);
 
+  /** Host: ask one person to do something about their connection. False when it did not go out. Their page asks them. */
+  const askPeer = useCallback(
+    (peerId: string, ask: HelpAsk): boolean => signalRef.current?.send({ type: 'peer-help', peerId, ask }) ?? false,
+    []
+  );
+
+  /** The person turned down the host's ask. */
+  const dismissHelpAsk = useCallback(() => {
+    setState((s) => ({ ...s, helpAsk: null }));
+  }, []);
+
+  /** The person accepted the host's ask: the socket is dropped and opened again, and joining rebuilds the rest. */
+  const restartConnection = useCallback(() => {
+    setState((s) => ({ ...s, helpAsk: null }));
+    // The restart is the rebuild of this cooldown: a second failed connection
+    // right after it must not tear every connection down again.
+    lastIceReconnectRef.current = Date.now();
+    signalRef.current?.reconnect();
+  }, []);
+
   /** Host: remove one person from the room. The Room closes their socket, and its `peer-left` updates the state. */
   const removePeer = useCallback((peerId: string) => {
     signalRef.current?.send({ type: 'peer-remove', peerId });
@@ -3289,18 +3340,19 @@ export function useRoom(slug: string) {
     // Actually tell the UI. Everything above is teardown; without this the user
     // stays on the call stage watching frozen tiles of a connection that no
     // longer exists.
-    setState((s) => ({
-      ...s,
-      phase: 'left',
-      localStream: null,
-      remoteStream: null,
-      remotePeers: [],
-      remoteScreenStream: null,
-      localScreenStream: null,
-      slides: null,
-      screenSharing: false,
-      connectionWarning: null,
-    }));
+    setState((s) =>
+      withRemoteScreens([], {
+        ...s,
+        phase: 'left',
+        localStream: null,
+        remoteStream: null,
+        remotePeers: [],
+        localScreenStream: null,
+        slides: null,
+        screenSharing: false,
+        connectionWarning: null,
+      })
+    );
   }, [endRecording, release]);
 
   // Last-resort commit. A FileSystemWritableFileStream only writes through to
@@ -3364,6 +3416,9 @@ export function useRoom(slug: string) {
     dismissIncomingScript,
     setPeerRecorded,
     mutePeer,
+    askPeer,
+    dismissHelpAsk,
+    restartConnection,
     removePeer,
     setRoomAccess,
     sendPasscode,
