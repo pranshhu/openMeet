@@ -7,6 +7,8 @@ import { Icon } from './Icon';
 export interface StageFeed {
   stream: MediaStream | null;
   name: string;
+  /** The person's own title, a second line on the name tag. */
+  title?: string;
   muted: boolean;
   camOff: boolean;
   presence?: ReactNode;
@@ -22,6 +24,7 @@ function feedProps(f: StageFeed) {
     muted: f.muted,
     label: f.name,
     camOff: f.camOff,
+    ...(f.title ? { title: f.title } : {}),
     // Avoid passing an explicit `presence: undefined` (exactOptionalPropertyTypes).
     ...(f.presence !== undefined ? { presence: f.presence } : {}),
     ...(f.mirror ? { mirror: true } : {}),

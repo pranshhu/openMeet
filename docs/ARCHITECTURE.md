@@ -65,13 +65,16 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (23 variants) ↔ `ServerMessage` (25).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (24 variants) ↔ `ServerMessage` (26).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `look` (`accent`, one of `LOOK_ACCENTS`, and `logo`) is in both unions as well: the Room passes
+  on only the host's, to everyone else, with no `from`. A `logo` travels only when `isLogo` accepts
+  it (see the `look` bullet below).
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
   as a bare `{type}`, and that peer's own page turns its microphone off. `peer-help` (`peerId`,
   `ask`, one of `HELP_ASKS`) is in both unions as well: the Room hands only the host's to that one
@@ -100,7 +103,11 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
   when it is one of those codes, and the page that receives it checks again.
   `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
-  when it is exactly `true`, and a page reads nothing else as a raised hand.
+  when it is exactly `true`, and a page reads nothing else as a raised hand. It also
+  carries `title`, the sender's own text for their name tag: the Room passes it on, trimmed,
+  only when `titleFrom` accepts it (a string of 1 to `MAX_TITLE_LENGTH` = 60 units once
+  cleaned: line breaks and other control characters become spaces, and a text with no
+  visible character is not a title), and a page checks it again.
   `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
   stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -235,7 +242,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
 - `presence` is relayed with `handRaised: true` only when the sender's field is exactly
-  `true`; any other value is left out. Nothing is kept.
+  `true`; any other value is left out. `title` goes on, trimmed, only when `titleFrom`
+  accepts it, and a presence with a bad title is still relayed without the field. Nothing
+  is kept.
 - `reaction` is relayed to every other joined peer (`broadcastExcept`, stamped
   `from`/`fromPeerId`) when its code is one of `REACTIONS`, and dropped otherwise; only
   `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
@@ -261,6 +270,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   script. It is **passed on only from the host**, to every other joined peer and with no
   `from`, and only when `text` is a string of at most `MAX_SCRIPT_LENGTH` (50,000) UTF-16
   units. Nothing is kept, so a peer that joins later is not sent it.
+- `look` (`accent` and `logo`, in both unions like `script`) is the host's accent colour for
+  the name tags and the host's logo. It is **passed on only from the host**, to every other
+  joined peer and with no `from`, as `{type:'look'}` plus `accent` only when it is one of
+  `LOOK_ACCENTS` and `logo` only when `isLogo` accepts it; no other field of the message
+  travels. `isLogo` (used by the Room and by the page, and it never throws) holds three checks:
+  the value is a string of at most `MAX_LOGO_LENGTH` (150,000) UTF-16 units; it starts with
+  `data:image/png;base64,` and the rest is base64 characters only; and the first 24 decoded bytes
+  are the PNG signature, a 13-byte `IHDR` chunk header and a width and a height that are each
+  from 1 to `LOGO_MAX_PX` (160). The last check is what keeps a few kilobytes from decoding into
+  a picture of a gigabyte in every participant's tab. Nothing is kept, so the host's page sends
+  it again to each person who joins.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -414,7 +434,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
   preview is back; Try again asks for the microphone alone when Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
-  form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
+  form, so Enter joins). Directly under it the main join form has an optional **title** field
+  (`maxLength` `MAX_TITLE_LENGTH`; not on the producer or Present-only screens, and hidden with
+  the form on the check page); Join does not depend on it. It also has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
   (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
   `om_listening`). **Speakers, echo cancellation on** opens the microphone again with
@@ -599,6 +621,44 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   person's own tile the same mark. The names of the people who have a tile and a raised
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
+- **Name tag title** — the text from the lobby's title field. `Lobby` hands it to
+  `chooseTitle` (`lib/name-tag.ts`, held in a module value like `lib/listening.ts` and typed
+  per visit, kept nowhere); `joinedTitle()` gives `CallStage` the text for the person's own
+  tile, and `titleField()` is spread into the `presence` that `sendPresence` sends, so it
+  goes again to everyone who joins and after a reconnect. A page keeps what it receives on
+  that person's `RemotePeer.title`, read through `titleFrom` by `applyRemotePeerPresence` on
+  every presence, so a presence without a valid title leaves the person with none.
+  `titleFrom` turns each run of control characters and line breaks into one space, so a
+  title is one line, and a title with no visible character (only zero-width or direction
+  marks, say) is not a title.
+  `CallStage` gives each camera feed its title (`StageFeed.title`, passed on by `feedProps`);
+  a screen tile has none. `VideoTile` draws it as a second line of its own inside the name
+  tag, smaller and dimmer, and the tile is a CSS container: below 224 px wide (the corner
+  picture, a phone's floating picture, the narrow side column) the line is hidden by a
+  container query, with no measuring in script. The tag's tooltip holds the name and the
+  title. The title is drawn only as text, and reaches no file, the People panel, chat or the
+  waiting room.
+- **Show look** — the colour of the name tags and a logo. `ShowLook`, a **Name tag colour**
+  select in the host's lobby (not on the check page), saves the choice at once with `saveLook`
+  (`lib/look.ts`) under `om_look_<slug>` in `localStorage` and in a module value, for a
+  browser that blocks storage. The host's call page reads it with `readLook` and sends it as
+  `look` from its `role-assigned` and `peer-joined` handlers beside `sendPresence()`, also
+  when it is plain, so a colour the host took away is taken away for everyone. Every other
+  page keeps what arrives in `RoomState.look`, read through `lookFrom`. `RoomView` hands it to
+  `CallStage`, which sets the custom property `--om-tag-bar` on its root element from
+  `ACCENT_HEX` (the colour is the page's own constant, never the sender's text), and
+  `VideoTile`'s name tag draws a left bar from it. No file holds the look.
+  The logo is picked with **Add a logo** (**Change logo** and **Remove logo** once there is
+  one) under the select, in the same `ShowLook`. `logoFrom` decodes the picked file with
+  `createImageBitmap`, redraws it on a canvas so that neither side is over `LOGO_MAX_PX`
+  (never scaled up) and keeps `toDataURL('image/png')` only when `isLogo` accepts it; the
+  file's own bytes are never stored or sent, and a picture that cannot be used shows a line
+  with `role="alert"` and leaves the saved logo as it was. `lookFrom` keeps a `logo` only
+  when `isLogo` accepts it, so one logo is held per page and each new `look` replaces it.
+  `CallStage` draws it as an `<img alt="">` inside `stage-main`: top left, 32 px high below
+  the `sm` width and 40 px from it up, at most 96 px wide, `pointer-events-none`, at `z-10`
+  so the notices (`z-30`) are drawn over it. It is only ever an image source, never CSS or
+  markup.
 - **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
   incoming video** (`CallStage`; not for the host, whose files are written directly, and
   not for a guest the host set as not recorded or whose browser cannot record, who have
@@ -1076,7 +1136,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   cancellation on, the report has an `echoCancellation` section naming that person's camera and
   WAV files, and the summary's rows for them read "echo cancellation on": the host's own from its
   microphone's settings at End & save, a guest's from the `listening` it announced, kept by peer id
-  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
+  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). When a recorded person gave a
+  title, the report has a `nameTags` section: each recorded person's name, title and files, for an
+  editor's lower thirds. The host's title is the one it joined with; a guest's is kept by peer id
+  past `peer-left` (`titlesRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
   in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
@@ -2210,3 +2273,34 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   them **Restart connection** alone, and a page without device menus drops a device ask.
 - **Where a browser cannot switch a device mid-take, the opened menu reads "Switch after this
   take".**
+- **A title is not remembered and cannot be changed in the call.** It is typed in the lobby
+  for one visit; a person who wants another leaves and joins again.
+- **A producer and a Present-only device have no title.** Their lobby has no field and they
+  have no tile to show it on.
+- **A small tile shows the name alone.** In a tile narrower than 224 px the title is hidden;
+  its owner's tag still holds it in the tooltip.
+- **A title is its owner's own text and nobody checks it.** Only its type and length are
+  checked, and the only file it is written to is the sync file's `nameTags`.
+- **A take saved from its crash copy has no `nameTags`.** Its sync file lists names only, in
+  `guests[]`.
+- **After a host reload `nameTags` holds only the titles of people in the room after it.** A
+  guest who left before the reload is listed by name only, or not at all when nobody else has a
+  title.
+- **`nameTags` leaves some people out.** A guest set as not recorded, a producer and a
+  Present-only device have no file of their own, so they are not listed.
+- **The look can only be chosen in the host's lobby.** A change needs the host to leave and
+  join again, which ends the host's part of a running take.
+- **While the host is away, a person who joins sees the plain look.** The people already there
+  keep the last one.
+- **The waiting room and the lobby preview have the plain look.**
+- **The look is the host's in one browser.** Another browser starts without it.
+- **A Worker deployed before `look` passes nothing on.** Guests then see the plain look.
+- **The logo passes through the signalling server like every `look`.** It is relayed and never
+  stored, and it is sent again to everyone each time someone joins.
+- **Someone who shares their entire screen shows the logo,** and that screen recording holds it.
+  The logo is drawn by the page, so no recording of a camera or a microphone holds it.
+- **A notice at the top of the stage can cover the logo on a phone.**
+- **The waiting room has no logo.**
+- **A room's colour and logo stay in the host's browser after the room has expired.** The look
+  is kept under `om_look_<slug>` in `localStorage` and is not removed with the room, so it
+  stays until the site's data is cleared.

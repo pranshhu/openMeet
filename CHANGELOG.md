@@ -12,6 +12,14 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host can add a logo in the lobby; it sits in a corner of the call for everyone. It
+  is not drawn into any recording.
+- The host can pick a colour for the show in the lobby; everyone's name tags carry it
+  during the call.
+- The sync file lists each recorded person's name and title with their files, ready for
+  lower thirds.
+- A title under your name: type it in the lobby and everyone in the call sees it on
+  your name tag.
 - A room passcode: the host sets one in the room controls, and anyone joining with the
   invite link is asked for it first.
 - A waiting room: with it on, a person who opens the invite link waits until the host

@@ -14,6 +14,7 @@ import {
   recordingChannelKind,
   isHelpAsk,
   isListening,
+  titleFrom,
   type BrowserNote,
   type HelpAsk,
   type Listening,
@@ -27,6 +28,7 @@ import { PeerConnection, ConnectionTimeoutError } from '@/lib/peer';
 import { MediaManager } from '@/lib/media';
 import { SwitchableMedia, isPhone } from '@/lib/switchable-media';
 import { buildIceServers } from '@/lib/ice';
+import { lookFrom, readLook, type Look } from '@/lib/look';
 import { getScreenStream, presentFile, presentRearCamera } from '@/lib/screen';
 import { presentSlides, type PresentedSlides } from '@/lib/slides';
 import { pickRecordingMime, UnsupportedCodecError } from '@/lib/recorder';
@@ -41,6 +43,7 @@ import { getOrCreateClientId } from '@/lib/client-id';
 import { readRoomAccess, type RoomAccess } from '@/lib/room-access';
 import { hostTagNote } from '@/lib/browser-guidance';
 import { listeningField } from '@/lib/listening';
+import { joinedTitle, titleField } from '@/lib/name-tag';
 import { isStagePeer } from '@/lib/stage-peers';
 import type { MicWarning } from '@/lib/mic-watch';
 import {
@@ -138,6 +141,8 @@ export interface PeerPresence {
 export interface RemotePeer {
   peerId: string;
   name: string | null;
+  /** The person's own title, from their latest presence; absent when they gave none. */
+  title?: string | undefined;
   stream: MediaStream | null;
   presence?: PeerPresence | undefined;
   role?: Role | undefined;
@@ -148,7 +153,7 @@ export interface RemotePeer {
 
 export function applyRemotePeerPresence(
   remotePeers: RemotePeer[],
-  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean }
+  m: { fromPeerId?: string; fromName?: string; micOn: boolean; camOn: boolean; screenSharing: boolean; handRaised?: boolean; title?: unknown }
 ): RemotePeer[] {
   const presence: PeerPresence = {
     micOn: m.micOn,
@@ -157,6 +162,8 @@ export function applyRemotePeerPresence(
     // Another participant's field, so only a real `true` is a raised hand.
     ...(m.handRaised === true ? { handRaised: true } : {}),
   };
+  // Another participant's text too, so it is checked here as the Room checks it.
+  const title = titleFrom(m.title) || undefined;
   const targetPeerId = m.fromPeerId ?? remotePeers[0]?.peerId;
   if (!targetPeerId) return remotePeers;
   const exists = remotePeers.some((r) => r.peerId === targetPeerId);
@@ -166,6 +173,7 @@ export function applyRemotePeerPresence(
         ? {
             ...r,
             presence,
+            title,
             ...(m.fromName && !r.name ? { name: m.fromName } : {}),
           }
         : r
@@ -178,6 +186,7 @@ export function applyRemotePeerPresence(
       name: m.fromName ?? null,
       stream: null,
       presence,
+      title,
     },
   ];
 }
@@ -315,6 +324,8 @@ export interface RoomState {
    * it or turns it down; null when none is waiting.
    */
   incomingScript: string | null;
+  /** The host's look for the room, drawn on the call screen; plain until the host sends one. */
+  look: Look;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
   countdownEndsAt: number | null;
 }
@@ -655,7 +666,7 @@ export function startConnectWatchdog(
 }
 
 export const MAX_RELAYED_MARKERS = 1000;
-/** How many peers' "echo cancellation on" a tab remembers. A peer id is new on every reconnect. */
+/** How many peers' "echo cancellation on" and titles a tab remembers. A peer id is new on every reconnect. */
 const MAX_ECHO_PEERS = 64;
 
 /**
@@ -723,6 +734,7 @@ export function useRoom(slug: string) {
     takeNotice: null,
     recoveryBusy: false,
     incomingScript: null,
+    look: {},
     countdownEndsAt: null,
   });
   // Peer ids whose camera recording channel has arrived for the take in
@@ -778,6 +790,9 @@ export function useRoom(slug: string) {
   // the message arrives, and kept after a peer leaves: a take's notes are
   // written at its end, when a guest may be gone.
   const echoPeersRef = useRef(new Set<string>());
+  // Each peer's title from their latest presence, by peer id. Written where the
+  // message arrives and kept after a peer leaves, for the same reason.
+  const titlesRef = useRef(new Map<string, string>());
   const localStreamRef = useRef<MediaStream | null>(null);
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
@@ -850,6 +865,7 @@ export function useRoom(slug: string) {
       screenSharing: screenSharingRef.current,
       // Absent while the hand is down, like every optional field on the wire.
       ...(handRaisedRef.current ? { handRaised: true } : {}),
+      ...titleField(),
     });
   }, []);
 
@@ -1761,6 +1777,11 @@ export function useRoom(slug: string) {
           helpAsk: s.helpAsk === 'reconnect' ? null : s.helpAsk,
         }));
         sendPresence();
+        if (m.role === 'host') {
+          const look = readLook(slug);
+          setState((s) => ({ ...s, look }));
+          signal.send({ type: 'look', ...look });
+        }
         // The Room drops its recording flag with the host's socket, and tells a
         // host that comes back `recording: false` while the files are still
         // open. A guest who joined from then on would never be started.
@@ -1821,6 +1842,8 @@ export function useRoom(slug: string) {
           );
         }
         sendPresence();
+        // Sent also when plain, so a look the host took away is taken away for everyone.
+        if (roleRef.current === 'host') signal.send({ type: 'look', ...readLook(slug) });
         setState((s) => ({
           ...s,
           remotePeers: s.remotePeers.some((r) => r.peerId === m.peerId)
@@ -1931,6 +1954,14 @@ export function useRoom(slug: string) {
       signal.on('script', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_SCRIPT_LENGTH || !m.text.trim()) return;
         setState((s) => ({ ...s, incomingScript: m.text }));
+      });
+
+      // The host's look for the room. Only the host's is passed on by the
+      // Room; what this page keeps is checked here again. The host's own page
+      // keeps the look it chose.
+      signal.on('look', (m) => {
+        if (roleRef.current === 'host') return;
+        setState((s) => ({ ...s, look: lookFrom(m) }));
       });
 
       signal.on('marker', (m) => {
@@ -2066,7 +2097,15 @@ export function useRoom(slug: string) {
         messagesRef.current = [...messagesRef.current, msg];
         setState((s) => ({ ...s, messages: messagesRef.current }));
       });
-      signal.on('presence', (m) =>
+      signal.on('presence', (m) => {
+        if (typeof m.fromPeerId === 'string') {
+          const titles = titlesRef.current;
+          const title = titleFrom(m.title);
+          if (title) titles.set(m.fromPeerId, title);
+          else titles.delete(m.fromPeerId);
+          // The oldest goes first: a Map keeps the order things were added in.
+          if (titles.size > MAX_ECHO_PEERS) titles.delete(titles.keys().next().value as string);
+        }
         setState((s) => {
           const remotePeers = applyRemotePeerPresence(s.remotePeers, m);
           // Belt-and-suspenders: drop the sender's screen when it reports it
@@ -2077,8 +2116,8 @@ export function useRoom(slug: string) {
               ? withoutScreen(s.remoteScreens, m.fromPeerId)
               : s.remoteScreens;
           return withRemoteScreens(screens, { ...s, remotePeers });
-        })
-      );
+        });
+      });
 
       // Another participant's reaction. The sender's id must be a string, and
       // takeReaction takes only a code this build knows, one a second from one
@@ -3158,6 +3197,16 @@ export function useRoom(slug: string) {
               slots: guestReports
                 .filter((g) => echoPeersRef.current.has(h.slotPeerIds?.get(g.slot) ?? ''))
                 .map((g) => g.slot),
+            },
+            nameTags: {
+              hostName: localNameRef.current,
+              hostTitle: joinedTitle(),
+              slotTitles: new Map(
+                guestReports.flatMap((g) => {
+                  const title = titlesRef.current.get(h.slotPeerIds?.get(g.slot) ?? '');
+                  return title ? [[g.slot, title] as const] : [];
+                })
+              ),
             },
             ...(h.resumed ? { resumed: true } : {}),
             ...(h.hostParts?.length ? { hostParts: h.hostParts } : {}),

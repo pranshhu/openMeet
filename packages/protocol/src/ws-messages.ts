@@ -1,3 +1,5 @@
+import { LOGO_MAX_PX, MAX_LOGO_LENGTH, MAX_TITLE_LENGTH } from './constants';
+
 /**
  * `producer` is present but never recorded and never publishes media: a
  * technical operator who watches the session so the host can focus on the
@@ -73,6 +75,8 @@ export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * most MAX_SCRIPT_LENGTH long.
  */
 export type ClientScript = { type: 'script'; text: string };
+/** The host's look for the room. No `accent` means the plain colour, no `logo` no logo. */
+export type ClientLook = { type: 'look'; accent?: LookAccent; logo?: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 /**
  * A chat line for one person. `to` is that person's peerId. A type of its
@@ -87,6 +91,8 @@ export type ClientPresence = {
   screenSharing: boolean;
   /** This person has a hand raised: they are waiting to speak. Sent only while true. */
   handRaised?: boolean;
+  /** The sender's own title, shown under their name. Absent when they gave none. */
+  title?: string;
 };
 /**
  * A quick reaction, drawn for a moment on its sender's tile. A code, not a
@@ -98,6 +104,59 @@ export type Reaction = (typeof REACTIONS)[number];
 
 export function isReaction(v: unknown): v is Reaction {
   return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The accent colour a host picks for the room's name tags. A code, never CSS:
+ * each page draws its own colour for it, and the Room drops anything not on
+ * this list.
+ */
+export const LOOK_ACCENTS = ['blue', 'red', 'green', 'yellow', 'purple', 'pink'] as const;
+export type LookAccent = (typeof LOOK_ACCENTS)[number];
+
+export function isLookAccent(v: unknown): v is LookAccent {
+  return (LOOK_ACCENTS as readonly unknown[]).includes(v);
+}
+
+const LOGO_PREFIX = 'data:image/png;base64,';
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const PNG_SIGNATURE_AND_IHDR = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52];
+
+/**
+ * Whether `v` is a logo to draw: a PNG as `data:` text, no longer than
+ * MAX_LOGO_LENGTH, whose own header says it is at most LOGO_MAX_PX wide and
+ * high. The header is what keeps a few kilobytes from decoding into a picture
+ * of a gigabyte in every tab. Used by the Room and by the page, because the
+ * field is another participant's. Never throws.
+ */
+export function isLogo(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > MAX_LOGO_LENGTH || !v.startsWith(LOGO_PREFIX)) return false;
+  const data = v.slice(LOGO_PREFIX.length);
+  // 32 characters are the first 24 bytes: the signature, the IHDR chunk header, width and height.
+  if (data.length < 32 || !BASE64.test(data)) return false;
+  const bytes = Uint8Array.from(atob(data.slice(0, 32)), (c) => c.charCodeAt(0));
+  if (bytes.length !== 24 || !PNG_SIGNATURE_AND_IHDR.every((b, i) => bytes[i] === b)) return false;
+  const view = new DataView(bytes.buffer);
+  const [width, height] = [view.getUint32(16), view.getUint32(20)];
+  return width >= 1 && width <= LOGO_MAX_PX && height >= 1 && height <= LOGO_MAX_PX;
+}
+
+/**
+ * A person's title as text to show, or '' when `v` is not one: not a string,
+ * without a visible character, or longer than MAX_TITLE_LENGTH once cleaned.
+ * Each run of control characters and line or paragraph separators becomes one
+ * space, so a title is one line, and the ends are trimmed. A text that holds
+ * only control, format and space characters (a zero-width space, a
+ * right-to-left override) draws nothing and is not a title. Format characters
+ * inside a title that has visible ones are kept, as some scripts and emoji
+ * need them. Used by the Room and by the page, because the field is another
+ * participant's.
+ */
+export function titleFrom(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  const t = v.replace(/[\p{Cc}\u2028\u2029]+/gu, ' ').trim();
+  if (/^[\p{Cc}\p{Cf}\p{Z}]*$/u.test(t)) return '';
+  return t.length <= MAX_TITLE_LENGTH ? t : '';
 }
 
 export type ClientReaction = { type: 'reaction'; reaction: Reaction };
@@ -223,6 +282,7 @@ export type ClientMessage =
   | ClientRecordingStop
   | ClientRecordingCountdown
   | ClientScript
+  | ClientLook
   | ClientChat
   | ClientPrivateMessage
   | ClientPresence
@@ -350,6 +410,8 @@ export type ServerPresence = {
   screenSharing: boolean;
   /** The sender has a hand raised. The Room passes it on only when it is exactly true. */
   handRaised?: boolean;
+  /** The sender's title. The Room passes it on only when `titleFrom` accepts it. */
+  title?: string;
   from: Role;
   fromPeerId?: string;
   fromName?: string;
@@ -378,6 +440,11 @@ export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * host's is passed on, so it carries no `from`.
  */
 export type ServerScript = { type: 'script'; text: string };
+/**
+ * The host's ClientLook, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerLook = { type: 'look'; accent?: LookAccent; logo?: string };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -465,6 +532,7 @@ export type ServerMessage =
   | ServerRecordingStop
   | ServerRecordingCountdown
   | ServerScript
+  | ServerLook
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
@@ -486,6 +554,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'chat',
   'private-message',
   'presence',
@@ -518,6 +587,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'recording-ack',
   'room-closed',
   'pong',

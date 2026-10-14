@@ -126,6 +126,11 @@ retention policy to trust, because there's nothing retained.
 - **Raise hand**: one click puts a mark on your tile for everyone, so a panel can take
   turns without talking over the recording (a phone held upright shows the hands and
   has no button)
+- **A title under your name**: type it in the lobby and it shows as a second line on your
+  name tag, on your tile and on everyone's screen
+- **A colour and a logo for the show**: the host picks a colour in the lobby and every
+  name tag in the call carries a bar in it; the host can also add a logo, which sits in
+  the top left corner of the call for everyone and is not drawn into any recording
 - Quick reactions (thumbs up, applause, laugh, heart) from the arrow beside **Raise
   hand**: the picture shows on your tile for a few seconds, silently, for everyone
 - Screen kept awake during a take, REC badge when the tab is hidden, and
@@ -148,7 +153,8 @@ retention policy to trust, because there's nothing retained.
 - `sync.json` with the start-time offset between tracks, the size of every file and a
   verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
   for pairing each video with its WAV master and for aligned copies that start at
-  00:00, downloaded from the summary
+  00:00, downloaded from the summary; when people gave a title, each recorded person's
+  name and title with their files, ready for lower thirds
 - Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
   lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
 - `chapters.txt` if anyone dropped markers

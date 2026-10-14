@@ -14,7 +14,10 @@ import {
   WS_CLOSE_REPLACED,
   isHelpAsk,
   isListening,
+  isLogo,
+  isLookAccent,
   isReaction,
+  titleFrom,
   type ClientMessage,
   type Role,
   type ServerMessage,
@@ -690,6 +693,10 @@ export class Room implements DurableObject {
           // A raised hand travels only as a real `true`: the field is the
           // sender's, and every other screen draws what is passed on here.
           ...(parsed.handRaised === true ? { handRaised: true } : {}),
+          // The title is the sender's own text: it goes on only when it is
+          // one, and as the trimmed text, so no page draws more than it is
+          // allowed to hold.
+          ...(titleFrom(parsed.title) ? { title: titleFrom(parsed.title) } : {}),
           from: p.role,
           fromPeerId: p.peerId,
           ...(p.displayName ? { fromName: p.displayName } : {}),
@@ -820,6 +827,18 @@ export class Room implements DurableObject {
           break;
         }
         this.broadcastExcept(ws, { type: 'script', text: parsed.text });
+        break;
+      case 'look':
+        // The host's accent colour for the name tags and logo. Only the
+        // host's is passed on, with an accent only when it is on the list and
+        // a logo only when isLogo accepts it. Nothing is kept, so a person who
+        // joins later is sent it by the host's page.
+        if (p.role !== 'host') break;
+        this.broadcastExcept(ws, {
+          type: 'look',
+          ...(isLookAccent(parsed.accent) ? { accent: parsed.accent } : {}),
+          ...(isLogo(parsed.logo) ? { logo: parsed.logo } : {}),
+        });
         break;
       case 'recording-capability':
         // Relay only, like presence — a live UI hint for the host, not room

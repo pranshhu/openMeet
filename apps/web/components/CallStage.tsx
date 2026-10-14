@@ -14,6 +14,7 @@ import { PeoplePanel } from './PeoplePanel';
 import { RoomAccess } from './RoomAccess';
 import type { RoomAccess as Access } from '@/lib/room-access';
 import type { MediaBoard } from '@/lib/media-board';
+import { ACCENT_HEX, type Look } from '@/lib/look';
 import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
 import type { PresentedSlides } from '@/lib/slides';
 import type { TrackReading } from '@/hooks/recording-controller';
@@ -36,6 +37,7 @@ import { Logo } from './Logo';
 import { RoleLinks } from './RoleLinks';
 import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { LISTENING_TAG } from '@/lib/listening';
+import { joinedTitle } from '@/lib/name-tag';
 import { isPhone } from '@/lib/switchable-media';
 import { cameraControls } from '@/lib/camera-controls';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
@@ -144,6 +146,7 @@ export function CallStage({
   onDiscardTake,
   onOpenMediaBoard,
   incomingScript = null,
+  look,
   onSendScript,
   onDismissScript,
   onToggleScreen,
@@ -265,6 +268,8 @@ export function CallStage({
   onOpenMediaBoard: () => MediaBoard | null;
   /** A script the host sent that this person has not answered; null when none. */
   incomingScript?: string | null;
+  /** The host's look for the room: its accent colour is drawn as a bar on every name tag, its logo in a corner of the stage. */
+  look?: Look;
   /** Host: offer the teleprompter script to everyone else. False when it did not go out. */
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
@@ -712,6 +717,7 @@ export function CallStage({
   const local: StageFeed = {
     stream: localStream,
     name: localName ? `${localName} (You)` : 'You',
+    ...(joinedTitle() ? { title: joinedTitle() } : {}),
     muted: true,
     camOff: !camOn || rearCameraEndsFace,
     // A self-view reads mirrored, as in the lobby; a rear camera shows the world.
@@ -755,6 +761,7 @@ export function CallStage({
         stream: remoteStream,
         volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
+        ...(firstRemote?.title ? { title: firstRemote.title } : {}),
         muted: companion ? true : false,
         camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
         presence: (
@@ -840,7 +847,10 @@ export function CallStage({
   ) : null;
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden bg-[#202124] text-white [color-scheme:dark]">
+    <div
+      className="relative flex h-[100dvh] flex-col overflow-hidden bg-[#202124] text-white [color-scheme:dark]"
+      style={look?.accent ? ({ '--om-tag-bar': `3px solid ${ACCENT_HEX[look.accent]}` } as React.CSSProperties) : undefined}
+    >
       {/* Top status bar. aria-live so a screen-reader user is told when
           recording starts, stops, or fails — for a recording tool, "am I
           recording" is the one status that must not be silent. */}
@@ -1208,6 +1218,7 @@ export function CallStage({
                   stream: r.stream,
                   volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
+                  ...(r.title ? { title: r.title } : {}),
                   muted: companion ? true : false,
                   camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
                   presence: (
@@ -1252,6 +1263,15 @@ export function CallStage({
               onStopPresenting={() => onToggleScreen()}
               onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
+            {/* Under the notices (z-30) and over the tiles. Only a value the page
+                accepted as a logo reaches here, and it is only ever an image source. */}
+            {look?.logo && (
+              <img
+                src={look.logo}
+                alt=""
+                className="pointer-events-none absolute left-3 top-3 z-10 h-8 w-auto max-w-24 object-contain sm:h-10"
+              />
+            )}
             {prompterOpen && (
               <Teleprompter
                 slug={slug}

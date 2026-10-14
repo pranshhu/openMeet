@@ -140,6 +140,22 @@ export const MAX_RECORDED_PEERS = 4;
  */
 export const MAX_SCRIPT_LENGTH = 50_000;
 
+/**
+ * The longest title a person can give under their name, in UTF-16 units
+ * (`String.length`). A longer one is dropped, never cut.
+ */
+export const MAX_TITLE_LENGTH = 60;
+
+/**
+ * The longest host logo, in UTF-16 units (`String.length`) of the whole
+ * `data:` text: a 160 by 160 pixel PNG redrawn by the host's page is a small
+ * fraction of it.
+ */
+export const MAX_LOGO_LENGTH = 150_000;
+
+/** The most pixels a logo is wide or high. The host's page scales a picture down to it. */
+export const LOGO_MAX_PX = 160;
+
 export const WS_CLOSE_CAPACITY_FULL = 4001;
 export const WS_CLOSE_INVALID_SLUG = 4002;
 export const WS_CLOSE_EXPIRED_SLUG = 4003;

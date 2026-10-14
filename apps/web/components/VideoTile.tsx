@@ -13,6 +13,7 @@ export function VideoTile({
   stream,
   muted,
   label,
+  title,
   presence,
   camOff = false,
   fit = 'cover',
@@ -33,6 +34,8 @@ export function VideoTile({
   stream: MediaStream | null;
   muted: boolean;
   label: string;
+  /** The person's own title, a second line under the name. Not shown in a narrow tile. */
+  title?: string;
   presence?: ReactNode;
   camOff?: boolean;
   fit?: 'cover' | 'contain';
@@ -93,7 +96,7 @@ export function VideoTile({
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${black ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
+      className={`@container group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${black ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
     >
       <video
         ref={ref}
@@ -112,10 +115,18 @@ export function VideoTile({
         </div>
       )}
       <span
-        title={label}
-        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
+        title={title ? `${label}\n${title}` : label}
+        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm [border-left:var(--om-tag-bar,none)] sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
       >
-        {label}
+        {title ? (
+          <>
+            <span className="block truncate">{label}</span>
+            {/* The tile is the container: below 224 px wide the line is left out. */}
+            <span className="hidden truncate text-[11px] font-normal text-white/70 @[224px]:block">{title}</span>
+          </>
+        ) : (
+          label
+        )}
       </span>
       {presence}
     </div>

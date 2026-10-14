@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LISTENING_CHOICES,
+  MAX_TITLE_LENGTH,
   RECORDING_FRAME_RATE,
   WAV_SAMPLE_RATE,
   isListening,
@@ -45,6 +46,7 @@ import { CameraSettings } from './CameraSettings';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { CalendarInvite } from './CalendarInvite';
+import { ShowLook } from './ShowLook';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
 import { findTakeJournals, deleteTakeJournal, type TakeJournal } from '@/lib/take-journal';
 import { pickRecordingDirectory } from '@/lib/fs-writer';
@@ -59,6 +61,7 @@ import { formatBytes } from '@/lib/sync-report';
 import { listSpeakers, setSpeaker } from '@/lib/speaker';
 import { useSpeakerId } from '@/hooks/use-speaker';
 import { LISTENING_HINT, LISTENING_LABEL, chooseListening } from '@/lib/listening';
+import { chooseTitle } from '@/lib/name-tag';
 import { setSingleKeys, useSingleKeys } from '@/hooks/use-single-keys';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
@@ -174,6 +177,8 @@ export function Lobby({
   const [previewError, setPreviewError] = useState<{ title: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
+  // Typed per visit, like the name: nothing keeps it for the next one.
+  const [title, setTitle] = useState('');
   const [copied, setCopied] = useState(false);
   const [checkCopied, setCheckCopied] = useState(false);
   const [micOn, setMicOn] = useState(true);
@@ -630,6 +635,9 @@ export function Lobby({
   const select =
     'w-full min-w-0 bg-transparent text-[#202124] outline-none disabled:cursor-not-allowed disabled:opacity-50';
 
+  const textInput =
+    'w-full rounded-lg border border-[#dadce0] px-4 py-3 text-base outline-none focus:border-[#0b57d0] focus:ring-1 focus:ring-[#0b57d0]';
+
   const nameField = (
     <>
       <label htmlFor="lobby-name" className="sr-only">
@@ -642,7 +650,7 @@ export function Lobby({
         placeholder="What’s your name?"
         autoComplete="name"
         enterKeyHint="go"
-        className="w-full rounded-lg border border-[#dadce0] px-4 py-3 text-base outline-none focus:border-[#0b57d0] focus:ring-1 focus:ring-[#0b57d0]"
+        className={textInput}
       />
     </>
   );
@@ -1004,6 +1012,7 @@ export function Lobby({
               }
               chooseBitrate(shownBitrate);
               chooseListening(shownListening);
+              chooseTitle(title);
               handedOffRef.current = true;
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               // The capture that is open at this moment: one that arrived while
@@ -1012,6 +1021,19 @@ export function Lobby({
             }}
           >
             {nameField}
+            <label htmlFor="lobby-title" className="sr-only">
+              Your title, optional
+            </label>
+            <input
+              id="lobby-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Title or company (optional)"
+              maxLength={MAX_TITLE_LENGTH}
+              autoComplete="organization-title"
+              enterKeyHint="go"
+              className={textInput}
+            />
             {/* Asked above Join, where a phone still shows it. Off until the
                 preview is up: echo cancellation is a property of the open
                 microphone, and before that there is none to open again. */}
@@ -1239,6 +1261,7 @@ export function Lobby({
             </p>
           )}
           {!checkOnly && keysSwitch}
+          {isHost && !checkOnly && <ShowLook slug={slug} />}
           {/* Last in the panel: nothing a guest or a host needs after a crash
               moves down for it. The check page joins no call and leaves it out. */}
           {isHost && !checkOnly && <CalendarInvite slug={slug} />}
