@@ -42,11 +42,11 @@ const programOf = (input: SyncReportInput) =>
   (JSON.parse(buildSyncReport(input).json) as { program?: Program }).program;
 
 const CMD_TWO =
-  'ffmpeg -i "host_r.mp4" -i "guest_r.mp4" -i "host_r.wav" -i "guest_r.wav" -filter_complex ' +
+  'ffmpeg -y -i "host_r.mp4" -i "guest_r.mp4" -i "host_r.wav" -i "guest_r.wav" -filter_complex ' +
   '"[0:v]fps=30,scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:-1:-1,setsar=1,tpad=start_duration=0.000[v0];' +
   '[1:v]fps=30,scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:-1:-1,setsar=1,tpad=start_duration=1.234[v1];' +
   '[v0][v1]xstack=inputs=2:layout=0_0|960_0:fill=black,pad=1920:1080:-1:-1[v];' +
-  '[2:a]adelay=0:all=1[a0];[3:a]adelay=1234:all=1[a1];[a0][a1]amix=inputs=2:normalize=0[a]" ' +
+  '[2:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=0:all=1[a0];[3:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=1234:all=1[a1];[a0][a1]amix=inputs=2:normalize=0[a]" ' +
   '-map "[v]" -map "[a]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k -ac 2 ' +
   '-movflags +faststart "host_r_program.mp4"';
 
@@ -55,7 +55,8 @@ const NOTE =
   'grid on a 1920x1080 picture at 30 frames a second, the first top left, and mixes the files in audio. Each file ' +
   'is placed by its padMs under aligned: a person who started later is black and silent until then, and a person ' +
   'whose file ends first stays as a still picture. It re-encodes to H.264 and AAC, so it is slow and not lossless. ' +
-  'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
+  'Voices are added at the level they were recorded, and a one-channel master is put on both channels at its own ' +
+  'level. Run it in the recording folder with ffmpeg 4.4 or later. ' +
   "leftOut names every file of the take that cmd does not read, and why. If ffmpeg says that ':a' matches " +
   'no streams, a file in audio has no sound track: take its input and its adelay out. ' +
   "If ffmpeg says that ':v' matches no streams, a file in video has no picture (a person recorded without a " +
@@ -65,7 +66,7 @@ const NOTE =
   'Its sound is already in the mix. Or ask for the take again.';
 
 const LABEL_TWO = "Program file: the 2 cameras in a grid with everyone's audio mixed (re-encodes, slow)";
-const LEFT_OUT_SENTENCE = ' The sync file lists the files it leaves out.';
+const LEFT_OUT_SENTENCE = '. The sync file lists the files it leaves out.';
 
 /** A take of the host and `n` guests, each with a camera file and a WAV. */
 const crowd = (n: number): SyncReportInput => ({
@@ -147,9 +148,9 @@ describe('buildSyncReport: the program file command', () => {
     const program = (JSON.parse(r.json) as { program: Program }).program;
     expect(program.video).toEqual(['host_r.mp4', 'guest_r.mp4']);
     expect(program.audio).toEqual(['host_r.wav', 'guest_r.mp4']);
-    expect(program.cmd.startsWith('ffmpeg -i "host_r.mp4" -i "guest_r.mp4" -i "host_r.wav" -filter_complex')).toBe(true);
+    expect(program.cmd.startsWith('ffmpeg -y -i "host_r.mp4" -i "guest_r.mp4" -i "host_r.wav" -filter_complex')).toBe(true);
     expect(program.cmd).toContain('[1:v]fps=30');
-    expect(program.cmd).toContain('[2:a]adelay=0:all=1[a0];[1:a]adelay=1234:all=1[a1]');
+    expect(program.cmd).toContain('[2:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=0:all=1[a0];[1:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=1234:all=1[a1]');
     expect(program.cmd.match(/-i "/g)).toHaveLength(3);
     expect(program.leftOut).toEqual([{ file: 'guest_r.wav', why: 'no recording in this file' }]);
     expect(r.data.commands.at(-1)?.label).toBe(LABEL_TWO + LEFT_OUT_SENTENCE);
@@ -184,7 +185,7 @@ describe('buildSyncReport: the program file command', () => {
     const program = programOf(input);
     expect(program?.video).toEqual(['host_r.mp4']);
     expect(program?.audio).toEqual(['host_r.wav', 'guest_r.mp4']);
-    expect(program?.cmd).toContain('[2:a]adelay=1234:all=1[a1]');
+    expect(program?.cmd).toContain('[2:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=1234:all=1[a1]');
     expect(program?.cmd).not.toContain('[2:v]');
     expect(program?.leftOut).toEqual([]);
   });
@@ -274,6 +275,53 @@ describe('buildSyncReport: the program file command', () => {
   });
 });
 
+describe('programMix: the level of each voice and a command that can be run again', () => {
+  const PAN = 'pan=stereo|FL=FL+FC|FR=FR+FC,adelay=';
+  const silent = {
+    'host_r.mp4': { bytes: 1000, audioOnly: true },
+    'guest_r.mp4': { bytes: 1000, audioOnly: true },
+  };
+
+  it('puts every sound input of a camera take on both channels before its delay', () => {
+    const cmd = programOf(withChecks(crowd(2)))?.cmd ?? '';
+    const inputs = cmd.match(/\[\d+:a\][^;"]*/g) ?? [];
+    expect(inputs).toHaveLength(3);
+    for (const input of inputs) {
+      expect(input).toMatch(/^\[\d+:a\]pan=stereo\|FL=FL\+FC\|FR=FR\+FC,adelay=\d+:all=1\[a\d\]$/);
+    }
+    expect(cmd.split(PAN)).toHaveLength(4);
+  });
+
+  it('puts every sound input of a sound-only take on both channels before its delay', () => {
+    const audioOnly = { bytes: 1000, audioOnly: true };
+    const input = withChecks(crowd(2), { ...silent, 'guest1_r.mp4': audioOnly, 'guest2_r.mp4': audioOnly });
+    const cmd = programOf(input)?.cmd ?? '';
+    expect(cmd).toContain('-rf64 auto "host_r_program.wav"');
+    expect(cmd.split(PAN)).toHaveLength(4);
+  });
+
+  it.each([
+    ['a camera take', () => programOf(withChecks(take))],
+    ['a sound-only take', () => programOf(withChecks(take, silent))],
+  ])('writes over its own output in %s', (_, run) => {
+    const cmd = run()?.cmd ?? '';
+    expect(cmd.startsWith('ffmpeg -y -i ')).toBe(true);
+    expect(cmd.match(/ -y /g)).toHaveLength(1);
+  });
+
+  it('ends the label of each kind with a full stop before the second sentence', () => {
+    const lastLabel = (input: SyncReportInput) => buildSyncReport(input).data.commands.at(-1)?.label;
+    const leaves = ' The sync file lists the files it leaves out.';
+    expect(lastLabel(withChecks(take, { 'guest_r.mp4': { bytes: 1000, audioOnly: true } }))).toBe(
+      "Program file: the camera with everyone's audio mixed (re-encodes, slow)." + leaves
+    );
+    expect(lastLabel(withChecks(crowd(2), { 'guest2_r.wav': { bytes: 0 } }))).toBe(
+      "Program file: the 3 cameras in a grid with everyone's audio mixed (re-encodes, slow)." + leaves
+    );
+    expect(lastLabel(withChecks(take, silent))).toBe("Program file: everyone's audio mixed into one WAV." + leaves);
+  });
+});
+
 describe('programMix: input it cannot use', () => {
   it('returns nothing for a report built without checks', () => {
     expect(programMix(take, [], [])).toBeNull();
@@ -308,14 +356,15 @@ describe('programMix: a take where nobody has a camera', () => {
     'guest_r.mp4': { bytes: 1000, audioOnly: true },
   };
   const CMD_WAV =
-    'ffmpeg -i "host_r.wav" -i "guest_r.wav" -filter_complex "[0:a]adelay=0:all=1[a0];[1:a]adelay=1234:all=1[a1];' +
+    'ffmpeg -y -i "host_r.wav" -i "guest_r.wav" -filter_complex "[0:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=0:all=1[a0];[1:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=1234:all=1[a1];' +
     '[a0][a1]amix=inputs=2:normalize=0[a]" -map "[a]" -c:a pcm_s24le -ac 2 -rf64 auto "host_r_program.wav"';
   const WAV_NOTE =
     "cmd writes one file, named in output, and changes none of the take's files. Nobody in this take was recorded " +
     'with a camera, so it is sound only: the files in audio mixed into one WAV at the depth of the masters. Each ' +
     'file is placed by its padMs under aligned, so a person who started later is silent until then. Voices are ' +
-    'added at the level they were recorded, and the mix is not compressed. Run it in the recording folder with ' +
-    'ffmpeg 4.4 or later. leftOut names every file of the take that cmd does not read, and why.';
+    'added at the level they were recorded, a one-channel master is put on both channels at its own level, and ' +
+    'the mix is not compressed. Run it in the recording folder with ffmpeg 4.4 or later. leftOut names every ' +
+    'file of the take that cmd does not read, and why.';
   const LABEL_WAV = "Program file: everyone's audio mixed into one WAV";
 
   it('writes one command that mixes the WAVs, each placed by its start', () => {
@@ -344,7 +393,7 @@ describe('programMix: a take where nobody has a camera', () => {
     const r = buildSyncReport(input);
     const program = (JSON.parse(r.json) as { program: Program }).program;
     expect(program.audio).toEqual(['host_r.wav', 'guest_r.mp4']);
-    expect(program.cmd).toContain('[1:a]adelay=1234:all=1[a1]');
+    expect(program.cmd).toContain('[1:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=1234:all=1[a1]');
     expect(program.output).toBe('host_r_program.wav');
     expect(program.leftOut).toEqual([
       { file: 'host_r.mp4', why: "no picture, and the same sound is in this person's WAV master" },

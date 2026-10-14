@@ -898,7 +898,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   start and an `ffmpeg` command that writes a copy starting there,
   a `program` section (`lib/program-mix.ts`): one command that lays each camera in a grid and mixes
   everyone's sound, or, when nobody has a camera, mixes it into one WAV at the depth of the masters,
-  placing each file by its `aligned` pad, with `leftOut` naming every file it does not read and why;
+  putting each voice on both channels at its own level before the mix and placing each file by its
+  `aligned` pad, with `leftOut` naming every file it does not read and why;
   it reads only files whose `checks` entry holds bytes, so a report built without `checks` has none,
   and a `frameRate` section: the default requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the

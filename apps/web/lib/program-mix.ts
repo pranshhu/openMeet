@@ -7,7 +7,8 @@ const PROGRAM_NOTE =
   'grid on a 1920x1080 picture at 30 frames a second, the first top left, and mixes the files in audio. Each file ' +
   'is placed by its padMs under aligned: a person who started later is black and silent until then, and a person ' +
   'whose file ends first stays as a still picture. It re-encodes to H.264 and AAC, so it is slow and not lossless. ' +
-  'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
+  'Voices are added at the level they were recorded, and a one-channel master is put on both channels at its own ' +
+  'level. Run it in the recording folder with ffmpeg 4.4 or later. ' +
   "leftOut names every file of the take that cmd does not read, and why. If ffmpeg says that ':a' matches " +
   'no streams, a file in audio has no sound track: take its input and its adelay out. ' +
   "If ffmpeg says that ':v' matches no streams, a file in video has no picture (a person recorded without a " +
@@ -20,8 +21,9 @@ const SOUND_NOTE =
   "cmd writes one file, named in output, and changes none of the take's files. Nobody in this take was recorded " +
   'with a camera, so it is sound only: the files in audio mixed into one WAV at the depth of the masters. Each file ' +
   'is placed by its padMs under aligned, so a person who started later is silent until then. Voices are added at ' +
-  'the level they were recorded, and the mix is not compressed. Run it in the recording folder with ffmpeg 4.4 or ' +
-  'later. leftOut names every file of the take that cmd does not read, and why.';
+  'the level they were recorded, a one-channel master is put on both channels at its own level, and the mix is not ' +
+  'compressed. Run it in the recording folder with ffmpeg 4.4 or later. leftOut names every file of the take that ' +
+  'cmd does not read, and why.';
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -130,13 +132,15 @@ export function programMix(
           `${tiles.map((_, i) => `[v${i}]`).join('')}xstack=inputs=${n}:layout=${layout}:fill=black,` +
             `pad=${WIDTH}:${HEIGHT}:-1:-1[v]`,
         ];
-  const delays = sounds.map((file, j) => `[${indexOf(file)}:a]adelay=${padOf(file)}:all=1[a${j}]`);
+  const delays = sounds.map(
+    (file, j) => `[${indexOf(file)}:a]pan=stereo|FL=FL+FC|FR=FR+FC,adelay=${padOf(file)}:all=1[a${j}]`
+  );
   const mix = `${sounds.map((_, j) => `[a${j}]`).join('')}amix=inputs=${sounds.length}:normalize=0[a]`;
   const graph = [...chains, ...stack, ...delays, mix].join(';');
 
   const first = inputs[0] as string;
   const output = first.replace(/\.[^.]+$/, '') + (soundOnly ? '_program.wav' : '_program.mp4');
-  const feed = `ffmpeg ${inputs.map((f) => `-i "${f}"`).join(' ')} -filter_complex "${graph}"`;
+  const feed = `ffmpeg -y ${inputs.map((f) => `-i "${f}"`).join(' ')} -filter_complex "${graph}"`;
   const cmd = soundOnly
     ? `${feed} -map "[a]" -c:a pcm_s${WAV_BIT_DEPTH}le -ac 2 -rf64 auto "${output}"`
     : `${feed} -map "[v]" -map "[a]" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 192k ` +
@@ -164,7 +168,7 @@ export function programMix(
     : n === 1
       ? "Program file: the camera with everyone's audio mixed (re-encodes, slow)"
       : `Program file: the ${n} cameras in a grid with everyone's audio mixed (re-encodes, slow)`;
-  const label = head + (leftOut.length > 0 ? ' The sync file lists the files it leaves out.' : '');
+  const label = head + (leftOut.length > 0 ? '. The sync file lists the files it leaves out.' : '');
 
   return {
     row: { label, cmd },
