@@ -354,6 +354,7 @@ export function RoomView({ slug }: { slug: string }) {
       localStream={state.localStream}
       remoteStream={state.remoteStream}
       remotePeers={state.remotePeers}
+      remoteScreens={state.remoteScreens}
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}

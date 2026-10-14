@@ -317,6 +317,12 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.98 | The host asks a guest to restart their connection | Host and one guest record. The host opens **People**, presses **Help** beside the guest, then **Restart connection**. Then run it a second time and press **Not now** on the guest's screen | The host reads "Asked <guest>. They answer on their own screen."; the guest reads the question with "Your recording goes on.". After **Restart** the guest's tile drops and returns within seconds on both screens, the take keeps running, and after **End & save** the guest's camera file and WAV read complete and play through the restart. With **Not now** nothing changes on either side | ☐ | |
 | 8.99 | The host asks a guest to switch microphone | Host and one guest with two fake microphones record. The host presses **Help** beside the guest, then **Switch microphone**; the guest presses **Choose microphone** and picks the other one | The guest's menu opens with both names and stays open; after the pick the tick moves, no error line shows, the take keeps running, and the guest's camera file and WAV read complete after **End & save**. The host's screen never shows a device name | ☐ | |
 | 8.100 | The device question on a phone | Join as a guest from a phone about 390 px wide; the host presses **Help**, then **Switch camera** beside the guest | The question and its two buttons fit the screen, each button at least 44 px tall, and **Choose camera** opens the camera menu | ☐ | |
+| 8.98 | Two people present | Host and two guests in a call. Guest 1 presents a tab, then guest 2 presents a window. Guest 1 stops. Watch the host's stage | The host sees guest 1's screen named for guest 1, and after guest 1 stops guest 2's screen named for guest 2, never a frozen picture of guest 1's | ☐ | |
+| 8.99 | Two screens at once | Host and two guests in a call, a take running. Guest 1 and the host both present. Watch guest 2's stage, on a computer and on a phone 390 px wide. End & save | Guest 2 sees both screens side by side under the two names, one above the other on the phone, with nothing scrolling sideways. After End & save the folder holds `host…_screen_….mp4` and `guest_screen_….mp4`, both play, and `sync_….json` lists both under `screenSegments` with the two names | ☐ | |
+| 8.100 | A phone held upright | Join as a guest from a phone held upright, with the host on a computer | On the host's screen the guest's tile shows the guest's whole picture, head to chest, with dark bars at the sides, and the guest's own lobby preview shows the same | ☐ | |
+| 8.101 | Portrait shape | On a computer, pick **Shape: Portrait** at 1080p in the lobby, join as host with a guest, record 10 s, End & save. Reload the lobby. Open the lobby on a phone | The lobby preview shows a tall picture with dark bars and "Capturing 608x1080"; the guest sees the host's tile tall; `ffprobe` on the host MP4 and on its downloaded backup reports 608 x 1080; the reloaded lobby keeps Portrait; on a phone the lobby has no Shape picker | ☐ | |
+| 8.102 | Screen share across a reconnect | Host and one guest; the guest presents a window; the host records; after 10 s turn the guest's network off for 10 s and on again; after 10 s more the host presses End & save | The folder holds one `guest_screen_…mp4`, the summary lists it as complete, and it plays through the gap | ☐ | |
+| 8.103 | Screen share when the host lost the file | Host and one guest who presents; the host records 20 s, reloads its tab, joins again and presses **Resume recording**; then turn the guest's network off for 10 s and on again; after 20 s more the host presses End & save | The folder holds the screen file from before the reload and a second, numbered one that plays from its first frame; no empty screen file is left, and no "gap" message was shown | ☐ | |
 
 ## 9 — Deploy
 
@@ -356,9 +362,9 @@ Also not covered automatically. Needs 3 browser profiles.
   camera; a real screen comes from a second device joined with **Present only**.
 - **Mid-take camera or mic switching needs Chromium.** Safari and iPhone switch
   between takes.
-- **A screen share across a full WebSocket reconnect continues in a new numbered
-  segment.** Camera and WAV resume into the same files; the interrupted segment's
-  tail is only in the sharer's screen backup, and the summary marks it incomplete.
+- **A screen share stopped while its connection is down, or on a page that reloads,
+  ends its file there.** The summary marks the file incomplete and the rest is only in
+  the sharer's screen backup.
 - **A second host tab mid-take asks before it takes the call over.** If the host
   joins there anyway, the first tab's files end there; the rest of each guest's
   part is only in that guest's backup.
