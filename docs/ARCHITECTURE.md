@@ -122,7 +122,9 @@ bitrate for the actual track via `presetForTrack`, and the camera `ChunkRecorder
 `BackupRecorder` via `cameraVideoBps`: that preset at the level picked in the lobby (`BITRATE_LEVELS`:
 Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`), times 1.5 when the track delivers
 more than 40 fps (`presetAt`), under the same ceiling; capture constraints in
-`lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
+`lib/media.ts` `RECORDING_CONSTRAINTS`; `cameraConstraints` takes `portrait` and then asks for the
+preset's height and a width of 9/16 of it, rounded to an even number, as `ideal` values: 608 x 1080
+at 1080p). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
 `cameraConstraints` asks the camera for it. The picker lists only the rates the camera's
 capabilities reach (`supportedFrameRates`), so 50 and 60 appear on few cameras. The
@@ -340,7 +342,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   opened and none has failed (`!stream && !previewError`), and Try again does nothing while
   `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
   microphone, quality, frame rate or echo cancellation made while another is being opened is not
-  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. Under the quality picker a
+  **Picture shape** picker (`om_portrait` in `localStorage`, `'1'` for portrait and anything else
+  landscape) opens the camera again like a change of quality and is passed to every capture the lobby
+  opens. It is not on a phone, which ignores a stored `'1'`, and it is hidden with the quality picker
+  for Microphone only. While portrait is chosen the Framing guide is not drawn, and a line says so
+  when the camera's track is not taller than wide. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
@@ -392,9 +399,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
-  floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
+  floating peer PiP on mobile; every presented screen is drawn in the spotlight, the first in
+  `remoteScreen` and the rest in `otherScreens`, stacked below 768 px and side by side above; a
+  desktop screen sharer sees a "You're presenting" placeholder with a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
-  feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
+  feed back as a viewfinder via `localScreenStream`, drawn beside other people's screens). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). While one other person is on the stage, their tile is drawn once their own camera
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
@@ -403,7 +412,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   full sheet with the control bar hidden while open. The bar's wrapper is one level above the
   stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
   menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  `className` to fill the spotlight or size a PiP. A picture taller than wide (a phone held
+  upright) is always drawn whole, as `contain` does, whatever `fit` says: the tile reads the
+  shape on the video element's `loadedmetadata` and `resize` events and starts again as not
+  tall when its stream changes. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
   every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
@@ -595,7 +607,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
   them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
-  where the preview shows a band of a tall picture.
+  where the preview draws a tall picture whole inside the wide box, so thirds of the box are
+  not thirds of the picture.
 - **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
   panel, in the browser that holds the room's host token (`Lobby`'s `isHost`), and not on the
   check page (`checkOnly`), which joins no call. The host picks a
@@ -629,7 +642,8 @@ guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `Room
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
 `notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
-backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
+backups, shown as offers on the host), `remoteScreens` (one screen per presenter, oldest
+first), `remoteScreenStream` (the first one's stream, or null), `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
@@ -725,7 +739,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
-  `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
+  `onRemoteScreenEnded`, given the stream that ended, on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
   `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
   `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is
@@ -1322,7 +1336,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
     Real camera settings, constraints (`getConstraints()`) and requests for new constraints
     (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
-    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
+    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`), and
+    for its shape: portrait when the asked height is above the asked width. When those
+    constraints carry no size (after a lobby Camera setting), the shape on a computer is read from
+    the lobby camera's settings instead; a phone is never offered portrait, so it stays wide.
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
@@ -1995,3 +2012,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **The slide keys do nothing while a field, a fader or a list has the keyboard,** and a window
   narrower than 640 px has no shortcut list to read them in. They turn nothing while chat covers
   a phone's stage, as the row is hidden then.
+- **With incoming video stopped only the first screen carries the note and Show video.** The
+  other screens are black tiles under their names, which still play their sound. With four or
+  more screens on a phone each tile is small, and nothing enlarges one.
+- **A portrait picture is the middle of the camera's wide picture.** A 1080p camera gives
+  608 x 1080, not 1080 x 1920, and the lobby's "Capturing" line shows the real size. It is
+  encoded at the chosen quality's bitrate, which is more than that many pixels need. It is not
+  offered on a phone, has no framing guide, cannot be changed during a call, and was checked
+  with test cameras only.

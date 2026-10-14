@@ -12,6 +12,11 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- On a computer the lobby offers a portrait (9:16) picture shape for the camera, for
+  people who record for vertical video.
+- When two or more people present at the same time, everyone sees the other people's
+  screens on the stage, each under its presenter's name. Each was already recorded to
+  its own file.
 - Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
   presentation clicker sends.
 - Present a deck as slides: pick one picture per slide and turn them with Previous and
@@ -291,6 +296,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A camera picture that is taller than wide, such as a phone held upright, is shown whole in
+  its tile instead of as a band across its middle.
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.
@@ -325,6 +332,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- When two people presented and one of them stopped, the stage could keep a frozen
+  picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own
   small picture was drawn over the menu.
 - Browser storage that does not answer cannot hold up a guest's stop:

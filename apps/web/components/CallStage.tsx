@@ -45,6 +45,7 @@ import { canPopOut, usePopOut } from '@/hooks/use-pop-out';
 import { ReactionBadge } from './ReactionBadge';
 import { ReactionMenu } from './ReactionMenu';
 import { OWN_REACTION, type Reaction, type ShownReactions } from '@/lib/reactions';
+import { screenLabelOf, type RemoteScreen } from '@/lib/remote-screens';
 
 /**
  * Why a remote participant won't be fully captured, or null if they will be.
@@ -96,6 +97,7 @@ export function CallStage({
   localStream,
   remoteStream,
   remotePeers,
+  remoteScreens,
   remoteScreenStream,
   localScreenStream,
   localName,
@@ -190,6 +192,8 @@ export function CallStage({
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   remotePeers: RemotePeer[];
+  /** One screen per presenter, oldest first. The first one is named after its presenter. */
+  remoteScreens?: RemoteScreen[];
   remoteScreenStream: MediaStream | null;
   localScreenStream: MediaStream | null;
   localName: string;
@@ -1159,18 +1163,31 @@ export function CallStage({
                 };
               })}
               remoteScreen={remoteScreenStream}
+              otherScreens={[
+                ...(remoteScreens ?? []).slice(1).map((r) => {
+                  const peer = remotePeers.find((p) => p.peerId === r.peerId);
+                  return { stream: r.stream, label: peer ? screenLabelOf(peer) : 'Shared screen', muted: !!companion };
+                }),
+                ...(remoteScreenStream && localScreenStream
+                  ? [
+                      {
+                        stream: localScreenStream,
+                        label: presentingRearCamera ? 'Your rear camera' : 'What you’re presenting',
+                        muted: true,
+                      },
+                    ]
+                  : []),
+              ]}
               localScreen={localScreenStream}
               localPresenting={screenSharing}
               screenLabel={(() => {
                 if (!remoteScreenStream) return presentingRearCamera ? 'Your rear camera' : 'What you’re presenting';
+                const shownPeer = remotePeers.find((r) => r.peerId === remoteScreens?.[0]?.peerId);
+                if (shownPeer) return screenLabelOf(shownPeer);
                 const sharingPeer =
                   remotePeers.find((r) => r.presence?.screenSharing) ??
                   remotePeers.find((r) => r.companion);
-                if (sharingPeer) {
-                  return sharingPeer.companion
-                    ? `${sharingPeer.name || 'Guest'} (Presenting)`
-                    : `${sharingPeer.name ?? 'Guest'}'s screen`;
-                }
+                if (sharingPeer) return screenLabelOf(sharingPeer);
                 const name = peerName ?? remotePeers[0]?.name ?? (role === 'host' ? 'Guest' : 'Host');
                 return `${name}'s screen`;
               })()}

@@ -254,3 +254,11 @@ describe('cleanFps', () => {
     expect(cleanFps(100000)).toBeNull();
   });
 });
+
+describe('a portrait picture', () => {
+  it('gets the bitrate of the chosen quality, as a wide one of the same height does', () => {
+    const tall = cameraVideoBps(track(undefined, { width: 608, height: 1080 }));
+    expect(tall).toBe(cameraVideoBps(track(undefined, { width: 1920, height: 1080 })));
+    expect(tall).toBe(5_000_000);
+  });
+});
