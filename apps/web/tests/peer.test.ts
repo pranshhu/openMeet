@@ -152,10 +152,12 @@ describe('PeerConnection screen-share routing', () => {
         if (e === 'ended') endedCb = cb;
       },
     };
+    const screen = fakeStream('screen', vt);
     pc.ontrack?.({ streams: [fakeStream('cam')] });
-    pc.ontrack?.({ streams: [fakeStream('screen', vt)] });
+    pc.ontrack?.({ streams: [screen] });
     endedCb!();
     expect(onRemoteScreenEnded).toHaveBeenCalledOnce();
+    expect(onRemoteScreenEnded).toHaveBeenCalledWith(screen);
   });
 
   it('removeTrack removes the matching sender', () => {
@@ -184,6 +186,32 @@ describe('PeerConnection screen-share routing', () => {
     pc.ontrack?.({ streams: [fakeStream('producer-or-companion-stream')] });
     expect(onRemoteScreen).toHaveBeenCalledOnce();
     expect(onRemoteStream).not.toHaveBeenCalled();
+  });
+
+  it("hands the ended callback a companion's or producer's stream that ended", () => {
+    const pc = new FakePC();
+    const onRemoteScreenEnded = vi.fn();
+    const peer = new PeerConnection({
+      polite: false,
+      iceServers: [],
+      sendSignal: () => {},
+      onRemoteStream: vi.fn(),
+      onRemoteScreen: vi.fn(),
+      onRemoteScreenEnded,
+      screenOnly: true,
+      pcFactory: () => pc as unknown as RTCPeerConnection,
+    });
+    peer.start();
+    let endedCb: (() => void) | null = null;
+    const vt = {
+      addEventListener: (e: string, cb: () => void) => {
+        if (e === 'ended') endedCb = cb;
+      },
+    };
+    const screen = fakeStream('producer-or-companion-stream', vt);
+    pc.ontrack?.({ streams: [screen] });
+    endedCb!();
+    expect(onRemoteScreenEnded).toHaveBeenCalledWith(screen);
   });
 });
 

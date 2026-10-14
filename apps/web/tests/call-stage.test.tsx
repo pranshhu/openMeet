@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor, within } from '@testing-library/react';
 import { CallStage } from '@/components/CallStage';
 import { MIC_WARNING_TEXT } from '@/lib/mic-watch';
+import { chooseTitle } from '@/lib/name-tag';
 
 const baseProps = {
   role: 'host' as const,
@@ -3020,5 +3021,294 @@ describe('CallStage: camera settings', () => {
     expect(spy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
     expect(spy).toHaveBeenCalled();
+  });
+});
+
+describe('CallStage: two people present', () => {
+  const presenting = { micOn: true, camOn: true, screenSharing: true };
+  const bothPresenting = [
+    { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+    { peerId: 'p2', name: 'Cara', stream: null, presence: presenting },
+  ];
+
+  it("names the screen after the person whose stream comes first, whoever is listed first", () => {
+    const first = new EventTarget() as unknown as MediaStream;
+    const second = new EventTarget() as unknown as MediaStream;
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={second}
+        remoteScreens={[
+          { peerId: 'p2', stream: second },
+          { peerId: 'p1', stream: first },
+        ]}
+        remotePeers={bothPresenting}
+      />
+    );
+    const tileOf = (s: MediaStream) =>
+      Array.from(container.querySelectorAll('video'))
+        .find((v) => (v as unknown as { srcObject?: unknown }).srcObject === s)!
+        .parentElement as HTMLElement;
+    expect(within(tileOf(second)).getByText("Cara's screen")).toBeInTheDocument();
+    expect(within(tileOf(first)).getByText("Bob's screen")).toBeInTheDocument();
+  });
+
+  it('names the screen the usual way when its presenter is not listed', () => {
+    const stream = new EventTarget() as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={stream}
+        remoteScreens={[{ peerId: 'gone', stream }]}
+        remotePeers={bothPresenting}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+  });
+
+  it('names a present-only device as it names one without the list', () => {
+    const stream = new EventTarget() as unknown as MediaStream;
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={stream}
+        remoteScreens={[{ peerId: 'p2', stream }]}
+        remotePeers={[
+          { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+          { peerId: 'p2', name: 'Colin', stream: null, companion: true, presence: presenting },
+        ]}
+      />
+    );
+    expect(screen.getByText('Colin (Presenting)')).toBeInTheDocument();
+  });
+});
+
+describe('CallStage: every screen is on the stage', () => {
+  const presenting = { micOn: true, camOn: true, screenSharing: true };
+  const stream = (id: string) => Object.assign(new EventTarget(), { id }) as unknown as MediaStream;
+  const videoOf = (container: HTMLElement, s: MediaStream) =>
+    Array.from(container.querySelectorAll('video')).find(
+      (v) => (v as unknown as { srcObject?: unknown }).srcObject === s,
+    ) as HTMLVideoElement;
+  const peers = [
+    { peerId: 'p1', name: 'Bob', stream: null, presence: presenting },
+    { peerId: 'p2', name: 'Cara', stream: null, presence: presenting },
+  ];
+
+  it("labels each of two screens with its presenter's name", () => {
+    const a = stream('a');
+    const b = stream('b');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'p2', stream: b },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+    expect(videoOf(container, b).muted).toBe(false);
+  });
+
+  it('names another screen the usual way when its presenter is not listed', () => {
+    const a = stream('a');
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'gone', stream: stream('b') },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText('Shared screen')).toBeInTheDocument();
+  });
+
+  it('plays no sound of another screen on a present-only device', () => {
+    const a = stream('a');
+    const b = stream('b');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        companion
+        remoteScreenStream={a}
+        remoteScreens={[
+          { peerId: 'p1', stream: a },
+          { peerId: 'p2', stream: b },
+        ]}
+        remotePeers={peers}
+      />
+    );
+    expect(videoOf(container, b).muted).toBe(true);
+  });
+
+  it('shows what you present beside another person’s screen, without its sound', () => {
+    const a = stream('a');
+    const mine = stream('mine');
+    const { container } = render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[{ peerId: 'p1', stream: a }]}
+        localScreenStream={mine}
+        screenSharing
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText("Bob's screen")).toBeInTheDocument();
+    expect(screen.getByText('What you’re presenting')).toBeInTheDocument();
+    expect(videoOf(container, mine).muted).toBe(true);
+  });
+
+  it('names your rear camera beside another person’s screen', () => {
+    const a = stream('a');
+    render(
+      <CallStage
+        {...baseProps}
+        remoteScreenStream={a}
+        remoteScreens={[{ peerId: 'p1', stream: a }]}
+        localScreenStream={stream('mine')}
+        presentingRearCamera
+        screenSharing
+        remotePeers={peers}
+      />
+    );
+    expect(screen.getByText('Your rear camera')).toBeInTheDocument();
+    expect(screen.queryByText('What you’re presenting')).toBeNull();
+  });
+
+  it('draws what you present once while nobody else presents', () => {
+    render(<CallStage {...baseProps} localScreenStream={stream('mine')} screenSharing remotePeers={peers} />);
+    expect(screen.getAllByText('What you’re presenting')).toHaveLength(1);
+  });
+});
+
+describe('CallStage: a title under a name', () => {
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const eve = { peerId: 'p-eve', name: 'Eve', stream: null, role: 'guest' as const, title: 'Founder, Acme' };
+  const fay = { peerId: 'p-fay', name: 'Fay', stream: null, role: 'guest' as const };
+
+  it('puts a remote person’s title on their tile, and leaves a one-line tag for one without', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[eve]} />);
+    const tag = document.querySelector('[title^="Eve"]') as HTMLElement;
+    expect(tag.title).toBe('Eve\nFounder, Acme');
+    expect(Array.from(tag.children).map((c) => c.textContent)).toEqual(['Eve', 'Founder, Acme']);
+    cleanup();
+
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[fay]} />);
+    const plain = document.querySelector('[title="Fay"]') as HTMLElement;
+    expect(plain.children).toHaveLength(0);
+  });
+
+  it('puts the title on every tile of a mesh call, the first and the others', () => {
+    const gus = { peerId: 'p-gus', name: 'Gus', stream: null, role: 'guest' as const, title: 'Producer' };
+    render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[eve, gus, fay]} />);
+    expect((document.querySelector('[title^="Eve"]') as HTMLElement).title).toBe('Eve\nFounder, Acme');
+    expect((document.querySelector('[title^="Gus"]') as HTMLElement).title).toBe('Gus\nProducer');
+    expect((document.querySelector('[title="Fay"]') as HTMLElement).children).toHaveLength(0);
+  });
+
+  it('puts the title this tab joined with on its own tile, and none on a screen tile', () => {
+    chooseTitle('Host, Acme');
+    try {
+      render(<CallStage {...baseProps} remoteStream={stream()} remotePeers={[fay]} remoteScreenStream={stream()} />);
+      const own = document.querySelector('[title^="Alice (You)"]') as HTMLElement;
+      expect(own.title).toBe('Alice (You)\nHost, Acme');
+      expect(Array.from(own.children).map((c) => c.textContent)).toEqual(['Alice (You)', 'Host, Acme']);
+      expect(screen.queryAllByText('Host, Acme')).toHaveLength(1);
+    } finally {
+      chooseTitle('');
+    }
+  });
+
+  it('keeps the host’s capability note after the name, with the title as the second line', () => {
+    const noted = { ...eve, role: 'guest' as const };
+    render(
+      <CallStage
+        {...baseProps}
+        remoteStream={stream()}
+        remotePeers={[noted]}
+        capabilities={{ 'p-eve': { mp4: true, wav: true, listening: 'speakers' } }}
+      />
+    );
+    const tag = document.querySelector('[title^="Eve"]') as HTMLElement;
+    expect(tag.children[0]!.textContent).toBe('Eve — on speakers');
+    expect(tag.children[1]!.textContent).toBe('Founder, Acme');
+  });
+});
+
+describe('CallStage: the name tag colour', () => {
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const root = () => document.querySelector('.h-\\[100dvh\\]') as HTMLElement;
+
+  it('sets the tag bar on the root in the colour of the look, and draws it on a tag', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} look={{ accent: 'red' }} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('3px solid #f28b82');
+    const tag = document.querySelector('[title="Alice (You)"]') as HTMLElement;
+    expect(tag.className).toContain('[border-left:var(--om-tag-bar,none)]');
+  });
+
+  it('has a light tint for each of the six codes', () => {
+    const hex = { blue: '#8ab4f8', red: '#f28b82', green: '#81c995', yellow: '#fdd663', purple: '#c58af9', pink: '#ff8bcb' };
+    for (const [accent, tint] of Object.entries(hex)) {
+      const { unmount } = render(<CallStage {...baseProps} look={{ accent: accent as keyof typeof hex }} />);
+      expect(root().style.getPropertyValue('--om-tag-bar')).toBe(`3px solid ${tint}`);
+      unmount();
+    }
+  });
+
+  it('sets nothing for the plain look, or when no look is handed over', () => {
+    const { rerender } = render(<CallStage {...baseProps} look={{}} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('');
+    expect(root().getAttribute('style')).toBeNull();
+    rerender(<CallStage {...baseProps} />);
+    expect(root().style.getPropertyValue('--om-tag-bar')).toBe('');
+  });
+});
+
+describe('CallStage: the host logo', () => {
+  const LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const imgs = () => Array.from(screen.getByTestId('stage-main').querySelectorAll('img'));
+
+  it('draws one picture inside the stage with that source and an empty alt', () => {
+    render(<CallStage {...baseProps} remoteStream={stream()} look={{ accent: 'red', logo: LOGO }} />);
+    expect(imgs()).toHaveLength(1);
+    expect(imgs()[0]!.getAttribute('src')).toBe(LOGO);
+    expect(imgs()[0]!.getAttribute('alt')).toBe('');
+  });
+
+  it('draws none without a logo, for the plain look or when no look is handed over', () => {
+    const { rerender } = render(<CallStage {...baseProps} look={{ accent: 'red' }} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} look={{}} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} />);
+    expect(imgs()).toHaveLength(0);
+    rerender(<CallStage {...baseProps} look={{ logo: LOGO }} />);
+    expect(imgs()).toHaveLength(1);
+  });
+
+  it('puts it top left, 32 px high on a phone and 40 px from sm up, at most 96 px wide, and lets taps through', () => {
+    render(<CallStage {...baseProps} look={{ logo: LOGO }} />);
+    const cls = imgs()[0]!.className.split(' ');
+    for (const c of ['absolute', 'top-3', 'left-3', 'h-8', 'sm:h-10', 'max-w-24', 'object-contain', 'pointer-events-none']) {
+      expect(cls).toContain(c);
+    }
+  });
+
+  it('is drawn under the recording notice, the countdown and the marker note', () => {
+    render(<CallStage {...baseProps} roomRecording look={{ logo: LOGO }} />);
+    const z = (el: Element) => Number(/(?:^| )z-(\d+)/.exec(el.className)?.[1]);
+    const notice = screen.getByTestId('stage-main').querySelector('.pointer-events-none.absolute.inset-x-0')!;
+    expect(z(notice)).toBe(30);
+    expect(z(imgs()[0]!)).toBeLessThan(z(notice));
+    expect(z(imgs()[0]!)).toBeGreaterThan(0);
   });
 });

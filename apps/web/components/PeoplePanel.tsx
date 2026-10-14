@@ -1,11 +1,19 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import type { HelpAsk } from '@openmeet/protocol';
 import type { RemotePeer } from '@/hooks/useRoom';
 import { Icon } from './Icon';
 
 const rowButton =
   'min-h-11 shrink-0 rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-8';
+
+const RESTART_ASK: [string, HelpAsk][] = [['Restart connection', 'reconnect']];
+// Only a person with a microphone and camera of their own has devices to switch.
+const DEVICE_ASKS: [string, HelpAsk][] = [
+  ['Switch microphone', 'microphone'],
+  ['Switch camera', 'camera'],
+];
 
 /**
  * The host's list of everyone else in the call, opened from the control bar
@@ -17,7 +25,9 @@ export function PeoplePanel({
   recording = false,
   onMute,
   onRemove,
+  onAsk,
   onClose,
+  children,
 }: {
   people: RemotePeer[];
   /** A take is running or can still be resumed, so removing a recorded person ends their files here. */
@@ -26,11 +36,19 @@ export function PeoplePanel({
   onMute: (peerId: string) => void;
   /** Remove this person from the room. Without it no row offers Remove. */
   onRemove?: ((peerId: string) => void) | undefined;
+  /** Ask this person to do something about their connection. True when it went out. Without it no row offers Help. */
+  onAsk?: ((peerId: string, ask: HelpAsk) => boolean) | undefined;
   onClose: () => void;
+  /** Drawn above the list. */
+  children?: ReactNode;
 }) {
   // The person whose removal is being asked about, by peer id. Asked in the
   // row: a blocking dialog would stall this tab, which writes the take.
   const [asking, setAsking] = useState<string | null>(null);
+  // The person the host is choosing an ask for, by peer id, and the line that
+  // says what became of the last ask. Only one row is swapped at a time.
+  const [helping, setHelping] = useState<string | null>(null);
+  const [askedLine, setAskedLine] = useState<string | null>(null);
   const questionId = useId();
   return (
     <section
@@ -50,6 +68,7 @@ export function PeoplePanel({
           <Icon name="close" className="h-4 w-4" />
         </button>
       </div>
+      {children}
       <ul className="max-h-[40dvh] overflow-y-auto">
         {people.map((p) => {
           const name = p.name || 'Guest';
@@ -97,6 +116,44 @@ export function PeoplePanel({
               </li>
             );
           }
+          if (onAsk && helping === p.peerId) {
+            return (
+              <li key={p.peerId} className="py-1.5 text-sm text-white">
+                <p id={questionId} className="text-xs text-[#fdd663] wrap-anywhere">
+                  {`Ask ${name} to:`}
+                </p>
+                <div className="mt-1 flex flex-wrap justify-end gap-2">
+                  {(hasMic ? DEVICE_ASKS : []).concat(RESTART_ASK).map(([text, ask]) => (
+                    <button
+                      key={ask}
+                      type="button"
+                      aria-describedby={questionId}
+                      onClick={() => {
+                        setHelping(null);
+                        setAskedLine(
+                          onAsk(p.peerId, ask)
+                            ? `Asked ${name}. They answer on their own screen.`
+                            : `Could not ask ${name}. Try again.`
+                        );
+                      }}
+                      className={`${rowButton} hover:bg-white/10`}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    autoFocus
+                    aria-describedby={questionId}
+                    onClick={() => setHelping(null)}
+                    className={`${rowButton} hover:bg-white/10`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </li>
+            );
+          }
           return (
             <li key={p.peerId} className="flex min-h-11 items-center gap-2 text-sm text-white">
               <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -112,11 +169,27 @@ export function PeoplePanel({
                   {micOn ? 'Mute' : 'Muted'}
                 </button>
               )}
+              {onAsk && (
+                <button
+                  type="button"
+                  aria-label={`Help ${name}`}
+                  onClick={() => {
+                    setAsking(null);
+                    setHelping(p.peerId);
+                  }}
+                  className={`${rowButton} hover:bg-white/10`}
+                >
+                  Help
+                </button>
+              )}
               {onRemove && (
                 <button
                   type="button"
                   aria-label={`Remove ${name}`}
-                  onClick={() => setAsking(p.peerId)}
+                  onClick={() => {
+                    setHelping(null);
+                    setAsking(p.peerId);
+                  }}
                   className={`${rowButton} hover:bg-white/10`}
                 >
                   Remove
@@ -126,6 +199,11 @@ export function PeoplePanel({
           );
         })}
       </ul>
+      {askedLine && (
+        <p role="status" className="mt-1 text-xs text-[#fdd663] wrap-anywhere">
+          {askedLine}
+        </p>
+      )}
     </section>
   );
 }

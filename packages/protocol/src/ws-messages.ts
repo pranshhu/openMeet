@@ -1,3 +1,5 @@
+import { LOGO_MAX_PX, MAX_LOGO_LENGTH, MAX_TITLE_LENGTH } from './constants';
+
 /**
  * `producer` is present but never recorded and never publishes media: a
  * technical operator who watches the session so the host can focus on the
@@ -29,6 +31,11 @@ export type ClientJoin = {
   audioOnly?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
+  /**
+   * What the guest typed when the room asked for a passcode. Sent only after
+   * the Room's `door` message with state `passcode`, and on each join after.
+   */
+  passcode?: string;
 };
 // `to` addresses a specific peer. Omitted means 'the other one', which is
 // still correct in a two-person room and keeps the 1:1 path unchanged.
@@ -70,6 +77,8 @@ export type ClientRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * most MAX_SCRIPT_LENGTH long.
  */
 export type ClientScript = { type: 'script'; text: string };
+/** The host's look for the room. No `accent` means the plain colour, no `logo` no logo. */
+export type ClientLook = { type: 'look'; accent?: LookAccent; logo?: string };
 export type ClientChat = { type: 'chat'; text: string; ts: number };
 /**
  * A chat line for one person. `to` is that person's peerId. A type of its
@@ -84,6 +93,8 @@ export type ClientPresence = {
   screenSharing: boolean;
   /** This person has a hand raised: they are waiting to speak. Sent only while true. */
   handRaised?: boolean;
+  /** The sender's own title, shown under their name. Absent when they gave none. */
+  title?: string;
 };
 /**
  * A quick reaction, drawn for a moment on its sender's tile. A code, not a
@@ -95,6 +106,59 @@ export type Reaction = (typeof REACTIONS)[number];
 
 export function isReaction(v: unknown): v is Reaction {
   return (REACTIONS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The accent colour a host picks for the room's name tags. A code, never CSS:
+ * each page draws its own colour for it, and the Room drops anything not on
+ * this list.
+ */
+export const LOOK_ACCENTS = ['blue', 'red', 'green', 'yellow', 'purple', 'pink'] as const;
+export type LookAccent = (typeof LOOK_ACCENTS)[number];
+
+export function isLookAccent(v: unknown): v is LookAccent {
+  return (LOOK_ACCENTS as readonly unknown[]).includes(v);
+}
+
+const LOGO_PREFIX = 'data:image/png;base64,';
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const PNG_SIGNATURE_AND_IHDR = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52];
+
+/**
+ * Whether `v` is a logo to draw: a PNG as `data:` text, no longer than
+ * MAX_LOGO_LENGTH, whose own header says it is at most LOGO_MAX_PX wide and
+ * high. The header is what keeps a few kilobytes from decoding into a picture
+ * of a gigabyte in every tab. Used by the Room and by the page, because the
+ * field is another participant's. Never throws.
+ */
+export function isLogo(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length > MAX_LOGO_LENGTH || !v.startsWith(LOGO_PREFIX)) return false;
+  const data = v.slice(LOGO_PREFIX.length);
+  // 32 characters are the first 24 bytes: the signature, the IHDR chunk header, width and height.
+  if (data.length < 32 || !BASE64.test(data)) return false;
+  const bytes = Uint8Array.from(atob(data.slice(0, 32)), (c) => c.charCodeAt(0));
+  if (bytes.length !== 24 || !PNG_SIGNATURE_AND_IHDR.every((b, i) => bytes[i] === b)) return false;
+  const view = new DataView(bytes.buffer);
+  const [width, height] = [view.getUint32(16), view.getUint32(20)];
+  return width >= 1 && width <= LOGO_MAX_PX && height >= 1 && height <= LOGO_MAX_PX;
+}
+
+/**
+ * A person's title as text to show, or '' when `v` is not one: not a string,
+ * without a visible character, or longer than MAX_TITLE_LENGTH once cleaned.
+ * Each run of control characters and line or paragraph separators becomes one
+ * space, so a title is one line, and the ends are trimmed. A text that holds
+ * only control, format and space characters (a zero-width space, a
+ * right-to-left override) draws nothing and is not a title. Format characters
+ * inside a title that has visible ones are kept, as some scripts and emoji
+ * need them. Used by the Room and by the page, because the field is another
+ * participant's.
+ */
+export function titleFrom(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  const t = v.replace(/[\p{Cc}\u2028\u2029]+/gu, ' ').trim();
+  if (/^[\p{Cc}\p{Cf}\p{Z}]*$/u.test(t)) return '';
+  return t.length <= MAX_TITLE_LENGTH ? t : '';
 }
 
 export type ClientReaction = { type: 'reaction'; reaction: Reaction };
@@ -158,11 +222,57 @@ export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; record
 export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
 
 /**
+ * What a host can ask one person to do. A code, not copy. `reconnect` is a
+ * full restart of that person's connection to the room. `microphone` and
+ * `camera` ask them to switch that device: the code names no device, so the
+ * choice stays with the person on their own screen.
+ */
+export const HELP_ASKS = ['reconnect', 'microphone', 'camera'] as const;
+export type HelpAsk = (typeof HELP_ASKS)[number];
+
+export function isHelpAsk(v: unknown): v is HelpAsk {
+  return (HELP_ASKS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The host asks one person to do something about their own connection.
+ * Passed on only from the host, to that person alone, whose own page asks
+ * them and acts only on their answer.
+ */
+export type ClientPeerHelp = { type: 'peer-help'; peerId: string; ask: HelpAsk };
+
+/**
  * The host removes one person from the room. Acted on only from the host:
  * the Room closes that socket with WS_CLOSE_REMOVED, tells everyone else
  * with `peer-left`, and refuses the same tab until the session ends.
  */
 export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
+
+/**
+ * The host locks or unlocks the room, or turns the waiting room on or off.
+ * Acted on only from the host, and each field only when it is exactly a
+ * boolean. While locked, the Room refuses any join from a tab it did not seat
+ * in this session, with WS_CLOSE_NOT_ADMITTED. Locking closes nobody. With the
+ * waiting room on, such a join is held until the host answers it with
+ * ClientAdmit; turning it off lets in everyone who waits.
+ *
+ * A string `passcode` of MIN_PASSCODE_LENGTH to MAX_PASSCODE_LENGTH units sets
+ * the passcode a guest gives before it joins; `null` removes it. Any other
+ * value is ignored. Setting or removing one closes nobody.
+ */
+export type ClientRoomAccess = {
+  type: 'room-access';
+  locked?: boolean;
+  waitingRoom?: boolean;
+  passcode?: string | null;
+};
+
+/**
+ * The host answers one waiting person. Acted on only from the host, with a
+ * `peerId` that names a waiting socket and a boolean `admit`: true seats it as
+ * if it had just joined, false closes it with WS_CLOSE_NOT_ADMITTED.
+ */
+export type ClientAdmit = { type: 'admit'; peerId: string; admit: boolean };
 
 export type ClientMessage =
   | ClientJoin
@@ -174,6 +284,7 @@ export type ClientMessage =
   | ClientRecordingStop
   | ClientRecordingCountdown
   | ClientScript
+  | ClientLook
   | ClientChat
   | ClientPrivateMessage
   | ClientPresence
@@ -183,8 +294,11 @@ export type ClientMessage =
   | ClientPing
   | ClientRecordingCapability
   | ClientPeerMute
+  | ClientPeerHelp
   | ClientPeerRemove
-  | ClientPeerRecorded;
+  | ClientPeerRecorded
+  | ClientRoomAccess
+  | ClientAdmit;
 
 export interface PeerInfo {
   peerId: string;
@@ -306,6 +420,8 @@ export type ServerPresence = {
   screenSharing: boolean;
   /** The sender has a hand raised. The Room passes it on only when it is exactly true. */
   handRaised?: boolean;
+  /** The sender's title. The Room passes it on only when `titleFrom` accepts it. */
+  title?: string;
   from: Role;
   fromPeerId?: string;
   fromName?: string;
@@ -334,6 +450,11 @@ export type ServerRecordingCountdown = { type: 'recording-countdown'; seconds: n
  * host's is passed on, so it carries no `from`.
  */
 export type ServerScript = { type: 'script'; text: string };
+/**
+ * The host's ClientLook, passed on to everyone else in the room. Only the
+ * host's is passed on, so it carries no `from`.
+ */
+export type ServerLook = { type: 'look'; accent?: LookAccent; logo?: string };
 export type ServerRecordingAck = {
   type: 'recording-ack';
   recordingId: string;
@@ -368,6 +489,43 @@ export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; record
  */
 export type ServerPeerMute = { type: 'peer-mute' };
 
+/** A person held at the door of a room with a waiting room, as its hosts are told. */
+export type WaitingPerson = {
+  peerId: string;
+  displayName: string;
+  role: 'guest' | 'producer';
+  companion?: boolean;
+};
+
+/**
+ * Whether the room is locked, whether its waiting room is on, and who waits
+ * (at most eight, in the order they arrived), sent to every host in the room:
+ * right after its `role-assigned`, and again after each change. Guests are
+ * never told. `passcode` says whether one is set, never what it is.
+ */
+export type ServerRoomAccess = {
+  type: 'room-access';
+  locked: boolean;
+  waitingRoom: boolean;
+  passcode: boolean;
+  waiting: WaitingPerson[];
+};
+
+/**
+ * Sent to a person who is not in the room yet. State `waiting`: its join was
+ * received and the host has not answered; it is followed by `role-assigned` or
+ * by a close. State `passcode`: the room asks for a passcode, and `wrong` is
+ * true when the join carried one that is not right; the socket stays open for
+ * another `join`.
+ */
+export type ServerDoor = { type: 'door'; state: 'waiting' } | { type: 'door'; state: 'passcode'; wrong?: boolean };
+
+/**
+ * A host's ClientPeerHelp, handed to the one person it names. It carries only
+ * the ask: whoever receives it is the person meant.
+ */
+export type ServerPeerHelp = { type: 'peer-help'; ask: HelpAsk };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -384,13 +542,17 @@ export type ServerMessage =
   | ServerRecordingStop
   | ServerRecordingCountdown
   | ServerScript
+  | ServerLook
   | ServerRecordingAck
   | ServerRoomClosed
   | ServerPong
   | ServerError
   | ServerRecordingCapability
   | ServerPeerMute
-  | ServerPeerRecorded;
+  | ServerPeerHelp
+  | ServerPeerRecorded
+  | ServerRoomAccess
+  | ServerDoor;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -402,6 +564,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'chat',
   'private-message',
   'presence',
@@ -411,8 +574,11 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'ping',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-remove',
   'peer-recorded',
+  'room-access',
+  'admit',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -431,13 +597,17 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'recording-stop',
   'recording-countdown',
   'script',
+  'look',
   'recording-ack',
   'room-closed',
   'pong',
   'error',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-recorded',
+  'room-access',
+  'door',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {

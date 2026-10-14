@@ -3,6 +3,7 @@ import {
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_SLUG,
+  WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   WS_HEARTBEAT_INTERVAL_MS,
@@ -21,6 +22,7 @@ const FATAL_CLOSE_CODES = new Set<number>([
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_INVALID_SLUG,
   WS_CLOSE_EXPIRED_SLUG,
+  WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
 ]);
@@ -58,6 +60,8 @@ export class SignalClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private closed = false;
+  /** What the person typed for the room's passcode; sent with every join until the Room says it is not right. */
+  private passcode: string | undefined;
 
   constructor(opts: SignalClientOpts) {
     this.opts = opts;
@@ -71,17 +75,7 @@ export class SignalClient {
     this.ws = ws;
     ws.onopen = () => {
       this.attempt = 0;
-      this.send({
-        type: 'join',
-        displayName: this.opts.displayName,
-        userAgent: this.opts.userAgent,
-        // exactOptionalPropertyTypes: only include the key when defined.
-        ...(this.opts.hostToken ? { hostToken: this.opts.hostToken } : {}),
-        ...(this.opts.producer ? { producer: true } : {}),
-        ...(this.opts.companion ? { companion: true } : {}),
-        ...(this.opts.audioOnly ? { audioOnly: true } : {}),
-        ...(this.opts.clientId ? { clientId: this.opts.clientId } : {}),
-      });
+      this.send(this.joinMessage());
       this.startHeartbeat();
     };
     ws.onmessage = (ev: { data: unknown }) => {
@@ -98,6 +92,9 @@ export class SignalClient {
       // liveness avoids tearing down a healthy connection that merely lost one
       // heartbeat.
       this.lastSeenAt = Date.now();
+      // The Room asks again: what was sent was missing or wrong, and a
+      // reconnect must not send it a second time.
+      if (msg.type === 'door' && msg.state === 'passcode') this.passcode = undefined;
       this.anyHandlers.forEach((h) => h(msg));
       this.handlers.get(msg.type)?.forEach((h) => h(msg));
     };
@@ -132,6 +129,30 @@ export class SignalClient {
   onAny(handler: (m: ServerMessage) => void): () => void {
     this.anyHandlers.add(handler);
     return () => this.anyHandlers.delete(handler);
+  }
+
+  /**
+   * Answer the Room's request for a passcode: join again on the open socket,
+   * and with this passcode on every join after it (a reconnect).
+   */
+  rejoin(passcode: string): void {
+    this.passcode = passcode;
+    this.send(this.joinMessage());
+  }
+
+  private joinMessage(): ClientMessage {
+    return {
+      type: 'join',
+      displayName: this.opts.displayName,
+      userAgent: this.opts.userAgent,
+      // exactOptionalPropertyTypes: only include the key when defined.
+      ...(this.opts.hostToken ? { hostToken: this.opts.hostToken } : {}),
+      ...(this.opts.producer ? { producer: true } : {}),
+      ...(this.opts.companion ? { companion: true } : {}),
+      ...(this.opts.audioOnly ? { audioOnly: true } : {}),
+      ...(this.opts.clientId ? { clientId: this.opts.clientId } : {}),
+      ...(this.passcode ? { passcode: this.passcode } : {}),
+    };
   }
 
   /** Whether the message went out. One sent while the socket is not open is dropped, not queued. */
