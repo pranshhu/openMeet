@@ -134,6 +134,13 @@ export const WAV_SAMPLE_RATE = 48_000; // requested; the actual rate is read fro
 export const MAX_RECORDED_PEERS = 4;
 
 /**
+ * Recorded seats in a room where every recorded seat joined with the
+ * microphone only. No camera video crosses the mesh there, so the cost per
+ * guest is its audio: the host receives about 1.3 Mbps per guest.
+ */
+export const MAX_AUDIO_ONLY_PEERS = 8;
+
+/**
  * The longest teleprompter script one participant can send to the others, in
  * UTF-16 units (`String.length`): about 55 minutes of speech, and about
  * 300 KB as JSON at the very worst.

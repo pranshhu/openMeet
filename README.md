@@ -68,7 +68,8 @@ retention policy to trust, because there's nothing retained.
   records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
-- Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
+- Up to **4 recorded participants**, or **8** when everyone recorded, the host too,
+  joined with **Microphone only**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
 - Host controls in **People**: turn a participant's microphone off for the call (they
@@ -426,18 +427,24 @@ switched during the call is opened the same way as the one chosen in the lobby.
 
 ### Producers and Present only
 
-A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are
-shared by these two:
+A room has 4 recorded seats (8 when every recorded person joined with **Microphone
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link and the Present-only link.
+  waiting room and in the call, copies this link, the Present-only link and the
+  microphone-only link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+
+For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
+**Microphone only**, so nobody's camera comes back on. The host copies this link from
+the same arrow beside **Copy invite link**. A browser also remembers, per room, that a
+person joined with the microphone only, and opens that room's lobby that way again.
 
 ### What lands on disk
 
@@ -447,7 +454,7 @@ All in the one folder the host picks, per take:
 |---|---|
 | `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
-| `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
+| `guest2_<id>.*`, `guest3_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8_` in a take, and higher numbers after reconnects |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |

@@ -17,6 +17,12 @@ const LINKS = [
     hint: 'Shares a screen only. No camera or mic.',
     copied: 'Present-only link copied.',
   },
+  {
+    query: 'audio',
+    title: 'Copy microphone-only link',
+    hint: 'Sound only, recorded. For rooms of 5 to 8.',
+    copied: 'Microphone-only link copied.',
+  },
 ] as const;
 
 type Link = (typeof LINKS)[number];
@@ -24,9 +30,12 @@ type Link = (typeof LINKS)[number];
 const LABEL = 'Other links';
 
 /**
- * The two links that join with no camera or microphone, behind an arrow beside
- * the host's Copy invite link. Each says what happens to whoever opens it:
- * sent to a guest by mistake, either one joins that guest unrecorded.
+ * The three other links, behind an arrow beside the host's Copy invite link:
+ * the producer and Present-only links, which join with no camera or
+ * microphone, and the microphone-only link, which opens the lobby on
+ * Microphone only. Each says what happens to whoever opens it: sent to a guest
+ * by mistake, the first two join that guest unrecorded, and the third records
+ * their sound alone.
  *
  * The caller places the panel (`menuClassName`) from the row the arrow sits
  * in, not from the arrow: the arrow moves as the label beside it changes, and
@@ -104,7 +113,7 @@ export function RoleLinks({
               key={link.query}
               type="button"
               onClick={() => copy(link)}
-              className="block w-full rounded-lg px-3 py-2 text-left hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+              className="block min-h-11 w-full rounded-lg px-3 py-2 text-left hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
             >
               <span className="block text-sm">{link.title}</span>
               <span className="block text-xs leading-snug text-white/70">{link.hint}</span>

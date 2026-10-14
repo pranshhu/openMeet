@@ -88,6 +88,12 @@ function isPresentLink(): boolean {
   return new URLSearchParams(window.location.search).get('present') === '1';
 }
 
+/** `?audio=1` on the room link: the lobby opens on Microphone only. */
+function isAudioLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('audio') === '1';
+}
+
 /** `?check=1` on the room link: the lobby's preview and checks, with no way into the room. */
 function isCheckLink(): boolean {
   if (typeof window === 'undefined') return false;
@@ -147,6 +153,7 @@ export function RoomView({ slug }: { slug: string }) {
   const producer = isProducerLink();
   const present = isPresentLink();
   const check = isCheckLink();
+  const audio = isAudioLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
   // A host who went on without anyone else. Kept while this tab stays in the
   // room: the call screen then stays up while they are alone, while someone
@@ -191,8 +198,8 @@ export function RoomView({ slug }: { slug: string }) {
   if (state.phase === 'full') {
     return (
       <StatusScreen title="This room is full" action="Try again">
-        Up to 4 people on camera, plus 2 producers or present‑only screens. Try again once someone
-        leaves.
+        A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers or
+        present‑only screens. Try again once someone leaves.
       </StatusScreen>
     );
   }
@@ -251,6 +258,7 @@ export function RoomView({ slug }: { slug: string }) {
         producer={producer}
         present={present}
         checkOnly={check}
+        audio={audio}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>
           void join(stream, name, producer, asCompanion, screenStream, stereo)

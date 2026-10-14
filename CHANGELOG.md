@@ -12,6 +12,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
+  link**; the lobby also remembers, per room, that you joined with the microphone only.
+- A room seats up to 8 recorded people when everyone joins with **Microphone only**; with a
+  camera in the room it seats 4, as before.
 - The host can add a logo in the lobby; it sits in a corner of the call for everyone. It
   is not drawn into any recording.
 - The host can pick a colour for the show in the lobby; everyone's name tags carry it

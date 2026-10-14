@@ -1202,32 +1202,24 @@ describe('a guest cannot make the host open files without end', () => {
     expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
   });
 
-  it('refuses the ninth key of a take, whoever opens it', async () => {
+  it('refuses the fifteenth key of a take, whoever opens it', async () => {
     const opened: string[] = [];
     const written: Written[] = [];
     const h = await hostHandles(opened, written, []);
     const { errors, onError } = errorLog();
 
-    // Five connections, two keys each, then one more: the take has eight slots.
-    for (let p = 1; p <= 4; p++) {
+    // Seven connections, two keys each, then one more: the take has fourteen slots.
+    for (let p = 1; p <= 7; p++) {
       for (let k = 1; k <= 2; k++) {
         await bindHostGuestChannel(fakeChannel(`recording#p${p}k${k}`), h, `peer-${p}`, onError);
       }
     }
-    const ninth = fakeChannel('recording#p5k1');
-    await bindHostGuestChannel(ninth, h, 'peer-5', onError);
+    const fifteenth = fakeChannel('recording#p8k1');
+    await bindHostGuestChannel(fifteenth, h, 'peer-8', onError);
 
-    expect(opened).toEqual([
-      'guest2_rec.mp4',
-      'guest3_rec.mp4',
-      'guest4_rec.mp4',
-      'guest5_rec.mp4',
-      'guest6_rec.mp4',
-      'guest7_rec.mp4',
-      'guest8_rec.mp4',
-    ]);
-    expect(h.guestReceivers?.has('p5k1:mp4')).toBe(false);
-    expect(ninth.onmessage).toBeNull();
+    expect(opened).toEqual(Array.from({ length: 13 }, (_, i) => `guest${i + 2}_rec.mp4`));
+    expect(h.guestReceivers?.has('p8k1:mp4')).toBe(false);
+    expect(fifteenth.onmessage).toBeNull();
     expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
   });
 
@@ -1238,21 +1230,21 @@ describe('a guest cannot make the host open files without end', () => {
     const h = await hostHandles(opened, written, slot0);
     const { errors, onError } = errorLog();
 
-    for (let p = 1; p <= 4; p++) {
+    for (let p = 1; p <= 7; p++) {
       for (let k = 1; k <= 2; k++) {
         await bindHostGuestChannel(fakeChannel(`recording#p${p}k${k}`), h, `peer-${p}`, onError);
       }
     }
-    await bindHostGuestChannel(fakeChannel('recording#p5k1'), h, 'peer-5', onError);
+    await bindHostGuestChannel(fakeChannel('recording#p8k1'), h, 'peer-8', onError);
     expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
 
     // peer-1's tab reloaded: a new peer id, but the same key, so the same file.
     const reconnected = fakeChannel('recording#p1k1');
-    await bindHostGuestChannel(reconnected, h, 'peer-6', onError);
+    await bindHostGuestChannel(reconnected, h, 'peer-9', onError);
     await sendChunk(reconnected, 0, 0, 10);
 
     expect(errors.map((e) => (e as Error).message)).toEqual([REFUSAL_MESSAGE]);
-    expect(opened).toHaveLength(7);
+    expect(opened).toHaveLength(13);
     expect(slot0).toEqual([{ file: 'guest_rec.mp4', position: 0, bytes: 10 }]);
   });
 
@@ -2471,5 +2463,36 @@ describe('a resumed take keeps the clock estimate from before the reload', () =>
     const [g] = await collectGuestReports(h, () => undefined);
     expect(g?.startHostMs).toBe(start);
     expect(g?.clockEnd).toBeUndefined();
+  });
+});
+
+/**
+ * A room of seven recorded guests, each on a microphone only, opens one key
+ * per connection: the take has a slot and a file for every one of them.
+ */
+describe('a take with seven recorded guests', () => {
+  it('opens a file for each of fourteen keys from fourteen connections and refuses the fifteenth', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = await hostHandles(opened, written, []);
+    const errors: unknown[] = [];
+    const onError = (e: unknown) => {
+      errors.push(e);
+    };
+
+    for (let p = 1; p <= 14; p++) {
+      await bindHostGuestChannel(fakeChannel(`recording#k${p}`), h, `peer-${p}`, onError);
+    }
+    expect(errors).toEqual([]);
+    expect(opened).toEqual(Array.from({ length: 13 }, (_, i) => `guest${i + 2}_rec.mp4`));
+    expect(h.guestSlots?.size).toBe(14);
+
+    const fifteenth = fakeChannel('recording#k15');
+    await bindHostGuestChannel(fifteenth, h, 'peer-15', onError);
+
+    expect(fifteenth.onmessage).toBeNull();
+    expect(errors.map((e) => (e as Error).message)).toEqual([
+      'A guest opened more recordings than one take allows. The extra ones were not saved; their own backup has them.',
+    ]);
   });
 });

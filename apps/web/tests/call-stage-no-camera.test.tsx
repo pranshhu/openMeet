@@ -139,3 +139,57 @@ describe('CallStage for a person who joined without a camera', () => {
     expect(screen.queryByText(line)).toBeNull();
   });
 });
+
+describe('CallStage for a remote person who joined with the microphone only', () => {
+  // EventTargets, because a tile listens on the stream it is given.
+  const bob = Object.assign(new EventTarget(), { id: 'stream-bob' }) as unknown as MediaStream;
+  const carol = Object.assign(new EventTarget(), { id: 'stream-carol' }) as unknown as MediaStream;
+  const camOn = { micOn: true, camOn: true, screenSharing: false };
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** The picture of a stream is the <video> that plays it; it is hidden when the tile is an initial. */
+  const pictureShown = (container: HTMLElement, stream: MediaStream) =>
+    Array.from(container.querySelectorAll('video'))
+      .filter((v) => (v as { srcObject?: unknown }).srcObject === stream)
+      .some((v) => v.className.includes('opacity-100'));
+
+  function stage(bobAudioOnly: boolean, carolAudioOnly: boolean) {
+    return render(
+      <CallStage
+        {...baseProps}
+        remoteStream={bob}
+        remotePeers={[
+          { peerId: 'p-bob', name: 'Bob', stream: bob, presence: camOn, audioOnly: bobAudioOnly },
+          { peerId: 'p-carol', name: 'Carol', stream: carol, presence: camOn, audioOnly: carolAudioOnly },
+        ]}
+      />
+    );
+  }
+
+  it('draws the first remote person as an initial whatever their presence says', () => {
+    const { container } = stage(true, false);
+    expect(screen.getByText('B')).toBeInTheDocument();
+    expect(pictureShown(container, bob)).toBe(false);
+    expect(pictureShown(container, carol)).toBe(true);
+    expect(screen.queryByText('C')).toBeNull();
+  });
+
+  it('draws one of the others as an initial whatever their presence says', () => {
+    const { container } = stage(false, true);
+    expect(screen.getByText('C')).toBeInTheDocument();
+    expect(pictureShown(container, carol)).toBe(false);
+    expect(pictureShown(container, bob)).toBe(true);
+    expect(screen.queryByText('B')).toBeNull();
+  });
+
+  it('draws the same people with their pictures without the flag', () => {
+    const { container } = stage(false, false);
+    expect(pictureShown(container, bob)).toBe(true);
+    expect(pictureShown(container, carol)).toBe(true);
+    expect(screen.queryByText('B')).toBeNull();
+    expect(screen.queryByText('C')).toBeNull();
+  });
+});

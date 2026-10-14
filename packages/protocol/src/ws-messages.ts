@@ -27,6 +27,8 @@ export type ClientJoin = {
   producer?: boolean;
   /** Join as an unrecorded screen-share companion. Takes no recorded seat. */
   companion?: boolean;
+  /** Join with the microphone only: this seat sends no camera for as long as the socket is in the room. */
+  audioOnly?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
   /**
@@ -310,6 +312,12 @@ export interface PeerInfo {
    * what a client deployed around this Worker reads.
    */
   notRecorded?: boolean;
+  /**
+   * The Room admitted this seat as microphone only, so no camera picture is
+   * received from it. Present only when true, and never on a producer or a
+   * companion.
+   */
+  audioOnly?: boolean;
 }
 
 export type ServerRoleAssigned = {
@@ -366,6 +374,8 @@ export type ServerPeerJoined = {
   companion?: boolean;
   /** The host has this guest set as not recorded. Present only when true. */
   notRecorded?: boolean;
+  /** The Room admitted this seat as microphone only. Present only when true. */
+  audioOnly?: boolean;
 };
 export type ServerMarker = {
   type: 'marker';
