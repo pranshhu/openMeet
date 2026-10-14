@@ -833,4 +833,12 @@ describe.each([
     expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
     expect(sizeAsked(getUserMedia.mock.calls[1]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
   });
+
+  it('asks a phone for a wide picture when the constraints carry none and its picture is upright', async () => {
+    const getUserMedia = vi.fn().mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-2')]));
+    vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia } });
+    const sm = new SwitchableMedia(media({}, { width: 1080, height: 1920 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 3840 }, { ideal: 2160 }]);
+  });
 });

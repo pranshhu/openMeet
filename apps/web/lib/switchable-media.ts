@@ -89,11 +89,12 @@ export class SwitchableMedia {
     // The shape rides on the track as well: a switched-to camera is asked for
     // the picture shape the lobby camera was, so the recording keeps one shape.
     // Once a camera setting has been applied the constraints hold no size, and
-    // the delivered size says the shape instead.
+    // the delivered size says the shape instead, on a computer: a phone is never
+    // offered the portrait shape, and held upright it delivers a tall picture.
     const askedSize = rawCamTrack?.getConstraints?.();
     let shapeWidth = ideal(askedSize?.width);
     let shapeHeight = ideal(askedSize?.height);
-    if (!shapeWidth || !shapeHeight) {
+    if ((!shapeWidth || !shapeHeight) && !isPhone()) {
       const delivered = rawCamTrack?.getSettings?.();
       shapeWidth = delivered?.width;
       shapeHeight = delivered?.height;
