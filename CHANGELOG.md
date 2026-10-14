@@ -14,8 +14,9 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 - On a computer the lobby offers a portrait (9:16) picture shape for the camera, for
   people who record for vertical video.
-- When two or more people present at the same time, every screen is on the stage, each
-  under its presenter's name. Each was already recorded to its own file.
+- When two or more people present at the same time, everyone sees the other people's
+  screens on the stage, each under its presenter's name. Each was already recorded to
+  its own file.
 - Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
   presentation clicker sends.
 - Present a deck as slides: pick one picture per slide and turn them with Previous and
