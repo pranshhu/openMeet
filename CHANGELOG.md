@@ -12,6 +12,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host can ask a participant to restart their connection from **People**.
+  The participant sees the request and decides; nothing restarts without their
+  press.
+- The host can ask a participant to switch microphone or camera from **People**.
+  The participant picks the device on their own screen; the host is not shown
+  their devices.
 - On a computer the lobby offers a portrait (9:16) picture shape for the camera, for
   people who record for vertical video.
 - When two or more people present at the same time, everyone sees the other people's

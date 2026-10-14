@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { BrowserNote, Listening, Role } from '@openmeet/protocol';
+import type { BrowserNote, HelpAsk as HelpAskCode, Listening, Role } from '@openmeet/protocol';
 import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
@@ -9,6 +9,7 @@ import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
 import { CameraSettings } from './CameraSettings';
 import { SlideControls } from './SlideControls';
+import { HelpAsk } from './HelpAsk';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
 import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
@@ -181,7 +182,11 @@ export function CallStage({
   notRecorded,
   onSetPeerRecorded,
   hostMuted = false,
+  helpAsk = null,
+  onRestartConnection,
+  onDismissHelpAsk,
   onMutePeer,
+  onAskPeer,
   onRemovePeer,
   countdownEndsAt = null,
 }: {
@@ -317,8 +322,16 @@ export function CallStage({
   onSetPeerRecorded?: (peerId: string, recorded: boolean) => void;
   /** The host turned this viewer's microphone off, and it is still off. */
   hostMuted?: boolean;
+  /** The host asked this viewer to restart their connection, and they have not answered. */
+  helpAsk?: HelpAskCode | null;
+  /** The viewer chose to restart their connection. */
+  onRestartConnection?: () => void;
+  /** The viewer turned the host's ask down. */
+  onDismissHelpAsk?: () => void;
   /** Host: ask for one person's microphone to be turned off. */
   onMutePeer?: (peerId: string) => void;
+  /** Host: ask one person to do something about their connection. False when it did not go out. */
+  onAskPeer?: (peerId: string, ask: HelpAskCode) => boolean;
   /** Host: remove one person from the room. */
   onRemovePeer?: (peerId: string) => void;
   /** When the countdown before a take ends, on this tab's own clock; null while none runs. */
@@ -338,6 +351,14 @@ export function CallStage({
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [micMenuOpen, setMicMenuOpen] = useState(false);
   const [camMenuOpen, setCamMenuOpen] = useState(false);
+  const micArrowRef = useRef<HTMLButtonElement>(null);
+  const camArrowRef = useRef<HTMLButtonElement>(null);
+  // Set when the person answers a device question; a new object each time, so
+  // focus moves again even when that list is already open.
+  const [focusArrow, setFocusArrow] = useState<{ device: 'microphone' | 'camera' } | null>(null);
+  useEffect(() => {
+    if (focusArrow) (focusArrow.device === 'microphone' ? micArrowRef : camArrowRef).current?.focus();
+  }, [focusArrow]);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [recordMenuOpen, setRecordMenuOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
@@ -503,6 +524,18 @@ export function CallStage({
       .filter((m) => m.private && m.fromPeerId)
       .pop()?.fromPeerId;
     if (sender && chatTo === '' && chatRecipients.some((r) => r.peerId === sender)) setChatTo(sender);
+  }
+  // Opens this person's own list for the device the host asked about. Nothing
+  // is switched here: that is a press on an item of the list.
+  function chooseDevice(device: 'microphone' | 'camera') {
+    onDismissHelpAsk?.();
+    // The control bar is hidden while chat covers the screen.
+    if (chatOpen) openChat(false);
+    setMicMenuOpen(device === 'microphone');
+    setCamMenuOpen(device === 'camera');
+    setPresentMenuOpen(false);
+    setRecordMenuOpen(false);
+    setFocusArrow({ device });
   }
   function closeSummary() {
     setSummaryOpen(false);
@@ -935,6 +968,15 @@ export function CallStage({
             : 'The host muted your microphone. Turn it back on when you want to speak.'}
         </p>
       )}
+      {helpAsk && phase !== 'finalizing' && (
+        <HelpAsk
+          ask={helpAsk}
+          recording={phase === 'recording'}
+          onRestart={() => onRestartConnection?.()}
+          onChoose={() => chooseDevice(helpAsk === 'camera' ? 'camera' : 'microphone')}
+          onDismiss={() => onDismissHelpAsk?.()}
+        />
+      )}
       {!canRecord && recordUnavailableReason && phase === 'in-call' && recordBlocked && (
         <p className="mb-1 max-w-[92vw] self-center rounded-2xl bg-black/40 px-3 py-1 text-center text-xs text-[#fdd663]">
           {recordUnavailableReason}
@@ -1219,6 +1261,7 @@ export function CallStage({
                 people={remotePeers}
                 recording={takeActive || Boolean(resumeOffer)}
                 onMute={onMutePeer}
+                onAsk={onAskPeer}
                 onRemove={onRemovePeer}
                 onClose={closePeople}
               />
@@ -1274,6 +1317,7 @@ export function CallStage({
                       }}
                     />
                     <button
+                      ref={micArrowRef}
                       type="button"
                       onClick={() => {
                         setMicMenuOpen((o) => !o);
@@ -1341,6 +1385,7 @@ export function CallStage({
                       }}
                     />
                     <button
+                      ref={camArrowRef}
                       type="button"
                       onClick={() => {
                         setCamMenuOpen((o) => !o);

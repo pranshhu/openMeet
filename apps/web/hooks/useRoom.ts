@@ -11,8 +11,10 @@ import {
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
   recordingChannelKind,
+  isHelpAsk,
   isListening,
   type BrowserNote,
+  type HelpAsk,
   type Listening,
   type Role,
   type ServerMessage,
@@ -225,6 +227,8 @@ export interface RoomState {
   micWarning: MicWarning | null;
   /** The host turned this participant's microphone off, and it has not been turned back on. */
   hostMuted: boolean;
+  /** The host asked this participant to do something about their connection; they have not answered. */
+  helpAsk: HelpAsk | null;
   messages: ChatMessage[];
   backupBlobUrl: string | null;
   wavBackupBlobUrl: string | null;
@@ -667,6 +671,7 @@ export function useRoom(slug: string) {
     connectionWarning: null,
     micWarning: null,
     hostMuted: false,
+    helpAsk: null,
     messages: [],
     backupBlobUrl: null,
     wavBackupBlobUrl: null,
@@ -1720,6 +1725,9 @@ export function useRoom(slug: string) {
           phase: phaseOnRoleAssigned(s.phase, anyoneHere),
           peerRecording: m.recording ?? false,
           notRecorded: m.notRecorded === true,
+          // The socket was opened again, which is what a restart ask wanted.
+          // A device ask is about a device, which a new socket does not change.
+          helpAsk: s.helpAsk === 'reconnect' ? null : s.helpAsk,
         }));
         sendPresence();
         // The Room drops its recording flag with the host's socket, and tells a
@@ -1966,6 +1974,15 @@ export function useRoom(slug: string) {
         micOnRef.current = false;
         sendPresence();
         setState((s) => ({ ...s, hostMuted: true }));
+      });
+      // The host asked this person to restart their connection or to switch
+      // a device. Only the question is kept, one at a time; nothing starts
+      // until their own press. A page with no device menus (a producer, a
+      // present-only device) has nothing to switch, so it is not asked.
+      signal.on('peer-help', (m) => {
+        if (roleRef.current === 'host' || !isHelpAsk(m.ask)) return;
+        if (m.ask !== 'reconnect' && !switchableMediaRef.current) return;
+        setState((s) => ({ ...s, helpAsk: m.ask }));
       });
       signal.on('chat', (m) => {
         if (typeof m.text !== 'string' || m.text.length > MAX_CHAT_MESSAGE_LENGTH) return;
@@ -2658,6 +2675,26 @@ export function useRoom(slug: string) {
     signalRef.current?.send({ type: 'peer-mute', peerId });
   }, []);
 
+  /** Host: ask one person to do something about their connection. False when it did not go out. Their page asks them. */
+  const askPeer = useCallback(
+    (peerId: string, ask: HelpAsk): boolean => signalRef.current?.send({ type: 'peer-help', peerId, ask }) ?? false,
+    []
+  );
+
+  /** The person turned down the host's ask. */
+  const dismissHelpAsk = useCallback(() => {
+    setState((s) => ({ ...s, helpAsk: null }));
+  }, []);
+
+  /** The person accepted the host's ask: the socket is dropped and opened again, and joining rebuilds the rest. */
+  const restartConnection = useCallback(() => {
+    setState((s) => ({ ...s, helpAsk: null }));
+    // The restart is the rebuild of this cooldown: a second failed connection
+    // right after it must not tear every connection down again.
+    lastIceReconnectRef.current = Date.now();
+    signalRef.current?.reconnect();
+  }, []);
+
   /** Host: remove one person from the room. The Room closes their socket, and its `peer-left` updates the state. */
   const removePeer = useCallback((peerId: string) => {
     signalRef.current?.send({ type: 'peer-remove', peerId });
@@ -3316,6 +3353,9 @@ export function useRoom(slug: string) {
     dismissIncomingScript,
     setPeerRecorded,
     mutePeer,
+    askPeer,
+    dismissHelpAsk,
+    restartConnection,
     removePeer,
     toggleScreenShare,
     startRecording,

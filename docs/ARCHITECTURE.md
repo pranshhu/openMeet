@@ -65,7 +65,7 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (20 variants) ↔ `ServerMessage` (22).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (21 variants) ↔ `ServerMessage` (23).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
@@ -73,7 +73,9 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
-  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
+  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-help` (`peerId`,
+  `ask`, one of `HELP_ASKS`) is in both unions as well: the Room hands only the host's to that one
+  peer as `{type, ask}`, and that peer's own page asks them. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
   `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
   the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
@@ -240,6 +242,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `peer-mute` is **passed on only from the host**, to the one joined peer it names and never back
   to the sender, as `{type:'peer-mute'}`. Nothing is kept, a take changes nothing about it, and
   the Room turns no microphone on or off: the page that receives it does, and can turn it back on.
+- `peer-help` is **passed on only from the host**, when `peerId` is a string and `ask` is one of
+  `HELP_ASKS`, to the one joined peer it names and never back to the sender, as
+  `{type:'peer-help', ask}` and nothing else of what was sent. Anything else is dropped and no
+  socket is closed. Nothing is kept, a take changes nothing about it, and no answer comes back:
+  the page that receives it asks its person and acts only on their press.
 - `peer-remove` is **acted on only from the host**, for a joined peer that is not a host, during
   a take as outside one: the DO remembers that peer's client id (`session.removed`, the newest 16),
   closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
@@ -396,6 +403,24 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   **Cancel** focused and last, at the row's right end where Remove was; during a take, and
   while an interrupted take can still be resumed, the question says that a recorded
   person's recording here ends.
+  Between them each row has **Help** (given `onAsk`, which `CallStage` fills with `askPeer`),
+  for a producer's and a present-only device's row too: it swaps the row, as Remove does, for
+  "Ask <name> to:" with **Switch microphone**, **Switch camera** and **Restart connection**
+  (a producer's and a present-only device's row has **Restart connection** alone: they have
+  no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
+  time. A `role="status"` line below the list then says "Asked <name>.
+  They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
+  `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
+  **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
+  `microphone` and `camera` its text is "The host asks you to switch microphone." or "…camera."
+  and the first button is **Choose microphone** or **Choose camera**: it clears the ask, closes
+  chat if chat covers the control bar, opens the asked person's own menu for that device (the
+  other menus closed), and moves focus to its arrow button. The box is a `data-picker-container`,
+  so the press that opens the menu is not read as a click outside it. Nothing is switched by the
+  ask or by **Choose…**: a device changes only when the person presses an item of their own menu,
+  through the existing `handleSwitchMic` / `handleSwitchCamera`, and no device list leaves their
+  browser.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
@@ -656,6 +681,16 @@ off until they turn it back on: the handler does what `setMic(false)` does (trac
 `presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
 already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
 sends `peer-mute`, and the panel follows that person's `presence`.
+`helpAsk` holds the one ask a host's `peer-help` left on this page (nothing for a host or an ask
+`isHelpAsk` refuses, and nothing for a `microphone` or `camera` ask on a page with no
+`SwitchableMedia`, which is read from `switchableMediaRef` when the ask arrives; a newer ask
+replaces it). `askPeer(peerId, ask)` is the host's side: it sends
+`peer-help` and returns whether the send went out. `dismissHelpAsk()` clears `helpAsk` and nothing
+else; `restartConnection()` clears it, starts the cooldown of the automatic rebuild
+(`lastIceReconnectRef`), and calls `signal.reconnect()`, the path a second `failed`
+connection takes, which does nothing after a terminal close. A `reconnect` ask is also taken
+down when `role-assigned` arrives again on a socket the page opened again by itself; a
+`microphone` or `camera` ask stays.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
@@ -2028,3 +2063,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   encoded at the chosen quality's bitrate, which is more than that many pixels need. It is not
   offered on a phone, has no framing guide, cannot be changed during a call, and was checked
   with test cameras only.
+- **The host is not told the answer to a help request.** "Asked <name>" reads the same whatever
+  the person does; the host sees a restart as that person's tile leaving and returning.
+- **A help request reaches a page still on "Connecting…" but is drawn only on the call screen.**
+  The page keeps it and shows it when its call screen appears.
+- **A restart gives that person a new id.** A screen they present starts a new file, and their
+  Levels fader and the chat's **To** are forgotten, as on every reconnect.
+- **A page that does not know `peer-help` shows nothing.** A Worker deployed before this
+  message drops it too. In both cases the host's line still reads that the person was asked.
+- **Nothing limits how often the host asks.** After **Not now** the same question can be sent
+  again at once.
+- **The host does not see which device a person is on or what they have.** The microphone and
+  camera asks name no device, and the host names the one it wants by voice.
+- **A person who joined with the microphone only gets the camera ask.** Their camera menu then
+  reads "You joined without a camera. To use one, leave and join again."
+- **A producer and a present-only device are not asked about devices.** The host's row offers
+  them **Restart connection** alone, and a page without device menus drops a device ask.
+- **Where a browser cannot switch a device mid-take, the opened menu reads "Switch after this
+  take".**

@@ -156,6 +156,26 @@ export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; record
 export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
 
 /**
+ * What a host can ask one person to do. A code, not copy. `reconnect` is a
+ * full restart of that person's connection to the room. `microphone` and
+ * `camera` ask them to switch that device: the code names no device, so the
+ * choice stays with the person on their own screen.
+ */
+export const HELP_ASKS = ['reconnect', 'microphone', 'camera'] as const;
+export type HelpAsk = (typeof HELP_ASKS)[number];
+
+export function isHelpAsk(v: unknown): v is HelpAsk {
+  return (HELP_ASKS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The host asks one person to do something about their own connection.
+ * Passed on only from the host, to that person alone, whose own page asks
+ * them and acts only on their answer.
+ */
+export type ClientPeerHelp = { type: 'peer-help'; peerId: string; ask: HelpAsk };
+
+/**
  * The host removes one person from the room. Acted on only from the host:
  * the Room closes that socket with WS_CLOSE_REMOVED, tells everyone else
  * with `peer-left`, and refuses the same tab until the session ends.
@@ -181,6 +201,7 @@ export type ClientMessage =
   | ClientPing
   | ClientRecordingCapability
   | ClientPeerMute
+  | ClientPeerHelp
   | ClientPeerRemove
   | ClientPeerRecorded;
 
@@ -358,6 +379,12 @@ export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; record
  */
 export type ServerPeerMute = { type: 'peer-mute' };
 
+/**
+ * A host's ClientPeerHelp, handed to the one person it names. It carries only
+ * the ask: whoever receives it is the person meant.
+ */
+export type ServerPeerHelp = { type: 'peer-help'; ask: HelpAsk };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -380,6 +407,7 @@ export type ServerMessage =
   | ServerError
   | ServerRecordingCapability
   | ServerPeerMute
+  | ServerPeerHelp
   | ServerPeerRecorded;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
@@ -401,6 +429,7 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'ping',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-remove',
   'peer-recorded',
 ]);
@@ -427,6 +456,7 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'error',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-recorded',
 ]);
 
