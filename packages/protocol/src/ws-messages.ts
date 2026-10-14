@@ -198,6 +198,12 @@ export interface PeerInfo {
    * what a client deployed around this Worker reads.
    */
   notRecorded?: boolean;
+  /**
+   * The Room admitted this seat as microphone only, so no camera picture is
+   * received from it. Present only when true, and never on a producer or a
+   * companion.
+   */
+  audioOnly?: boolean;
 }
 
 export type ServerRoleAssigned = {
@@ -254,6 +260,8 @@ export type ServerPeerJoined = {
   companion?: boolean;
   /** The host has this guest set as not recorded. Present only when true. */
   notRecorded?: boolean;
+  /** The Room admitted this seat as microphone only. Present only when true. */
+  audioOnly?: boolean;
 };
 export type ServerMarker = {
   type: 'marker';

@@ -467,6 +467,7 @@ export class Room implements DurableObject {
               ordinal: pp.ordinal,
               ...(pp.companion ? { companion: true } : {}),
               ...(this.isNotRecorded(pp) ? { notRecorded: true } : {}),
+              ...(this.isAudioOnlySeat(pp) ? { audioOnly: true } : {}),
             })),
         });
         this.broadcastExcept(ws, {
@@ -478,6 +479,7 @@ export class Room implements DurableObject {
           ordinal: p.ordinal,
           ...(p.companion ? { companion: true } : {}),
           ...(this.isNotRecorded(p) ? { notRecorded: true } : {}),
+          ...(this.isAudioOnlySeat(p) ? { audioOnly: true } : {}),
         });
         break;
       case 'ping':
@@ -880,6 +882,11 @@ export class Room implements DurableObject {
   /** The host set this guest as not recorded. Looked up by client id, so it holds across a reconnect. */
   private isNotRecorded(p: PeerAttachment): boolean {
     return p.role === 'guest' && !!p.clientId && this.notRecorded.includes(p.clientId);
+  }
+
+  /** A recorded seat that joined with the microphone only. A producer and a companion never are one. */
+  private isAudioOnlySeat(p: PeerAttachment): boolean {
+    return p.audioOnly === true && p.role !== 'producer' && !p.companion;
   }
 
   private send(ws: WebSocket, msg: ServerMessage): void {

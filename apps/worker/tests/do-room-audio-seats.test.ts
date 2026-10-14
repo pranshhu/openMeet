@@ -194,3 +194,98 @@ describe('Room DO: recorded seats when everyone joined with the microphone only'
     closeAll(opened);
   });
 });
+
+describe('Room DO: telling the other pages which seats are microphone only', () => {
+  type Seat = { ws: WebSocket; seen: ServerMessage[]; outcome: Promise<Outcome> };
+
+  async function seat(slug: string, extra: Record<string, unknown>, opened: WebSocket[]): Promise<Seat> {
+    const ws = await openWs(slug);
+    opened.push(ws);
+    const seen: ServerMessage[] = [];
+    ws.addEventListener('message', (e) => seen.push(JSON.parse(e.data as string) as ServerMessage));
+    const outcome = waitForRoleOrClose(ws);
+    ws.send(JSON.stringify({ type: 'join', displayName: `P${opened.length}`, userAgent: 'ua', ...extra }));
+    expect((await outcome).kind).toBe('role-assigned');
+    return { ws, seen, outcome };
+  }
+
+  /** A pong proves every earlier message to this socket has arrived. */
+  async function settle(...seats: Seat[]): Promise<void> {
+    await Promise.all(
+      seats.map(
+        (s) =>
+          new Promise<void>((resolve) => {
+            const onMsg = (e: MessageEvent) => {
+              if ((JSON.parse(e.data as string) as ServerMessage).type === 'pong') {
+                s.ws.removeEventListener('message', onMsg);
+                resolve();
+              }
+            };
+            s.ws.addEventListener('message', onMsg);
+            s.ws.send(JSON.stringify({ type: 'ping' }));
+          })
+      )
+    );
+  }
+
+  const peerJoined = (s: Seat) =>
+    s.seen.filter((m): m is Extract<ServerMessage, { type: 'peer-joined' }> => m.type === 'peer-joined');
+
+  it('lists an audio-only seat with the flag and a camera seat without the key, and echoes it on peer-joined', async () => {
+    const slug = 'aud-tell-aaa';
+    await seedRoom(slug, 'tok-aud-tell');
+    const opened: WebSocket[] = [];
+    const mic = await seat(slug, { audioOnly: true }, opened);
+    const cam = await seat(slug, {}, opened);
+    const third = await seat(slug, {}, opened);
+    const outcome = await third.outcome;
+    await settle(mic, cam);
+    const peers = outcome.kind === 'role-assigned' ? outcome.msg.peers : [];
+    expect(peers.map((p) => [p.displayName, p.audioOnly])).toEqual(
+      expect.arrayContaining([
+        ['P1', true],
+        ['P2', undefined],
+      ])
+    );
+    expect(peers).toHaveLength(2);
+    expect('audioOnly' in peers.find((p) => p.displayName === 'P2')!).toBe(false);
+    // The first seat heard both later joins; only the second of them has a camera.
+    expect(peerJoined(mic).map((m) => 'audioOnly' in m)).toEqual([false, false]);
+    expect(peerJoined(cam).map((m) => 'audioOnly' in m)).toEqual([false]);
+    closeAll(opened);
+  });
+
+  it('puts the flag on the peer-joined of an audio-only seat', async () => {
+    const slug = 'aud-tjoi-aaa';
+    await seedRoom(slug, 'tok-aud-tjoi');
+    const opened: WebSocket[] = [];
+    const first = await seat(slug, {}, opened);
+    const second = await seat(slug, { audioOnly: true }, opened);
+    const third = await seat(slug, {}, opened);
+    await settle(first, second);
+    expect(peerJoined(first).map((m) => m.audioOnly)).toEqual([true, undefined]);
+    expect('audioOnly' in peerJoined(first)[1]!).toBe(false);
+    expect(peerJoined(second).map((m) => 'audioOnly' in m)).toEqual([false]);
+    expect(third.seen.some((m) => m.type === 'peer-joined')).toBe(false);
+    closeAll(opened);
+  });
+
+  it('lists a producer and a companion that sent audioOnly without it', async () => {
+    const slug = 'aud-tpro-aaa';
+    await seedRoom(slug, 'tok-aud-tpro');
+    const opened: WebSocket[] = [];
+    const first = await seat(slug, {}, opened);
+    await seat(slug, { producer: true, audioOnly: true }, opened);
+    await seat(slug, { companion: true, audioOnly: true }, opened);
+    const last = await seat(slug, {}, opened);
+    const outcome = await last.outcome;
+    await settle(first);
+    const peers = outcome.kind === 'role-assigned' ? outcome.msg.peers : [];
+    expect(peers).toHaveLength(3);
+    expect(peers.some((p) => p.role === 'producer')).toBe(true);
+    expect(peers.some((p) => p.companion === true)).toBe(true);
+    expect(peers.filter((p) => 'audioOnly' in p)).toEqual([]);
+    expect(peerJoined(first).map((m) => 'audioOnly' in m)).toEqual([false, false, false]);
+    closeAll(opened);
+  });
+});

@@ -136,6 +136,8 @@ export interface RemotePeer {
   companion?: boolean | undefined;
   /** The host set this guest as not recorded. */
   notRecorded?: boolean | undefined;
+  /** The Room admitted this seat as microphone only: its tile is an initial and no camera picture is received. */
+  audioOnly?: boolean | undefined;
 }
 
 export function applyRemotePeerPresence(
@@ -1374,7 +1376,8 @@ export function useRoom(slug: string) {
         remotePeerId: string,
         remoteOrdinal: number,
         remoteRole?: Role,
-        remoteCompanion?: boolean
+        remoteCompanion?: boolean,
+        remoteAudioOnly?: boolean
       ) => {
         // One ICE restart per CONNECTION. This used to be declared once per
         // join(), shared by every peer in the mesh, so one peer's restart
@@ -1391,6 +1394,7 @@ export function useRoom(slug: string) {
           remotePeerId,
           iceServers,
           screenOnly: remoteRole === 'producer' || Boolean(remoteCompanion),
+          audioOnly: remoteAudioOnly === true,
           sendSignal: (m) => signal.send(m),
           onConnectionStateChange: (cs) => {
             if (cs === 'connected') {
@@ -1441,7 +1445,7 @@ export function useRoom(slug: string) {
             setState((s) => {
               const remotePeers = s.remotePeers.some((r) => r.peerId === remotePeerId)
                 ? s.remotePeers.map((r) => (r.peerId === remotePeerId ? { ...r, stream: remoteStream } : r))
-                : [...s.remotePeers, { peerId: remotePeerId, name: null, stream: remoteStream, role: remoteRole, companion: remoteCompanion }];
+                : [...s.remotePeers, { peerId: remotePeerId, name: null, stream: remoteStream, role: remoteRole, companion: remoteCompanion, audioOnly: remoteAudioOnly }];
               return {
                 ...s,
                 phase: phaseOnRemoteStream(s.phase),
@@ -1686,7 +1690,7 @@ export function useRoom(slug: string) {
         // dropped. Tracks are added once because every connection in
         // `started` is new: handing a live one over again is the
         // InvalidAccessError that leaves both sides waiting for an offer.
-        const started = peers.map((other) => startPeer(other.peerId, other.ordinal, other.role, other.companion));
+        const started = peers.map((other) => startPeer(other.peerId, other.ordinal, other.role, other.companion, other.audioOnly === true));
         // Everyone already here → negotiate now and leave the waiting room.
         // Otherwise wait for 'peer-joined'.
         const anyoneHere = peers.length > 0;
@@ -1704,6 +1708,7 @@ export function useRoom(slug: string) {
             role: pp.role,
             companion: pp.companion,
             notRecorded: pp.notRecorded === true,
+            audioOnly: pp.audioOnly === true,
           })),
           // Every connection listed here is new and no camera has arrived on it:
           // a stream still held belongs to a connection that is closed.
@@ -1756,7 +1761,7 @@ export function useRoom(slug: string) {
         // Only the side that was already here opens the connection; the joiner
         // opened its own from the `peers` list in role-assigned. Both opening
         // one would produce two connections per pair.
-        const peer = startPeer(m.peerId, m.ordinal, m.role, m.companion);
+        const peer = startPeer(m.peerId, m.ordinal, m.role, m.companion, m.audioOnly === true);
         if (!asProducer && !asCompanion) {
           peer.setLocalStreamAfterFirstOffer(
             withBoardAudio(localStream, boardRef.current),
@@ -1784,6 +1789,7 @@ export function useRoom(slug: string) {
                       role: m.role,
                       companion: m.companion,
                       notRecorded: m.notRecorded === true,
+                      audioOnly: m.audioOnly === true,
                     }
                   : r
               )
@@ -1796,6 +1802,7 @@ export function useRoom(slug: string) {
                   role: m.role,
                   companion: m.companion,
                   notRecorded: m.notRecorded === true,
+                  audioOnly: m.audioOnly === true,
                 },
               ],
           // 'peer-left' is recoverable: the peer may have simply reconnected.

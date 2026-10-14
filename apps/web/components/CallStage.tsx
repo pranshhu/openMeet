@@ -706,7 +706,7 @@ export function CallStage({
         volume: volumeOf(firstRemote?.peerId),
         name: nameWithCapability(firstRemote?.name ?? peerName ?? peerFallback, firstRemote?.peerId, isHost, capabilities),
         muted: companion ? true : false,
-        camOff: incomingVideoOff || (firstRemotePresence ? !firstRemotePresence.camOn : false),
+        camOff: incomingVideoOff || firstRemote?.audioOnly === true || (firstRemotePresence ? !firstRemotePresence.camOn : false),
         presence: (
           <>
             {firstRemotePresence && <PresenceBadge {...firstRemotePresence} />}
@@ -1149,7 +1149,7 @@ export function CallStage({
                   volume: volumeOf(r.peerId),
                   name: nameWithCapability(r.name ?? 'Guest', r.peerId, isHost, capabilities),
                   muted: companion ? true : false,
-                  camOff: incomingVideoOff || (presence ? !presence.camOn : !r.stream),
+                  camOff: incomingVideoOff || r.audioOnly === true || (presence ? !presence.camOn : !r.stream),
                   presence: (
                     <>
                       {presence && <PresenceBadge {...presence} />}

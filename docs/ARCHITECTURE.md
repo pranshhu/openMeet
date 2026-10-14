@@ -102,8 +102,11 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   the socket is in the room) lifts the recorded cap from 4 to 8 when every recorded seat claimed it;
   the DO enforces the per-role caps at `join`. "Present only" is never
   offered to a producer: `?producer=1` wins over `?present=1`. `role-assigned` (peers)
-  and `peer-joined` echo `companion?: boolean` and `notRecorded?: boolean` (the host set that guest
-  as not recorded; `role-assigned` carries it for the joining connection too).
+  and `peer-joined` echo `companion?: boolean`, `notRecorded?: boolean` (the host set that guest
+  as not recorded; `role-assigned` carries it for the joining connection too) and
+  `audioOnly?: boolean` (the Room admitted that seat as microphone only; present only when true,
+  never on a producer or a companion, and `role-assigned` has no such field for the joining
+  connection itself).
 
 **Chunk wire format** — each chunk = **TWO ordered DataChannel sends**: (1) a JSON **string**
 header `{idx,offset,size,ts}` (`encodeChunkHeader` = `JSON.stringify`), then (2) the binary
@@ -629,7 +632,8 @@ State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
-`notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
+`notRecorded`, `audioOnly`: true only when the Room's field is exactly `true`), `notRecorded`
+(this peer: the host set it as not recorded, so its capture never
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
 backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
@@ -737,6 +741,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   makes, so a camera that is added, a person who joins or a screen that starts being shared
   is turned down in that very description; `syncSendQuality` (`useRoom`) tells each new or
   rebuilt connection, from a ref the switch writes itself.
+  A connection built with `audioOnly` (a seat the Room admitted as microphone only) does not
+  receive that seat's camera: the video transceiver that arrives on the camera stream is turned
+  off the same way, kept off in every later offer and answer, and left off when
+  `setIncomingVideoOff(false)` takes the other video again. The stream still goes to
+  `onRemoteStream`, so the sound plays; a video on another stream id is a shared screen and is
+  received as usual. `CallStage` draws that person as an initial whatever their presence says.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
 - Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
@@ -1364,6 +1374,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   camera on, and joining that way a room of five or more ends on "This room is full". The lobby's
   size figures and the take's 50 call-copy files (`CALL_COPY_MAX_FILES`) are still those of a
   four-person room.
+- **A microphone-only seat can still present a screen to everyone.** The seat is held to
+  sending no camera, not to sending no video: a shared screen, a photo or a video it presents
+  arrives as one more stream and is shown like any shared screen. The hold is made by the page
+  that receives, from the Room's `audioOnly` field, so a page changed to ignore that field
+  still shows what such a seat sends.
 - **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt

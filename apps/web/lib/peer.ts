@@ -44,6 +44,8 @@ export interface PeerOpts {
   onNegotiationError?: (err: unknown) => void;
   /** Peer is unrecorded/screen-only (companion or producer). Every stream is routed to onRemoteScreen. */
   screenOnly?: boolean;
+  /** The Room admitted this peer as microphone only: no camera video is received from it. A shared screen still is. */
+  audioOnly?: boolean;
 }
 
 export class ConnectionTimeoutError extends Error {
@@ -76,6 +78,8 @@ export class PeerConnection {
   private lowPower = false;
   /** This side has stopped taking the other side's video. Its audio is never touched. */
   private incomingVideoOff = false;
+  /** Video transceivers that carry a microphone-only peer's camera stream. They stay off whatever incomingVideoOff says. */
+  private readonly cameraVideoOff = new Set<RTCRtpTransceiver>();
   /** Serializes handleSignal() calls so signals are processed strictly in order. */
   private signalTail: Promise<void> = Promise.resolve();
   // Lazily created by whenConnected() so a caller that never asks pays nothing.
@@ -100,7 +104,7 @@ export class PeerConnection {
         this.makingOffer = true;
         // A track added while incoming video is off brings a transceiver that
         // would ask for the other side's video; the offer must not carry that.
-        if (this.incomingVideoOff) this.applyIncomingVideo();
+        if (this.holdsIncomingVideo()) this.applyIncomingVideo();
         await pc.setLocalDescription();
         const sdp = pc.localDescription?.sdp ?? '';
         this.opts.sendSignal({ type: 'webrtc-offer', sdp, ...this.addr() });
@@ -137,6 +141,11 @@ export class PeerConnection {
       // First remote stream (or any track of it) = camera.
       if (this.remoteCameraStreamId === null || stream.id === this.remoteCameraStreamId) {
         this.remoteCameraStreamId = stream.id;
+        // The sound plays; the picture is not taken, so the far browser does not send it.
+        if (this.opts.audioOnly && ev.track.kind === 'video') {
+          this.cameraVideoOff.add(ev.transceiver);
+          this.applyIncomingVideo();
+        }
         this.opts.onRemoteStream(stream);
         return;
       }
@@ -340,6 +349,11 @@ export class PeerConnection {
     this.applyIncomingVideo();
   }
 
+  /** Something keeps incoming video off: the person's choice, or a microphone-only peer's camera. */
+  private holdsIncomingVideo(): boolean {
+    return this.incomingVideoOff || this.cameraVideoOff.size > 0;
+  }
+
   /**
    * Set the receive half of every video transceiver and leave its send half
    * alone. A changed direction makes the browser ask for a negotiation, which
@@ -353,7 +367,7 @@ export class PeerConnection {
       // A browser may refuse this for one transceiver. The others, and the
       // offer or answer being made, must not be lost with it.
       try {
-        if (this.incomingVideoOff) t.direction = sends ? 'sendonly' : 'inactive';
+        if (this.incomingVideoOff || this.cameraVideoOff.has(t)) t.direction = sends ? 'sendonly' : 'inactive';
         else t.direction = sends ? 'sendrecv' : 'recvonly';
       } catch {
         // That transceiver keeps the direction it has.
@@ -507,7 +521,7 @@ export class PeerConnection {
       // The offer may have brought a new video (someone joined, or started to
       // share a screen). Turned down here, the answer itself says so and the
       // other side never starts sending it.
-      if (this.incomingVideoOff) this.applyIncomingVideo();
+      if (this.holdsIncomingVideo()) this.applyIncomingVideo();
       await pc.setLocalDescription();
       const sdp = pc.localDescription?.sdp ?? '';
       this.opts.sendSignal({ type: 'webrtc-answer', sdp, ...this.addr() });
