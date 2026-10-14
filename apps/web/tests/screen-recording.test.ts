@@ -1675,3 +1675,101 @@ describe('the key of a guest screen stretch', () => {
     await stopScreenRecording(h);
   });
 });
+
+describe('the keyed screen files one take keeps waiting', () => {
+  const fragment = (idx: number) => [
+    JSON.stringify({ idx, offset: idx * 4, size: 4, ts: 100 }),
+    new Uint8Array(4).fill(idx + 1).buffer,
+  ];
+
+  // A folder that counts the files it opened and the ones closed.
+  function folder() {
+    let opened = 0;
+    const closed = new Set<number>();
+    const dir = {
+      getFileHandle: async (name: string) => {
+        const n = opened++;
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => { closed.add(n); } }) };
+      },
+      removeEntry: async () => {},
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    return { dir, closed: () => [...closed].sort((a, b) => a - b), opened: () => opened };
+  }
+
+  // One keyed share that writes a fragment; its channel can be closed without a finish message.
+  async function share(h: RecordingHandles, key: string) {
+    const ch = Object.assign(new EventTarget(), {
+      label: `recording-screen-1#${key}`,
+      readyState: 'open',
+      send: () => {},
+    });
+    await bindHostScreenChannel(ch as unknown as RTCDataChannel, h, undefined, `peer-${key}`);
+    for (const f of fragment(0)) await (ch as unknown as RTCDataChannel).onmessage?.({ data: f } as MessageEvent);
+    const seg = h.screenByKey?.get(key);
+    await vi.waitFor(() => expect(seg?.receiver.bytesWritten).toBe(4));
+    return {
+      ch: ch as unknown as RTCDataChannel,
+      drop: async () => {
+        ch.dispatchEvent(new Event('close'));
+        await new Promise((r) => setTimeout(r, 5));
+      },
+    };
+  }
+
+  it('closes the ninth file that waits and keeps the first eight open', async () => {
+    // Removal that must fail this test: the bound on files waiting.
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    for (let n = 1; n <= 9; n++) await (await share(h, `k${n}`)).drop();
+
+    expect(f.opened()).toBe(9);
+    expect(f.closed()).toEqual([8]);
+    expect([...(h.screenByKey?.keys() ?? [])]).toEqual(['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8']);
+    expect(h.screenEndedEarlyByFile?.size).toBe(9);
+  });
+
+  it('does not count a file that was taken up again', async () => {
+    // Removal that must fail this test: leaving the segment's live channel out of the count.
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    for (let n = 1; n <= 8; n++) await (await share(h, `k${n}`)).drop();
+    const again = Object.assign(new EventTarget(), { label: 'recording-screen-1#k1', readyState: 'open', send: () => {} });
+    await bindHostScreenChannel(again as unknown as RTCDataChannel, h, undefined, 'peer-new');
+
+    await (await share(h, 'k9')).drop();
+    expect(f.closed()).toEqual([]);
+
+    await (await share(h, 'k10')).drop();
+    expect(f.closed()).toEqual([9]);
+  });
+
+  it('does not count a file that was closed', async () => {
+    // Removal that must fail this test: forgetting the key of a file that closes.
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    for (let n = 1; n <= 8; n++) await (await share(h, `k${n}`)).drop();
+    const done = await share(h, 'k9');
+    await done.drop();
+    expect(f.closed()).toEqual([8]);
+
+    await (await share(h, 'k10')).drop();
+
+    expect(f.closed()).toEqual([8, 9]);
+  });
+
+  it('does not count the host’s own screen files', async () => {
+    // Removal that must fail this test: counting every open screen writer instead of the keyed ones waiting.
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    installMediaRecorder();
+    for (let n = 0; n < 8; n++) {
+      await startScreenRecording(h, fakeScreen(), 'host', null);
+      await stopScreenRecording(h);
+    }
+    expect(h.screenWriters).toHaveLength(8);
+
+    await (await share(h, 'k1')).drop();
+
+    expect(f.closed()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+});

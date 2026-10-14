@@ -56,6 +56,13 @@ const MAX_GUEST_SCREEN_NOTES = 48;
 const MAX_SCREEN_NOTES_PER_SHARER = 12;
 
 /**
+ * Keyed guest screen files one take keeps open with no channel feeding them,
+ * for a sharer whose connection may come back. A ninth is closed as a file
+ * with no key is, so one participant cannot keep any number of files open.
+ */
+const MAX_WAITING_SCREENS = 8;
+
+/**
  * A channel-label key: the guest's recording id, or the Room's peer id when the
  * label carries none. Both are letters, digits and hyphens. The key is held for
  * the whole take and written into the notes, so anything else is not a key.
@@ -1350,7 +1357,10 @@ export function bindGuestChannel(
   channel: RTCDataChannel,
   sender: ChunkSender,
   clockSync?: ClockSync,
-  onHostTakeId?: (id: string) => void
+  onHostTakeId?: (id: string) => void,
+  // Asked first when the host says where its file stands. True means the
+  // answer was dealt with and the sender is not to replay from it.
+  onResumeOffset?: (lastIdx: number) => boolean
 ): void {
   channel.onmessage = (ev: MessageEvent) => {
     if (typeof ev.data !== 'string') return;
@@ -1366,6 +1376,7 @@ export function bindGuestChannel(
         }
         sender.handleControl(msg);
       } else if (msg.type === 'resume_offset') {
+        if (onResumeOffset?.(msg.lastIdx)) return;
         // The host's own number, so it can be nonsense or out of range. `resume`
         // rebuilds the whole queue from it, so a bad value would empty it, and
         // an index this sender never put on the wire cannot have been received.
@@ -1469,7 +1480,25 @@ export async function rebindGuestRecordingWhenConnected(
       });
       running.rebind(channel);
       running.hold();
-      bindGuestChannel(channel, running);
+      bindGuestChannel(channel, running, undefined, undefined, (lastIdx) => {
+        // A host that holds less than it acknowledged is not holding this file:
+        // what is still queued would land at offsets past the start of a new
+        // one. This stretch ends and the share goes on in a new file. A stretch
+        // that has ended, or has given up, has nothing to continue.
+        if (
+          h.screenSender !== running ||
+          running.isAbandoned ||
+          !Number.isSafeInteger(lastIdx) ||
+          lastIdx >= running.lastAckedIdx
+        ) {
+          return false;
+        }
+        running.giveUp();
+        void stopScreenRecording(h)
+          .then(() => startScreenRecording(h, screenStream, 'guest', peer, onError))
+          .catch((e: unknown) => onError?.(e));
+        return true;
+      });
     } else {
       await stopScreenRecording(h);
       await startScreenRecording(h, screenStream, 'guest', peer, onError);
@@ -2303,12 +2332,15 @@ function followScreenChannel(
     h.screenLive?.delete(segment);
     // A keyed share that dropped with bytes on disk may come back on a rebuilt
     // connection. Its file stays open for that until the take ends, which
-    // closes every writer. A take already ending has nothing to wait for.
+    // closes every writer. A take already ending has nothing to wait for, and
+    // one that already has the most files waiting closes this one.
     if (
       key !== undefined &&
       !receiver.receivedFinalized &&
       receiver.bytesWritten > 0 &&
-      !h.callCopiesClosed
+      !h.callCopiesClosed &&
+      [...(h.screenByKey?.values() ?? [])].filter((s) => s !== seg && !h.screenLive?.has(s.segment)).length <
+        MAX_WAITING_SCREENS
     ) {
       (h.screenEndedEarlyByFile ??= new Set()).add(writer.fileName);
       return;

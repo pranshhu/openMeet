@@ -1188,8 +1188,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
    a reconnect leaves the running share's recorder and its local OPFS backup alone: the
    share's channel is recreated under the share's own key (`recording-screen-<n>#<key>`) and the
-   host continues the same file. Host rebinds new channel to existing
-   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
+   host continues the same file. A host that answers with less than it acknowledged does not hold
+   that file, so the sharer ends the stretch and starts a new numbered segment. Host rebinds new
+   channel to existing receiver, found by a stable key (see below), not by the DO's
+   fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -1361,8 +1363,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 - **A screen file can still end where the connection did.** A share continues in the same host
   file across a reconnect, but one stopped while its connection is down, one on a page that
-  reloads, and one whose stream was given up or is being sent later end the file there and read
-  incomplete on the host; the sharer's screen backup holds all of it.
+  reloads, one whose stream was given up or is being sent later, one whose file the host no
+  longer holds because it started another take or reloaded and resumed, and a ninth file waiting
+  in one take end the file there and read incomplete on the host; the sharer's screen backup holds
+  all of it.
 - **A screen file whose sharer dropped and never came back stays open until the take ends.** The
   host keeps it for a return, and closes it with the other files at End & save.
 - **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
