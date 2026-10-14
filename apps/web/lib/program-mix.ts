@@ -9,7 +9,11 @@ const PROGRAM_NOTE =
   'whose file ends first stays as a still picture. It re-encodes to H.264 and AAC, so it is slow and not lossless. ' +
   'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
   'leftOut names every file of the take that cmd does not read, and why. If ffmpeg says a stream specifier matches ' +
-  'no streams, a file in audio has no sound track: take its input and its adelay out.';
+  'no streams, a file in audio has no sound track: take its input and its adelay out. ' +
+  "If ffmpeg says that ':v' matches no streams, a file in video has no picture (a person recorded without a " +
+  'camera whose take did not finish cleanly, or a take saved from its crash copy): ' +
+  "take that file's input and its chain out of the filter, lower xstack's inputs by one, and add the file to the " +
+  'audio mix, or ask for the take again.';
 
 const SOUND_NOTE =
   "cmd writes one file, named in output, and changes none of the take's files. Nobody in this take was recorded " +

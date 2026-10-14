@@ -1953,3 +1953,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A camera file with no sound track and no WAV makes the program command stop.** ffmpeg says the
   stream specifier matches no streams; the sync file's note says to take that file's input and
   its `adelay` out.
+- **A camera file that holds no picture and is not marked audio only makes the program command
+  stop.** A guest recorded without a camera whose take did not finish cleanly, and any take saved
+  from its crash copy, have such a file; ffmpeg says `:v` matches no streams, and the sync file's
+  note says how to take that file out.
+- **In a resumed take whose resumed WAV is empty, the host's voice after the reload is not in the
+  program file.** The sound is read per person, so the earlier WAV stands for the host.

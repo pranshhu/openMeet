@@ -57,7 +57,11 @@ const NOTE =
   'whose file ends first stays as a still picture. It re-encodes to H.264 and AAC, so it is slow and not lossless. ' +
   'Voices are added at the level they were recorded. Run it in the recording folder with ffmpeg 4.4 or later. ' +
   'leftOut names every file of the take that cmd does not read, and why. If ffmpeg says a stream specifier matches ' +
-  'no streams, a file in audio has no sound track: take its input and its adelay out.';
+  'no streams, a file in audio has no sound track: take its input and its adelay out. ' +
+  "If ffmpeg says that ':v' matches no streams, a file in video has no picture (a person recorded without a " +
+  'camera whose take did not finish cleanly, or a take saved from its crash copy): ' +
+  "take that file's input and its chain out of the filter, lower xstack's inputs by one, and add the file to the " +
+  'audio mix, or ask for the take again.';
 
 const LABEL_TWO = "Program file: the 2 cameras in a grid with everyone's audio mixed (re-encodes, slow)";
 const LEFT_OUT_SENTENCE = ' The sync file lists the files it leaves out.';
@@ -370,5 +374,34 @@ describe('programMix: a take where nobody has a camera', () => {
     expect(program?.output).toBe('host_r_program.mp4');
     expect(program?.video).toEqual(['host_r.mp4']);
     expect(program?.note).toContain('H.264');
+  });
+});
+
+describe('programMix: the note of a camera take', () => {
+  it('says what to do when ffmpeg stops on a file that has no picture', () => {
+    const note = programOf(withChecks(take))?.note ?? '';
+    expect(note).toContain("If ffmpeg says that ':v' matches no streams, a file in video has no picture");
+    expect(note).toContain("take that file's input and its chain out of the filter, lower xstack's inputs by one");
+    expect(note).toContain('a file in audio has no sound track: take its input and its adelay out.');
+  });
+});
+
+describe('programMix: a resumed take with no host WAV', () => {
+  it("reads the host's resumed camera file once and mixes it once", () => {
+    const input = withChecks({
+      ...take,
+      hostFile: 'host_r_resumed.mp4',
+      hostWavFile: undefined,
+      resumed: true,
+      hostParts: [
+        { name: 'host-ana_r.mp4', offsetMs: 0, kind: 'camera' },
+        { name: 'host_r_resumed.mp4', offsetMs: 20_000, kind: 'camera' },
+      ],
+    });
+    const program = programOf(input);
+    expect(program?.video).toEqual(['host_r_resumed.mp4', 'guest_r.mp4']);
+    expect([...(program?.audio ?? [])].sort()).toEqual(['guest_r.wav', 'host-ana_r.mp4', 'host_r_resumed.mp4']);
+    expect(program?.cmd.match(/-i "host_r_resumed\.mp4"/g)).toHaveLength(1);
+    expect(program?.cmd).toContain('amix=inputs=3:normalize=0[a]');
   });
 });
