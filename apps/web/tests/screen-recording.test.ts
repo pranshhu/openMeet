@@ -1340,3 +1340,338 @@ describe('screen files from before the reload', () => {
     expect(verdict.text).toContain('Ask Bo for the backup');
   });
 });
+
+describe('a guest screen share whose connection is rebuilt', () => {
+  const finished = (id: string) =>
+    JSON.stringify({ type: 'recording-finalized', recordingId: id, totalBytes: 12, sha256: 'abc' });
+  const fragment = (idx: number) => [
+    JSON.stringify({ idx, offset: idx * 4, size: 4, ts: 100 }),
+    new Uint8Array(4).fill(idx + 1).buffer,
+  ];
+
+  // A folder that keeps what its files were told: names asked for, byte
+  // positions written, closes and removals.
+  function folder() {
+    const opened: string[] = [];
+    const removed: string[] = [];
+    const positions: number[] = [];
+    let closes = 0;
+    const writable = {
+      write: async (op: { position: number }) => { positions.push(op.position); },
+      close: async () => { closes++; },
+    };
+    const dir = {
+      getFileHandle: async (name: string) => {
+        opened.push(name);
+        return { name, createWritable: async () => writable };
+      },
+      removeEntry: async (name: string) => { removed.push(name); },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    return { dir, opened, removed, positions, closes: () => closes };
+  }
+
+  function channel(label: string) {
+    const sent: { type: string; lastIdx?: number }[] = [];
+    const ch = Object.assign(new EventTarget(), {
+      label,
+      readyState: 'open',
+      send: (json: string) => { sent.push(JSON.parse(json)); },
+    });
+    return { ch: ch as unknown as RTCDataChannel, sent, close: () => ch.dispatchEvent(new Event('close')) };
+  }
+
+  const deliver = async (ch: RTCDataChannel, ...frames: (string | ArrayBuffer)[]) => {
+    for (const f of frames) await ch.onmessage?.({ data: f } as MessageEvent);
+  };
+
+  const keyed = (key: string) => `recording-screen-1#${key}`;
+
+  // Two fragments written on a first channel, then that channel closes with no finish message.
+  async function dropped(label = keyed('share-key')) {
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    const first = channel(label);
+    await bindHostScreenChannel(first.ch, h, undefined, 'peer-old');
+    await deliver(first.ch, ...fragment(0), ...fragment(1));
+    await vi.waitFor(() => expect(h.screenReceivers?.get(1)?.bytesWritten).toBe(8));
+    first.close();
+    await new Promise((r) => setTimeout(r, 5));
+    return { f, h, first };
+  }
+
+  it('keeps the file open when a keyed channel closes before its finish message', async () => {
+    // Removal that must fail this test: the keep-open branch of the close handler.
+    const { f, h } = await dropped();
+
+    expect(f.closes()).toBe(0);
+    expect(f.opened).toEqual(['guest_screen_r.mp4']);
+    expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual(['guest_screen_r.mp4']);
+    expect([...(h.screenLive?.keys() ?? [])]).toEqual([]);
+  });
+
+  it('continues the same file when a channel with the same key arrives', async () => {
+    // Removal that must fail this test: the key lookup, so that a second file opens.
+    const { f, h } = await dropped();
+    const second = channel(keyed('share-key'));
+
+    await bindHostScreenChannel(second.ch, h, undefined, 'peer-new');
+
+    expect(f.opened).toEqual(['guest_screen_r.mp4']);
+    expect(second.sent).toEqual([expect.objectContaining({ type: 'resume_offset', lastIdx: 1 })]);
+    expect(second.ch.binaryType).toBe('arraybuffer');
+    expect([...(h.screenLive?.entries() ?? [])]).toEqual([[1, 'peer-new']]);
+    expect(h.screenSharerPeerIdsByFile?.get('guest_screen_r.mp4')).toBe('peer-new');
+    expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual([]);
+
+    await deliver(second.ch, ...fragment(2));
+    await vi.waitFor(() => expect(f.positions).toEqual([0, 4, 8]));
+
+    await deliver(second.ch, finished('r'));
+    second.close();
+    await vi.waitFor(() => expect(f.closes()).toBe(1));
+    expect(h.screenWriters).toHaveLength(1);
+    expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual([]);
+    expect(collectScreenSegments(h)).toEqual([{ file: 'guest_screen_r.mp4', offsetMs: 0, sharer: 'peer-new' }]);
+  });
+
+  it('ignores the close of a channel the segment has moved on from', async () => {
+    // Removal that must fail this test: the check that the closing channel is the current one.
+    const { f, h, first } = await dropped();
+    const second = channel(keyed('share-key'));
+    await bindHostScreenChannel(second.ch, h, undefined, 'peer-new');
+
+    first.close();
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(f.closes()).toBe(0);
+    expect([...(h.screenLive?.keys() ?? [])]).toEqual([1]);
+    expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual([]);
+  });
+
+  it('removes the file of a keyed channel that closes before writing a byte', async () => {
+    // Removal that must fail this test: the bytes-written condition of the keep-open branch.
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    const ch = channel(keyed('share-key'));
+    await bindHostScreenChannel(ch.ch, h);
+
+    ch.close();
+
+    await vi.waitFor(() => expect(f.removed).toEqual(['guest_screen_r.mp4']));
+    expect(f.closes()).toBe(1);
+    expect(h.screenWriters).toEqual([]);
+    expect(collectScreenSegments(h)).toEqual([]);
+  });
+
+  it('forgets the key of a finished file, so a later channel with it opens a new file', async () => {
+    // Removal that must fail this test: forgetting the key when the file is closed.
+    const { f, h } = await dropped();
+    const second = channel(keyed('share-key'));
+    await bindHostScreenChannel(second.ch, h, undefined, 'peer-new');
+    await deliver(second.ch, finished('r'));
+    second.close();
+    await vi.waitFor(() => expect(f.closes()).toBe(1));
+
+    await bindHostScreenChannel(channel(keyed('share-key')).ch, h, undefined, 'peer-new');
+
+    expect(f.opened).toEqual(['guest_screen_r.mp4', 'guest_screen_r_2.mp4']);
+  });
+
+  it.each([`recording-screen-1#${'k'.repeat(65)}`, 'recording-screen-1#$', 'recording-screen-1#'])(
+    'treats the label %s as a channel with no key',
+    async (label) => {
+      // Removal that must fail this test: the key shape check.
+      const { f, h } = await dropped(label);
+      expect(f.closes()).toBe(1);
+      expect([...(h.screenEndedEarlyByFile ?? [])]).toEqual(['guest_screen_r.mp4']);
+
+      await bindHostScreenChannel(channel(label).ch, h, undefined, 'peer-new');
+
+      expect(f.opened).toEqual(['guest_screen_r.mp4', 'guest_screen_r_2.mp4']);
+    }
+  );
+
+  describe('ending the take', () => {
+    // Everything a take needs to end, with a finished camera, around a keyed share.
+    async function presenting(label = keyed('share-key')) {
+      const f = folder();
+      const camera = new ChunkReceiver({
+        recordingId: 'r',
+        writer: { write: async () => {}, close: async () => {}, fileName: 'cam.mp4' } as never,
+        sendControl: () => {},
+      });
+      await camera.handleMessage(finished('r'));
+      const h: RecordingHandles = {
+        recordingId: 'r',
+        dir: f.dir,
+        receiver: camera,
+        channelRef: { current: { readyState: 'open' } as RTCDataChannel },
+      };
+      const first = channel(label);
+      await bindHostScreenChannel(first.ch, h, undefined, 'peer-old');
+      await deliver(first.ch, ...fragment(0), ...fragment(1));
+      await vi.waitFor(() => expect(h.screenReceivers?.get(1)?.bytesWritten).toBe(8));
+      return { f, h, first };
+    }
+
+    it('stops waiting for a keyed file when its channel closes during the wait', async () => {
+      // Removal that must fail this test: the "take has not begun to end" condition of the keep-open branch.
+      vi.useFakeTimers();
+      try {
+        const { h, first } = await presenting();
+        let ended = false;
+        const done = endHostRecording(h).then(() => { ended = true; });
+
+        await vi.advanceTimersByTimeAsync(50);
+        first.close();
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(ended, 'kept waiting for a channel that closed').toBe(true);
+        await done;
+        expect(collectScreenSegments(h)).toEqual([
+          { file: 'guest_screen_r.mp4', offsetMs: 0, endedEarly: true, sharer: 'peer-old' },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('closes a kept-open file without waiting for it, and lists it ended early', async () => {
+      // Removal that must fail this test: leaving the file out of screenLive when its channel closes.
+      vi.useFakeTimers();
+      try {
+        const { f, h, first } = await presenting();
+        first.close();
+        await vi.advanceTimersByTimeAsync(10);
+        let ended = false;
+        const done = endHostRecording(h).then(() => { ended = true; });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(ended, 'waited for a sharer that dropped').toBe(true);
+        await done;
+        expect(f.closes()).toBe(1);
+        expect(collectScreenSegments(h)).toEqual([
+          { file: 'guest_screen_r.mp4', offsetMs: 0, endedEarly: true, sharer: 'peer-old' },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('waits for a taken-up file and lists it complete when its finish message arrives', async () => {
+      // Removal that must fail this test: ending the receiver's wait in the keep-open branch.
+      const { f, h, first } = await presenting();
+      first.close();
+      await new Promise((r) => setTimeout(r, 5));
+      const second = channel(keyed('share-key'));
+      await bindHostScreenChannel(second.ch, h, undefined, 'peer-new');
+
+      const done = endHostRecording(h);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(f.closes(), 'closed the file before its finish message').toBe(0);
+      await deliver(second.ch, finished('r'));
+      await done;
+
+      expect(f.closes()).toBe(1);
+      expect(collectScreenSegments(h)).toEqual([{ file: 'guest_screen_r.mp4', offsetMs: 0, sharer: 'peer-new' }]);
+    });
+  });
+});
+
+describe('the key of a guest screen stretch', () => {
+  const peerWith = (ch: RTCDataChannel) => {
+    const keys: (string | undefined)[] = [];
+    return { keys, peer: { createRecordingScreenChannel: (key?: string) => (keys.push(key), ch) } };
+  };
+  const openChannel = () =>
+    Object.assign(new EventTarget(), { readyState: 'open', close: vi.fn(), send: vi.fn() }) as unknown as RTCDataChannel;
+
+  it('is made for each stretch, put on its channel and cleared when the stretch stops', async () => {
+    // Removal that must fail this test: clearing the key in stopScreenRecording.
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-key' };
+    const firstChannel = openChannel();
+    const first = peerWith(firstChannel);
+
+    await startScreenRecording(h, fakeScreen(), 'guest', first.peer);
+    const firstKey = h.screenKey;
+    (firstChannel as { readyState: string }).readyState = 'closed';
+
+    expect(firstKey).toMatch(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+    expect(first.keys).toEqual([firstKey]);
+
+    await stopScreenRecording(h);
+    expect(h.screenKey).toBeUndefined();
+
+    const secondChannel = openChannel();
+    const second = peerWith(secondChannel);
+    await startScreenRecording(h, fakeScreen(), 'guest', second.peer);
+    expect(second.keys).toEqual([h.screenKey]);
+    expect(h.screenKey).not.toBe(firstKey);
+    (secondChannel as { readyState: string }).readyState = 'closed';
+    await stopScreenRecording(h);
+  });
+
+  it('is not kept when the stretch is rolled back', async () => {
+    // Removal that must fail this test: clearing the key where the stretch is rolled back.
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-key-rollback' };
+    const screen = fakeScreen();
+    const track = screen.getVideoTracks()[0] as { readyState: string };
+    const ch = Object.assign(new EventTarget(), { readyState: 'connecting', close: vi.fn() }) as unknown as RTCDataChannel;
+
+    const started = startScreenRecording(h, screen, 'guest', peerWith(ch).peer);
+    track.readyState = 'ended';
+    ch.dispatchEvent(new Event('open'));
+    await started;
+
+    expect(h.screenKey).toBeUndefined();
+  });
+
+  it('is not kept when its channel never opens', async () => {
+    // Removal that must fail this test: clearing the key where the channel did not open.
+    installMediaRecorder();
+    vi.useFakeTimers();
+    try {
+      const h: RecordingHandles = { recordingId: 'rec-key-unopened' };
+      const ch = Object.assign(new EventTarget(), { readyState: 'connecting', close: vi.fn() }) as unknown as RTCDataChannel;
+
+      const started = startScreenRecording(h, fakeScreen(), 'guest', peerWith(ch).peer);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await started;
+
+      expect(h.screenKey).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is not kept when the recorder fails to start', async () => {
+    // Removal that must fail this test: clearing the key where the recorder failed to start.
+    installMediaRecorder();
+    const mr = (globalThis as unknown as { MediaRecorder: { prototype: { start: () => void } } }).MediaRecorder;
+    const start = mr.prototype.start;
+    mr.prototype.start = () => { throw new Error('MediaRecorder start failed'); };
+    try {
+      const h: RecordingHandles = { recordingId: 'rec-key-failed' };
+
+      await startScreenRecording(h, fakeScreen(), 'guest', peerWith(openChannel()).peer, vi.fn());
+
+      expect(h.screenKey).toBeUndefined();
+    } finally {
+      mr.prototype.start = start;
+    }
+  });
+
+  it('is not made for the host’s own screen', async () => {
+    // Removal that must fail this test: making the key outside the guest branch.
+    installMediaRecorder();
+    const h: RecordingHandles = { recordingId: 'rec-host', dir: fakeDir() };
+
+    await startScreenRecording(h, fakeScreen(), 'host', null);
+
+    expect(h.screenKey).toBeUndefined();
+    await stopScreenRecording(h);
+  });
+});

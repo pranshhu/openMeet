@@ -314,6 +314,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.95 | Send later, only where it applies | Host and one guest in a call. The host opens **Who is recorded** and turns the guest off. The guest opens the arrow beside the camera button. Then the host turns the guest on again, records, and the guest ticks **Send my recording later** and opens the menu again while the host presses **End & save** | With the guest set as not recorded the menu has no **Send my recording later** and no line about the recording staying on the device. Once recorded again it has both. While the take is being saved the ticked item is greyed, as it is during the take | ☐ | |
 | 8.96 | Camera settings during a take | Use a camera whose exposure or colour the browser lists (most USB webcams in Chrome). Host and one guest record. Ten seconds in, the guest opens the arrow beside the camera button, chooses **Camera settings** and moves **Exposure** or **Colour temperature**; then ticks **Auto exposure** on and off, presses **Reset** and **Close**. End & save | The picture changes on both sides while the sliders move, the REC mark stays and the take does not stop. **Exposure time** is greyed while **Auto exposure** is on. **Reset** puts the sliders back to where they were when the panel opened. A camera that lists none of these has no **Camera settings** item. The saved file plays through the change at one resolution | ☐ | |
 | 8.97 | Camera settings in the lobby | Use a camera whose exposure or colour the browser lists. In the lobby press **Camera settings** under the preview, move a slider, then join and record a take | The preview changes as the slider moves. In the call the tile and the saved file show the same picture. The same button is on the check page; a camera that lists none of the controls, and **Microphone only**, show no button | ☐ | |
+| 8.98 | Screen share across a reconnect | Host and one guest; the guest presents a window; the host records; after 10 s turn the guest's network off for 10 s and on again; after 10 s more the host presses End & save | The folder holds one `guest_screen_…mp4`, the summary lists it as complete, and it plays through the gap | ☐ | |
 
 ## 9 — Deploy
 
@@ -353,9 +354,9 @@ Also not covered automatically. Needs 3 browser profiles.
   camera; a real screen comes from a second device joined with **Present only**.
 - **Mid-take camera or mic switching needs Chromium.** Safari and iPhone switch
   between takes.
-- **A screen share across a full WebSocket reconnect continues in a new numbered
-  segment.** Camera and WAV resume into the same files; the interrupted segment's
-  tail is only in the sharer's screen backup, and the summary marks it incomplete.
+- **A screen share stopped while its connection is down, or on a page that reloads,
+  ends its file there.** The summary marks the file incomplete and the rest is only in
+  the sharer's screen backup.
 - **A second host tab mid-take asks before it takes the call over.** If the host
   joins there anyway, the first tab's files end there; the rest of each guest's
   part is only in that guest's backup.

@@ -86,6 +86,15 @@ export interface CallCopy {
 /** One guest's open ingest: its receiver, the channel target and the file behind it. */
 type GuestIngest = { receiver: ChunkReceiver; ref: { current: RTCDataChannel | null }; writer?: FileWriter };
 
+/** One guest screen file: its number, the receiver and writer behind it, and the channel that feeds it now. */
+export type ScreenSegment = {
+  segment: number;
+  receiver: ChunkReceiver;
+  writer: FileWriter;
+  ref: { current: RTCDataChannel | null };
+  key?: string;
+};
+
 export interface RecordingHandles {
   recordingId: string;
   hostWriter?: FileWriter;
@@ -211,6 +220,8 @@ export interface RecordingHandles {
   screenBackup?: BackupRecorder | undefined;
   screenBackups?: BackupRecorder[] | undefined;
   screenChannel?: RTCDataChannel | undefined;
+  /** The key the running stretch's channel label carries, so a rebuilt connection can continue it. */
+  screenKey?: string | undefined;
   screenReceivers?: Map<number, ChunkReceiver>;
   /**
    * Segment numbers handed out to guests' screen channels this take. A number
@@ -233,6 +244,12 @@ export interface RecordingHandles {
   screenWriters?: FileWriter[];
   screenChannelRef?: { current: RTCDataChannel | null };
   screenEndedEarlyByFile?: Set<string>;
+  /**
+   * Guest screen segments that carry a key from their sharer, by that key, from
+   * the moment the receiver exists until the file is closed. A channel that
+   * arrives with a held key continues that file.
+   */
+  screenByKey?: Map<string, ScreenSegment>;
   /**
    * Segment start times on the local clock, keyed by file name, for the sync
    * sidecar. Keyed, not positional: host and guest segments register at
@@ -1430,10 +1447,9 @@ export async function rebindGuestRecordingWhenConnected(
   screenStream?: MediaStream | null,
   onError?: (err: unknown) => void
 ): Promise<void> {
-  const hOld = recordingRef.current;
-  if (hOld && screenStream) {
-    await stopScreenRecording(hOld);
-  }
+  // The stretch running now, if any. Its recorder and backup keep going while
+  // the connection is rebuilt, so the file the host holds can be continued.
+  const running = recordingRef.current?.screenSender;
   // No timeout: a reconnect can take longer than a fresh join, and giving up
   // here would silently stop the guest's stream for the rest of the take.
   await peer.whenConnected(Infinity);
@@ -1441,8 +1457,23 @@ export async function rebindGuestRecordingWhenConnected(
   if (!h) return;
   rebindGuestRecording(h, peer);
   if (screenStream && screenStream.getVideoTracks().some((t) => t.readyState === 'live')) {
-    await stopScreenRecording(h);
-    await startScreenRecording(h, screenStream, 'guest', peer, onError);
+    if (running && h.screenSender === running && h.screenRecorder && h.screenKey && !running.isAbandoned) {
+      // The same key lets the host find the file this stretch was writing; its
+      // answer to the query says where to replay from.
+      const channel = peer.createRecordingScreenChannel(h.screenKey);
+      h.screenChannel = channel;
+      channel.addEventListener('open', () => {
+        if (channel.readyState === 'open') {
+          channel.send(JSON.stringify({ type: 'resume_query', recordingId: h.recordingId }));
+        }
+      });
+      running.rebind(channel);
+      running.hold();
+      bindGuestChannel(channel, running);
+    } else {
+      await stopScreenRecording(h);
+      await startScreenRecording(h, screenStream, 'guest', peer, onError);
+    }
   }
 }
 
@@ -1945,7 +1976,7 @@ export async function startScreenRecording(
   h: RecordingHandles,
   screen: MediaStream,
   role: 'host' | 'guest',
-  peer: { createRecordingScreenChannel: () => RTCDataChannel } | null,
+  peer: { createRecordingScreenChannel: (key?: string) => RTCDataChannel } | null,
   onError?: (err: unknown) => void,
   sharerName?: string
 ): Promise<void> {
@@ -2035,7 +2066,11 @@ export async function startScreenRecording(
     if (!peer) return;
     // One channel per segment: each carries exactly one file, so idx/offset and
     // the retransmit buffer reset naturally instead of needing a segment tag.
-    const channel = peer.createRecordingScreenChannel();
+    // The key names this stretch to the host for as long as it runs, so a
+    // channel rebuilt after a reconnect continues the same file.
+    const key = crypto.randomUUID();
+    const channel = peer.createRecordingScreenChannel(key);
+    h.screenKey = key;
     h.screenChannel = channel;
     // Bounded. Unbounded, a channel whose SCTP negotiation stalled never
     // settled — and this is awaited from beginGuestRecording, so the guest sat
@@ -2059,6 +2094,7 @@ export async function startScreenRecording(
     if (!opened) {
       onError?.(new Error('The screen-recording channel did not open; the screen is not being recorded.'));
       h.screenChannel = undefined;
+      h.screenKey = undefined;
       rollback();
       try { channel.close(); } catch { /* already gone */ }
       return;
@@ -2066,6 +2102,7 @@ export async function startScreenRecording(
     if (screen.getVideoTracks()[0]?.readyState === 'ended') {
       try { channel.close(); } catch { /* already gone */ }
       h.screenChannel = undefined;
+      h.screenKey = undefined;
       rollback();
       return;
     }
@@ -2105,6 +2142,7 @@ export async function startScreenRecording(
       try { channel.close(); } catch { /* already gone */ }
       await screenBackup.stop();
       h.screenChannel = undefined;
+      h.screenKey = undefined;
       h.screenSender = undefined;
       rollback();
       onError?.(e);
@@ -2131,6 +2169,7 @@ export async function stopScreenRecording(h: RecordingHandles): Promise<void> {
   await h.screenWriter?.close();
   h.screenWriter = undefined;
   h.screenSender = undefined;
+  h.screenKey = undefined;
   if (h.screenChannel) {
     try { h.screenChannel.close(); } catch { /* already gone */ }
     h.screenChannel = undefined;
@@ -2154,6 +2193,17 @@ export async function bindHostScreenChannel(
 ): Promise<void> {
   channel.binaryType = 'arraybuffer';
   if (!h.dir) return;
+  // The sharer's own page chose the key. One of another shape is no key.
+  const label: unknown = channel.label;
+  const labelKey = typeof label === 'string' ? recordingChannelKind(label).key : undefined;
+  const key = labelKey !== undefined && GUEST_KEY_RE.test(labelKey) ? labelKey : undefined;
+  const held = key !== undefined ? h.screenByKey?.get(key) : undefined;
+  if (held) {
+    // The sharer's connection was rebuilt: its file goes on from where it ends.
+    followScreenChannel(h, held, channel, sharerPeerIdOrName, onError);
+    held.receiver.answerResume();
+    return;
+  }
   // A number is claimed before anything is awaited, so two shares arriving
   // together never hold the same one.
   const claim = () =>
@@ -2208,9 +2258,6 @@ export async function bindHostScreenChannel(
     noted = true;
   });
   if (noted) (h.screenNotesBySharer ??= new Map()).set(sharer, sharerNotes + 1);
-  if (sharerPeerIdOrName) {
-    (h.screenSharerPeerIdsByFile ??= new Map()).set(writer.fileName, sharerPeerIdOrName);
-  }
   const ref: { current: RTCDataChannel | null } = { current: channel };
   const receiver = new ChunkReceiver({
     recordingId: h.recordingId,
@@ -2224,12 +2271,49 @@ export async function bindHostScreenChannel(
     ...(onError ? { onError } : {}),
   });
   h.screenReceivers = new Map(h.screenReceivers ?? []).set(segment, receiver);
+  const seg: ScreenSegment = { segment, receiver, writer, ref, ...(key !== undefined ? { key } : {}) };
+  if (key !== undefined) (h.screenByKey ??= new Map()).set(key, seg);
+  followScreenChannel(h, seg, channel, sharerPeerIdOrName, onError);
+}
+
+/**
+ * Feed a guest's screen segment from `channel`: the one it arrived on, or the
+ * one a rebuilt connection brought for the same keyed file.
+ */
+function followScreenChannel(
+  h: RecordingHandles,
+  seg: ScreenSegment,
+  channel: RTCDataChannel,
+  sharerPeerIdOrName: string | undefined,
+  onError?: (err: unknown) => void
+): void {
+  const { segment, receiver, writer, ref, key } = seg;
+  ref.current = channel;
+  if (sharerPeerIdOrName) {
+    (h.screenSharerPeerIdsByFile ??= new Map()).set(writer.fileName, sharerPeerIdOrName);
+  }
   (h.screenLive ??= new Map()).set(segment, sharerPeerIdOrName ?? '');
+  h.screenEndedEarlyByFile?.delete(writer.fileName);
   channel.onmessage = (ev: MessageEvent) => {
     void receiver.handleMessage(ev.data as string | ArrayBuffer);
   };
   channel.addEventListener('close', () => {
+    // The segment has moved to a newer channel: this one's end is no news.
+    if (ref.current !== channel) return;
     h.screenLive?.delete(segment);
+    // A keyed share that dropped with bytes on disk may come back on a rebuilt
+    // connection. Its file stays open for that until the take ends, which
+    // closes every writer. A take already ending has nothing to wait for.
+    if (
+      key !== undefined &&
+      !receiver.receivedFinalized &&
+      receiver.bytesWritten > 0 &&
+      !h.callCopiesClosed
+    ) {
+      (h.screenEndedEarlyByFile ??= new Set()).add(writer.fileName);
+      return;
+    }
+    if (key !== undefined) h.screenByKey?.delete(key);
     // A closed channel delivers nothing more, so a take being saved stops
     // waiting for this file's finish message.
     receiver.resolveEarly();

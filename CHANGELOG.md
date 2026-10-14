@@ -291,6 +291,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A screen share that is being recorded continues in the same file after the
+  presenter's connection drops and comes back, instead of starting a second file.
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.

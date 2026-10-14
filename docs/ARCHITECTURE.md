@@ -129,7 +129,7 @@ capabilities reach (`supportedFrameRates`), so 50 and 60 appear on few cameras. 
 lobby's size figures follow the rate the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
-`recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
+`recording-screen-<n>`, optionally keyed `recording-screen-<n>#<key>` (the host matches the prefix); `backup#<file name>` (one leftover backup
 going back to the host); `backup#file-<uuid>` (one file a participant picked to send the
 host: the same channel and messages, with the file's own name in its `backup_offer`).
 WS close codes: `4001` capacity-full,
@@ -1155,7 +1155,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
    still open is waited for the same way; one whose channel has closed is not, and its writer was
-   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   closed by that event, except that a keyed screen file which had bytes and no finish message is
+   kept open for the sharer's return and closed with the other files. A channel that closes during the wait ends the wait for its file. A screen
    file that gave no finish signal within the limits, or whose channel closed without one, is
    listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
    so the channel's close and the end of the take can both ask for it.
@@ -1185,8 +1186,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
    runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
    the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
-   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
-   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
+   a reconnect leaves the running share's recorder and its local OPFS backup alone: the
+   share's channel is recreated under the share's own key (`recording-screen-<n>#<key>`) and the
+   host continues the same file. Host rebinds new channel to existing
    receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
@@ -1357,10 +1359,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
-- **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
-  (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
-  finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
-  connection, with each segment backed up locally in OPFS.
+- **A screen file can still end where the connection did.** A share continues in the same host
+  file across a reconnect, but one stopped while its connection is down, one on a page that
+  reloads, and one whose stream was given up or is being sent later end the file there and read
+  incomplete on the host; the sharer's screen backup holds all of it.
+- **A screen file whose sharer dropped and never came back stays open until the take ends.** The
+  host keeps it for a return, and closes it with the other files at End & save.
 - **Taking the host seat over mid-take ends the first tab's files.** A second tab in the
   host's browser asks before it joins while a take is live. If the host joins there anyway,
   the new tab takes the host seat (4006 to the old one); the old tab keeps its phase and

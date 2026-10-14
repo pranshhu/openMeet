@@ -680,11 +680,11 @@ exercised end-to-end in real Chrome.
 
 Known gaps, listed below:
 
-- **Screen share reconnect starts a new segment rather than appending to the old file.**
-  A guest's camera and WAV recording pick up again by themselves, from the last acknowledged
-  chunk, into the same files on the host's disk. A screen share comes back for everyone and
-  recording continues in a new numbered segment; the interrupted segment's tail is only in
-  the sharer's screen backup, and the session summary marks that segment incomplete.
+- **Some screen shares still end their file early.** A share that is being recorded
+  continues in the same file when its connection drops and comes back. One stopped while the
+  connection is down, one on a page that reloads, and one that is being sent later end the
+  file there; the session summary marks it incomplete and the sharer's screen backup holds
+  all of it.
 - **Taking the call over in a second tab during a take ends the first tab's files.**
   A second tab in the host's browser asks before it joins while a recording is running.
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
