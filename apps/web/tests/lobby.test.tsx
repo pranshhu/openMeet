@@ -2391,6 +2391,164 @@ describe('Lobby', () => {
       });
     });
   });
+
+  describe('camera settings under the preview', () => {
+    const exposureOf = (id: string, at: number, lists = true) => {
+      const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ deviceId: 'mic1' }) };
+      const video = {
+        id,
+        kind: 'video',
+        enabled: true,
+        stop: vi.fn(),
+        getSettings: () => ({ deviceId: 'cam1', width: 1280, height: 720, frameRate: 30, exposureTime: at }),
+        getCapabilities: () => (lists ? { exposureTime: { min: 10, max: 1000, step: 10 } } : {}),
+        getConstraints: () => ({ frameRate: 30 }),
+        applyConstraints: vi.fn().mockResolvedValue(undefined),
+      };
+      const stream = Object.assign(new EventTarget(), {
+        getTracks: () => [audio, video],
+        getAudioTracks: () => [audio],
+        getVideoTracks: () => [video],
+      }) as unknown as MediaStream;
+      return { stream, video };
+    };
+    const micStream = () => {
+      const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ deviceId: 'mic1' }) };
+      return Object.assign(new EventTarget(), {
+        getTracks: () => [audio],
+        getAudioTracks: () => [audio],
+        getVideoTracks: () => [],
+      }) as unknown as MediaStream;
+    };
+    const lobbyWith = (getUserMedia: ReturnType<typeof vi.fn>, checkOnly = false) => {
+      vi.stubGlobal('navigator', {
+        userAgent: 'test',
+        mediaDevices: {
+          getUserMedia,
+          enumerateDevices: vi
+            .fn()
+            .mockResolvedValue([...DEVICES, { kind: 'videoinput', deviceId: 'cam2', label: 'USB cam' }]),
+        },
+      });
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly={checkOnly} />);
+    };
+    const settingsButton = () => screen.queryByRole('button', { name: 'Camera settings' });
+
+    it('keeps the panel closed until the button is pressed, and a slider changes the previewed camera', async () => {
+      const { stream, video } = exposureOf('t1', 100);
+      lobbyWith(vi.fn().mockResolvedValue(stream));
+      const button = await screen.findByRole('button', { name: 'Camera settings' });
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      const micOnlyButton = screen.getByRole('button', { name: 'Microphone only' });
+      expect(button.compareDocumentPosition(micOnlyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      fireEvent.click(button);
+
+      expect(button).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('region', { name: 'Camera settings' })).toBeInTheDocument();
+      fireEvent.change(screen.getByRole('slider', { name: 'Exposure time' }), { target: { value: '300' } });
+      await waitFor(() => expect(video.applyConstraints).toHaveBeenCalledTimes(1));
+      expect(video.applyConstraints).toHaveBeenCalledWith({ frameRate: 30, advanced: [{ exposureTime: 300 }] });
+    });
+
+    it('hides the panel when the button is pressed again', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream));
+      const button = await screen.findByRole('button', { name: 'Camera settings' });
+      fireEvent.click(button);
+      expect(screen.getByRole('region', { name: 'Camera settings' })).toBeInTheDocument();
+
+      fireEvent.click(button);
+
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('asks the camera for its controls once, not on every key typed in the name field', async () => {
+      const { stream, video } = exposureOf('t1', 100);
+      // Only the camera-controls code reads this key; the lobby's own quality and frame rate reads do not.
+      let reads = 0;
+      video.getCapabilities = () => ({
+        get exposureTime() {
+          reads++;
+          return { min: 10, max: 1000, step: 10 };
+        },
+      });
+      lobbyWith(vi.fn().mockResolvedValue(stream));
+      await screen.findByRole('button', { name: 'Camera settings' });
+      const asked = reads;
+      expect(asked).toBeGreaterThan(0);
+
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'A' } });
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ab' } });
+
+      expect(reads).toBe(asked);
+    });
+
+    it('closes the panel from its own Close button', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream));
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      expect(settingsButton()).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('offers no button for a camera that lists none of the controls', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100, false).stream));
+
+      await screen.findByLabelText('Camera');
+
+      expect(settingsButton()).toBeNull();
+    });
+
+    it('offers no button with Microphone only', async () => {
+      lobbyWith(
+        vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+          c.video === false ? micStream() : exposureOf('t1', 100).stream
+        )
+      );
+      await screen.findByRole('button', { name: 'Camera settings' });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Microphone only' }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Microphone only' })).toHaveAttribute('aria-pressed', 'true'));
+      expect(settingsButton()).toBeNull();
+    });
+
+    it('drops an open panel when Microphone only is chosen', async () => {
+      lobbyWith(
+        vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+          c.video === false ? micStream() : exposureOf('t1', 100).stream
+        )
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Microphone only' }));
+
+      await waitFor(() => expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull());
+    });
+
+    it('is on the check page too', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream), true);
+
+      expect(await screen.findByRole('button', { name: 'Camera settings' })).toBeInTheDocument();
+    });
+
+    it('shows the new camera’s value when the camera picker opens another capture', async () => {
+      const first = exposureOf('t1', 100);
+      const getUserMedia = vi.fn().mockResolvedValue(first.stream);
+      lobbyWith(getUserMedia);
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+      expect(screen.getByRole('slider', { name: 'Exposure time' })).toHaveValue('100');
+
+      getUserMedia.mockResolvedValue(exposureOf('t2', 300).stream);
+      fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'cam2' } });
+
+      await waitFor(() => expect(screen.getByRole('slider', { name: 'Exposure time' })).toHaveValue('300'));
+    });
+  });
 });
 
 describe('Lobby: a title under the name', () => {

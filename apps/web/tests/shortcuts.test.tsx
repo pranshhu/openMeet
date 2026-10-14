@@ -152,6 +152,7 @@ describe('Shortcuts', () => {
       ['C', 'Chat'],
       ['T', 'Teleprompter'],
       ['M', 'Marker, while recording'],
+      ['← →', 'Previous or next slide'],
       ['?', 'This list'],
     ] as const) {
       expect(screen.getByText(does).previousElementSibling).toHaveTextContent(keys);
@@ -669,7 +670,7 @@ describe('Shortcuts: the switch for the single keys', () => {
     for (const does of ['Microphone on or off', 'Marker with a note, while recording', 'This list']) {
       expect(row(does)).toHaveClass('opacity-60');
     }
-    for (const does of ['Record (host)', 'End & save (host)']) expect(row(does)).not.toHaveClass('opacity-60');
+    for (const does of ['Record (host)', 'End & save (host)', 'Previous or next slide']) expect(row(does)).not.toHaveClass('opacity-60');
 
     on();
     expect(screen.queryByText(said)).toBeNull();

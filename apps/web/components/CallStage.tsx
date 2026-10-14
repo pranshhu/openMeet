@@ -7,10 +7,13 @@ import { Teleprompter } from './Teleprompter';
 import { SessionSummary } from './SessionSummary';
 import { MediaBoardPanel } from './MediaBoardPanel';
 import { LevelsPanel } from './LevelsPanel';
+import { CameraSettings } from './CameraSettings';
+import { SlideControls } from './SlideControls';
 import { PeoplePanel } from './PeoplePanel';
 import type { MediaBoard } from '@/lib/media-board';
 import { ACCENT_HEX, type Look } from '@/lib/look';
-import type { LoadSample, RemotePeer } from '@/hooks/useRoom';
+import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
+import type { PresentedSlides } from '@/lib/slides';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
 import { ChatPanel, chatSenderLabel, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
@@ -32,6 +35,7 @@ import { BROWSER_NOTE_TEXT } from '@/lib/browser-guidance';
 import { LISTENING_TAG } from '@/lib/listening';
 import { joinedTitle } from '@/lib/name-tag';
 import { isPhone } from '@/lib/switchable-media';
+import { cameraControls } from '@/lib/camera-controls';
 import { useProblemAlert, requestProblemNotifications } from '@/hooks/use-problem-alert';
 import { useTakeGuard } from '@/hooks/use-take-guard';
 import { downloadNamesFor } from '@/lib/file-names';
@@ -148,6 +152,7 @@ export function CallStage({
   activeCamId,
   isFallbackMedia = false,
   presentingRearCamera = false,
+  slides = null,
   readLoad,
   readTrackHealth,
   lowPower = false,
@@ -254,7 +259,7 @@ export function CallStage({
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
   onDismissScript?: () => void;
-  onToggleScreen: (source?: File | 'rear-camera') => void;
+  onToggleScreen: (source?: PresentSource) => void;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
@@ -263,6 +268,8 @@ export function CallStage({
   activeCamId?: string | undefined;
   isFallbackMedia?: boolean;
   presentingRearCamera?: boolean;
+  /** The deck this page presents, turned with Previous and Next; null or absent when there is none. */
+  slides?: PresentedSlides | null;
   /** One reading of how this device is coping; polled only while a take records. */
   readLoad?: () => Promise<LoadSample>;
   /** Read on a timer by the track panel; it must keep its identity between renders. */
@@ -423,6 +430,10 @@ export function CallStage({
   const showFallbackNotice = Boolean(isFallbackMedia && takeActive);
   // Joined with no camera: there is none to turn on or to pick until this person rejoins.
   const noCamera = !!localStream && localStream.getVideoTracks().length === 0;
+  const cameraTrack = localStream?.getVideoTracks()[0];
+  const [cameraSettingsOpen, setCameraSettingsOpen] = useState(false);
+  // Asked of the camera only while the menu is open, not on every render.
+  const offersCameraSettings = camMenuOpen && !noCamera && !!cameraTrack && cameraControls(cameraTrack).length > 0;
 
   async function handleSwitchMic(deviceId: string) {
     if (!onSwitchMic) return;
@@ -1223,7 +1234,7 @@ export function CallStage({
               rows the bar wraps to. Hidden on mobile while chat or the summary
               covers the stage. */}
           <div
-            className={`shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
+            className={`relative z-20 shrink-0 flex-col items-center px-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] ${chatOpen || showSummary ? 'hidden sm:flex' : 'flex'}`}
           >
             {/* In the flow above the bar, so it covers no face and no other
                 panel, and it hides with the bar while chat covers a phone. */}
@@ -1234,6 +1245,10 @@ export function CallStage({
                 onVolume={(peerId, v) => setVolumes((m) => new Map(m).set(peerId, v))}
               />
             )}
+            {cameraSettingsOpen && cameraTrack && (
+              <CameraSettings key={currentCamId} track={cameraTrack} onClose={() => setCameraSettingsOpen(false)} />
+            )}
+            {slides && <SlideControls key={slides.stream.id} slides={slides} />}
             {/* Mounted while hidden too: its place in the show must survive
                 hiding the strip in the middle of a take. */}
             {hasRundown && (
@@ -1402,6 +1417,19 @@ export function CallStage({
                               </button>
                             ) : null
                           )}
+                        {offersCameraSettings && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setCamMenuOpen(false);
+                              setCameraSettingsOpen(true);
+                            }}
+                            className="mb-1 flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border-b border-white/10 px-3 py-2.5 text-left text-sm text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"
+                          >
+                            <span>Camera settings</span>
+                          </button>
+                        )}
                         <div className="px-3 py-1.5 text-xs font-semibold text-white/70 uppercase tracking-wider">
                           Camera
                         </div>
@@ -1523,7 +1551,7 @@ export function CallStage({
                       >
                         <label
                           role="menuitem"
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
+                          className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
                         >
                           <span>A photo or video</span>
                           <input
@@ -1538,6 +1566,24 @@ export function CallStage({
                             }}
                           />
                         </label>
+                        <label
+                          role="menuitem"
+                          className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
+                        >
+                          <span>Slides (pictures)</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="sr-only"
+                            onChange={(e) => {
+                              const files = e.target.files;
+                              if (!files || files.length === 0) return;
+                              setPresentMenuOpen(false);
+                              onToggleScreen(Array.from(files));
+                            }}
+                          />
+                        </label>
                         {!screenShareSupported && (
                           <button
                             type="button"
@@ -1546,7 +1592,7 @@ export function CallStage({
                               setPresentMenuOpen(false);
                               onToggleScreen('rear-camera');
                             }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
+                            className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
                           >
                             <span>Rear camera</span>
                           </button>

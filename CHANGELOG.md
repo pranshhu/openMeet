@@ -20,6 +20,16 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   lower thirds.
 - A title under your name: type it in the lobby and everyone in the call sees it on
   your name tag.
+- Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
+  presentation clicker sends.
+- Present a deck as slides: pick one picture per slide and turn them with Previous and
+  Next. Everyone sees the slide, and during a recording the deck is saved like any
+  presented screen.
+- **Camera settings** in the call's camera menu: exposure and colour temperature for
+  the camera you are on, where your camera offers them to the browser. The change is
+  in the call and in your recording.
+- **Camera settings** under the lobby preview, and on the check link: set exposure
+  and colour before you join.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
@@ -323,6 +333,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- On a phone each item of the Present menu can be tapped anywhere on it; your own
+  small picture was drawn over the menu.
 - Browser storage that does not answer cannot hold up a guest's stop:
   the backup waits five seconds for it, then continues in memory with the usual
   warning. A screen backup held in memory says so as the camera backup does, and

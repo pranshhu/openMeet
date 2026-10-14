@@ -2948,6 +2948,79 @@ describe('CallStage: the pop-up of a line for everyone starts with the page’s 
   });
 });
 
+describe('CallStage: camera settings', () => {
+  function streamWith(capabilities: Record<string, unknown> | null) {
+    const mic = { kind: 'audio', enabled: true, getSettings: () => ({}) };
+    const cam = {
+      kind: 'video',
+      enabled: true,
+      readyState: 'live',
+      getSettings: () => ({ deviceId: 'cam1' }),
+      getCapabilities: () => capabilities ?? {},
+      getConstraints: () => ({}),
+      applyConstraints: vi.fn().mockResolvedValue(undefined),
+    };
+    return Object.assign(new EventTarget(), {
+      getTracks: () => (capabilities ? [mic, cam] : [mic]),
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => (capabilities ? [cam] : []),
+    }) as unknown as MediaStream;
+  }
+
+  it('offers it above the cameras when the camera lists a setting, and opens the panel', () => {
+    render(<CallStage {...baseProps} localStream={streamWith({ exposureTime: { min: 1, max: 9 } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+
+    const item = screen.getByRole('menuitem', { name: 'Camera settings' });
+    expect(item.className).toMatch(/\bmin-h-11\b/);
+    expect(screen.getByText('Camera').compareDocumentPosition(item) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+
+    fireEvent.click(item);
+    expect(screen.queryByRole('menu')).toBeNull();
+    const panel = screen.getByRole('region', { name: 'Camera settings' });
+    expect(within(panel).getByRole('slider', { name: 'Exposure time' })).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+  });
+
+  it('starts the panel over on the new camera after a change of camera', () => {
+    const stream = streamWith({ zoom: { min: 1, max: 9, step: 1 } });
+    const settings = { zoom: 2 };
+    (stream.getVideoTracks()[0] as unknown as { getSettings: () => object }).getSettings = () => settings;
+    const { rerender } = render(<CallStage {...baseProps} localStream={stream} activeCamId="cam1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Camera settings' }));
+    expect((screen.getByRole('slider', { name: 'Zoom' }) as HTMLInputElement).value).toBe('2');
+
+    settings.zoom = 7;
+    rerender(<CallStage {...baseProps} localStream={stream} activeCamId="cam2" />);
+    expect((screen.getByRole('slider', { name: 'Zoom' }) as HTMLInputElement).value).toBe('7');
+  });
+
+  it('is absent for a camera that lists none of the settings', () => {
+    render(<CallStage {...baseProps} localStream={streamWith({ width: { min: 1, max: 9 } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Camera settings' })).toBeNull();
+  });
+
+  it('is absent for a person who joined without a camera', () => {
+    render(<CallStage {...baseProps} localStream={streamWith(null)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    expect(screen.getByText(/You joined without a camera/)).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Camera settings' })).toBeNull();
+  });
+
+  it('reads the camera only while the menu is open', () => {
+    const stream = streamWith({ zoom: { min: 1, max: 3 } });
+    const spy = vi.spyOn(stream.getVideoTracks()[0]!, 'getCapabilities');
+    const { rerender } = render(<CallStage {...baseProps} localStream={stream} />);
+    rerender(<CallStage {...baseProps} localStream={stream} messages={[]} />);
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    expect(spy).toHaveBeenCalled();
 describe('CallStage: a title under a name', () => {
   const stream = () => new EventTarget() as unknown as MediaStream;
   const eve = { peerId: 'p-eve', name: 'Eve', stream: null, role: 'guest' as const, title: 'Founder, Acme' };

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   LISTENING_CHOICES,
   MAX_TITLE_LENGTH,
@@ -19,6 +19,7 @@ import {
   recordedChannels,
   type DeviceList,
 } from '@/lib/media';
+import { cameraControls } from '@/lib/camera-controls';
 import { isRecordingSupported } from '@/lib/recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
@@ -40,6 +41,7 @@ import {
 import { PreflightPanel } from './PreflightPanel';
 import { VideoTile } from './VideoTile';
 import { FramingGuide } from './FramingGuide';
+import { CameraSettings } from './CameraSettings';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { CalendarInvite } from './CalendarInvite';
@@ -229,6 +231,12 @@ export function Lobby({
   // Save and Delete wait, so neither runs under it.
   const [saving, setSaving] = useState(false);
   const [saveNote, setSaveNote] = useState<{ text: string; problem: boolean } | null>(null);
+  // The camera's settings panel under the preview. Only whether it is open is kept: the
+  // panel starts over on whatever the track in the preview reports.
+  const [cameraSettingsOpen, setCameraSettingsOpen] = useState(false);
+  const previewTrack = stream?.getVideoTracks()[0];
+  // Asked of the camera once per track, not on every key typed in the name field.
+  const hasCameraControls = useMemo(() => !!previewTrack && cameraControls(previewTrack).length > 0, [previewTrack]);
 
   useEffect(() => {
     let cancelled = false;
@@ -885,6 +893,25 @@ export function Lobby({
               did not start is looking. One control for no camera, a blocked or
               busy one, and a computer that struggles with video. */}
           <div className="mt-3 flex flex-col items-center gap-1">
+            {previewTrack && hasCameraControls && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={cameraSettingsOpen}
+                  onClick={() => setCameraSettingsOpen((open) => !open)}
+                  className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
+                >
+                  Camera settings
+                </button>
+                {cameraSettingsOpen && (
+                  <CameraSettings
+                    key={previewTrack.id}
+                    track={previewTrack}
+                    onClose={() => setCameraSettingsOpen(false)}
+                  />
+                )}
+              </>
+            )}
             <button
               type="button"
               aria-pressed={micOnly}
