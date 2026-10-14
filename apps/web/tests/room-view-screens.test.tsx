@@ -655,6 +655,28 @@ describe('the first person’s tile', () => {
   });
 });
 
+describe('two people present', () => {
+  it('hands the call the screens, so the first one is named for its presenter', () => {
+    const presenting = { micOn: true, camOn: true, screenSharing: true };
+    const first = new EventTarget() as unknown as MediaStream;
+    const second = new EventTarget() as unknown as MediaStream;
+    Object.assign(state, inCall, {
+      remoteScreenStream: second,
+      remoteScreens: [
+        { peerId: 'p-cara', stream: second },
+        { peerId: 'p-bob', stream: first },
+      ],
+      remotePeers: [
+        { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest', presence: presenting },
+        { peerId: 'p-cara', name: 'Cara', stream: null, role: 'guest', presence: presenting },
+      ],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
+  });
+});
+
 describe('mic warning', () => {
   it('hands the warning to the call screen for guest and host', () => {
     Object.assign(state, inCall, { micWarning: 'silent' });

@@ -20,6 +20,7 @@ import {
   type DeviceList,
 } from '@/lib/media';
 import { cameraControls } from '@/lib/camera-controls';
+import { isPhone } from '@/lib/switchable-media';
 import { isRecordingSupported } from '@/lib/recorder';
 import { isPcmCaptureSupported } from '@/lib/pcm-recorder';
 import {
@@ -90,6 +91,7 @@ interface BackupItem {
 const EMPTY_DEVICES: DeviceList = { audioInputs: [], videoInputs: [] };
 
 const QUALITY_KEY = 'om_quality';
+const PORTRAIT_KEY = 'om_portrait';
 const FRAME_RATE_KEY = 'om_fps';
 const BITRATE_KEY = 'om_bitrate';
 const STEREO_KEY = 'om_stereo';
@@ -189,6 +191,9 @@ export function Lobby({
   const speaker = useSpeakerId();
   const singleKeys = useSingleKeys();
   const [qualityId, setQualityId] = useState(DEFAULT_QUALITY_ID);
+  // The camera's picture is the middle of its wide one, 9:16. Never set on a
+  // phone, where the way it is held decides the shape.
+  const [portrait, setPortrait] = useState(false);
   const [bitrateId, setBitrateId] = useState(DEFAULT_BITRATE_ID);
   const [frameRate, setFrameRate] = useState(RECORDING_FRAME_RATE);
   const [stereo, setStereo] = useState(false);
@@ -358,9 +363,16 @@ export function Lobby({
     }
   }
 
-  function startPreview(mm: MediaManager, cam: string, quality: string, fps: number, echo: boolean) {
+  function startPreview(
+    mm: MediaManager,
+    cam: string,
+    quality: string,
+    fps: number,
+    echo: boolean,
+    tall: boolean
+  ) {
     setPreviewError(null);
-    mm.acquire(deviceConstraints('', cam, quality, fps, echo))
+    mm.acquire(deviceConstraints('', cam, quality, fps, echo, tall))
       .then(async (s) => {
         // The lobby was left for the call, or this run of the effect was
         // cleaned up: nobody owns this capture, so it is let go.
@@ -394,6 +406,7 @@ export function Lobby({
     let saved = DEFAULT_QUALITY_ID;
     let savedFps = RECORDING_FRAME_RATE;
     let savedListening: Listening | '' = '';
+    let savedPortrait = false;
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
@@ -403,13 +416,16 @@ export function Lobby({
       const heard = localStorage.getItem(LISTENING_KEY);
       // Anything but one of the three answers is "not said".
       if (isListening(heard)) savedListening = heard;
+      // Strictly '1', and not on a phone, which has no picker to change it.
+      savedPortrait = localStorage.getItem(PORTRAIT_KEY) === '1' && !isPhone();
     } catch {
       /* private mode — fall back to the default */
     }
     setQualityId(saved);
     setFrameRate(savedFps);
     setListening(savedListening);
-    startPreview(mm, '', saved, savedFps, savedListening === 'speakers-ec');
+    setPortrait(savedPortrait);
+    startPreview(mm, '', saved, savedFps, savedListening === 'speakers-ec', savedPortrait);
     return () => {
       if (!handedOffRef.current) mm.stop();
       mmRef.current = null;
@@ -421,7 +437,8 @@ export function Lobby({
     nextCam: string,
     nextQuality: string,
     nextFrameRate: number,
-    nextListening: Listening | '' = listening
+    nextListening: Listening | '' = listening,
+    nextPortrait: boolean = portrait
   ) {
     const mm = mmRef.current;
     if (!mm || reopeningRef.current) return;
@@ -444,7 +461,7 @@ export function Lobby({
       // Acquire FIRST; only stop the old stream once it succeeds, so a failed
       // switch (e.g. OverconstrainedError) leaves the live preview intact
       // instead of a dead frame.
-      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo));
+      const s = await mm.acquire(deviceConstraints(nextMic, nextCam, nextQuality, nextFrameRate, echo, nextPortrait));
       // Joined, or left, while this capture was being opened: the call keeps
       // the stream it was given, and the capture that arrived late is let go.
       if (handedOffRef.current || mmRef.current !== mm) {
@@ -463,11 +480,13 @@ export function Lobby({
       setQualityId(nextQuality);
       setFrameRate(nextFrameRate);
       setListening(nextListening);
+      setPortrait(nextPortrait);
       setActual(describeTrack(s.getVideoTracks()[0]));
       try {
         localStorage.setItem(QUALITY_KEY, nextQuality);
         localStorage.setItem(FRAME_RATE_KEY, String(nextFrameRate));
         localStorage.setItem(LISTENING_KEY, nextListening);
+        localStorage.setItem(PORTRAIT_KEY, nextPortrait ? '1' : '0');
       } catch {
         /* private mode — the choice just doesn't persist */
       }
@@ -792,6 +811,10 @@ export function Lobby({
   // remembered, and the picker shows the best it can do.
   const rates = supportedFrameRates(stream?.getVideoTracks()[0]);
   const shownFrameRate = rates.includes(frameRate) ? frameRate : rates.at(-1)!;
+  // A camera that cannot give a tall picture keeps the wide one: say so, as the
+  // frame-rate line does.
+  const picture = stream?.getVideoTracks()[0]?.getSettings?.();
+  const wideForPortrait = portrait && !!picture?.width && !!picture.height && picture.height <= picture.width;
   const otherFps = deliveredFps !== null && Math.abs(deliveredFps - shownFrameRate) > 0.5 ? deliveredFps : null;
   // Asked of the microphone that is in the preview, and only offered where it
   // can change the file: a two-channel mic in a browser that keeps the
@@ -829,8 +852,9 @@ export function Lobby({
               // instead of running under it.
               tagClassName="max-w-[calc(50%-4.5rem)]"
             />
-            {/* Only over a picture: with the camera off there is nothing to frame. */}
-            {stream && camOn && !micOnly && <FramingGuide />}
+            {/* Only over a picture: with the camera off there is nothing to frame. A tall
+                picture sits whole inside the wide box, so thirds of the box are not its thirds. */}
+            {stream && camOn && !micOnly && !portrait && <FramingGuide />}
             {stream ? (
               /* Overlaid mic / cam controls */
               <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center gap-4 sm:bottom-4">
@@ -872,7 +896,7 @@ export function Lobby({
                         if (mmRef.current && !reopeningRef.current) {
                           // What the person chose: no camera after Microphone only.
                           const cam = camId === NO_CAMERA ? NO_CAMERA : '';
-                          startPreview(mmRef.current, cam, qualityId, frameRate, listening === 'speakers-ec');
+                          startPreview(mmRef.current, cam, qualityId, frameRate, listening === 'speakers-ec', portrait);
                         }
                       }}
                       className="mt-1 min-h-11 shrink-0 rounded-full bg-white px-5 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#e8f0fe] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
@@ -1335,6 +1359,23 @@ export function Lobby({
                   ))}
                 </select>
               </label>
+              {!isPhone() && (
+                <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
+                  <Icon name="settings" size={18} className="shrink-0" />
+                  <select
+                    aria-label="Picture shape"
+                    value={portrait ? 'portrait' : 'landscape'}
+                    disabled={!stream}
+                    onChange={(e) =>
+                      void reacquire(micId, camId, qualityId, frameRate, listening, e.target.value === 'portrait')
+                    }
+                    className={select}
+                  >
+                    <option value="landscape">Shape: Landscape · 16:9</option>
+                    <option value="portrait">Shape: Portrait · 9:16 vertical</option>
+                  </select>
+                </label>
+              )}
               <label hidden={micOnly} className={`${picker} sm:col-span-2`}>
                 <Icon name="settings" size={18} className="shrink-0" />
                 <select
@@ -1376,6 +1417,11 @@ export function Lobby({
                 ? `${WAV_SAMPLE_RATE / 1000}kHz/24-bit ${channels === 2 ? 'stereo' : 'mono'} uncompressed`
                 : '(compressed)'}
               {echoOn && ' · echo cancellation on'}
+            </p>
+          )}
+          {wideForPortrait && (
+            <p role="status" className="mt-1 text-center text-xs text-[#7a4f01]">
+              This camera gave a wide picture, not a portrait one.
             </p>
           )}
           {otherFps !== null && (

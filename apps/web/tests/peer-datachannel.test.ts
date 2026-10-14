@@ -4,6 +4,7 @@ import {
   DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING,
   DATA_CHANNEL_RECORDING_AUDIO,
+  DATA_CHANNEL_RECORDING_SCREEN,
 } from '@openmeet/protocol';
 
 class FakePC {
@@ -99,6 +100,18 @@ describe('PeerConnection recording DataChannel', () => {
     peer.start();
     const ch = peer.createRecordingChannel('rec-123');
     expect((ch as unknown as { label: string }).label).toBe(`${DATA_CHANNEL_RECORDING}#rec-123`);
+  });
+
+  it('createRecordingScreenChannel(key) suffixes the label with #<key>, and with no key leaves it as numbered', () => {
+    const { peer } = make();
+    peer.start();
+    const keyed = peer.createRecordingScreenChannel('k');
+    expect((keyed as unknown as { label: string }).label).toBe(`${DATA_CHANNEL_RECORDING_SCREEN}-1#k`);
+
+    const { peer: other } = make();
+    other.start();
+    const bare = other.createRecordingScreenChannel();
+    expect((bare as unknown as { label: string }).label).toBe(`${DATA_CHANNEL_RECORDING_SCREEN}-1`);
   });
 
   it('accepts a keyed recording channel (recording#x) and a keyed audio channel (recording-audio#x)', () => {

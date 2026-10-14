@@ -29,6 +29,11 @@ export type ClientJoin = {
   companion?: boolean;
   /** Per-tab client ID so a reconnecting tab replaces its own stale socket. */
   clientId?: string;
+  /**
+   * What the guest typed when the room asked for a passcode. Sent only after
+   * the Room's `door` message with state `passcode`, and on each join after.
+   */
+  passcode?: string;
 };
 // `to` addresses a specific peer. Omitted means 'the other one', which is
 // still correct in a two-person room and keeps the 1:1 path unchanged.
@@ -215,11 +220,57 @@ export type ClientPeerRecorded = { type: 'peer-recorded'; peerId: string; record
 export type ClientPeerMute = { type: 'peer-mute'; peerId: string };
 
 /**
+ * What a host can ask one person to do. A code, not copy. `reconnect` is a
+ * full restart of that person's connection to the room. `microphone` and
+ * `camera` ask them to switch that device: the code names no device, so the
+ * choice stays with the person on their own screen.
+ */
+export const HELP_ASKS = ['reconnect', 'microphone', 'camera'] as const;
+export type HelpAsk = (typeof HELP_ASKS)[number];
+
+export function isHelpAsk(v: unknown): v is HelpAsk {
+  return (HELP_ASKS as readonly unknown[]).includes(v);
+}
+
+/**
+ * The host asks one person to do something about their own connection.
+ * Passed on only from the host, to that person alone, whose own page asks
+ * them and acts only on their answer.
+ */
+export type ClientPeerHelp = { type: 'peer-help'; peerId: string; ask: HelpAsk };
+
+/**
  * The host removes one person from the room. Acted on only from the host:
  * the Room closes that socket with WS_CLOSE_REMOVED, tells everyone else
  * with `peer-left`, and refuses the same tab until the session ends.
  */
 export type ClientPeerRemove = { type: 'peer-remove'; peerId: string };
+
+/**
+ * The host locks or unlocks the room, or turns the waiting room on or off.
+ * Acted on only from the host, and each field only when it is exactly a
+ * boolean. While locked, the Room refuses any join from a tab it did not seat
+ * in this session, with WS_CLOSE_NOT_ADMITTED. Locking closes nobody. With the
+ * waiting room on, such a join is held until the host answers it with
+ * ClientAdmit; turning it off lets in everyone who waits.
+ *
+ * A string `passcode` of MIN_PASSCODE_LENGTH to MAX_PASSCODE_LENGTH units sets
+ * the passcode a guest gives before it joins; `null` removes it. Any other
+ * value is ignored. Setting or removing one closes nobody.
+ */
+export type ClientRoomAccess = {
+  type: 'room-access';
+  locked?: boolean;
+  waitingRoom?: boolean;
+  passcode?: string | null;
+};
+
+/**
+ * The host answers one waiting person. Acted on only from the host, with a
+ * `peerId` that names a waiting socket and a boolean `admit`: true seats it as
+ * if it had just joined, false closes it with WS_CLOSE_NOT_ADMITTED.
+ */
+export type ClientAdmit = { type: 'admit'; peerId: string; admit: boolean };
 
 export type ClientMessage =
   | ClientJoin
@@ -241,8 +292,11 @@ export type ClientMessage =
   | ClientPing
   | ClientRecordingCapability
   | ClientPeerMute
+  | ClientPeerHelp
   | ClientPeerRemove
-  | ClientPeerRecorded;
+  | ClientPeerRecorded
+  | ClientRoomAccess
+  | ClientAdmit;
 
 export interface PeerInfo {
   peerId: string;
@@ -425,6 +479,43 @@ export type ServerPeerRecorded = { type: 'peer-recorded'; peerId: string; record
  */
 export type ServerPeerMute = { type: 'peer-mute' };
 
+/** A person held at the door of a room with a waiting room, as its hosts are told. */
+export type WaitingPerson = {
+  peerId: string;
+  displayName: string;
+  role: 'guest' | 'producer';
+  companion?: boolean;
+};
+
+/**
+ * Whether the room is locked, whether its waiting room is on, and who waits
+ * (at most eight, in the order they arrived), sent to every host in the room:
+ * right after its `role-assigned`, and again after each change. Guests are
+ * never told. `passcode` says whether one is set, never what it is.
+ */
+export type ServerRoomAccess = {
+  type: 'room-access';
+  locked: boolean;
+  waitingRoom: boolean;
+  passcode: boolean;
+  waiting: WaitingPerson[];
+};
+
+/**
+ * Sent to a person who is not in the room yet. State `waiting`: its join was
+ * received and the host has not answered; it is followed by `role-assigned` or
+ * by a close. State `passcode`: the room asks for a passcode, and `wrong` is
+ * true when the join carried one that is not right; the socket stays open for
+ * another `join`.
+ */
+export type ServerDoor = { type: 'door'; state: 'waiting' } | { type: 'door'; state: 'passcode'; wrong?: boolean };
+
+/**
+ * A host's ClientPeerHelp, handed to the one person it names. It carries only
+ * the ask: whoever receives it is the person meant.
+ */
+export type ServerPeerHelp = { type: 'peer-help'; ask: HelpAsk };
+
 export type ServerMessage =
   | ServerRoleAssigned
   | ServerPeerJoined
@@ -448,7 +539,10 @@ export type ServerMessage =
   | ServerError
   | ServerRecordingCapability
   | ServerPeerMute
-  | ServerPeerRecorded;
+  | ServerPeerHelp
+  | ServerPeerRecorded
+  | ServerRoomAccess
+  | ServerDoor;
 
 const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'join',
@@ -470,8 +564,11 @@ const CLIENT_TYPES = new Set<ClientMessage['type']>([
   'ping',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-remove',
   'peer-recorded',
+  'room-access',
+  'admit',
 ]);
 
 const SERVER_TYPES = new Set<ServerMessage['type']>([
@@ -497,7 +594,10 @@ const SERVER_TYPES = new Set<ServerMessage['type']>([
   'error',
   'recording-capability',
   'peer-mute',
+  'peer-help',
   'peer-recorded',
+  'room-access',
+  'door',
 ]);
 
 export function isClientMessage(v: unknown): v is ClientMessage {

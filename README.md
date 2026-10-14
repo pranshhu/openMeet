@@ -54,7 +54,8 @@ retention policy to trust, because there's nothing retained.
 - Screen share recorded as its **own** track, one file per sharing stretch, with the
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K, at 24, 25, 29.97 or
-  30 fps, and 50 or 60 where the camera offers them
+  30 fps, and 50 or 60 where the camera offers them, and on a computer a portrait
+  (9:16) shape for vertical video
 - Raw audio — echo cancellation, noise suppression and AGC are all **off**, unless
   someone on speakers turns echo cancellation on for their own microphone in the lobby
   (see [Headphones](#headphones-really))
@@ -71,7 +72,9 @@ retention policy to trust, because there's nothing retained.
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
 - Host controls in **People**: turn a participant's microphone off for the call (they
-  are told, and turn it back on themselves), or remove someone from the room
+  are told, and turn it back on themselves), ask someone to restart their connection
+  or to switch microphone or camera (they decide on their own screen), or remove
+  someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
@@ -103,7 +106,7 @@ retention policy to trust, because there's nothing retained.
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera), and so can a deck of slide pictures, turned with Previous and Next
-  or the arrow keys
+  or the arrow keys, and several people can present at once
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
 - Private messages: with three or more in the call, a chat message can go to one
@@ -503,7 +506,10 @@ it** (all-party-consent jurisdictions, GDPR).
 The host can turn a participant's microphone off from **People** in the call. That
 person is told at once and turns it back on with their own microphone button. While
 it is off their recording has no sound from the microphone, exactly as when they turn
-it off themselves; nobody can turn another person's microphone on.
+it off themselves; nobody can turn another person's microphone on. The host can also
+ask a participant to restart their connection, or to switch microphone or camera, and
+that person decides on their own screen. For a device the participant picks it from
+their own list; the host is not shown the participant's devices.
 
 The host can also remove a participant from **People**. That person is told the host
 removed them. What they recorded before the removal stays in the host's folder and
@@ -511,6 +517,10 @@ ends there; the rest is in their own browser's backup, which is never deleted fo
 them. If a take was running, their browser keeps recording into that backup until
 they press **Stop and save**; their page then offers the backup as a download, and
 the lobby in that browser lists it afterwards.
+
+The host can also tick **Lock the room** in **People**. Nobody new can join until it is
+unticked; the people already in the call can reconnect. The lock ends with the session,
+and it does not remove anyone who is already in the call.
 Each take's `sync_<id>.json` holds a record of who was told (`recordingNotice`): when the
 host's browser announced the take, everyone the room listed then or who joined while it
 ran, and for each of them the moment their own recording channel reached the host. A
@@ -686,11 +696,11 @@ exercised end-to-end in real Chrome.
 
 Known gaps, listed below:
 
-- **Screen share reconnect starts a new segment rather than appending to the old file.**
-  A guest's camera and WAV recording pick up again by themselves, from the last acknowledged
-  chunk, into the same files on the host's disk. A screen share comes back for everyone and
-  recording continues in a new numbered segment; the interrupted segment's tail is only in
-  the sharer's screen backup, and the session summary marks that segment incomplete.
+- **Some screen shares still end their file early.** A share that is being recorded
+  continues in the same file when its connection drops and comes back. One stopped while the
+  connection is down, one on a page that reloads, one that is being sent later, and one
+  whose file the host no longer holds end the file there; the session summary marks it
+  incomplete and the sharer's screen backup holds all of it.
 - **Taking the call over in a second tab during a take ends the first tab's files.**
   A second tab in the host's browser asks before it joins while a recording is running.
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
@@ -721,8 +731,14 @@ Known gaps, listed below:
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
-  removed tab until everyone has left, but the invite link is the only credential: a new
-  tab or another browser joins again.
+  removed tab until everyone has left, but the invite link is the only credential for joining
+  (unless the host has set a passcode or turned the waiting room on): a new tab or another
+  browser joins again.
+  The host can lock the room against new joins, which keeps out a new tab for as long as it is
+  locked; the lock ends with the session, and a tab that was in the call can still reconnect.
+  With the waiting room on, a new tab waits until the host lets it in or refuses it.
+  With a passcode set, a new tab is asked for it before it joins; the Room keeps only a digest
+  of it, limits the tries, and the passcode does not gate the TURN credentials a link mints.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 

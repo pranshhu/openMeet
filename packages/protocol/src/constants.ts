@@ -163,3 +163,9 @@ export const WS_CLOSE_INVALID_MESSAGE = 4005;
 export const WS_CLOSE_REPLACED = 4006;
 // The host removed this participant. The same tab is refused until the session ends.
 export const WS_CLOSE_REMOVED = 4007;
+// The room is locked and this tab was not seated in this session. Refused until the host unlocks.
+export const WS_CLOSE_NOT_ADMITTED = 4008;
+
+// The length of a room passcode, in UTF-16 units (`String.length`).
+export const MIN_PASSCODE_LENGTH = 6;
+export const MAX_PASSCODE_LENGTH = 64;

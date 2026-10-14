@@ -1,14 +1,18 @@
 import {
   BROWSER_NOTES,
+  MAX_PASSCODE_LENGTH,
   MAX_RECORDED_PEERS,
   MAX_SCRIPT_LENGTH,
+  MIN_PASSCODE_LENGTH,
   ROOM_TTL_MS,
   WS_CLOSE_CAPACITY_FULL,
   WS_CLOSE_EXPIRED_SLUG,
   WS_CLOSE_INVALID_MESSAGE,
   WS_CLOSE_INVALID_SLUG,
+  WS_CLOSE_NOT_ADMITTED,
   WS_CLOSE_REMOVED,
   WS_CLOSE_REPLACED,
+  isHelpAsk,
   isListening,
   isLogo,
   isLookAccent,
@@ -17,6 +21,7 @@ import {
   type ClientMessage,
   type Role,
   type ServerMessage,
+  type ServerRoomAccess,
 } from '@openmeet/protocol';
 import type { Env } from '../env.js';
 import { parseHostTokenCookie } from '../lib/cookie.js';
@@ -61,6 +66,12 @@ interface PeerAttachment {
   left?: boolean;
   clientId?: string;
   companion?: boolean;
+  /** Held at the door by the waiting room: connected, and not part of the room. */
+  waiting?: boolean;
+  /** The host let this socket in, so neither the lock nor the waiting room holds it again. */
+  admitted?: boolean;
+  /** Wrong passcodes this socket has given, so one socket cannot guess without end. */
+  passFails?: number;
 }
 
 interface RoomRow {
@@ -74,6 +85,8 @@ interface SessionRow {
   recordingCount?: number;
   notRecorded?: string[];
   removed?: string[];
+  locked?: boolean;
+  admitted?: string[];
 }
 
 /**
@@ -102,6 +115,19 @@ const MAX_NOT_RECORDED_CLIENTS = 16;
 // Tabs the host removed, kept so the same tab stays out until the session
 // ends. Past the bound the oldest is forgotten and can join again.
 const MAX_REMOVED_CLIENTS = 16;
+// Tabs seated in this session, kept so that a tab that was in the room can come
+// back while it is locked. Past the bound, a tab that has left is forgotten
+// before one that is still here.
+const MAX_ADMITTED_CLIENTS = 32;
+// Sockets the waiting room holds at once, and so the most a host is shown. The
+// names are chosen by anyone with the link, so the list is bounded.
+const MAX_WAITING = 8;
+// Wrong passcodes one socket may give before it is closed, and the room as a
+// whole in a window that starts at the first of them. The passcode is as short
+// as six characters, so guesses are bounded per socket and across sockets.
+const MAX_PASSCODE_TRIES_PER_SOCKET = 5;
+const MAX_PASSCODE_TRIES_PER_ROOM = 20;
+const PASSCODE_WINDOW_MS = 10 * 60_000;
 
 /** Cut to `max` UTF-16 units, dropping the half of a surrogate pair a cut can leave behind. */
 function truncate(s: string, max: number): string {
@@ -127,6 +153,16 @@ export class Room implements DurableObject {
   // Client ids of the tabs the host removed in this session. By client id for
   // the same reason: it is what a tab presents again on its next socket.
   private removed: string[] = [];
+  // The host locked the room: a tab not in `admitted` is refused until it is
+  // unlocked or the session ends.
+  private locked = false;
+  // Client ids of the tabs seated in this session that are not a host's.
+  private admitted: string[] = [];
+  // New people wait until the host lets them in. A setting of the room, not of
+  // the session: it stays when everyone leaves, so it is kept under its own key.
+  private waitingRoom = false;
+  // Lowercase hex SHA-256 of `<slug>:<passcode>`; the passcode itself is never kept.
+  private passcodeHash: string | null = null;
   private hostToken: string | null = null;
   private nextOrdinal = 0;
 
@@ -153,7 +189,12 @@ export class Room implements DurableObject {
         this.recordingCount = session.recordingCount ?? 0;
         this.notRecorded = session.notRecorded ?? [];
         this.removed = session.removed ?? [];
+        this.locked = session.locked === true;
+        this.admitted = session.admitted ?? [];
       }
+      const access = await this.state.storage.get<{ waitingRoom?: boolean; passcodeHash?: string }>('access');
+      this.waitingRoom = access?.waitingRoom === true;
+      this.passcodeHash = typeof access?.passcodeHash === 'string' ? access.passcodeHash : null;
       const nextOrdinal = await this.state.storage.get<number>('nextOrdinal');
       if (typeof nextOrdinal === 'number') {
         this.nextOrdinal = nextOrdinal;
@@ -175,6 +216,21 @@ export class Room implements DurableObject {
     ws.serializeAttachment(p);
   }
 
+  /**
+   * Close a socket the Room refuses to seat. It is flagged left first: the
+   * close takes effect later, and what the socket has sent by then must not be
+   * acted on as from a live one.
+   */
+  private refuse(ws: WebSocket, p: PeerAttachment, code: number, reason: string): void {
+    p.left = true;
+    this.save(ws, p);
+    try {
+      ws.close(code, reason);
+    } catch {
+      // already gone
+    }
+  }
+
   private allPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
     return this.state
       .getWebSockets()
@@ -193,6 +249,53 @@ export class Room implements DurableObject {
     return this.allPeers().filter(({ p }) => p.joined);
   }
 
+  /** The sockets the waiting room holds, in the order they arrived. */
+  private waitingPeers(): Array<{ ws: WebSocket; p: PeerAttachment }> {
+    return this.allPeers()
+      .filter(({ p }) => p.waiting)
+      .sort((a, b) => a.p.ordinal - b.p.ordinal);
+  }
+
+  private accessMessage(): ServerRoomAccess {
+    return {
+      type: 'room-access',
+      locked: this.locked,
+      waitingRoom: this.waitingRoom,
+      passcode: this.passcodeHash !== null,
+      waiting: this.waitingPeers().map(({ p }) => ({
+        peerId: p.peerId,
+        displayName: p.displayName ?? '',
+        role: p.role === 'producer' ? ('producer' as const) : ('guest' as const),
+        ...(p.companion ? { companion: true } : {}),
+      })),
+    };
+  }
+
+  private async saveAccess(): Promise<void> {
+    await this.state.storage.put('access', {
+      waitingRoom: this.waitingRoom,
+      ...(this.passcodeHash ? { passcodeHash: this.passcodeHash } : {}),
+    });
+  }
+
+  private async passcodeDigest(passcode: string): Promise<string> {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${this.slug}:${passcode}`));
+    return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** The wrong passcodes the room has counted, or null once their window has passed. */
+  private async passcodeFails(): Promise<{ count: number; since: number } | null> {
+    const fails = await this.state.storage.get<{ count: number; since: number }>('passFails');
+    return fails && Date.now() - fails.since < PASSCODE_WINDOW_MS ? fails : null;
+  }
+
+  private tellHosts(): void {
+    const msg = this.accessMessage();
+    for (const { ws, p } of this.joinedPeers()) {
+      if (p.role === 'host') this.send(ws, msg);
+    }
+  }
+
   private async saveSession(): Promise<void> {
     await this.state.storage.put('session', {
       sessionId: this.sessionId,
@@ -200,6 +303,8 @@ export class Room implements DurableObject {
       recordingCount: this.recordingCount,
       notRecorded: this.notRecorded,
       removed: this.removed,
+      locked: this.locked,
+      admitted: this.admitted,
     } satisfies SessionRow);
   }
 
@@ -316,8 +421,9 @@ export class Room implements DurableObject {
     switch (parsed.type) {
       case 'join':
         // A repeat would insert another participant row per message and
-        // announce the same peer again.
-        if (p.joined) break;
+        // announce the same peer again; a waiting socket's name is the one the
+        // host was shown.
+        if (p.joined || p.waiting) break;
         if (typeof parsed.displayName !== 'string' || typeof parsed.userAgent !== 'string') {
           this.send(ws, {
             type: 'error',
@@ -325,11 +431,7 @@ export class Room implements DurableObject {
             message: 'join requires string displayName and userAgent',
           });
           console.error('room:invalid_join');
-          try {
-            ws.close(WS_CLOSE_INVALID_MESSAGE, 'invalid_join');
-          } catch {
-            // already gone
-          }
+          this.refuse(ws, p, WS_CLOSE_INVALID_MESSAGE, 'invalid_join');
           return;
         }
         parsed.displayName = truncate(parsed.displayName, MAX_DISPLAY_NAME_LENGTH);
@@ -361,11 +463,64 @@ export class Room implements DurableObject {
         // A tab the host removed stays out until the session ends. A host is
         // never refused: the token outranks whatever id its tab presents.
         if (p.role !== 'host' && p.clientId && this.removed.includes(p.clientId)) {
-          try {
-            ws.close(WS_CLOSE_REMOVED, 'removed');
-          } catch {
-            // already gone
+          this.refuse(ws, p, WS_CLOSE_REMOVED, 'removed');
+          return;
+        }
+        // A locked room seats nobody it has not seated already in this session.
+        // A host is never refused, and the link is the same for every role.
+        const seatedBefore = !!p.clientId && this.admitted.includes(p.clientId);
+        if (this.locked && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'locked');
+          return;
+        }
+        // A room with a passcode seats nobody who has not given it, on the same
+        // terms as the lock. The socket stays open and unseated, and may send
+        // `join` again with another try.
+        if (this.passcodeHash && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          if ((this.peer(ws).passFails ?? 0) >= MAX_PASSCODE_TRIES_PER_SOCKET) {
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
+            return;
           }
+          const given = parsed.passcode;
+          if (typeof given !== 'string' || given.length === 0 || given.length > MAX_PASSCODE_LENGTH) {
+            this.send(ws, { type: 'door', state: 'passcode' });
+            return;
+          }
+          const spent = await this.passcodeFails();
+          if (spent && spent.count >= MAX_PASSCODE_TRIES_PER_ROOM) {
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
+            return;
+          }
+          const digest = await this.passcodeDigest(given);
+          // The awaits above let this socket's other messages run; whatever
+          // they did to its attachment, or to the passcode, is what counts.
+          const now = this.peer(ws);
+          if (now.joined || now.waiting || now.left) return;
+          if (this.passcodeHash && !timingSafeEqualHex(digest, this.passcodeHash)) {
+            const fails = (await this.passcodeFails()) ?? { count: 0, since: Date.now() };
+            await this.state.storage.put('passFails', { count: fails.count + 1, since: fails.since });
+            p.passFails = (now.passFails ?? 0) + 1;
+            this.save(ws, p);
+            if (p.passFails >= MAX_PASSCODE_TRIES_PER_SOCKET) {
+              this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'passcode');
+              return;
+            }
+            this.send(ws, { type: 'door', state: 'passcode', wrong: true });
+            return;
+          }
+        }
+        // With the waiting room on, a newcomer is held until the host answers:
+        // it is not seated, and so creates no row, extends no expiry and is
+        // reached by nothing that goes to the room.
+        if (this.waitingRoom && p.role !== 'host' && !p.admitted && !seatedBefore) {
+          if (this.waitingPeers().length >= MAX_WAITING) {
+            this.refuse(ws, p, WS_CLOSE_NOT_ADMITTED, 'busy');
+            return;
+          }
+          p.waiting = true;
+          this.save(ws, p);
+          this.send(ws, { type: 'door', state: 'waiting' });
+          this.tellHosts();
           return;
         }
         // Now the role is known: enforce per-role caps.
@@ -377,11 +532,7 @@ export class Room implements DurableObject {
             ({ ws: pws, p: pp }) => pws !== ws && pp.joined && (pp.role === 'producer' || pp.companion === true)
           ).length;
           if (unrecorded >= MAX_PRODUCERS) {
-            try {
-              ws.close(WS_CLOSE_CAPACITY_FULL, 'room_full');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_CAPACITY_FULL, 'room_full');
             return;
           }
         } else {
@@ -389,11 +540,7 @@ export class Room implements DurableObject {
             ({ ws: pws, p: pp }) => pws !== ws && pp.joined && pp.role !== 'producer' && !pp.companion
           ).length;
           if (recorded >= MAX_RECORDED_PEERS) {
-            try {
-              ws.close(WS_CLOSE_CAPACITY_FULL, 'room_full');
-            } catch {
-              // already gone
-            }
+            this.refuse(ws, p, WS_CLOSE_CAPACITY_FULL, 'room_full');
             return;
           }
         }
@@ -401,6 +548,15 @@ export class Room implements DurableObject {
         // this seat: a socket refused above never becomes part of the room.
         p.joined = true;
         this.save(ws, p);
+        if (p.role !== 'host' && p.clientId && !this.admitted.includes(p.clientId)) {
+          const next = [...this.admitted, p.clientId];
+          if (next.length > MAX_ADMITTED_CLIENTS) {
+            const here = new Set(this.joinedPeers().map(({ p: pp }) => pp.clientId));
+            next.splice(Math.max(next.findIndex((id) => !here.has(id)), 0), 1);
+          }
+          this.admitted = next;
+          await this.saveSession();
+        }
         // Reusable rooms: every join pushes the expiry out, so a weekly show
         // keeps one link alive. Unused rooms still lapse on their own.
         if (this.slug) {
@@ -463,6 +619,7 @@ export class Room implements DurableObject {
               ...(this.isNotRecorded(pp) ? { notRecorded: true } : {}),
             })),
         });
+        if (p.role === 'host') this.send(ws, this.accessMessage());
         this.broadcastExcept(ws, {
           type: 'peer-joined',
           role: p.role,
@@ -707,6 +864,15 @@ export class Room implements DurableObject {
         if (target) this.send(target.ws, { type: 'peer-mute' });
         break;
       }
+      case 'peer-help': {
+        // A question, passed on only from the host, only to the one person
+        // named, and only as the fixed shape. Their own page asks them and
+        // acts on their press alone; nothing is kept and no answer comes back.
+        if (p.role !== 'host' || typeof parsed.peerId !== 'string' || !isHelpAsk(parsed.ask)) break;
+        const target = this.joinedPeers().find(({ ws: to, p: pp }) => to !== ws && pp.peerId === parsed.peerId);
+        if (target) this.send(target.ws, { type: 'peer-help', ask: parsed.ask });
+        break;
+      }
       case 'peer-remove': {
         // Only the host removes, and never a host. The tab is remembered before
         // its socket is closed, so it cannot be seated again in between.
@@ -726,6 +892,47 @@ export class Room implements DurableObject {
         // Tells everyone else, with this reason, and marks the socket left, so
         // the close callback that follows does not tell them again.
         await this.onClose(target.ws, 'removed');
+        break;
+      }
+      case 'room-access': {
+        // Only the host changes these, and each only with a real boolean (the
+        // passcode with `null` or a string of the allowed length). Nobody is
+        // closed by the lock or the passcode: they decide the joins that come
+        // after. Turning the waiting room off lets in everyone who waits.
+        const lock = typeof parsed.locked === 'boolean';
+        const door = typeof parsed.waitingRoom === 'boolean';
+        const code = parsed.passcode;
+        const pass =
+          code === null ||
+          (typeof code === 'string' && code.length >= MIN_PASSCODE_LENGTH && code.length <= MAX_PASSCODE_LENGTH);
+        if (p.role !== 'host' || !(lock || door || pass)) break;
+        if (lock) {
+          this.locked = parsed.locked === true;
+          await this.saveSession();
+        }
+        if (door) {
+          this.waitingRoom = parsed.waitingRoom === true;
+          await this.saveAccess();
+          if (!this.waitingRoom) {
+            for (const target of this.waitingPeers()) await this.answerWaiting(target.ws, true);
+          }
+        }
+        if (pass) {
+          this.passcodeHash = typeof code === 'string' ? await this.passcodeDigest(code) : null;
+          await this.saveAccess();
+          await this.state.storage.delete('passFails');
+        }
+        this.tellHosts();
+        break;
+      }
+      case 'admit': {
+        // Only the host answers, for a socket that waits (a `peerId` that is not
+        // a string names none) and with a real boolean.
+        if (p.role !== 'host' || typeof parsed.admit !== 'boolean') break;
+        const target = this.waitingPeers().find(({ p: pp }) => pp.peerId === parsed.peerId);
+        if (!target) break;
+        await this.answerWaiting(target.ws, parsed.admit);
+        this.tellHosts();
         break;
       }
       case 'peer-recorded': {
@@ -803,6 +1010,32 @@ export class Room implements DurableObject {
     await this.onClose(ws);
   }
 
+  /**
+   * Let a waiting socket in, or refuse it. Letting in runs the `join` path
+   * again from what the socket's attachment holds (its role, companion flag and
+   * client id are there already), so the caps, the rows, the `role-assigned`
+   * and the `peer-joined` are the ones every join gets.
+   */
+  private async answerWaiting(ws: WebSocket, admit: boolean): Promise<void> {
+    const p = this.peer(ws);
+    if (admit) {
+      p.waiting = false;
+      p.admitted = true;
+      this.save(ws, p);
+      await this.webSocketMessage(
+        ws,
+        JSON.stringify({ type: 'join', displayName: p.displayName ?? '', userAgent: p.userAgent ?? '' })
+      );
+      return;
+    }
+    try {
+      ws.close(WS_CLOSE_NOT_ADMITTED, 'refused');
+    } catch {
+      // already gone
+    }
+    await this.onClose(ws, 'refused');
+  }
+
   private async onClose(ws: WebSocket, reason = 'disconnect'): Promise<void> {
     const p = this.peer(ws);
     if (!p || p.left) return;
@@ -814,6 +1047,7 @@ export class Room implements DurableObject {
     if (p.joined) {
       this.broadcastExcept(ws, { type: 'peer-left', role: p.role, reason, peerId: p.peerId });
     }
+    if (p.waiting) this.tellHosts();
     // The host owns the recording, so its socket closing ends it. Otherwise a
     // crashed host leaves the room advertising `recording: true`, and the next
     // guest to join starts capturing into a host that is no longer there.
@@ -842,6 +1076,8 @@ export class Room implements DurableObject {
       this.recordingCount = 0;
       this.notRecorded = [];
       this.removed = [];
+      this.locked = false;
+      this.admitted = [];
       await this.saveSession();
     }
   }

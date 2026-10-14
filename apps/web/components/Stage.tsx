@@ -50,6 +50,7 @@ export function Stage({
   remote,
   others = [],
   remoteScreen,
+  otherScreens = [],
   localScreen,
   localPresenting,
   spotlight,
@@ -65,6 +66,8 @@ export function Stage({
   /** Additional remotes beyond the first. Non-empty means a mesh call. */
   others?: StageFeed[];
   remoteScreen: MediaStream | null; // peer's shared screen (viewer side)
+  /** Screens beyond the first one, drawn beside it. */
+  otherScreens?: { stream: MediaStream; label: string; muted?: boolean }[];
   localScreen?: MediaStream | null; // our own shared screen (self-preview)
   localPresenting: boolean;
   spotlight: 'local' | 'remote';
@@ -106,51 +109,73 @@ export function Stage({
 
   if (presenting) {
     const cams = [...(remote ? [remote] : []), ...others, ...(!companion ? [local] : [])];
+    const firstScreen = (
+      <>
+        {screen ? (
+          <VideoTile
+            stream={screen}
+            muted={companion ? true : !remoteScreen}
+            label={screenLabel}
+            fit="contain"
+            className="h-full w-full"
+          />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-2xl bg-[#3c4043] px-4 text-center ring-1 ring-white/5">
+            <Icon name="present" size={40} className="mb-2 text-[#8ab4f8]" />
+            <span className="text-lg font-medium text-white">You’re presenting</span>
+            <span className="text-sm text-white/70">
+              Everyone in the call can see what you’re sharing.
+            </span>
+            {onStopPresenting && (
+              <button
+                type="button"
+                onClick={onStopPresenting}
+                className="mt-4 rounded-full bg-[#8ab4f8] px-6 py-3 text-sm font-medium text-[#062e6f] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Stop presenting
+              </button>
+            )}
+          </div>
+        )}
+        {/* Laid over the tile, not in its place: the tile still plays the
+            shared screen's sound. */}
+        {remoteScreen && onShowVideo && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-[#3c4043] px-4 text-center ring-1 ring-white/5">
+            <Icon name="present" size={40} className="mb-2 text-[#8ab4f8]" />
+            <span className="max-w-full text-lg font-medium text-white wrap-anywhere">{screenLabel}</span>
+            <span className="text-sm text-white/70">Incoming video is off, so you can’t see it.</span>
+            <button
+              type="button"
+              onClick={onShowVideo}
+              className="mt-4 rounded-full bg-[#8ab4f8] px-6 py-3 text-sm font-medium text-[#062e6f] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              Show video
+            </button>
+          </div>
+        )}
+      </>
+    );
     return (
       <div className="flex h-full w-full flex-col gap-2 p-2 md:flex-row">
         {/* Screen spotlight */}
         <div className="relative min-h-0 flex-1">
-          {screen ? (
-            <VideoTile
-              stream={screen}
-              muted={companion ? true : !remoteScreen}
-              label={screenLabel}
-              fit="contain"
-              className="h-full w-full"
-            />
+          {otherScreens.length > 0 ? (
+            <div className="flex h-full w-full flex-col gap-2 md:flex-row">
+              <div className="relative min-h-0 min-w-0 flex-1">{firstScreen}</div>
+              {otherScreens.map((o) => (
+                <div key={o.stream.id} className="min-h-0 min-w-0 flex-1">
+                  <VideoTile
+                    stream={o.stream}
+                    muted={o.muted ?? false}
+                    label={o.label}
+                    fit="contain"
+                    className="h-full w-full"
+                  />
+                </div>
+              ))}
+            </div>
           ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-2xl bg-[#3c4043] px-4 text-center ring-1 ring-white/5">
-              <Icon name="present" size={40} className="mb-2 text-[#8ab4f8]" />
-              <span className="text-lg font-medium text-white">You’re presenting</span>
-              <span className="text-sm text-white/70">
-                Everyone in the call can see what you’re sharing.
-              </span>
-              {onStopPresenting && (
-                <button
-                  type="button"
-                  onClick={onStopPresenting}
-                  className="mt-4 rounded-full bg-[#8ab4f8] px-6 py-3 text-sm font-medium text-[#062e6f] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                >
-                  Stop presenting
-                </button>
-              )}
-            </div>
-          )}
-          {/* Laid over the tile, not in its place: the tile still plays the
-              shared screen's sound. */}
-          {remoteScreen && onShowVideo && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-[#3c4043] px-4 text-center ring-1 ring-white/5">
-              <Icon name="present" size={40} className="mb-2 text-[#8ab4f8]" />
-              <span className="max-w-full text-lg font-medium text-white wrap-anywhere">{screenLabel}</span>
-              <span className="text-sm text-white/70">Incoming video is off, so you can’t see it.</span>
-              <button
-                type="button"
-                onClick={onShowVideo}
-                className="mt-4 rounded-full bg-[#8ab4f8] px-6 py-3 text-sm font-medium text-[#062e6f] transition-colors hover:bg-[#aecbfa] focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-              >
-                Show video
-              </button>
-            </div>
+            firstScreen
           )}
           {/* Mobile: floating PiP of the peer over the screen */}
           {remote && (
