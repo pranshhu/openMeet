@@ -372,13 +372,22 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   lobby builds it) renders the same `Lobby` with `checkOnly`: preview, pickers and readiness
   panel, with the join form hidden and the backup and unsaved-recording lists left out, so a
   guest can test a device ahead of the call. It never calls `join`. A link that also carries
-  `producer=1` or `present=1` is that link, and `check` is ignored.
+  `producer=1` or `present=1` is that link, and `check` is ignored. `?audio=1` (`isAudioLink`)
+  is handed to the lobby as `audio`: the first preview opens the microphone alone, as it does
+  when `localStorage` holds `'1'` under `om_mic_only_<slug>` (a storage that throws, or holds
+  anything else, is "not set"). Either way `camId` is `NO_CAMERA` before the capture answers, so
+  Try again asks for the microphone alone. The link preselects and does not lock: **Microphone
+  only** can still be pressed for the camera, and the Room's seat rule answers that. The join form
+  writes the key when it hands a stream to `onJoin` (`'1'` if the stream has no video track, the
+  key removed otherwise, inside a `try`); a producer's and a Present-only join do not write it,
+  and the check page only reads it. A link that also carries `producer=1` or `present=1` is that
+  link and opens no capture.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
-  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
-  and the Present-only link (the plain link plus `?producer=1` or `?present=1`, the flags
-  `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
+  the Present-only link and the microphone-only link (the plain link plus `?producer=1`,
+  `?present=1` or `?audio=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -1370,8 +1379,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 ## Known gaps
 
 - **A room of five to eight people is for the microphone only, and its pieces are still sized for
-  four.** A person who joined with the microphone only and reloads lands in a lobby with the
-  camera on, and joining that way a room of five or more ends on "This room is full". The lobby's
+  four.** A browser keeps, per room, that its person joined with the microphone only, and the
+  lobby opens that way again after a reload; a browser that blocks storage starts on the camera,
+  and joining that way a room of five or more ends on "This room is full". The lobby's
   size figures and the take's 50 call-copy files (`CALL_COPY_MAX_FILES`) are still those of a
   four-person room.
 - **A microphone-only seat can still present a screen to everyone.** The seat is held to
@@ -1550,10 +1560,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
-- **The producer and Present-only links are offered only to the host, in the waiting
-  room and in the call's top bar before a take.** The lobby and the take summary offer
-  the plain invite link alone, and during a take and after one the top bar has neither.
-  Each is still the invite link plus `?producer=1` or `?present=1`.
+- **The producer, Present-only and microphone-only links are offered only to the host, in the
+  waiting room and in the call's top bar before a take.** The lobby and the take summary offer
+  the plain invite link alone, and during a take and after one the top bar has none of them.
+  Each is still the invite link plus `?producer=1`, `?present=1` or `?audio=1`.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a

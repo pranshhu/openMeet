@@ -425,11 +425,17 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these tw
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link and the Present-only link.
+  waiting room and in the call, copies this link, the Present-only link and the
+  microphone-only link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+
+For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
+**Microphone only**, so nobody's camera comes back on. The host copies this link from
+the same arrow beside **Copy invite link**. A browser also remembers, per room, that a
+person joined with the microphone only, and opens that room's lobby that way again.
 
 ### What lands on disk
 

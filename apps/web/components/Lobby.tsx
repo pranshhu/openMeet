@@ -91,6 +91,8 @@ const FRAME_RATE_KEY = 'om_fps';
 const BITRATE_KEY = 'om_bitrate';
 const STEREO_KEY = 'om_stereo';
 const LISTENING_KEY = 'om_listening';
+// Per room: '1' when this browser last joined the room with the microphone only.
+const micOnlyKey = (slug: string) => `om_mic_only_${slug}`;
 
 /** What a producer or present-only companion joins with: no camera, no mic. */
 function emptyStream(): MediaStream {
@@ -145,6 +147,7 @@ export function Lobby({
   producer = false,
   present = false,
   checkOnly = false,
+  audio = false,
 }: {
   slug: string;
   onJoin: (
@@ -162,6 +165,8 @@ export function Lobby({
   present?: boolean;
   /** The check link: the lobby's preview and checks, with no way into the room. */
   checkOnly?: boolean;
+  /** The microphone-only link: the first preview opens the microphone alone. */
+  audio?: boolean;
 }) {
   // A producer link that also carries ?present=1 is still a producer.
   const isPresent = present && !producer;
@@ -389,6 +394,7 @@ export function Lobby({
     let saved = DEFAULT_QUALITY_ID;
     let savedFps = RECORDING_FRAME_RATE;
     let savedListening: Listening | '' = '';
+    let micAlone = audio;
     try {
       saved = localStorage.getItem(QUALITY_KEY) ?? DEFAULT_QUALITY_ID;
       savedFps = frameRateFrom(localStorage.getItem(FRAME_RATE_KEY));
@@ -398,13 +404,17 @@ export function Lobby({
       const heard = localStorage.getItem(LISTENING_KEY);
       // Anything but one of the three answers is "not said".
       if (isListening(heard)) savedListening = heard;
+      if (localStorage.getItem(micOnlyKey(slug)) === '1') micAlone = true;
     } catch {
       /* private mode — fall back to the default */
     }
     setQualityId(saved);
     setFrameRate(savedFps);
     setListening(savedListening);
-    startPreview(mm, '', saved, savedFps, savedListening === 'speakers-ec');
+    // Set before the capture answers, so Try again after a refusal asks for the
+    // microphone alone as well.
+    if (micAlone) setCamId(NO_CAMERA);
+    startPreview(mm, micAlone ? NO_CAMERA : '', saved, savedFps, savedListening === 'speakers-ec');
     return () => {
       if (!handedOffRef.current) mm.stop();
       mmRef.current = null;
@@ -984,7 +994,15 @@ export function Lobby({
               if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
               // The capture that is open at this moment: one that arrived while
               // the seat was being asked about has replaced the preview read above.
-              onJoin(mmRef.current?.getStream() ?? stream, name.trim(), false, undefined, stereo);
+              const joined = mmRef.current?.getStream() ?? stream;
+              // Kept so a reload of this room opens the way this person joined it.
+              try {
+                if (joined.getVideoTracks().length === 0) localStorage.setItem(micOnlyKey(slug), '1');
+                else localStorage.removeItem(micOnlyKey(slug));
+              } catch {
+                /* private mode — the choice just doesn't persist */
+              }
+              onJoin(joined, name.trim(), false, undefined, stereo);
             }}
           >
             {nameField}
