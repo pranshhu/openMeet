@@ -3021,6 +3021,9 @@ describe('CallStage: camera settings', () => {
     expect(spy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
     expect(spy).toHaveBeenCalled();
+  });
+});
+
 describe('CallStage: a title under a name', () => {
   const stream = () => new EventTarget() as unknown as MediaStream;
   const eve = { peerId: 'p-eve', name: 'Eve', stream: null, role: 'guest' as const, title: 'Founder, Acme' };
