@@ -439,11 +439,13 @@ export class PeerConnection {
 
   /**
    * One channel per screen-share stretch. A label can only be used once per
-   * connection, so segments are suffixed; the host matches on the prefix.
+   * connection, so segments are suffixed; the host matches on the prefix. A key
+   * after `#` names the share, so the host can tell that a rebuilt
+   * connection's channel carries the same file.
    */
-  createRecordingScreenChannel(): RTCDataChannel {
+  createRecordingScreenChannel(key?: string): RTCDataChannel {
     const pc = this.requirePc();
-    const label = `${DATA_CHANNEL_RECORDING_SCREEN}-${++this.screenChannelSeq}`;
+    const label = `${DATA_CHANNEL_RECORDING_SCREEN}-${++this.screenChannelSeq}${key ? `#${key}` : ''}`;
     return pc.createDataChannel(label, { ordered: true });
   }
 

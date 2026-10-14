@@ -296,6 +296,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A screen share that is being recorded continues in the same file after the
+  presenter's connection drops and comes back, instead of starting a second file.
+  When the host no longer has that file, the share is recorded in a new numbered
+  file instead.
 - A camera picture that is taller than wide, such as a phone held upright, is shown whole in
   its tile instead of as a band across its middle.
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
