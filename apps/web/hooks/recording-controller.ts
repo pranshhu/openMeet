@@ -2273,6 +2273,9 @@ export async function bindHostScreenChannel(
     (sharerPeerIdOrName ? slotNameForPeer(h, sharerPeerIdOrName) : undefined) ||
     ''
   ).slice(0, 200);
+  // The peer id this file was bound under can leave the room and its slot be
+  // rebound to a new one, so the name is kept for the file itself.
+  if (who) (h.screenSharersByFile ??= new Map()).set(writer.fileName, who);
   let noted = false;
   h.journal?.note((n) => {
     if (sharerNotes >= MAX_SCREEN_NOTES_PER_SHARER) return;

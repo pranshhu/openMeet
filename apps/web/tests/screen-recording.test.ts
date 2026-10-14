@@ -1773,3 +1773,32 @@ describe('the keyed screen files one take keeps waiting', () => {
     expect(f.closed()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   });
 });
+
+describe('the sharer of a keyed screen file after the guest reconnects', () => {
+  it('is still named once the peer id it was bound under has left the room', async () => {
+    // Removal that must fail this test: storing the name for the file in bindHostScreenChannel.
+    const h: RecordingHandles = {
+      recordingId: 'r',
+      dir: fakeDir(),
+      slotPeerIds: new Map([[0, 'peer-old']]),
+      slotNames: new Map([[0, 'Bob']]),
+    };
+    const ch = Object.assign(new EventTarget(), {
+      label: 'recording-screen-1#share-key',
+      readyState: 'open',
+      send: () => {},
+    });
+    await bindHostScreenChannel(ch as unknown as RTCDataChannel, h, undefined, 'peer-old');
+    await (ch as unknown as RTCDataChannel).onmessage?.({
+      data: JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 100 }),
+    } as MessageEvent);
+    await (ch as unknown as RTCDataChannel).onmessage?.({ data: new Uint8Array(4).buffer } as MessageEvent);
+    await vi.waitFor(() => expect(h.screenReceivers?.get(1)?.bytesWritten).toBe(4));
+    ch.dispatchEvent(new Event('close'));
+    h.slotPeerIds = new Map([[0, 'peer-new']]);
+
+    expect(collectScreenSegments(h, () => undefined)).toEqual([
+      { file: expect.stringMatching(/^guest_screen_r/), offsetMs: 0, endedEarly: true, sharer: 'Bob' },
+    ]);
+  });
+});
