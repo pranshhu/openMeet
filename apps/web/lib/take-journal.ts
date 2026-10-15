@@ -1,4 +1,4 @@
-import type { Role } from '@openmeet/protocol';
+import { ROOM_SLUG_PATTERN, type Role } from '@openmeet/protocol';
 import {
   defaultOpfsRoot,
   getDirEntries,
@@ -93,7 +93,7 @@ export interface TakeJournal {
 
 const TAKE_PREFIX = 'openmeet-take';
 const NOTES_FILE = 'take.json';
-const ROOM_RE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
+const ROOM_RE = new RegExp(`^${ROOM_SLUG_PATTERN}$`);
 const PART_RE = /^(\d{6})-(\d+)-(\d+)\.part$/;
 const FINISHED_MARK = 'finished';
 // Left when a part failed twice, so the next session knows the take went on
@@ -102,9 +102,11 @@ const DEAD_MARK = 'dead';
 // Anchored and exactly thirteen digits, like parseBackupName: the listing
 // parses the number back out of the name, so a leading zero or an unsafe
 // integer would not round-trip.
-const TAKE_DIR_RE = /^openmeet-take-(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})$/;
+const TAKE_DIR_RE = new RegExp(`^openmeet-take-(\\d{13})-(${ROOM_SLUG_PATTERN})$`);
 // The directory names tryOpenOpfs writes, with and without its optional parts.
-const BACKUP_DIR_RE = /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d{13}(?:-[a-z]{3}-[a-z]{4}-[a-z]{3})?$/;
+const BACKUP_DIR_RE = new RegExp(
+  `^openmeet-backup-(?:host-)?(?:audio-|screen-)?\\d{13}(?:-${ROOM_SLUG_PATTERN})?$`
+);
 const KEY_RE = /^[A-Za-z0-9-]{0,64}$/;
 // The take's id becomes part of file names in the recording folder.
 const ID_RE = /^[A-Za-z0-9-]{1,64}$/;

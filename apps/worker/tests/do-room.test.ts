@@ -336,7 +336,7 @@ describe('Room DO — WS join', () => {
   });
 
   it('closes with 4002 (invalid_slug) when raw path is not a well-formed slug', async () => {
-    await seedRoom('not-a-valid-slug', 'tok-not-valid');
+    await seedRoom('not_a_valid_slug', 'tok-not-valid');
     const id = env.ROOM_DO.idFromName('mal-form-aaa');
     const stub = env.ROOM_DO.get(id);
     const res = await stub.fetch('https://test/ws/r/not-a-valid-slug', {
@@ -1399,7 +1399,7 @@ describe('Room DO — hardening', () => {
   // varying the URL spins up unbounded DOs — each billable, and DO count is a
   // free-tier limit.
   it('rejects a malformed slug before instantiating a Durable Object', async () => {
-    for (const bad of ['UPPERCASE', 'no-dashes', 'a-b-c', '../etc', '%00']) {
+    for (const bad of ['UPPERCASE', 'no_dashes', '-abc', '../etc', '%00']) {
       const res = await SELF.fetch(`https://test/ws/r/${encodeURIComponent(bad)}`, {
         headers: { Upgrade: 'websocket' },
       });

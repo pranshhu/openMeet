@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { ROOM_TTL_MS } from '@openmeet/protocol';
+import { ROOM_TTL_MS, isRoomName } from '@openmeet/protocol';
 import type { Env } from '../env.js';
 import { generateSlug, isValidSlugFormat } from '../lib/slug.js';
 import { generateHostToken } from '../lib/token.js';
@@ -26,29 +26,36 @@ export async function postRooms(c: Context<{ Bindings: Env }>): Promise<Response
       console.error('rooms:no_rate_limiter');
     }
   }
+  // A missing or unreadable body is a request with no name.
+  const body: unknown = await c.req.json().catch(() => null);
+  const named = typeof body === 'object' && body !== null && 'name' in body;
+  const name = named ? (body as { name: unknown }).name : undefined;
+  if (named && !isRoomName(name)) {
+    return c.json({ error: 'invalid_name' }, 400);
+  }
+
   const now = Date.now();
   const expiresAt = now + ROOM_TTL_MS;
   const hostToken = generateHostToken();
+  const row = (slug: string) => ({ slug, host_token: hostToken, created_at: now, expires_at: expiresAt });
 
   let slug = '';
-  for (let i = 0; i < MAX_COLLISION_RETRIES; i++) {
-    const candidate = generateSlug();
-    const existing = await getRoomBySlug(c.env.DB, candidate);
-    if (!existing) {
-      slug = candidate;
-      break;
+  if (isRoomName(name)) {
+    // Whether the name is free is decided by the insert itself, so two requests
+    // for one name cannot both win. An expired row keeps its name.
+    if (!(await insertRoom(c.env.DB, row(name)))) {
+      return c.json({ error: 'name_taken' }, 409);
+    }
+    slug = name;
+  } else {
+    for (let i = 0; i < MAX_COLLISION_RETRIES && !slug; i++) {
+      const candidate = generateSlug();
+      if (await insertRoom(c.env.DB, row(candidate))) slug = candidate;
+    }
+    if (!slug) {
+      return c.json({ error: 'slug_exhausted' }, 503);
     }
   }
-  if (!slug) {
-    return c.json({ error: 'slug_exhausted' }, 503);
-  }
-
-  await insertRoom(c.env.DB, {
-    slug,
-    host_token: hostToken,
-    created_at: now,
-    expires_at: expiresAt,
-  });
 
   const requestOrigin = c.req.header('Origin') ?? null;
   const headers: HeadersInit = {

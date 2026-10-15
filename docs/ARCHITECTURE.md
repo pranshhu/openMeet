@@ -175,9 +175,12 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
 ### REST (`src/index.ts` Hono app, `src/api/*`)
 - `POST /api/rooms` → 201 `{slug, host_token, expires_at}` + `Set-Cookie host_token__<slug>` (HttpOnly,
   SameSite=Lax, Path=/, Secure only over https). Generates 32-byte hex `host_token`, slug
-  (3-4-3 lowercase, ~47 bits, 5-retry collision loop → 503 `slug_exhausted`). IP rate limit
+  (3-4-3 lowercase, ~47 bits, 5-retry collision loop → 503 `slug_exhausted`). An optional JSON body
+  `{name}` asks for that slug instead: 400 `invalid_name` when it is not a name (`isRoomName`), 409
+  `name_taken` for any existing row, expired or not; the insert decides, so two requests for one
+  name cannot both win. A missing or unreadable body is a request with no name. IP rate limit
   10/60s → 429 via the `ROOM_CREATE_LIMITER` rate-limit binding (per Cloudflare location, not
-  global; fails open if the binding is missing).
+  global; fails open if the binding is missing), checked before the body is read.
 - `GET /api/rooms/:slug` → 200 `{slug, expires_at, consumed}` | 404 `invalid_slug|not_found|expired`.
 - `POST /api/turn-cred` `{slug}` → the operator's own `TURN_URLS` (+ `TURN_USERNAME`/
   `TURN_CREDENTIAL`) if set; else mints a Cloudflare Realtime TURN cred if `TURN_API_TOKEN`+
@@ -323,7 +326,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the name the host was shown cannot change. Every `room-access` the Room sends carries `locked`,
   `waitingRoom` and `waiting`: the waiting sockets, in ordinal order, as `{peerId, displayName,
   role, companion?}`. A waiting socket that closes, and a socket the host answers, leave the list
-  and the hosts are told.
+  and the hosts are told. A room whose slug is a name starts with the waiting room on, until the
+  host turns it off: `fetch` sets it when the room has never stored `access`.
 - **The passcode** (`access.passcodeHash`, set by a host's `room-access` with a string `passcode`
   of 6 to 64 units, removed by `null`; either change empties `passFails`, closes nobody and is
   answered to every joined host) is the gate between the lock gate and the waiting-room gate. A
@@ -362,7 +366,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `lib/cors.ts`: **strict single-origin** — headers only when `Origin === PAGES_ORIGIN`
   (`isAllowedOrigin`, also the `/ws/r/:slug` Origin check).
   `handlePreflight` 204s with method/header hints. Change `PAGES_ORIGIN` per deploy.
-- `lib/slug.ts`: `crypto.getRandomValues`, `bytes%26` (minor modulo bias, non-security-critical).
+- `lib/slug.ts`: random slugs from `generateSlug`: `crypto.getRandomValues`, `bytes%26` (minor modulo
+  bias, non-security-critical). What counts as a slug is `isRoomSlug` in `@openmeet/protocol`
+  `room-slug.ts`, which the Worker and the browser share.
 - `db/queries.ts`: parameterized D1 CRUD; `updateRecordingProgress` builds SET from a fixed
   allowlist (injection-safe), early-returns if no fields. `markRoomConsumed`/`endSession`/
   `markParticipantLeft` idempotent-guarded.
@@ -1606,6 +1612,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
+- **A room name is never freed, and nothing reserves names.** An expired named room reads "Room not
+  found or expired" and the name cannot be created again. Any name that is not taken can be asked for.
 - **A screen file can still end where the connection did.** A share continues in the same host
   file across a reconnect, but one stopped while its connection is down, one on a page that
   reloads, one whose stream was given up or is being sent later, one whose file the host no

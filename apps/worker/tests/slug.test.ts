@@ -16,13 +16,16 @@ describe('slug', () => {
   it('validates known-good slugs', () => {
     expect(isValidSlugFormat('xyz-abcd-pqr')).toBe(true);
     expect(isValidSlugFormat('aaa-bbbb-ccc')).toBe(true);
+    expect(isValidSlugFormat('xyz-abc-pqr')).toBe(true);
+    expect(isValidSlugFormat('xyz-abcd-pqr-extra')).toBe(true);
   });
 
   it('rejects malformed slugs', () => {
-    expect(isValidSlugFormat('xyz-abc-pqr')).toBe(false);
+    expect(isValidSlugFormat('ab')).toBe(false);
+    expect(isValidSlugFormat('x_y_z')).toBe(false);
+    expect(isValidSlugFormat('A-B-C')).toBe(false);
     expect(isValidSlugFormat('XYZ-ABCD-PQR')).toBe(false);
     expect(isValidSlugFormat('xyz_abcd_pqr')).toBe(false);
     expect(isValidSlugFormat('')).toBe(false);
-    expect(isValidSlugFormat('xyz-abcd-pqr-extra')).toBe(false);
   });
 });

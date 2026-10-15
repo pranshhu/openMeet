@@ -712,9 +712,9 @@ describe('backup room labels', () => {
     expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.wav')).toBeNull();
     expect(parseBackupName('openmeet-backup-screen-1700000000000-abc-defg-hij.wav')).toBeNull();
     // malformed room shape
-    expect(parseBackupName('openmeet-backup-1700000000000-abc.mp4')).toBeNull();
-    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij-x.mp4')).toBeNull();
-    expect(parseBackupName('openmeet-backup-1700000000000-abcd-efg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-ab.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij-.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc_defg_hij.mp4')).toBeNull();
     expect(parseBackupName('openmeet-backup-1700000000000-../../etc.mp4')).toBeNull();
     // upper case
     expect(parseBackupName('openMeet-backup-1700000000000-abc-defg-hij.mp4')).toBeNull();
@@ -2284,5 +2284,54 @@ describe('take journal — small closed parts in browser storage', () => {
       throw new Error('listing failed');
     };
     await expect(listed(angry)).resolves.toEqual([]);
+  });
+});
+
+describe('a room with a chosen name', () => {
+  const ROOM = 'my-show';
+  const INIT = { room: ROOM, recordingId: 'r1', take: 1, hostStartMs: 1759824000000 };
+  const TAKE_DIR = 'openmeet-take-1759824000000-my-show';
+  const open = (root: FakeDirectoryHandle) => openTakeJournal(INIT, async () => root as never);
+
+  it('parseBackupName reads the room from all three name shapes', () => {
+    expect(parseBackupName('openmeet-backup-1700000000000-my-show.mp4')).toEqual({
+      kind: 'camera',
+      startedMs: 1700000000000,
+      room: ROOM,
+      ext: 'mp4',
+    });
+    expect(parseBackupName('openmeet-backup-audio-1700000000000-my-show.wav')?.room).toBe(ROOM);
+    expect(parseBackupName('openmeet-backup-screen-1700000000000-my-show.mp4')?.room).toBe(ROOM);
+  });
+
+  it('opens a crash copy, lists it and removes it', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = await open(root);
+    expect(journal).not.toBeNull();
+    journal!.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    journal!.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal!.file('guest_r.mp4').commit(1);
+
+    const found = await findTakeJournals(async () => root as never);
+    expect(found.map((j) => j.dirName)).toEqual([TAKE_DIR]);
+    expect(found[0]!.notes.room).toBe(ROOM);
+
+    await deleteTakeJournal(TAKE_DIR, async () => root as never);
+    expect(root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('keeps a backup note whose directory carries the name', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) =>
+      n.backups.push({ dir: 'openmeet-backup-host-1700000000000-my-show', file: 'guest_r.mp4', kind: 'camera' })
+    );
+    journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal.file('guest_r.mp4').commit(1);
+
+    const [found] = await findTakeJournals(async () => root as never);
+    expect(found!.notes.backups).toEqual([
+      { dir: 'openmeet-backup-host-1700000000000-my-show', file: 'guest_r.mp4', kind: 'camera' },
+    ]);
   });
 });

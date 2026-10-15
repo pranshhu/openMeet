@@ -601,3 +601,45 @@ describe('Room DO: the waiting room with the lock and the session', () => {
     h.ws.close();
   });
 });
+
+describe('Room DO: a room with a chosen name starts with its waiting room on', () => {
+  it('holds a guest at the door and tells the host the waiting room is on', async () => {
+    const slug = 'rwt-named-show';
+    await seedRoom(slug, `tok-${slug}`);
+    const h = await enter(slug, 'H', { hostToken: `tok-${slug}`, clientId: 'tab-h' });
+    await until(() => ofType(h.heard, 'room-access').length > 0);
+    expect(lastAccess(h.heard).waitingRoom).toBe(true);
+    // A Room woken from eviction reads only storage, so the default is kept there.
+    expect(await storedAccess(slug)).toEqual({ waitingRoom: true });
+
+    const w = await knock(slug, 'Wanda', { clientId: 'tab-w' });
+    await until(() => w.heard.length > 0);
+    expect(w.heard).toEqual([{ type: 'door', state: 'waiting' }]);
+
+    [h.ws, w.ws].forEach((x) => x.close());
+  });
+
+  it('stays off once the host turned it off, for a later guest on a new socket', async () => {
+    const slug = 'rwt-named-open';
+    await seedRoom(slug, `tok-${slug}`);
+    const h = await enter(slug, 'H', { hostToken: `tok-${slug}`, clientId: 'tab-h' });
+    setWaitingRoom(h.ws, false);
+    await until(() => ofType(h.heard, 'room-access').at(-1)?.waitingRoom === false);
+    expect((await storedAccess(slug))?.waitingRoom).toBe(false);
+
+    const g = await enter(slug, 'G', { clientId: 'tab-g' });
+    expect(g.heard.some((m) => m.type === 'door')).toBe(false);
+
+    [h.ws, g.ws].forEach((x) => x.close());
+  });
+
+  it('seats a guest at once in a room with a random slug', async () => {
+    const slug = 'rwt-rand-aaa';
+    await seedRoom(slug, `tok-${slug}`);
+    const g = await enter(slug, 'G', { clientId: 'tab-g' });
+    expect(g.heard.some((m) => m.type === 'door')).toBe(false);
+    expect(await storedAccess(slug)).toBeUndefined();
+
+    g.ws.close();
+  });
+});

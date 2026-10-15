@@ -94,7 +94,9 @@ they're already known:
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
   joining a room as a guest, unless the host has set a passcode or turned the waiting room
-  on. Treat an invite link as a secret.
+  on. Treat an invite link as a secret. A named room's slug can be guessed, so such a room starts
+  with the waiting room on; a host who turns it off makes the name the only credential. Anyone can
+  check whether a name exists (`GET /api/rooms/:slug`, or a 409 from `POST /api/rooms`).
 - **A room passcode is a digest in the room's Durable Object storage.** The host
   sets it in the room controls and guests type it before they join. The Room keeps only
   the SHA-256 of the slug and the passcode, compares it in constant time, and writes the

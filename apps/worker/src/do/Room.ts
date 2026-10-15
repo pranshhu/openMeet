@@ -18,6 +18,7 @@ import {
   isLogo,
   isLookAccent,
   isReaction,
+  isRoomName,
   titleFrom,
   type ClientMessage,
   type Role,
@@ -370,6 +371,12 @@ export class Room implements DurableObject {
     this.slug = room.slug;
     this.hostToken = room.host_token;
     await this.state.storage.put('room', { slug: room.slug, hostToken: room.host_token } satisfies RoomRow);
+    // A name can be guessed, so a room that has one starts with the waiting room
+    // on. Once `access` is stored the host's setting is the only one.
+    if (isRoomName(room.slug) && (await this.state.storage.get('access')) === undefined) {
+      this.waitingRoom = true;
+      await this.saveAccess();
+    }
     // Same-origin/local-dev path: host_token may arrive as an httpOnly cookie.
     // Cross-origin deploys (*.pages.dev + *.workers.dev) can't send it, so the
     // host also presents the token in its `join` message (see webSocketMessage).
