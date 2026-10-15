@@ -104,6 +104,9 @@ retention policy to trust, because there's nothing retained.
   screen only and never in a recording (computers)
 - **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
   entry for the session, with the room link and a short checklist for the guest
+- A host can choose the room's link on the home page (`/r/my-show/`). New guests wait
+  until the host lets them in, and the link lasts while it is used at least once every
+  30 days.
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera), and so can a deck of slide pictures, turned with Previous and Next

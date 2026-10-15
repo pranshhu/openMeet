@@ -19,13 +19,17 @@ export interface TurnCred {
   ttl: number;
 }
 
-export async function createRoom(): Promise<CreateRoomResult> {
+export async function createRoom(name?: string): Promise<CreateRoomResult> {
   const res = await fetch(`${API_BASE}/api/rooms`, {
     method: 'POST',
     credentials: 'include',
+    ...(name !== undefined && {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
   });
   if (res.status !== 201) {
-    throw new Error(`createRoom failed: ${res.status}`);
+    throw Object.assign(new Error(`createRoom failed: ${res.status}`), { status: res.status });
   }
   return (await res.json()) as CreateRoomResult;
 }

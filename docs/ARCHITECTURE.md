@@ -392,10 +392,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Routes / UI (all components are `'use client'`; layouts are server)
 - `/` → `app/page.tsx` (Landing). "New Room" → `createRoom()` → `window.location.href =
-  '/r/${slug}/'` (**trailing slash required** for static export).
+  '/r/${slug}/'` (**trailing slash required** for static export). "Choose your own link"
+  (`NamedRoom`) → `createRoom(name)`, the same navigation.
 - `/r/[slug]` → `RoomPage` unwraps `params: Promise` via React `use()` → `<RoomView>`.
   `app/r/[slug]/layout.tsx` is **server** (hosts `generateStaticParams` placeholder shell;
-  real slug resolved client-side; `public/_redirects` rewrites every `/r/*` to that shell on Pages).
+  real slug resolved client-side and lowercased; `public/_redirects` rewrites every `/r/*` to that
+  shell on Pages).
 - Unknown paths → `app/not-found.tsx` (exported as `out/404.html`).
 - `next.config.ts`: `output:'export'` **only when `NODE_ENV==='production'`** — dev intentionally
   skips it so `/r/[slug]` resolves at runtime. **Don't unconditionally enable export.**

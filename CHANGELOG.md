@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A room can have a link you choose, such as `/r/my-show/`, for a show that sends every
+  guest the same link. New guests wait until you let them in.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
 - A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
