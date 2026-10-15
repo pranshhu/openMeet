@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within, cleanup } from '@testing-library/react';
 import { Lobby } from '@/components/Lobby';
 import { PreflightPanel } from '@/components/PreflightPanel';
 import { diskCheck, folderCheck } from '@/lib/preflight';
@@ -13,6 +13,7 @@ import {
   presetById,
 } from '@/lib/quality';
 import { formatBytes } from '@/lib/sync-report';
+import { chooseTitle, titleField } from '@/lib/name-tag';
 import type { TakeJournal } from '@/lib/take-journal';
 import type { FsDirectoryHandle } from '@/lib/fs-writer';
 
@@ -2389,5 +2390,450 @@ describe('Lobby', () => {
         );
       });
     });
+  });
+
+  describe('camera settings under the preview', () => {
+    const exposureOf = (id: string, at: number, lists = true) => {
+      const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ deviceId: 'mic1' }) };
+      const video = {
+        id,
+        kind: 'video',
+        enabled: true,
+        stop: vi.fn(),
+        getSettings: () => ({ deviceId: 'cam1', width: 1280, height: 720, frameRate: 30, exposureTime: at }),
+        getCapabilities: () => (lists ? { exposureTime: { min: 10, max: 1000, step: 10 } } : {}),
+        getConstraints: () => ({ frameRate: 30 }),
+        applyConstraints: vi.fn().mockResolvedValue(undefined),
+      };
+      const stream = Object.assign(new EventTarget(), {
+        getTracks: () => [audio, video],
+        getAudioTracks: () => [audio],
+        getVideoTracks: () => [video],
+      }) as unknown as MediaStream;
+      return { stream, video };
+    };
+    const micStream = () => {
+      const audio = { kind: 'audio', enabled: true, stop: vi.fn(), getSettings: () => ({ deviceId: 'mic1' }) };
+      return Object.assign(new EventTarget(), {
+        getTracks: () => [audio],
+        getAudioTracks: () => [audio],
+        getVideoTracks: () => [],
+      }) as unknown as MediaStream;
+    };
+    const lobbyWith = (getUserMedia: ReturnType<typeof vi.fn>, checkOnly = false) => {
+      vi.stubGlobal('navigator', {
+        userAgent: 'test',
+        mediaDevices: {
+          getUserMedia,
+          enumerateDevices: vi
+            .fn()
+            .mockResolvedValue([...DEVICES, { kind: 'videoinput', deviceId: 'cam2', label: 'USB cam' }]),
+        },
+      });
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly={checkOnly} />);
+    };
+    const settingsButton = () => screen.queryByRole('button', { name: 'Camera settings' });
+
+    it('keeps the panel closed until the button is pressed, and a slider changes the previewed camera', async () => {
+      const { stream, video } = exposureOf('t1', 100);
+      lobbyWith(vi.fn().mockResolvedValue(stream));
+      const button = await screen.findByRole('button', { name: 'Camera settings' });
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      const micOnlyButton = screen.getByRole('button', { name: 'Microphone only' });
+      expect(button.compareDocumentPosition(micOnlyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      fireEvent.click(button);
+
+      expect(button).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('region', { name: 'Camera settings' })).toBeInTheDocument();
+      fireEvent.change(screen.getByRole('slider', { name: 'Exposure time' }), { target: { value: '300' } });
+      await waitFor(() => expect(video.applyConstraints).toHaveBeenCalledTimes(1));
+      expect(video.applyConstraints).toHaveBeenCalledWith({ frameRate: 30, advanced: [{ exposureTime: 300 }] });
+    });
+
+    it('hides the panel when the button is pressed again', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream));
+      const button = await screen.findByRole('button', { name: 'Camera settings' });
+      fireEvent.click(button);
+      expect(screen.getByRole('region', { name: 'Camera settings' })).toBeInTheDocument();
+
+      fireEvent.click(button);
+
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('asks the camera for its controls once, not on every key typed in the name field', async () => {
+      const { stream, video } = exposureOf('t1', 100);
+      // Only the camera-controls code reads this key; the lobby's own quality and frame rate reads do not.
+      let reads = 0;
+      video.getCapabilities = () => ({
+        get exposureTime() {
+          reads++;
+          return { min: 10, max: 1000, step: 10 };
+        },
+      });
+      lobbyWith(vi.fn().mockResolvedValue(stream));
+      await screen.findByRole('button', { name: 'Camera settings' });
+      const asked = reads;
+      expect(asked).toBeGreaterThan(0);
+
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'A' } });
+      fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ab' } });
+
+      expect(reads).toBe(asked);
+    });
+
+    it('closes the panel from its own Close button', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream));
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull();
+      expect(settingsButton()).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('offers no button for a camera that lists none of the controls', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100, false).stream));
+
+      await screen.findByLabelText('Camera');
+
+      expect(settingsButton()).toBeNull();
+    });
+
+    it('offers no button with Microphone only', async () => {
+      lobbyWith(
+        vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+          c.video === false ? micStream() : exposureOf('t1', 100).stream
+        )
+      );
+      await screen.findByRole('button', { name: 'Camera settings' });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Microphone only' }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Microphone only' })).toHaveAttribute('aria-pressed', 'true'));
+      expect(settingsButton()).toBeNull();
+    });
+
+    it('drops an open panel when Microphone only is chosen', async () => {
+      lobbyWith(
+        vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+          c.video === false ? micStream() : exposureOf('t1', 100).stream
+        )
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Microphone only' }));
+
+      await waitFor(() => expect(screen.queryByRole('region', { name: 'Camera settings' })).toBeNull());
+    });
+
+    it('is on the check page too', async () => {
+      lobbyWith(vi.fn().mockResolvedValue(exposureOf('t1', 100).stream), true);
+
+      expect(await screen.findByRole('button', { name: 'Camera settings' })).toBeInTheDocument();
+    });
+
+    it('shows the new camera’s value when the camera picker opens another capture', async () => {
+      const first = exposureOf('t1', 100);
+      const getUserMedia = vi.fn().mockResolvedValue(first.stream);
+      lobbyWith(getUserMedia);
+      fireEvent.click(await screen.findByRole('button', { name: 'Camera settings' }));
+      expect(screen.getByRole('slider', { name: 'Exposure time' })).toHaveValue('100');
+
+      getUserMedia.mockResolvedValue(exposureOf('t2', 300).stream);
+      fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'cam2' } });
+
+      await waitFor(() => expect(screen.getByRole('slider', { name: 'Exposure time' })).toHaveValue('300'));
+    });
+  });
+});
+
+describe('Lobby: a title under the name', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+  });
+
+  afterEach(() => {
+    chooseTitle('');
+    vi.unstubAllGlobals();
+  });
+
+  it('has a title field under the name in the main form, for any phone to type in', () => {
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+    const title = screen.getByLabelText('Your title, optional') as HTMLInputElement;
+    const name = screen.getByLabelText('Your name') as HTMLInputElement;
+    expect(title.tagName).toBe('INPUT');
+    expect(title.placeholder).toBe('Title or company (optional)');
+    expect(title.maxLength).toBe(60);
+    expect(title.autocomplete).toBe('organization-title');
+    expect(title.className).toBe(name.className);
+    expect(name.form).toBe(title.form);
+    expect(name.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('has no title field for a producer, on the Present-only screen, or on the check page', () => {
+    const { unmount } = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} producer />);
+    expect(screen.queryByLabelText('Your title, optional')).toBeNull();
+    unmount();
+
+    const present = render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} present />);
+    expect(screen.queryByLabelText('Your title, optional')).toBeNull();
+    present.unmount();
+
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly />);
+    const hidden = screen.getByLabelText('Your title, optional', { selector: 'input' }) as HTMLInputElement;
+    expect(hidden.closest('form')).toHaveAttribute('hidden');
+  });
+
+  it('joins with the title typed, and with none when it was left empty', async () => {
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    fireEvent.change(screen.getByLabelText('Your title, optional'), { target: { value: '  Founder, Acme ' } });
+    fireEvent.submit(screen.getByLabelText('Your title, optional').closest('form')!);
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+    expect(titleField()).toEqual({ title: 'Founder, Acme' });
+    cleanup();
+
+    const again = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={again} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Alice' } });
+    fireEvent.submit(screen.getByLabelText('Your title, optional').closest('form')!);
+    await waitFor(() => expect(again).toHaveBeenCalledTimes(1));
+    expect(titleField()).toEqual({});
+  });
+});
+
+describe('Lobby: the host picks a name tag colour', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    localStorage.setItem('om_host_xyz-look-pqr', 'host-tok');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('om_host_xyz-look-pqr');
+    localStorage.removeItem('om_look_xyz-look-pqr');
+    localStorage.removeItem('om_look_xyz-other-pqr');
+    vi.unstubAllGlobals();
+  });
+
+  it('has a colour select for the host, with its seven choices and the hint under it', async () => {
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    const select = (await screen.findByLabelText('Name tag colour')) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'Name tag colour: No colour',
+      'Name tag colour: Blue',
+      'Name tag colour: Red',
+      'Name tag colour: Green',
+      'Name tag colour: Yellow',
+      'Name tag colour: Purple',
+      'Name tag colour: Pink',
+    ]);
+    expect(select).toHaveValue('');
+    expect(screen.getByText('Everyone in the call sees it. To change it, leave and join again.')).toBeInTheDocument();
+    expect(select.closest('label')!.className).toContain('min-h-11');
+    const calendar = screen.getByRole('button', { name: /add to calendar/i });
+    expect(select.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('has none for a guest and none on the check page', async () => {
+    const guest = render(<Lobby slug="xyz-other-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Name tag colour')).toBeNull();
+    guest.unmount();
+
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} checkOnly />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Name tag colour')).toBeNull();
+  });
+
+  it('saves the colour chosen for that room at once, and shows it again next time', async () => {
+    const first = render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    const select = (await screen.findByLabelText('Name tag colour')) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'red' } });
+    expect(localStorage.getItem('om_look_xyz-look-pqr')).toBe('{"accent":"red"}');
+    expect(localStorage.getItem('om_look_xyz-other-pqr')).toBeNull();
+    first.unmount();
+
+    render(<Lobby slug="xyz-look-pqr" onJoin={vi.fn()} />);
+    expect(await screen.findByLabelText('Name tag colour')).toHaveValue('red');
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: '' } });
+    expect(localStorage.getItem('om_look_xyz-look-pqr')).toBe('{}');
+  });
+});
+
+describe('Lobby: the host adds a logo', () => {
+  // A room of its own for each test: the page keeps its own copy of a saved look.
+  let SLUG = '';
+  let rooms = 0;
+  const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  // The first 24 bytes of a PNG: signature, the IHDR chunk header, width, height.
+  const logoOf = (width: number, height: number) =>
+    'data:image/png;base64,' +
+    btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...be32(13), 0x49, 0x48, 0x44, 0x52, ...be32(width), ...be32(height))) +
+    'AAAA';
+  const pick = (input: HTMLElement, name = 'logo.png') =>
+    fireEvent.change(input, { target: { files: [new File(['x'], name, { type: 'image/png' })] } });
+
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    SLUG = `xyz-logo${++rooms}-pqr`;
+    localStorage.setItem(`om_host_${SLUG}`, 'host-tok');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(`om_host_${SLUG}`);
+    localStorage.removeItem(`om_look_${SLUG}`);
+    localStorage.removeItem('om_look_xyz-other-pqr');
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('has an Add a logo button for the host, under the colour select, and none for a guest', async () => {
+    const guest = render(<Lobby slug="xyz-other-pqr" onJoin={vi.fn()} />);
+    await screen.findByRole('button', { name: /turn off microphone/i });
+    expect(screen.queryByLabelText('Add a logo')).toBeNull();
+    guest.unmount();
+
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const input = (await screen.findByLabelText('Add a logo')) as HTMLInputElement;
+    expect(input.type).toBe('file');
+    expect(input.accept).toBe('image/png,image/jpeg,image/webp');
+    expect(input.closest('label')!.className).toContain('min-h-11');
+    expect(screen.queryByRole('button', { name: 'Remove logo' })).toBeNull();
+    expect(screen.queryByAltText('Your logo')).toBeNull();
+    const select = screen.getByLabelText('Name tag colour');
+    expect(select.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows the picture, Change logo and Remove logo for a saved logo, and Remove clears it', async () => {
+    const logo = logoOf(160, 80);
+    localStorage.setItem(`om_look_${SLUG}`, JSON.stringify({ accent: 'red', logo }));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const img = (await screen.findByAltText('Your logo')) as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe(logo);
+    expect(img.className).toContain('h-10');
+    expect(screen.getByLabelText('Change logo')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Add a logo')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove logo' }));
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'red' });
+    expect(screen.queryByAltText('Your logo')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove logo' })).toBeNull();
+    expect(screen.getByLabelText('Add a logo')).toBeInTheDocument();
+  });
+
+  it('saves a picked picture, redrawn, at once and keeps the colour', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 320, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockImplementation(function (this: HTMLCanvasElement) {
+      return logoOf(this.width, this.height);
+    });
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Name tag colour'), { target: { value: 'green' } });
+    pick(await screen.findByLabelText('Add a logo'));
+
+    const img = await screen.findByAltText('Your logo');
+    expect(img.getAttribute('src')).toBe(logoOf(160, 80));
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'green', logo: logoOf(160, 80) });
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: '' } });
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ logo: logoOf(160, 80) });
+  });
+
+  it('keeps the logo for this visit when storage refuses the save', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 40, height: 40, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(40, 40));
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    const first = render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Add a logo'));
+    await screen.findByAltText('Your logo');
+    expect(localStorage.getItem(`om_look_${SLUG}`)).toBeNull();
+    first.unmount();
+
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    expect((await screen.findByAltText('Your logo')).getAttribute('src')).toBe(logoOf(40, 40));
+  });
+
+  it('keeps a colour picked while a picture is still being read', async () => {
+    let decoded!: (bitmap: { width: number; height: number; close: () => void }) => void;
+    vi.stubGlobal('createImageBitmap', vi.fn().mockReturnValue(new Promise((resolve) => (decoded = resolve))));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(30, 30));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Add a logo'));
+    fireEvent.change(screen.getByLabelText('Name tag colour'), { target: { value: 'blue' } });
+    decoded({ width: 30, height: 30, close: vi.fn() });
+
+    await screen.findByAltText('Your logo');
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ accent: 'blue', logo: logoOf(30, 30) });
+    expect(screen.getByLabelText('Name tag colour')).toHaveValue('blue');
+  });
+
+  it('lets the same file be picked again', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('no')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    const input = (await screen.findByLabelText('Add a logo')) as HTMLInputElement;
+    const file = new File(['x'], 'logo.png', { type: 'image/png' });
+    Object.defineProperty(input, 'value', { writable: true, value: 'C:\\fakepath\\logo.png' });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole('alert');
+    expect(input.value).toBe('');
+  });
+
+  it('does nothing when the picker is closed without a file', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('no')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Add a logo'), { target: { files: [] } });
+    await act(async () => {});
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Add a logo')).toBeInTheDocument();
+  });
+
+  it('says so, and keeps what was there, for a picture that cannot be used', async () => {
+    const logo = logoOf(50, 50);
+    localStorage.setItem(`om_look_${SLUG}`, JSON.stringify({ logo }));
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('not a picture')));
+    render(<Lobby slug={SLUG} onJoin={vi.fn()} />);
+    pick(await screen.findByLabelText('Change logo'), 'x.svg');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not use that picture. Try a PNG or a JPEG.');
+    expect(screen.getByAltText('Your logo').getAttribute('src')).toBe(logo);
+    expect(JSON.parse(localStorage.getItem(`om_look_${SLUG}`)!)).toEqual({ logo });
+
+    // The line goes when a picture works.
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 20, height: 20, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(logoOf(20, 20));
+    pick(screen.getByLabelText('Change logo'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByAltText('Your logo').getAttribute('src')).toBe(logoOf(20, 20));
   });
 });

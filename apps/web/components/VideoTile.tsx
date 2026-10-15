@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
 import { followSpeaker } from '@/lib/speaker';
 
 function initial(label: string): string {
@@ -13,6 +13,7 @@ export function VideoTile({
   stream,
   muted,
   label,
+  title,
   presence,
   camOff = false,
   fit = 'cover',
@@ -33,6 +34,8 @@ export function VideoTile({
   stream: MediaStream | null;
   muted: boolean;
   label: string;
+  /** The person's own title, a second line under the name. Not shown in a narrow tile. */
+  title?: string;
   presence?: ReactNode;
   camOff?: boolean;
   fit?: 'cover' | 'contain';
@@ -42,10 +45,21 @@ export function VideoTile({
   volume?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  // Whether the picture the element holds is taller than wide (a phone held
+  // upright). Such a picture is drawn whole, as a contained one is, instead of as
+  // a band across its middle.
+  const [tall, setTall] = useState(false);
+  const whole = fit === 'contain' || tall;
+  const showVideo = !!stream && !camOff;
+  // The black box belongs to a picture that is shown; a tile with the camera off
+  // keeps the colour every such tile has.
+  const black = fit === 'contain' || (tall && showVideo);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // A stream that is new, or gone, has not told its size yet.
+    setTall(false);
     // Assign AND clear. Only assigning meant a tile whose stream went away kept
     // rendering the last frame of a dead stream — e.g. after the peer left or
     // the call was torn down — so the UI showed video that no longer existed.
@@ -71,7 +85,10 @@ export function VideoTile({
     return followSpeaker(el);
   }, [muted]);
 
-  const showVideo = !!stream && !camOff;
+  // The element reports its picture size when it first knows it and when it
+  // changes. It is read there, not per frame.
+  const readShape = ({ currentTarget: v }: SyntheticEvent<HTMLVideoElement>) =>
+    setTall(v.videoWidth > 0 && v.videoHeight > v.videoWidth);
 
   useEffect(() => {
     if (ref.current) ref.current.volume = volume;
@@ -79,14 +96,16 @@ export function VideoTile({
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${fit === 'contain' ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
+      className={`@container group relative overflow-hidden rounded-2xl ring-1 ring-white/5 ${black ? 'bg-black' : 'bg-[#3c4043]'} ${className}`}
     >
       <video
         ref={ref}
         autoPlay
         playsInline
         muted={muted}
-        className={`h-full w-full ${fit === 'contain' ? 'object-contain' : 'object-cover'} transition-opacity duration-200 ${showVideo ? 'opacity-100' : 'opacity-0'} ${mirror ? '-scale-x-100' : ''}`}
+        onLoadedMetadata={readShape}
+        onResize={readShape}
+        className={`h-full w-full ${whole ? 'object-contain' : 'object-cover'} transition-opacity duration-200 ${showVideo ? 'opacity-100' : 'opacity-0'} ${mirror ? '-scale-x-100' : ''}`}
       />
       {!showVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
@@ -96,10 +115,18 @@ export function VideoTile({
         </div>
       )}
       <span
-        title={label}
-        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
+        title={title ? `${label}\n${title}` : label}
+        className={`absolute bottom-2 left-2 truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm [border-left:var(--om-tag-bar,none)] sm:bottom-3 sm:left-3 sm:px-2.5 sm:py-1 sm:text-[13px] ${tagClassName}`}
       >
-        {label}
+        {title ? (
+          <>
+            <span className="block truncate">{label}</span>
+            {/* The tile is the container: below 224 px wide the line is left out. */}
+            <span className="hidden truncate text-[11px] font-normal text-white/70 @[224px]:block">{title}</span>
+          </>
+        ) : (
+          label
+        )}
       </span>
       {presence}
     </div>

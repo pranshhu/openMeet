@@ -48,11 +48,12 @@ export function deviceConstraints(
   camId?: string,
   qualityId: string = DEFAULT_QUALITY_ID,
   frameRate: number = RECORDING_FRAME_RATE,
-  echoCancellation = false
+  echoCancellation = false,
+  portrait = false
 ): MediaStreamConstraints {
   return {
     audio: micConstraints(micId, echoCancellation),
-    video: cameraConstraints(camId, qualityId, frameRate),
+    video: cameraConstraints(camId, qualityId, frameRate, portrait),
   };
 }
 
@@ -80,14 +81,18 @@ export const NO_CAMERA = 'none';
 export function cameraConstraints(
   camIdOrFacing?: string,
   qualityId: string = DEFAULT_QUALITY_ID,
-  frameRate: number = RECORDING_FRAME_RATE
+  frameRate: number = RECORDING_FRAME_RATE,
+  portrait = false
 ): MediaTrackConstraints | false {
   if (camIdOrFacing === NO_CAMERA) return false;
   const v = RECORDING_CONSTRAINTS.video as MediaTrackConstraints;
   const q = presetById(qualityId);
+  // Portrait is the middle of the camera's wide picture: the preset's height at
+  // 9:16, the width on an even number because encoders take no odd sizes.
+  const width = portrait ? Math.round((q.height * 9) / 32) * 2 : q.width;
   return {
     ...v,
-    width: { ideal: q.width },
+    width: { ideal: width },
     height: { ideal: q.height },
     frameRate: { ideal: frameRate },
     ...(camIdOrFacing === 'user' || camIdOrFacing === 'environment'

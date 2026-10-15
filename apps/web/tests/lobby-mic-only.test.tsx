@@ -69,6 +69,10 @@ describe('cameraConstraints with the facing choices', () => {
 });
 
 describe('Lobby: microphone only', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -1014,5 +1018,219 @@ describe('Lobby: the last ways a capture is handed over stopped or left open', (
     await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
 
     for (const t of preview.getTracks()) expect(t.stop).toHaveBeenCalled();
+  });
+});
+
+describe('Lobby: a microphone-only link, and the choice kept per room', () => {
+  const KEY = 'om_mic_only_xyz-abcd-pqr';
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function workingMedia() {
+    const getUserMedia = vi.fn().mockImplementation(async (c: MediaStreamConstraints) =>
+      c.video === false ? streamOf(micTrack()) : streamOf(micTrack(), camTrack())
+    );
+    stubMedia(getUserMedia);
+    return getUserMedia;
+  }
+
+  async function join(name = 'Ana') {
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: name } });
+    await waitFor(() => expect(joinNow()).toBeEnabled());
+    fireEvent.click(joinNow());
+  }
+
+  it('opens the microphone alone first when the link asks for it', async () => {
+    const getUserMedia = workingMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} audio />);
+
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(getUserMedia.mock.calls[0]![0].video).toBe(false);
+  });
+
+  it('opens the microphone alone first when this room was last joined that way', async () => {
+    localStorage.setItem(KEY, '1');
+    const getUserMedia = workingMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(getUserMedia.mock.calls[0]![0].video).toBe(false);
+  });
+
+  it('asks for the camera first with neither the link nor the stored choice', async () => {
+    const getUserMedia = workingMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+    await screen.findByLabelText('Camera');
+    expect(getUserMedia.mock.calls[0]![0].video).not.toBe(false);
+    expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('ignores a stored value that is not 1, and the choice of another room', async () => {
+    localStorage.setItem(KEY, '0');
+    localStorage.setItem('om_mic_only_other-room', '1');
+    const getUserMedia = workingMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} />);
+
+    await screen.findByLabelText('Camera');
+    expect(getUserMedia.mock.calls[0]![0].video).not.toBe(false);
+  });
+
+  it('asks for the camera, and still joins, when the storage cannot be read', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+    const getUserMedia = workingMedia();
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+
+    await screen.findByLabelText('Camera');
+    expect(getUserMedia.mock.calls[0]![0].video).not.toBe(false);
+    await join();
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+  });
+
+  it('opens the microphone alone on the link even when the storage cannot be read', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage blocked');
+    });
+    const getUserMedia = workingMedia();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} audio />);
+
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    expect(getUserMedia.mock.calls[0]![0].video).toBe(false);
+  });
+
+  it('asks for the microphone alone again on Try again after a link that asks for it', async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { name: 'NotReadableError' }))
+      .mockImplementation(async () => streamOf(micTrack()));
+    stubMedia(getUserMedia);
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} audio />);
+
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    expect(getUserMedia.mock.calls[1]![0].video).toBe(false);
+  });
+
+  it('keeps that this room was joined with the microphone only', async () => {
+    workingMedia();
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    expect(localStorage.getItem(KEY)).toBeNull();
+
+    await join();
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem(KEY)).toBe('1');
+  });
+
+  it('forgets it when the same person joins with the camera', async () => {
+    localStorage.setItem(KEY, '1');
+    workingMedia();
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'false'));
+    await screen.findByLabelText('Camera');
+    expect(localStorage.getItem(KEY)).toBe('1');
+
+    await join();
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('joins when the storage refuses the write', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage full');
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage full');
+    });
+    workingMedia();
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} audio />);
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+
+    await join();
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledTimes(1));
+  });
+
+  it('is read on the check page and never written there', async () => {
+    localStorage.setItem(KEY, '1');
+    const getUserMedia = workingMedia();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem');
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} checkOnly />);
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    expect(getUserMedia.mock.calls[0]![0].video).toBe(false);
+
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'false'));
+
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(setItem.mock.calls.filter(([k]) => k === KEY)).toEqual([]);
+    expect(localStorage.getItem(KEY)).toBe('1');
+  });
+
+  it('keeps the choice of the capture handed to the call when it changed while the seat was being asked about', async () => {
+    const preview = streamOf(micTrack(), camTrack());
+    const arrived = streamOf(micTrack());
+    let open!: (s: MediaStream) => void;
+    let answerSeat!: (held: boolean) => void;
+    const getUserMedia = vi.fn().mockImplementation((c: MediaStreamConstraints) =>
+      c.video === false
+        ? new Promise<MediaStream>((resolve) => {
+            open = resolve;
+          })
+        : Promise.resolve(preview)
+    );
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue(DEVICES) },
+      // The question "is another tab recording this room", held open.
+      locks: {
+        request: () =>
+          new Promise<boolean>((resolve) => {
+            answerSeat = resolve;
+          }),
+      },
+    });
+    const onJoin = vi.fn();
+    render(<Lobby slug="xyz-abcd-pqr" onJoin={onJoin} />);
+    await screen.findByLabelText('Camera');
+    fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Ana' } });
+
+    fireEvent.click(joinNow());
+    fireEvent.click(micOnlyButton());
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      open(arrived);
+    });
+    await waitFor(() => expect(micOnlyButton()).toHaveAttribute('aria-pressed', 'true'));
+    await act(async () => {
+      answerSeat(false);
+    });
+
+    await waitFor(() => expect(onJoin).toHaveBeenCalledWith(arrived, 'Ana', false, undefined, false));
+    expect(localStorage.getItem(KEY)).toBe('1');
   });
 });

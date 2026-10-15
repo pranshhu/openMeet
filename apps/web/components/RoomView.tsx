@@ -13,6 +13,9 @@ import type { MediaBoard } from '@/lib/media-board';
 import { Lobby } from './Lobby';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
+import { KnockNotice } from './KnockNotice';
+import { RoomAccess } from './RoomAccess';
+import { PasscodeForm } from './PasscodeForm';
 import { StatusScreen } from './StatusScreen';
 
 /**
@@ -85,6 +88,12 @@ function isPresentLink(): boolean {
   return new URLSearchParams(window.location.search).get('present') === '1';
 }
 
+/** `?audio=1` on the room link: the lobby opens on Microphone only. */
+function isAudioLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('audio') === '1';
+}
+
 /** `?check=1` on the room link: the lobby's preview and checks, with no way into the room. */
 function isCheckLink(): boolean {
   if (typeof window === 'undefined') return false;
@@ -109,10 +118,19 @@ function FileLinks({ files }: { files: readonly (readonly [string | null, string
   );
 }
 
+/** What a refused person reads, by the reason the Room gave. */
+const REFUSALS = {
+  locked: ['This room is locked', 'The host locked it, so nobody new can join. Ask the host to unlock it, then try again.'],
+  refused: ['The host didn’t let you in', 'Ask the host, then try again.'],
+  busy: ['Too many people are waiting', 'The room’s waiting list is full. Try again in a minute.'],
+  passcode: ['Too many wrong passcodes', 'Wait ten minutes, then try again, or ask the host.'],
+  other: ['You can’t join this room right now', 'Ask the host, then try again.'],
+} as const;
+
 export function RoomView({ slug }: { slug: string }) {
   const {
     state, join, leave, setMic, setCam, switchCamera, switchMic, sendChat, setPeerRecorded, toggleScreenShare,
-    mutePeer, removePeer,
+    mutePeer, askPeer, dismissHelpAsk, restartConnection, removePeer, setRoomAccess, sendPasscode, admitPeer,
     recordWithCountdown, endRecording, addMarker, openMediaBoard, newTake, discardTake, readLoad,
     sendScript, dismissIncomingScript,
     readTrackHealth, setLowPower, acceptBackups, declineBackups, dismissBackup, stopBackup, sendBackups,
@@ -135,6 +153,7 @@ export function RoomView({ slug }: { slug: string }) {
   const producer = isProducerLink();
   const present = isPresentLink();
   const check = isCheckLink();
+  const audio = isAudioLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
   // A host who went on without anyone else. Kept while this tab stays in the
   // room: the call screen then stays up while they are alone, while someone
@@ -179,8 +198,8 @@ export function RoomView({ slug }: { slug: string }) {
   if (state.phase === 'full') {
     return (
       <StatusScreen title="This room is full" action="Try again">
-        Up to 4 people on camera, plus 2 producers or present‑only screens. Try again once someone
-        leaves.
+        A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers or
+        present‑only screens. Try again once someone leaves.
       </StatusScreen>
     );
   }
@@ -217,6 +236,14 @@ export function RoomView({ slug }: { slug: string }) {
       </StatusScreen>
     );
   }
+  if (state.phase === 'refused') {
+    const [title, text] = (state.refusal && REFUSALS[state.refusal]) || REFUSALS.other;
+    return (
+      <StatusScreen title={title} action="Try again" secondary={{ label: 'Back to home', href: '/' }}>
+        {text}
+      </StatusScreen>
+    );
+  }
   if (state.phase === 'error') {
     return (
       <StatusScreen title="Can’t reach openMeet" action="Try again">
@@ -231,6 +258,7 @@ export function RoomView({ slug }: { slug: string }) {
         producer={producer}
         present={present}
         checkOnly={check}
+        audio={audio}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>
           void join(stream, name, producer, asCompanion, screenStream, stereo)
@@ -254,6 +282,58 @@ export function RoomView({ slug }: { slug: string }) {
   // go on to the call screen without waiting for anyone: Record is there.
   const goAlone =
     record.canRecord && !state.companion ? { onContinueAlone: () => setAlone(true) } : {};
+  // A host who is alone still answers the people at the door and sets the room
+  // controls: they are drawn under the waiting screen's buttons.
+  const hostAccess =
+    state.role === 'host' && state.access
+      ? {
+          extra: (
+            <>
+              <KnockNotice role={state.role} waiting={state.access.waiting} onAdmit={admitPeer} />
+              <RoomAccess access={state.access} onChange={setRoomAccess} />
+            </>
+          ),
+        }
+      : {};
+  // The room asks for a passcode before it seats anyone: one field, and no
+  // spinner, as nothing is connecting yet.
+  if (
+    (state.door === 'passcode' || state.door === 'wrong-passcode') &&
+    (state.phase === 'connecting' || state.phase === 'waiting' || state.phase === 'peer-left')
+  ) {
+    return (
+      <WaitingRoom
+        role={state.role}
+        localStream={state.localStream}
+        localName={state.localName}
+        onLeave={leave}
+        onToggleMic={setMic}
+        onToggleCam={setCam}
+        title="This room needs a passcode"
+        note="Ask the host for it."
+        extra={<PasscodeForm wrong={state.door === 'wrong-passcode'} onSubmit={sendPasscode} />}
+      />
+    );
+  }
+  // The Room has the join and the host has not answered it: nothing is
+  // connecting, so no spinner.
+  if (
+    state.door === 'waiting' &&
+    (state.phase === 'connecting' || state.phase === 'waiting' || state.phase === 'peer-left')
+  ) {
+    return (
+      <WaitingRoom
+        role={state.role}
+        localStream={state.localStream}
+        localName={state.localName}
+        onLeave={leave}
+        onToggleMic={setMic}
+        onToggleCam={setCam}
+        title="Waiting for the host to let you in"
+        note="The host lets people in one at a time. Keep this tab open."
+      />
+    );
+  }
   if (state.phase === 'waiting' && !alone) {
     const note = companionNote ?? offeredNote;
     return (
@@ -266,6 +346,7 @@ export function RoomView({ slug }: { slug: string }) {
         onToggleCam={setCam}
         {...(note ? { note } : {})}
         {...goAlone}
+        {...hostAccess}
       />
     );
   }
@@ -283,6 +364,7 @@ export function RoomView({ slug }: { slug: string }) {
         busy
         title={state.connectionWarning ? 'Having trouble connecting' : 'Connecting…'}
         note={state.connectionWarning ?? companionNote ?? 'Joining the call. This usually takes a few seconds.'}
+        {...hostAccess}
       />
     );
   }
@@ -301,6 +383,7 @@ export function RoomView({ slug }: { slug: string }) {
         title="Everyone else left"
         note="You’re still in the room. The call picks up again when someone joins."
         {...goAlone}
+        {...hostAccess}
       />
     );
   }
@@ -354,6 +437,7 @@ export function RoomView({ slug }: { slug: string }) {
       localStream={state.localStream}
       remoteStream={state.remoteStream}
       remotePeers={state.remotePeers}
+      remoteScreens={state.remoteScreens}
       remoteScreenStream={state.remoteScreenStream}
       localScreenStream={state.localScreenStream}
       localName={state.localName}
@@ -422,14 +506,23 @@ export function RoomView({ slug }: { slug: string }) {
       onLeave={leave}
       onSendChat={sendChat}
       incomingScript={state.incomingScript}
+      look={state.look}
       onSendScript={sendScript}
       onDismissScript={dismissIncomingScript}
       onSetPeerRecorded={setPeerRecorded}
       hostMuted={state.hostMuted}
+      helpAsk={state.helpAsk}
+      onRestartConnection={restartConnection}
+      onDismissHelpAsk={dismissHelpAsk}
       onMutePeer={mutePeer}
+      onAskPeer={askPeer}
       onRemovePeer={removePeer}
+      roomAccess={state.access}
+      onRoomAccess={setRoomAccess}
+      onAdmit={admitPeer}
       onToggleScreen={(source) => void toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
+      slides={state.slides}
       onSwitchMic={switchMic}
       onSwitchCamera={switchCamera}
       activeMicId={state.activeMicId}

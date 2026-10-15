@@ -14,6 +14,46 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
+- A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
+  link**; the lobby also remembers, per room, that you joined with the microphone only.
+- A room seats up to 8 recorded people when everyone joins with **Microphone only**; with a
+  camera in the room it seats 4, as before.
+- The host can add a logo in the lobby; it sits in a corner of the call for everyone. It
+  is not drawn into any recording.
+- The host can pick a colour for the show in the lobby; everyone's name tags carry it
+  during the call.
+- The sync file lists each recorded person's name and title with their files, ready for
+  lower thirds.
+- A title under your name: type it in the lobby and everyone in the call sees it on
+  your name tag.
+- A room passcode: the host sets one in the room controls, and anyone joining with the
+  invite link is asked for it first.
+- A waiting room: with it on, a person who opens the invite link waits until the host
+  lets them in or refuses them. The host sees who is waiting on the call screen and
+  while waiting alone.
+- The host can lock the room from the People panel: nobody new can join until it is
+  unlocked, and the people already in the call can still reconnect.
+- The host can ask a participant to restart their connection from **People**.
+  The participant sees the request and decides; nothing restarts without their
+  press.
+- The host can ask a participant to switch microphone or camera from **People**.
+  The participant picks the device on their own screen; the host is not shown
+  their devices.
+- On a computer the lobby offers a portrait (9:16) picture shape for the camera, for
+  people who record for vertical video.
+- When two or more people present at the same time, everyone sees the other people's
+  screens on the stage, each under its presenter's name. Each was already recorded to
+  its own file.
+- Slides are turned with the arrow keys, or Page Up and Page Down, which is what a
+  presentation clicker sends.
+- Present a deck as slides: pick one picture per slide and turn them with Previous and
+  Next. Everyone sees the slide, and during a recording the deck is saved like any
+  presented screen.
+- **Camera settings** in the call's camera menu: exposure and colour temperature for
+  the camera you are on, where your camera offers them to the browser. The change is
+  in the call and in your recording.
+- **Camera settings** under the lobby preview, and on the check link: set exposure
+  and colour before you join.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
@@ -286,6 +326,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A screen share that is being recorded continues in the same file after the
+  presenter's connection drops and comes back, instead of starting a second file.
+  When the host no longer has that file, the share is recorded in a new numbered
+  file instead.
+- A camera picture that is taller than wide, such as a phone held upright, is shown whole in
+  its tile instead of as a band across its middle.
 - Audio is recorded at 48 kHz for everyone. A microphone that runs at another
   rate (44.1 kHz, or 16 kHz over Bluetooth) is resampled, so every WAV master
   and camera MP4 has the same sample rate.
@@ -320,6 +366,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- When two people presented and one of them stopped, the stage could keep a frozen
+  picture of the screen that had stopped, or name the screen after the wrong person.
+- On a phone each item of the Present menu can be tapped anywhere on it; your own
+  small picture was drawn over the menu.
 - Browser storage that does not answer cannot hold up a guest's stop:
   the backup waits five seconds for it, then continues in memory with the usual
   warning. A screen backup held in memory says so as the camera backup does, and

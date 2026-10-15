@@ -4,6 +4,7 @@ import {
   isTrackGeneratorSupported,
 } from '@/lib/switchable-media';
 import { MIC_POLL_MS, MIC_SILENT_AFTER_MS } from '@/lib/mic-watch';
+import { installStableGraph } from './stable-graph-fakes';
 
 function createMockTrack(kind: 'audio' | 'video', id: string, settings: Record<string, unknown> = {}) {
   return {
@@ -652,5 +653,192 @@ describe('SwitchableMedia', () => {
       // During a take, switching is refused
       await expect(sm.switchCamera('cam-1')).rejects.toThrow(/after this take/i);
     });
+  });
+});
+
+describe('SwitchableMedia: the stable video track answers for the real camera', () => {
+  class FakeStream {
+    private tracks: MediaStreamTrack[];
+    constructor(tracks: MediaStreamTrack[] = []) {
+      this.tracks = [...tracks];
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((t) => t.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t.kind === 'video');
+    }
+  }
+
+  // The camera-control constraints are not in the DOM typings.
+  const ask = (set: object) => ({ advanced: [set] }) as MediaTrackConstraints;
+
+  function camera(id: string, constraints: object) {
+    return {
+      kind: 'video',
+      id,
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: vi.fn(() => ({ deviceId: id })),
+      getCapabilities: vi.fn(() => ({})),
+      getConstraints: vi.fn(() => constraints),
+      applyConstraints: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MediaStreamTrack;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('MediaStream', FakeStream);
+    installStableGraph();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends constraints to the real camera and reads its constraints back', async () => {
+    const cam = camera('cam-1', { width: 1280, advanced: [{ zoom: 2 }] });
+    const sm = new SwitchableMedia(new FakeStream([cam]) as unknown as MediaStream);
+    const stable = sm.stream.getVideoTracks()[0]!;
+
+    expect(stable.getConstraints()).toEqual({ width: 1280, advanced: [{ zoom: 2 }] });
+    await stable.applyConstraints(ask({ exposureTime: 100 }));
+    expect(cam.applyConstraints).toHaveBeenCalledWith({ advanced: [{ exposureTime: 100 }] });
+  });
+
+  it('reaches the new camera after a switch, through the same track', async () => {
+    const first = camera('cam-1', { width: 1280 });
+    const second = camera('cam-2', { width: 640 });
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(new FakeStream([second])) },
+    });
+    const sm = new SwitchableMedia(new FakeStream([first]) as unknown as MediaStream);
+    const stable = sm.stream.getVideoTracks()[0]!;
+
+    await sm.switchCamera('cam-2');
+
+    expect(sm.stream.getVideoTracks()[0]).toBe(stable);
+    expect(sm.stream.getVideoTracks()).toHaveLength(1);
+    expect(stable.getConstraints()).toEqual({ width: 640 });
+    await stable.applyConstraints(ask({ zoom: 3 }));
+    expect(second.applyConstraints).toHaveBeenCalledWith({ advanced: [{ zoom: 3 }] });
+    expect(first.applyConstraints).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  ['the stable stream', true],
+  ['the raw tracks (no track generator)', false],
+])('SwitchableMedia, %s: the picture shape across a camera switch', (_name, stable) => {
+  class FakeStream {
+    private tracks: MediaStreamTrack[];
+    constructor(tracks: MediaStreamTrack[] = []) {
+      this.tracks = [...tracks];
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    getAudioTracks() {
+      return this.tracks.filter((t) => t.kind === 'audio');
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t.kind === 'video');
+    }
+    addTrack(t: MediaStreamTrack) {
+      this.tracks.push(t);
+    }
+    removeTrack(t: MediaStreamTrack) {
+      this.tracks = this.tracks.filter((x) => x !== t);
+    }
+  }
+  // A lobby camera that was asked for `asked`, and that delivers 1080 lines.
+  const lobbyCam = (asked: object, delivered: Record<string, unknown> = { height: 1080 }) =>
+    Object.assign(createMockTrack('video', 'cam-1', delivered), { getConstraints: () => asked });
+  const media = (asked: object, delivered?: Record<string, unknown>) =>
+    new FakeStream([createMockTrack('audio', 'mic-1'), lobbyCam(asked, delivered)]) as unknown as MediaStream;
+  const sizeAsked = (call: unknown[]) => {
+    const v = (call[0] as { video: MediaTrackConstraints }).video;
+    return [v.width, v.height];
+  };
+  const desktop = () => {
+    const getUserMedia = vi.fn().mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-2')]));
+    vi.stubGlobal('navigator', { userAgent: 'test-desktop', mediaDevices: { getUserMedia } });
+    return getUserMedia;
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('MediaStream', FakeStream);
+    if (stable) installStableGraph();
+    else vi.stubGlobal('MediaStreamTrackGenerator', undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asks the new camera for a portrait picture when the lobby camera was asked for one', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: { ideal: 608 }, height: { ideal: 1080 } }));
+    expect(sm.isFallback).toBe(!stable);
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('asks for a wide picture when the lobby camera was asked for one', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: { ideal: 1920 }, height: { ideal: 1080 } }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it('reads the shape from bare numbers too', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({ width: 608, height: 1080 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('is wide when the lobby camera was asked for no size', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it('reads the shape from the delivered size when the constraints carry none', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}, { width: 608, height: 1080 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('asks for a wide picture when the constraints carry none and the delivered size is wide', async () => {
+    const getUserMedia = desktop();
+    const sm = new SwitchableMedia(media({}, { width: 1920, height: 1080 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 1920 }, { ideal: 1080 }]);
+  });
+
+  it.runIf(stable)('asks the reopened old camera for the same shape when a phone switch fails', async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('no rear camera'))
+      .mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-1')]));
+    vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia } });
+    const sm = new SwitchableMedia(media({ width: { ideal: 608 }, height: { ideal: 1080 } }));
+    await expect(sm.switchCamera('environment')).rejects.toThrow('no rear camera');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+    expect(sizeAsked(getUserMedia.mock.calls[1]!)).toEqual([{ ideal: 608 }, { ideal: 1080 }]);
+  });
+
+  it('asks a phone for a wide picture when the constraints carry none and its picture is upright', async () => {
+    const getUserMedia = vi.fn().mockResolvedValue(new FakeStream([createMockTrack('video', 'cam-2')]));
+    vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia } });
+    const sm = new SwitchableMedia(media({}, { width: 1080, height: 1920 }));
+    await sm.switchCamera('cam-2');
+    expect(sizeAsked(getUserMedia.mock.calls[0]!)).toEqual([{ ideal: 3840 }, { ideal: 2160 }]);
   });
 });

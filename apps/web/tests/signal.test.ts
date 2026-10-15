@@ -94,6 +94,44 @@ describe('SignalClient', () => {
     });
   });
 
+  it('includes audioOnly in the join message when audioOnly is true, and again after a reconnect', () => {
+    const c = new SignalClient({
+      slug: 'xyz-abcd-pqr',
+      wsBase: 'ws://localhost:8787',
+      displayName: 'Alice',
+      userAgent: 'test-ua',
+      audioOnly: true,
+      wsFactory: (url) => new FakeWS(url) as unknown as WebSocket,
+    });
+    c.connect();
+    const ws1 = FakeWS.instances[0]!;
+    ws1.fireOpen();
+    expect(JSON.parse(ws1.sent[0]!)).toEqual({
+      type: 'join',
+      displayName: 'Alice',
+      userAgent: 'test-ua',
+      audioOnly: true,
+    });
+    ws1.fireClose(1006);
+    vi.advanceTimersByTime(1000);
+    const ws2 = FakeWS.instances[1]!;
+    ws2.fireOpen();
+    expect(JSON.parse(ws2.sent[0]!)).toEqual({
+      type: 'join',
+      displayName: 'Alice',
+      userAgent: 'test-ua',
+      audioOnly: true,
+    });
+  });
+
+  it('leaves audioOnly out of the join message when it is not set', () => {
+    const c = makeClient();
+    c.connect();
+    const ws = FakeWS.instances[0]!;
+    ws.fireOpen();
+    expect(Object.keys(JSON.parse(ws.sent[0]!))).not.toContain('audioOnly');
+  });
+
   it('includes clientId in the join message when provided', () => {
     const c = new SignalClient({
       slug: 'xyz-abcd-pqr',

@@ -93,12 +93,26 @@ they're already known:
   (10 per minute per IP, `ROOM_CREATE_LIMITER`), and fails open if the binding
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
-  joining a room as a guest. Treat an invite link as a secret.
+  joining a room as a guest, unless the host has set a passcode or turned the waiting room
+  on. Treat an invite link as a secret.
+- **A room passcode is a digest in the room's Durable Object storage.** The host
+  sets it in the room controls and guests type it before they join. The Room keeps only
+  the SHA-256 of the slug and the passcode, compares it in constant time, and writes the
+  passcode itself to no storage, database row or log. Tries are limited, to five wrong ones
+  per socket and twenty per room in ten minutes, after which everyone new is turned away,
+  also with the right passcode, until the window ends. The passcode is as short as six
+  characters, so it slows guessing and does not stop a determined one. It does not gate
+  `POST /api/turn-cred` or `GET /api/rooms/:slug`, and it does not hide that the room exists.
 - **Removing a participant keeps out that tab, not that person.** The room refuses
   the tab the host removed until everyone has left, but the invite link is still the
-  only credential: a new tab, a private window or another browser joins again. A
+  only credential for joining, unless the host has turned the waiting room on: a new tab, a
+  private window or another browser joins again. A
   host's mute is a request the muted person's own page carries out; it can turn no
-  microphone on, and a page that ignores it stays unmuted.
+  microphone on, and a page that ignores it stays unmuted. The host can also lock the room
+  against new joins: the Room then refuses any tab it has not seated in this session, but
+  the lock ends with the session, and a tab that was seated can reconnect. It removes no one
+  who is already in the call. With the waiting room on, a new tab is held until the host lets
+  it in; anyone with the link can fill its eight places with names of their choosing.
 
 ## Scope
 

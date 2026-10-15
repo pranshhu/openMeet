@@ -1,7 +1,7 @@
 # openMeet — Architecture and contributor guide
 
 Open-source, self-hostable, studio-quality remote recording. Riverside.fm alternative for
-**up to 4 recorded participants + 2 unrecorded producers** (full mesh, no SFU). Pure browser P2P WebRTC; each peer's local track is recorded
+**up to 4 recorded participants (8 when all of them joined with the microphone only) + 2 unrecorded producers** (full mesh, no SFU). Pure browser P2P WebRTC; each peer's local track is recorded
 and the bytes are written to the **host's local disk** (File System Access API). Recording
 bytes never touch any server — zero cloud-storage cost. Runs entirely on a free Cloudflare
 account (Pages + Worker + Durable Object + D1). MIT licensed.
@@ -65,16 +65,33 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
 ## Wire protocol (`packages/protocol`)
 
 **Two transports, two ack mechanisms — do not conflate:**
-- **WS signaling** (`ws-messages.ts`): `ClientMessage` (20 variants) ↔ `ServerMessage` (22).
+- **WS signaling** (`ws-messages.ts`): `ClientMessage` (24 variants) ↔ `ServerMessage` (26).
   Relay types `webrtc-offer|webrtc-answer|ice-candidate|chat|presence|marker|recording-started|
   recording-stop|recording-capability` exist in *both* unions; server adds `from: Role`, plus
   `fromPeerId` on all but `recording-started|stop`. `peer-recorded` is in both unions too, but it is
   **not a relay**: only the host's is acted on, and the Room sends its own to every joined peer with
   no `from`. `recording-countdown` (`seconds`) is in both unions as well: the Room passes on only
   the host's, to everyone else, with no `from`; it is a cue for the screen and starts nothing.
+  `look` (`accent`, one of `LOOK_ACCENTS`, and `logo`) is in both unions as well: the Room passes
+  on only the host's, to everyone else, with no `from`. A `logo` travels only when `isLogo` accepts
+  it (see the `look` bullet below).
   `peer-mute` (`peerId`) is in both unions too: the Room hands only the host's to that one peer,
-  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-remove` (`peerId`)
+  as a bare `{type}`, and that peer's own page turns its microphone off. `peer-help` (`peerId`,
+  `ask`, one of `HELP_ASKS`) is in both unions as well: the Room hands only the host's to that one
+  peer as `{type, ask}`, and that peer's own page asks them. `peer-remove` (`peerId`)
   is client-only and host-only: the Room closes that socket with `4007` and announces `peer-left`.
+  `room-access` (`locked`, `waitingRoom`, `passcode`) is in both unions, and is not a relay: the
+  Room acts on it only from the host, each of the first two only when it is a boolean and
+  `passcode` only when it is `null` or a string of 6 to 64 UTF-16 units
+  (`MIN_PASSCODE_LENGTH`, `MAX_PASSCODE_LENGTH`), and answers every joined host with its own,
+  carrying `locked`, `waitingRoom`, `passcode` (a boolean: whether one is set, never what it
+  is) and `waiting` (the people at the door, at most eight) and no `from`; a guest is never
+  sent one. `admit` (`peerId`, `admit`) is client-only and host-only. `door` (`state`) is
+  server-only: the Room sends it to a person it is holding, with state `waiting`, or with state
+  `passcode` (and `wrong: true` after a passcode that was not right) to one it asks for a
+  passcode. `join` also carries `displayName`, `userAgent`, and optionally `hostToken`,
+  `producer`, `companion`, `clientId` and `passcode`; the Room checks the type and length of
+  each before it uses it.
   `private-message` (`to`, `text`) is in both unions and is addressed, not relayed to the room:
   the Room sends it to the one joined peer whose id is `to`, stamped `from`, `fromPeerId` and
   `fromName`, and to nobody else. It is a type of its own, not a `chat` with a `to`, so a Room
@@ -86,7 +103,11 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `LISTENING_CHOICES`: `headphones`, `speakers`, `speakers-ec`). The Room passes it on only
   when it is one of those codes, and the page that receives it checks again.
   `presence` carries `handRaised` only while a hand is up: the Room passes the field on only
-  when it is exactly `true`, and a page reads nothing else as a raised hand.
+  when it is exactly `true`, and a page reads nothing else as a raised hand. It also
+  carries `title`, the sender's own text for their name tag: the Room passes it on, trimmed,
+  only when `titleFrom` accepts it (a string of 1 to `MAX_TITLE_LENGTH` = 60 units once
+  cleaned: line breaks and other control characters become spaces, and a text with no
+  visible character is not a title), and a page checks it again.
   `reaction` (`reaction`: one of the codes in `REACTIONS`) is a relay type in both unions too,
   stamped `from` and `fromPeerId`; the Room drops one whose code is not on the list.
 - **DataChannel control** (`chunk-header.ts`): `DataChannelControlMessage` = `ack` |
@@ -98,10 +119,15 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
   no remote audio, and shares the 2 unrecorded slots with producers (does not use a recorded seat;
-  role is still host/guest); the DO enforces the per-role caps at `join`. "Present only" is never
+  role is still host/guest); `join.audioOnly` (a recorded seat that sends no camera for as long as
+  the socket is in the room) lifts the recorded cap from 4 to 8 when every recorded seat claimed it;
+  the DO enforces the per-role caps at `join`. "Present only" is never
   offered to a producer: `?producer=1` wins over `?present=1`. `role-assigned` (peers)
-  and `peer-joined` echo `companion?: boolean` and `notRecorded?: boolean` (the host set that guest
-  as not recorded; `role-assigned` carries it for the joining connection too).
+  and `peer-joined` echo `companion?: boolean`, `notRecorded?: boolean` (the host set that guest
+  as not recorded; `role-assigned` carries it for the joining connection too) and
+  `audioOnly?: boolean` (the Room admitted that seat as microphone only; present only when true,
+  never on a producer or a companion, and `role-assigned` has no such field for the joining
+  connection itself).
 
 **Chunk wire format** — each chunk = **TWO ordered DataChannel sends**: (1) a JSON **string**
 header `{idx,offset,size,ts}` (`encodeChunkHeader` = `JSON.stringify`), then (2) the binary
@@ -122,20 +148,25 @@ bitrate for the actual track via `presetForTrack`, and the camera `ChunkRecorder
 `BackupRecorder` via `cameraVideoBps`: that preset at the level picked in the lobby (`BITRATE_LEVELS`:
 Standard x1, High x1.5, Maximum x2, never past `MAX_VIDEO_BPS`), times 1.5 when the track delivers
 more than 40 fps (`presetAt`), under the same ceiling; capture constraints in
-`lib/media.ts` `RECORDING_CONSTRAINTS`). `FRAME_RATE` is only the default: each person picks a
+`lib/media.ts` `RECORDING_CONSTRAINTS`; `cameraConstraints` takes `portrait` and then asks for the
+preset's height and a width of 9/16 of it, rounded to an even number, as `ideal` values: 608 x 1080
+at 1080p). `FRAME_RATE` is only the default: each person picks a
 rate in the Lobby (`FRAME_RATES` in `lib/quality.ts`, kept in `localStorage` as `om_fps`) and
 `cameraConstraints` asks the camera for it. The picker lists only the rates the camera's
 capabilities reach (`supportedFrameRates`), so 50 and 60 appear on few cameras. The
 lobby's size figures follow the rate the camera delivers through `presetAt`.
 DC names: `recording` (camera MP4) and `recording-audio` (WAV master), each optionally keyed
 `recording#<key>` / `recording-audio#<key>` (see gotchas); one channel per screen-share segment,
-`recording-screen-<n>` (the host matches the prefix); `backup#<file name>` (one leftover backup
+`recording-screen-<n>`, optionally keyed `recording-screen-<n>#<key>` (the host matches the prefix); `backup#<file name>` (one leftover backup
 going back to the host); `backup#file-<uuid>` (one file a participant picked to send the
 host: the same channel and messages, with the file's own name in its `backup_offer`).
 WS close codes: `4001` capacity-full,
 `4002` invalid slug, `4003` known-but-expired room (the DO distinguishes the two),
 `4005` invalid message, `4006` replaced (another host connection took over), `4007` removed (the
-host removed this participant, and the same tab is refused until the session ends).
+host removed this participant, and the same tab is refused until the session ends), `4008` not
+admitted (the host locked the room and this tab was not seated in this session, the host refused
+it from the waiting room, eight people were already waiting, or the room's passcode was given
+wrong five times on one socket or twenty times in the room, reason `passcode`).
 
 ---
 
@@ -170,22 +201,34 @@ host removed this participant, and the same tab is refused until the session end
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
-looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
-  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`) lives in a `PeerAttachment` on each
+  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`, `clientId`, `companion`, `waiting`,
+  `admitted`) lives in a `PeerAttachment` on each
+  `userAgent`, `joined`, `peerId`, `ordinal`, `participantId`, `audioOnly`) lives in a `PeerAttachment` on each
   WebSocket (`serializeAttachment`/`deserializeAttachment`, re-saved after every mutation), not an
   instance `Map`; `allPeers()` derives the live socket list from `state.getWebSockets()` (skipping
   sockets flagged `left: true`) instead, and `joinedPeers()` narrows it to the sockets whose `join`
   was admitted — the room itself, which is all that relays, broadcasts and `peerCount` look at, and
   what session end counts. A socket that hasn't joined, or was refused at the cap, gets its own
-  `join`/`ping` answered and nothing else; one flagged `left` (replaced, or after its own `leave`)
-  has every message dropped. `slug`/`hostToken`, `sessionId`/`recording`, and
+  `join`/`ping` answered and nothing else; a socket can also be held before it is seated, by the
+  waiting room (below), and is outside the room the same way; one flagged `left` (replaced, or after its own `leave`)
+  has every message dropped. Every refusal in `join` (invalid, removed, locked,
+  passcode, busy, full) flags the socket `left` before it closes it, so nothing the socket sent before or
+  after is acted on. `slug`/`hostToken`, `sessionId`/`recording`, and
   `nextOrdinal` are cached on the instance for convenience but persisted to DO storage (keys
-  `room`, `session`, `nextOrdinal`; `session` also holds the client ids of the guests the host set
-  as not recorded, at most 16, emptied when the session ends, and those of the tabs the host
-  removed, kept the same way) and reloaded in the constructor via
+  `room`, `session`, `access`, `passFails`, `nextOrdinal`; `access` holds whether the waiting room
+  is on and, when the host set a passcode, `passcodeHash` (the lowercase hex SHA-256 of
+  `<slug>:<passcode>`; the passcode itself is written to no storage, D1 row or log, and sent to
+  no socket), and belongs to the room, not the session, so it stays when everyone has left;
+  `passFails` is `{count, since}`, the wrong passcodes counted in the window that began at
+  `since`; `session` also holds the client ids of the guests the host set
+  as not recorded, at most 16, emptied when the session ends, those of the tabs the host
+  removed, kept the same way, whether the host locked the room, and the client ids of the tabs
+  seated in this session that are not a host's, at most 32, emptied with the rest) and reloaded in
+  the constructor via
   `blockConcurrencyWhile`, so a woken instance picks up exactly where the evicted one left off.
   The client's `{"type":"ping"}` heartbeat is answered `{"type":"pong"}` by
   `setWebSocketAutoResponse` without waking the DO; the `ping` case in the message switch stays as
@@ -205,7 +248,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (every other peer), stamped `from`/`fromPeerId`. `ping`→`pong` (sender only).
   `leave`→broadcast `peer-left` + close 1000.
 - `presence` is relayed with `handRaised: true` only when the sender's field is exactly
-  `true`; any other value is left out. Nothing is kept.
+  `true`; any other value is left out. `title` goes on, trimmed, only when `titleFrom`
+  accepts it, and a presence with a bad title is still relayed without the field. Nothing
+  is kept.
 - `reaction` is relayed to every other joined peer (`broadcastExcept`, stamped
   `from`/`fromPeerId`) when its code is one of `REACTIONS`, and dropped otherwise; only
   `type`, the code and the stamp are passed on. Nothing is kept and nothing is counted: each
@@ -231,6 +276,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   script. It is **passed on only from the host**, to every other joined peer and with no
   `from`, and only when `text` is a string of at most `MAX_SCRIPT_LENGTH` (50,000) UTF-16
   units. Nothing is kept, so a peer that joins later is not sent it.
+- `look` (`accent` and `logo`, in both unions like `script`) is the host's accent colour for
+  the name tags and the host's logo. It is **passed on only from the host**, to every other
+  joined peer and with no `from`, as `{type:'look'}` plus `accent` only when it is one of
+  `LOOK_ACCENTS` and `logo` only when `isLogo` accepts it; no other field of the message
+  travels. `isLogo` (used by the Room and by the page, and it never throws) holds three checks:
+  the value is a string of at most `MAX_LOGO_LENGTH` (150,000) UTF-16 units; it starts with
+  `data:image/png;base64,` and the rest is base64 characters only; and the first 24 decoded bytes
+  are the PNG signature, a 13-byte `IHDR` chunk header and a width and a height that are each
+  from 1 to `LOGO_MAX_PX` (160). The last check is what keeps a few kilobytes from decoding into
+  a picture of a gigabyte in every participant's tab. Nothing is kept, so the host's page sends
+  it again to each person who joins.
 - `peer-recorded` is **acted on only from the host**, only while no take is running and only for a
   joined guest that sent a client id; the DO remembers the guest by that id — until the host
   changes its mind, or the session ends — and flags it to later joiners and on a reconnect, then
@@ -238,11 +294,60 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `peer-mute` is **passed on only from the host**, to the one joined peer it names and never back
   to the sender, as `{type:'peer-mute'}`. Nothing is kept, a take changes nothing about it, and
   the Room turns no microphone on or off: the page that receives it does, and can turn it back on.
+- `peer-help` is **passed on only from the host**, when `peerId` is a string and `ask` is one of
+  `HELP_ASKS`, to the one joined peer it names and never back to the sender, as
+  `{type:'peer-help', ask}` and nothing else of what was sent. Anything else is dropped and no
+  socket is closed. Nothing is kept, a take changes nothing about it, and no answer comes back:
+  the page that receives it asks its person and acts only on their press.
 - `peer-remove` is **acted on only from the host**, for a joined peer that is not a host, during
   a take as outside one: the DO remembers that peer's client id (`session.removed`, the newest 16),
   closes the socket with `WS_CLOSE_REMOVED`/`'removed'` and runs `onClose(ws, 'removed')`, so
   everyone else gets `peer-left` with that reason. A later `join` that presents a remembered id is
   closed with the same code before it is seated; one that proves the host token is never refused.
+- `room-access` is **acted on only from the host**, and only when `locked` is exactly a boolean;
+  anything else is dropped without an answer. The Room keeps it in `session.locked` and sends
+  `{type:'room-access', locked}` to every joined host, and to a host right after its own
+  `role-assigned`. Locking closes nobody. While the room is locked, a `join` that is not a host
+  and whose client id is not in `session.admitted` (every id a non-host `join` was seated with in
+  this session, the newest 32, a tab that has left forgotten before one still here) is closed with
+  `WS_CLOSE_NOT_ADMITTED`/`'locked'` after the removed check and before the caps, and is never
+  seated. A guest, a producer link and a Present-only link are treated alike, and a `join` with no
+  client id has nothing to be admitted by. The lock and the list end with the session.
+- **The waiting room** (`access.waitingRoom`, set by a host's `room-access` with a boolean
+  `waitingRoom`) holds a newcomer at the door. After the lock gate and the passcode gate, a `join` that is not a
+  host's, whose client id is not in `session.admitted` and whose attachment does not say `admitted`
+  is not seated: with eight sockets already waiting (`MAX_WAITING`) it is closed with
+  `WS_CLOSE_NOT_ADMITTED`/`'busy'`; otherwise its attachment gets `waiting: true`, it is sent
+  `{type:'door', state:'waiting'}` and every joined host is sent `room-access`. It extends no
+  expiry and creates no session or participant row, and a further `join` from it is ignored, so
+  the name the host was shown cannot change. Every `room-access` the Room sends carries `locked`,
+  `waitingRoom` and `waiting`: the waiting sockets, in ordinal order, as `{peerId, displayName,
+  role, companion?}`. A waiting socket that closes, and a socket the host answers, leave the list
+  and the hosts are told.
+- **The passcode** (`access.passcodeHash`, set by a host's `room-access` with a string `passcode`
+  of 6 to 64 units, removed by `null`; either change empties `passFails`, closes nobody and is
+  answered to every joined host) is the gate between the lock gate and the waiting-room gate. A
+  `join` that is not a host's, whose client id is not in `session.admitted` and whose attachment
+  does not say `admitted` is not seated while a digest is stored: with no `passcode`, or one that is
+  not a string of 1 to 64 units, the socket is sent `{type:'door', state:'passcode'}` and nothing is
+  counted; with one the Room hashes and compares with `timingSafeEqualHex`, and a wrong one is
+  counted in the socket's attachment (`passFails`) and in the room's `passFails`, and is answered
+  `{type:'door', state:'passcode', wrong:true}`; the fifth wrong one on a socket closes it with
+  `WS_CLOSE_NOT_ADMITTED`/`'passcode'`, and a socket that has reached five is refused the same way before
+  anything is compared. While the room has counted 20 wrong passcodes in the ten
+  minutes after the first, a `join` that carries a passcode is closed the same way without being
+  compared and adds nothing; the window starts afresh ten minutes after `since`. The socket stays
+  unseated and may send `join` again; a right passcode goes on to the waiting-room gate and the
+  caps. A host is never asked, a seated tab's reconnect is not asked, and a producer link and a
+  Present-only link are asked like a guest.
+- `admit` is **acted on only from the host**, with a boolean `admit` and a `peerId` that names a
+  waiting socket. Let in: the attachment gets `waiting: false, admitted: true` and the Room runs
+  its own `join` path for that socket again, from the name and user agent the attachment holds, so
+  the caps, the session and participant rows, `role-assigned` (with `recording` as it stands) and
+  `peer-joined` are the code every join runs; `admitted` passes the lock gate too. Refuse: the
+  socket is closed with `WS_CLOSE_NOT_ADMITTED`/`'refused'` and `onClose` runs for it. Turning the
+  waiting room off lets in everyone who waits, the same way. The room's expiry `alarm()` closes a
+  waiting socket like any other.
 - `webSocketClose`/`webSocketError` share one `onClose(ws)` helper, idempotent via the
   attachment's `left` flag: `markParticipantLeft`; if `joinedPeers().length===0 &&
   !anyHostPresent() && sessionId` → `endSession` (`host-left`/`guest-left`). The host check keeps
@@ -294,9 +399,17 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   DENY`, `Referrer-Policy`, `nosniff`, `Permissions-Policy` (camera/mic/display-capture/fullscreen
   self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change.
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
-  and any connection warning, and for `peer-left`) / CallStage, plus light status screens
+  and any connection warning, and for `peer-left`; while `state.door` is `'waiting'` it reads
+  "Waiting for the host to let you in", without a spinner, in `connecting`, `waiting` and
+  `peer-left`; while it is `'passcode'` or `'wrong-passcode'` it reads "This room needs a
+  passcode" with `PasscodeForm` as the `extra`, in the same three phases) / CallStage, plus light
+  status screens
   (`components/StatusScreen.tsx`: SiteHeader, message, next step) `not-found`, `full` (4001),
-  `replaced` (4006: another tab/device took the host seat), `removed` (4007: the host removed
+  `replaced` (4006: another tab/device took the host seat), `refused` (4008: the room is locked,
+  "This room is locked" with Try again + Back to home; `refused` reads "The host didn’t let you
+  in", `busy` "Too many people are waiting" and `passcode` "Too many wrong passcodes"; a reason
+  other than these reads "You
+  can’t join this room right now"), `removed` (4007: the host removed
   this participant; Back to the lobby + Back to home, plus **Download your backup** and
   **Download your WAV backup** when this tab holds the backup of a recording it saved, drawn by
   the same `FileLinks` as the `left` screen's), `left` (Rejoin + Back to home, plus
@@ -327,7 +440,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
   preview is back; Try again asks for the microphone alone when Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
-  form, so Enter joins) + has mic/camera device pickers (`changeDevice` re-acquires with the chosen
+  form, so Enter joins). Directly under it the main join form has an optional **title** field
+  (`maxLength` `MAX_TITLE_LENGTH`; not on the producer or Present-only screens, and hidden with
+  the form on the check page); Join does not depend on it. It also has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
   (`LISTENING_CHOICES` in `@openmeet/protocol`, wording in `lib/listening.ts`, kept in `localStorage` as
   `om_listening`). **Speakers, echo cancellation on** opens the microphone again with
@@ -340,7 +455,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   opened and none has failed (`!stream && !previewError`), and Try again does nothing while
   `reopeningRef` is set, so neither asks for a capture beside one on its way. A change of camera,
   microphone, quality, frame rate or echo cancellation made while another is being opened is not
-  taken (`reopeningRef`), so a second capture is never asked for meanwhile. The select shows what the
+  taken (`reopeningRef`), so a second capture is never asked for meanwhile. Under the quality picker a
+  **Picture shape** picker (`om_portrait` in `localStorage`, `'1'` for portrait and anything else
+  landscape) opens the camera again like a change of quality and is passed to every capture the lobby
+  opens. It is not on a phone, which ignores a stored `'1'`, and it is hidden with the quality picker
+  for Microphone only. While portrait is chosen the Framing guide is not drawn, and a line says so
+  when the camera's track is not taller than wide. The select shows what the
   microphone reports (`getSettings().echoCancellation`, anything but `false` counting as on), not what was
   asked for. Its hint tells a guest that the host sees the answer; a host is not told so, because the
   host's own answer is shown to nobody. A blocked/missing/busy camera or mic shows in the preview
@@ -367,13 +487,26 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   lobby builds it) renders the same `Lobby` with `checkOnly`: preview, pickers and readiness
   panel, with the join form hidden and the backup and unsaved-recording lists left out, so a
   guest can test a device ahead of the call. It never calls `join`. A link that also carries
-  `producer=1` or `present=1` is that link, and `check` is ignored.
+  `producer=1` or `present=1` is that link, and `check` is ignored. `?audio=1` (`isAudioLink`)
+  is handed to the lobby as `audio`: the first preview opens the microphone alone, as it does
+  when `localStorage` holds `'1'` under `om_mic_only_<slug>` (a storage that throws, or holds
+  anything else, is "not set"). Either way `camId` is `NO_CAMERA` before the capture answers, so
+  Try again asks for the microphone alone. The link preselects and does not lock: **Microphone
+  only** can still be pressed for the camera, and the Room's seat rule answers that. The join form
+  writes the key when it hands a stream to `onJoin` (`'1'` if the stream has no video track, the
+  key removed otherwise, inside a `try`); a producer's and a Present-only join do not write it,
+  and the check page only reads it. A link that also carries `producer=1` or `present=1` is that
+  link and opens no capture.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
-  the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave;
+  the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
+  host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
+  each person at the door and the lock and waiting room checkboxes and the passcode field or the
+  line saying one is set (`RoomView` passes them as
+  the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
-  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link
-  and the Present-only link (the plain link plus `?producer=1` or `?present=1`, the flags
-  `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
+  the Present-only link and the microphone-only link (the plain link plus `?producer=1`,
+  `?present=1` or `?audio=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -383,25 +516,53 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   place, so opening one closes the other): a row per person with **Mute**, which a producer
   and a present-only device do not get. A person the host muted sees their own mic button off
   and a `role="status"` line that says so, and during their own capture that their recording
-  has no sound until they turn it back on.
+  has no sound until they turn it back on. The button is there while someone else is in the
+  call and also, with nobody else, once the Room has sent the host `room-access`; then the
+  panel holds the lock and waiting room checkboxes alone. While someone waits at the door the
+  button carries a dot and reads "People, N waiting to join".
   Each row also has **Remove**, which asks in the row itself before it calls
   `useRoom().removePeer` (a blocking dialog would stall the tab that writes the take), with
   **Cancel** focused and last, at the row's right end where Remove was; during a take, and
   while an interrupted take can still be resumed, the question says that a recorded
   person's recording here ends.
+  Between them each row has **Help** (given `onAsk`, which `CallStage` fills with `askPeer`),
+  for a producer's and a present-only device's row too: it swaps the row, as Remove does, for
+  "Ask <name> to:" with **Switch microphone**, **Switch camera** and **Restart connection**
+  (a producer's and a present-only device's row has **Restart connection** alone: they have
+  no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
+  time. A `role="status"` line below the list then says "Asked <name>.
+  They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
+  `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
+  **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
+  `microphone` and `camera` its text is "The host asks you to switch microphone." or "…camera."
+  and the first button is **Choose microphone** or **Choose camera**: it clears the ask, closes
+  chat if chat covers the control bar, opens the asked person's own menu for that device (the
+  other menus closed), and moves focus to its arrow button. The box is a `data-picker-container`,
+  so the press that opens the menu is not read as a click outside it. Nothing is switched by the
+  ask or by **Choose…**: a device changes only when the person presses an item of their own menu,
+  through the existing `handleSwitchMic` / `handleSwitchCamera`, and no device list leaves their
+  browser.
 - **`components/Stage.tsx`** — Google Meet focused layout. Derives mode from feeds:
   `solo` (local fills), `focused` (big spotlight + tap-to-swap corner PiP), `grid` (3+ people, equal
   tiles), `presenting` (screen spotlight + camera column on desktop, other people first and you last /
-  floating peer PiP on mobile; a desktop screen sharer sees a "You're presenting" placeholder with a
+  floating peer PiP on mobile; every presented screen is drawn in the spotlight, the first in
+  `remoteScreen` and the rest in `otherScreens`, stacked below 768 px and side by side above; a
+  desktop screen sharer sees a "You're presenting" placeholder with a
   Stop presenting button, no self-mirror; whoever presents a rear camera or a photo/video gets that
-  feed back as a viewfinder via `localScreenStream`). `CallStage` renders `<Stage>` (not a grid),
+  feed back as a viewfinder via `localScreenStream`, drawn beside other people's screens). `CallStage` renders `<Stage>` (not a grid),
   keeps optimistic mic/cam + `spotlight` local state; tiles show `localName (You)` / `peerName`
   (role fallback). While one other person is on the stage, their tile is drawn once their own camera
   stream has arrived (`solo` until then); with two or more, every person listed has a tile, an
   initial until their stream arrives. Responsive: `h-[100dvh]`, control bar `flex-wrap` + safe-area,
   mobile chat is a
-  full sheet with the control bar hidden while open. `VideoTile` takes `fit` (cover/contain) +
-  `className` to fill the spotlight or size a PiP. During a take, `useTakeGuard` holds a screen
+  full sheet with the control bar hidden while open. The bar's wrapper is one level above the
+  stage's floating pictures, because the pill's backdrop filter makes it a stacking context and a
+  menu's own level counts only inside it. `VideoTile` takes `fit` (cover/contain) +
+  `className` to fill the spotlight or size a PiP. A picture taller than wide (a phone held
+  upright) is always drawn whole, as `contain` does, whatever `fit` says: the tile reads the
+  shape on the video element's `loadedmetadata` and `resize` events and starts again as not
+  tall when its stream changes. During a take, `useTakeGuard` holds a screen
   wake lock, prefixes the tab title with `● REC ` while hidden, and surfaces calm notices if the
   tab was backgrounded or the battery drops to 10%. `useOverloadWatch` polls `useRoom().readLoad`
   every 5 s while a take records (audio the WAV recorder had to pad, and whether the browser
@@ -421,6 +582,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
   held back while a take records or saves.
+  `components/KnockNotice.tsx` is the host's row for each person at the door of a room with a
+  waiting room, right after `FileNotice`: the name in a `<bdi>` that truncates ("Guest" when empty,
+  with " (Producer)" or " (Presenting)" as the People panel writes them), "wants to join", **Let
+  in** and **Refuse**, at most three rows and then "and N more waiting". It is drawn in a take
+  too, and for no one but a host. The two buttons answer with `admitPeer`.
   `components/FileNotice.tsx` does the same for a file a participant picked to send the host
   (`kind: 'file'`), in words of its own: the host's question names the senders, each file as
   it will be called in the folder and the total size, and its Save to folder and Not now
@@ -470,6 +636,44 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   person's own tile the same mark. The names of the people who have a tile and a raised
   hand are put in the status bar's live region for screen readers ("Hand raised: …").
   Nothing of it reaches a recorder, a file or the crash copy.
+- **Name tag title** — the text from the lobby's title field. `Lobby` hands it to
+  `chooseTitle` (`lib/name-tag.ts`, held in a module value like `lib/listening.ts` and typed
+  per visit, kept nowhere); `joinedTitle()` gives `CallStage` the text for the person's own
+  tile, and `titleField()` is spread into the `presence` that `sendPresence` sends, so it
+  goes again to everyone who joins and after a reconnect. A page keeps what it receives on
+  that person's `RemotePeer.title`, read through `titleFrom` by `applyRemotePeerPresence` on
+  every presence, so a presence without a valid title leaves the person with none.
+  `titleFrom` turns each run of control characters and line breaks into one space, so a
+  title is one line, and a title with no visible character (only zero-width or direction
+  marks, say) is not a title.
+  `CallStage` gives each camera feed its title (`StageFeed.title`, passed on by `feedProps`);
+  a screen tile has none. `VideoTile` draws it as a second line of its own inside the name
+  tag, smaller and dimmer, and the tile is a CSS container: below 224 px wide (the corner
+  picture, a phone's floating picture, the narrow side column) the line is hidden by a
+  container query, with no measuring in script. The tag's tooltip holds the name and the
+  title. The title is drawn only as text, and reaches no file, the People panel, chat or the
+  waiting room.
+- **Show look** — the colour of the name tags and a logo. `ShowLook`, a **Name tag colour**
+  select in the host's lobby (not on the check page), saves the choice at once with `saveLook`
+  (`lib/look.ts`) under `om_look_<slug>` in `localStorage` and in a module value, for a
+  browser that blocks storage. The host's call page reads it with `readLook` and sends it as
+  `look` from its `role-assigned` and `peer-joined` handlers beside `sendPresence()`, also
+  when it is plain, so a colour the host took away is taken away for everyone. Every other
+  page keeps what arrives in `RoomState.look`, read through `lookFrom`. `RoomView` hands it to
+  `CallStage`, which sets the custom property `--om-tag-bar` on its root element from
+  `ACCENT_HEX` (the colour is the page's own constant, never the sender's text), and
+  `VideoTile`'s name tag draws a left bar from it. No file holds the look.
+  The logo is picked with **Add a logo** (**Change logo** and **Remove logo** once there is
+  one) under the select, in the same `ShowLook`. `logoFrom` decodes the picked file with
+  `createImageBitmap`, redraws it on a canvas so that neither side is over `LOGO_MAX_PX`
+  (never scaled up) and keeps `toDataURL('image/png')` only when `isLogo` accepts it; the
+  file's own bytes are never stored or sent, and a picture that cannot be used shows a line
+  with `role="alert"` and leaves the saved logo as it was. `lookFrom` keeps a `logo` only
+  when `isLogo` accepts it, so one logo is held per page and each new `look` replaces it.
+  `CallStage` draws it as an `<img alt="">` inside `stage-main`: top left, 32 px high below
+  the `sm` width and 40 px from it up, at most 96 px wide, `pointer-events-none`, at `z-10`
+  so the notices (`z-30`) are drawn over it. It is only ever an image source, never CSS or
+  markup.
 - **Send my recording later** — a ticked item in a guest's camera menu, under **Stop
   incoming video** (`CallStage`; not for the host, whose files are written directly, and
   not for a guest the host set as not recorded or whose browser cannot record, who have
@@ -533,7 +737,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   page, `checkOnly`, joins no call and leaves the box out). While the keys
   are off, `ControlButton` leaves a one-character `shortcut` out of `aria-keyshortcuts` and of the
   tooltip, the two marker buttons drop the key from their names, and the list dims its single-key
-  rows and says they are off. Alt+R and Alt+S are chords and stay on.
+  rows and says they are off. Alt+R and Alt+S are chords and stay on. The four slide keys
+  (**Right** and **Page Down**, **Left** and **Page Up**) are `SlideControls`' own listener and
+  are only listed in `ROWS`, as one row; they are not single letters, so they stay on while the
+  single keys are off.
 - **`components/Rundown.tsx`** — the host's running order for a show. **Show rundown** in the
   control bar (`hasRundown`: only for a host who can record, a present-only one included)
   shows a strip between the stage and the bar, where the Levels strip goes. Outside a take
@@ -571,11 +778,27 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   a person whose stream has not arrived; a producer and a present-only device have no camera
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
+- **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
+  lists **Camera settings** when the camera behind the call's video track lists any of exposure
+  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
+  turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
+  draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
+  `applyConstraints` replaces everything the track was asked before, so the request is the track's
+  own `getConstraints()` (size, frame rate, device, earlier sliders) with only the `advanced` set
+  for that key replaced. The panel keeps one request in flight and sends the newest value that
+  arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
+  video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
+  track, so the panel works on the track the call holds and a camera switch needs no change.
+  Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
+  component under the preview, on the previewed video track and keyed by its `id`; that track is the
+  one handed to the call, so what is set there is what the call and the recording get.
 - **`components/FramingGuide.tsx`** — on a computer the lobby preview carries **Framing
   guide**: a button that lays a rule-of-thirds grid over the preview while the camera is on.
   The page draws the lines over the tile and the component is given no stream, so nothing of
   them reaches a recording or another participant. Not rendered on a phone (`isPhone()`),
-  where the preview shows a band of a tall picture.
+  where the preview draws a tall picture whole inside the wide box, so thirds of the box are
+  not thirds of the picture.
 - **`components/CalendarInvite.tsx`** — **Add to calendar**, the last thing in the lobby's join
   panel, in the browser that holds the room's host token (`Lobby`'s `isHost`), and not on the
   check page (`checkOnly`), which joins no call. The host picks a
@@ -603,13 +826,15 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Call orchestration (`hooks/useRoom.ts`)
 State machine `RoomPhase`: `checking→lobby→waiting→connecting→in-call→recording→finalizing→done`
-(+ `not-found|peer-left|left|full|replaced|removed|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
+(+ `not-found|peer-left|left|full|replaced|removed|refused|error`). **`waiting`** = joined but alone; → `connecting` when the peer is
 present (`role-assigned` peerCount≥2 or `peer-joined`); → `in-call` on remote media. Transitions are
 guarded on `s.phase==='waiting'` so a reconnect can't downgrade `in-call`. `RoomState` also holds
 `localName`, `remotePeers` (per peer: name from `peer-joined`, stream, presence, role,
-`notRecorded`), `notRecorded` (this peer: the host set it as not recorded, so its capture never
+`notRecorded`, `audioOnly`: true only when the Room's field is exactly `true`), `notRecorded`
+(this peer: the host set it as not recorded, so its capture never
 starts), `capabilities` (per-peer MP4/WAV from `recording-capability`), `backupTransfers` (a guest's returned
-backups, shown as offers on the host), `remoteScreenStream`, `screenSharing`,
+backups, shown as offers on the host), `remoteScreens` (one screen per presenter, oldest
+first), `remoteScreenStream` (the first one's stream, or null), `screenSharing`,
 `micWarning` (this participant's own mic, from `SwitchableMedia`'s `onMicWarning`: `'silent'`, `'clipping'` or
 null; `CallStage` shows it as a note that can be dismissed until the next take starts),
 `countdownEndsAt` (when the countdown before a take ends, on this tab's clock, else null).
@@ -622,7 +847,28 @@ off until they turn it back on: the handler does what `setMic(false)` does (trac
 `presence` sent), writes `micOnRef` itself, and does nothing for a host or a microphone that is
 already off; `setMic(true)` clears the flag. `mutePeer(peerId)` is the host's side: it only
 sends `peer-mute`, and the panel follows that person's `presence`.
+`helpAsk` holds the one ask a host's `peer-help` left on this page (nothing for a host or an ask
+`isHelpAsk` refuses, and nothing for a `microphone` or `camera` ask on a page with no
+`SwitchableMedia`, which is read from `switchableMediaRef` when the ask arrives; a newer ask
+replaces it). `askPeer(peerId, ask)` is the host's side: it sends
+`peer-help` and returns whether the send went out. `dismissHelpAsk()` clears `helpAsk` and nothing
+else; `restartConnection()` clears it, starts the cooldown of the automatic rebuild
+(`lastIceReconnectRef`), and calls `signal.reconnect()`, the path a second `failed`
+connection takes, which does nothing after a terminal close. A `reconnect` ask is also taken
+down when `role-assigned` arrives again on a socket the page opened again by itself; a
+`microphone` or `camera` ask stays.
 `removePeer(peerId)` only sends `peer-remove`; the host's state follows the Room's `peer-left`.
+`setRoomAccess(change)` only sends `room-access`; `state.access` (null until the Room sends one, kept
+only in a host tab, read through `readRoomAccess`) follows the Room's answer, so a tick the Room did
+not get never shows; it also takes `waitingRoom` and `passcode` (a string, or `null` to remove it),
+and `state.access` holds `waitingRoom`, `passcode` (true only for `true`) and the
+people at the door, read by `readRoomAccess` (the first eight with a usable `peerId`, names cut
+to 64). `admitPeer(peerId, admit)` only sends `admit`. `state.door` is `'waiting'` from the Room's
+`door` message until `role-assigned` or a terminal close; it is also `'passcode'`, or
+`'wrong-passcode'` when the message says `wrong: true`, while the Room asks for a passcode, and
+`sendPasscode(code)` calls `SignalClient.rejoin`. `phaseOnFatalClose` turns `4008` into
+`refused`, and `state.refusal` is `'locked'`, `'refused'`, `'busy'` or `'passcode'` for those close
+reasons and null for any other.
 On the removed side `phaseOnFatalClose` turns `4007` into the `removed` phase, or holds a take
 that is running, as it does for every terminal close, with a banner that names the host. A held
 close also sets `peerRecording` to false: the host's `recording-stop` cannot reach a closed tab, so
@@ -692,7 +938,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 - `lib/signal.ts`: `SignalClient` — sends `join` on open, type-guards inbound, 30s ping, **exponential
   backoff reconnect** (`backoff.ts`: `min(1000·2^n, 30000)`). `send` **drops** if not OPEN (no queue).
-  It returns whether the message went out.
+  It returns whether the message went out. `rejoin(passcode)` keeps the passcode and sends `join`
+  again on the open socket, and every later `join` (a reconnect) carries it; a `door` message
+  with state `passcode` makes the client forget it, so a wrong one is never sent twice.
   After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
   `useRoom` calls on a connection's second `failed`, returns at once.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
@@ -705,7 +953,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   companions) to `onRemoteScreen`, never as camera, so a producer's screen share is never mistaken
   for a camera feed and hidden. For normal peers, the first stream is camera
   (`onRemoteStream`) and any distinct stream id is shared screen (`onRemoteScreen`, with
-  `onRemoteScreenEnded` on track end). Companions have no camera tile; their screen shows in presenting
+  `onRemoteScreenEnded`, given the stream that ended, on track end). Companions have no camera tile; their screen shows in presenting
   mode labelled "Name (Presenting)". `removeTrack(track)` for stop-sharing.
   `setIncomingVideoOff(off)` sets the receive half of every video transceiver (`sendrecv` to
   `sendonly`, `recvonly` to `inactive`, and back) and never an audio one; the change is
@@ -715,6 +963,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   makes, so a camera that is added, a person who joins or a screen that starts being shared
   is turned down in that very description; `syncSendQuality` (`useRoom`) tells each new or
   rebuilt connection, from a ref the switch writes itself.
+  A connection built with `audioOnly` (a seat the Room admitted as microphone only) does not
+  receive that seat's camera: the video transceiver that arrives on the camera stream is turned
+  off the same way, kept off in every later offer and answer, and left off when
+  `setIncomingVideoOff(false)` takes the other video again. The stream still goes to
+  `onRemoteStream`, so the sound plays; a video on another stream id is a shared screen and is
+  received as usual. `CallStage` draws that person as an initial whatever their presence says.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
 - Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
@@ -909,7 +1163,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   cancellation on, the report has an `echoCancellation` section naming that person's camera and
   WAV files, and the summary's rows for them read "echo cancellation on": the host's own from its
   microphone's settings at End & save, a guest's from the `listening` it announced, kept by peer id
-  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
+  past `peer-left` (`echoPeersRef` in `useRoom`, at most 64 ids). When a recorded person gave a
+  title, the report has a `nameTags` section: each recorded person's name, title and files, for an
+  editor's lower thirds. The host's title is the one it joined with; a guest's is kept by peer id
+  past `peer-left` (`titlesRef` in `useRoom`, at most 64 ids). After a take the host's summary is a column beside the stage
   (a sheet on phones) that shares that side with chat; "Record another take" runs `newTake` then
   `recordWithCountdown` in one click (same folder, no second prompt). It is offered with nobody else
   in the room too: the take that follows is the host's alone, and `RoomView` keeps the call screen up
@@ -990,6 +1247,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   connections in `told` that the room still lists, and `saveRecoveredTake` writes the
   list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
+- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
@@ -1121,7 +1379,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 1. **Room create/join/auth** — New Room → `POST /api/rooms` (token+cookie) → nav `/r/slug/` →
    `getRoom` → lobby → join → WS → DO assigns host (cookie match or token in join) / guest (invite link, no token)
-   → `role-assigned` + `peer-joined`. Peer past capacity → close 4001.
+   → `role-assigned` + `peer-joined`. Peer past capacity → close 4001 (a recorded seat with a camera past the fourth, or any recorded seat past the eighth).
 2. **WebRTC signaling** — perfect negotiation over WS relay; guest creates DataChannel, host
    `ondatachannel`; ICE trickled in parallel; DO never inspects SDP.
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
@@ -1139,7 +1397,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    `recording-finalized` before closing writers — closing early truncates the guest's tail, and a
    guest that keeps sending cannot hold the save open. A guest screen segment whose channel is
    still open is waited for the same way; one whose channel has closed is not, and its writer was
-   closed by that event. A channel that closes during the wait ends the wait for its file. A screen
+   closed by that event, except that a keyed screen file which had bytes and no finish message is
+   kept open for the sharer's return and closed with the other files. A channel that closes during the wait ends the wait for its file. A screen
    file that gave no finish signal within the limits, or whose channel closed without one, is
    listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
    so the channel's close and the end of the take can both ask for it.
@@ -1169,9 +1428,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    the host's socket, so a host that gets `role-assigned` with `recording: false` while its own take
    runs sends `recording-started` again under the take's id: a guest already in the take ignores it,
    the Room keeps the row it has, and a guest who joins from then on is started. When sharing screen,
-   a reconnect finishes the old screen segment and starts a new numbered segment on the rebuilt
-   connection, with each segment backed up locally in OPFS. Host rebinds new channel to existing
-   receiver, found by a stable key (see below), not by the DO's fresh-per-socket peerId.
+   a reconnect leaves the running share's recorder and its local OPFS backup alone: the
+   share's channel is recreated under the share's own key (`recording-screen-<n>#<key>`) and the
+   host continues the same file. A host that answers with less than it acknowledged does not hold
+   that file, so the sharer ends the stretch and starts a new numbered segment. Host rebinds new
+   channel to existing receiver, found by a stable key (see below), not by the DO's
+   fresh-per-socket peerId.
 5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
    optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
@@ -1202,7 +1464,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most eight guest slots
+  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most fourteen guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
@@ -1304,8 +1566,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   - Video is a persistent `MediaStreamTrackGenerator({ kind: 'video' })` fed via `MediaStreamTrackProcessor`;
     switching cameras cancels the old reader and pumps frames from the new camera without changing the stable
     video track ID or interrupting the recorder (with `avc3` carrying updated SPS/PPS across resolution changes).
-    Real camera settings are delegated from the real track. A switched-to camera is asked for the
-    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`).
+    Real camera settings, constraints (`getConstraints()`) and requests for new constraints
+    (`applyConstraints()`) are delegated to the real track. A switched-to camera is asked for the
+    frame rate the lobby camera was asked for (read once from that track's `getConstraints()`), and
+    for its shape: portrait when the asked height is above the asked width. When those
+    constraints carry no size (after a lobby Camera setting), the shape on a computer is read from
+    the lobby camera's settings instead; a phone is never offered portrait, so it stays wide.
   - Audio is an `AudioContext` at 48 kHz (`WAV_SAMPLE_RATE`) recording one channel, or two when stereo
     was asked for at join and the microphone has two (`recordedChannels` in `lib/media.ts`),
     routing mic -> `MediaStreamAudioSourceNode` -> `MediaStreamAudioDestinationNode`; switching mics swaps
@@ -1340,6 +1606,25 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
+- **A screen file can still end where the connection did.** A share continues in the same host
+  file across a reconnect, but one stopped while its connection is down, one on a page that
+  reloads, one whose stream was given up or is being sent later, one whose file the host no
+  longer holds because it started another take or reloaded and resumed, and a ninth file waiting
+  in one take end the file there and read incomplete on the host; the sharer's screen backup holds
+  all of it.
+- **A screen file whose sharer dropped and never came back stays open until the take ends.** The
+  host keeps it for a return, and closes it with the other files at End & save.
+- **A room of five to eight people is for the microphone only, and its pieces are still sized for
+  four.** A browser keeps, per room, that its person joined with the microphone only, and the
+  lobby opens that way again after a reload; a browser that blocks storage starts on the camera,
+  and joining that way a room of five or more ends on "This room is full". The lobby's
+  size figures and the take's 50 call-copy files (`CALL_COPY_MAX_FILES`) are still those of a
+  four-person room.
+- **A microphone-only seat can still present a screen to everyone.** The seat is held to
+  sending no camera, not to sending no video: a shared screen, a photo or a video it presents
+  arrives as one more stream and is shown like any shared screen. The hold is made by the page
+  that receives, from the Room's `audioOnly` field, so a page changed to ignore that field
+  still shows what such a seat sends.
 - **Screen share reconnect starts a new segment rather than appending to the old file.** Camera
   (and WAV) recording resumes into the same host files via `resume_query`. Screen share instead
   finishes the old segment on disconnect and starts a new numbered segment on the rebuilt
@@ -1453,6 +1738,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   in `sync.json` shows it: align by waveform a clip that sits wrong by a second or more.
   A clock set between a guest's two estimates does not move the offset of that guest's
   camera file and WAV.
+- **A room's passcode is given at the door and shown nowhere.** The host cannot read it back: a
+  host who forgot it removes it and sets another. After 20 wrong tries everyone new, also someone
+  with the right passcode, reads "Too many wrong passcodes" for up to ten minutes; the host and
+  the people in the call are not affected, and the host can remove the passcode to let people in
+  at once. The invite link does not carry the passcode, so the host sends it separately. A person
+  asked for the passcode during their own running capture (their id was forgotten) keeps the call
+  screen and sees no field: their backup keeps recording, and a reload after the take brings the
+  field. The passcode does not hide that the room exists and does not stop TURN credentials
+  being minted with the link.
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
@@ -1511,10 +1805,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
-- **The producer and Present-only links are offered only to the host, in the waiting
-  room and in the call's top bar before a take.** The lobby and the take summary offer
-  the plain invite link alone, and during a take and after one the top bar has neither.
-  Each is still the invite link plus `?producer=1` or `?present=1`.
+- **The producer, Present-only and microphone-only links are offered only to the host, in the
+  waiting room and in the call's top bar before a take.** The lobby and the take summary offer
+  the plain invite link alone, and during a take and after one the top bar has none of them.
+  Each is still the invite link plus `?producer=1`, `?present=1` or `?audio=1`.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a
@@ -1622,11 +1916,27 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Alt+R and Alt+S have not been run on a Mac.** They rely on Option+R and Option+S reaching
   the page with the key codes of R and S (`MANUAL-TESTING.md` rows 8.44 and 8.45).
 - **A removed participant can come back in another tab.** The Room remembers the tab's id
-  (`lib/client-id.ts`, session storage), and the invite link is still the only credential: a new
+  (`lib/client-id.ts`, session storage), and the invite link is still the only credential for
+  joining unless the host has turned the waiting room on: a new
   tab, a private window or another browser is a new id, a client that sends no id is closed but
   cannot be remembered, and a browser that blocks session storage sends a new id on every load,
   so that tab gets back in by reloading. The list is the session's: when the last person leaves,
   or a host who is alone in the room reloads, it is emptied and the removed tab can join again.
+- **A waiting room is by tab too, and the host sees it only on the call screen.** A host alone in
+  the waiting screen ("Waiting for others to join") sees no row: the row is on the call screen,
+  which **Continue alone** opens. A host in a browser without the room's host token is a guest and
+  waits like one; nobody can let it in from there. Anyone with the link can fill the eight
+  waiting places with names of their choosing, and others then read "Too many people are waiting";
+  the host refuses them or locks the room. A refused person can knock again, and their second
+  device waits like anyone. A person whose reconnect is held while their own capture runs (their
+  id was forgotten: everyone dropped at once) keeps the call screen and is told nothing until the
+  host lets them in; their backup keeps recording. A page older than this Worker stays on
+  "Connecting…" while it waits; a reload fixes it.
+- **A lock is by tab, and ends with the session.** A person the Room seated before the lock
+  presents the same client id on a reload and gets back in. One whose browser blocks session
+  storage sends a new id on every load, so after a reload in a locked room they read "This
+  room is locked" until the host unlocks. When every connection drops at the same moment the
+  session ends and the lock with it, and the room is open again.
 - **A mute is a request.** The Room passes it on and the muted person's own page carries it out;
   a page that does not know the message, or was changed to ignore it, stays unmuted. Removal is
   what the Room enforces.
@@ -1660,9 +1970,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lists it.
 - **Nobody else is told why a person left.** A removal reaches the other participants as an
   ordinary `peer-left`; its `reason` is `removed`, and no page reads it.
-- **The People panel exists on the call screen only.** A host whose page still reads
-  "Connecting…" cannot mute or remove the person it is connecting to, and a removal cannot be
-  undone from the panel: the removed person opens the link in a new tab.
+- **Mute and remove are on the call screen only.** The lock and waiting room checkboxes and
+  the rows for people at the door are also on the host's waiting screen, but a host whose
+  page still reads "Connecting…" cannot mute or remove the person it is connecting to, and a
+  removal cannot be undone from the panel: the removed person opens the link in a new tab.
 - **After a host reload the rundown has lost its place.** **Resume recording** brings back the
   take's markers, not the segment that was running: the strip is hidden and, shown, reads
   "Rundown not started" until the host chooses the segment the show had reached in the list
@@ -1704,6 +2015,25 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   lobby preview is a 16:9 box that crops any other shape, so with a camera that gives 4:3
   the recording has a little more above and below than the lines show. The guide is not
   offered on a phone, is not remembered from one visit to the next, and the call has none.
+- **A camera that offers the browser none of the camera settings has no Camera settings item.**
+  The item is missing from the camera menu, as it is for a person who joined without a camera.
+  Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
+  controls the browser opens only after its "use and move your camera" permission shows no such
+  rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
+  the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
+  and frame-rate entries from a track's constraints once a camera setting is applied to it
+  (measured on Chrome 155), and the stable stream reads the asked rate from those constraints at
+  join, then from the track's settings. The two differ only when the lobby camera fell short of
+  the picked rate.
+- **Camera settings are not remembered.** A change of camera, a reload or a rejoin starts from what
+  the camera has, and **Reset** goes back to the values at the panel's opening, not to the camera's
+  factory values. The waiting room has no panel: it is in the lobby before and in the call after.
+- **A change of camera, quality, frame rate or echo cancellation in the lobby opens the camera again.**
+  The sliders then show what the new capture has, not what was set on the one before.
+- **A long exposure time can lower the frame rate the camera delivers, and the file follows.** The
+  self-view is mirrored, so Pan moves the other way on screen than in the recording. While a slider
+  has the keyboard, **M** and **N** mark nothing.
 - **A calendar entry is offered only in the host's lobby.** The waiting room and the call have
   no **Add to calendar**, and a host in a browser without the room's host token is a guest
   there. The entry is one hour long with a fixed title and text; the calendar that opens it
@@ -1850,11 +2180,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   size fields are 32 bits and cannot hold its length, so they declare the most they can
   hold, more than the file has, and the FLAC commands, like any other command on that
   file, report it.
-- **Microphone only is not remembered.** A person with no camera presses it on every
-  visit. While it is pressed the lobby's storage and folder figures still count a camera
-  file, so they overstate what that person's recording needs. A person whose camera
-  never started gets no Speaker row in the lobby after pressing it; the call's microphone
-  menu has one.
+- **Microphone only is kept per room, not across rooms or browsers.** The choice is
+  stored in this browser under `om_mic_only_<slug>`, so a person with no camera presses it
+  once for each room. While it is pressed the lobby's storage and folder figures still
+  count a camera file, so they overstate what that person's recording needs. A person
+  whose camera never started gets no Speaker row in the lobby after pressing it; the
+  call's microphone menu has one.
 - **A person who joined with the microphone only cannot turn a camera on in that call.**
   A running recorder cannot be given a video track, so the stream keeps the shape it was
   joined with. They leave and join again with a camera. The host is not told before a take
@@ -1944,6 +2275,78 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
+- **A deck takes pictures only.** The Present menu's **Slides (pictures)** picker offers
+  images. A PDF or a slides file picked anyway is left out, and when nothing is left nothing
+  is presented and the menu closes. The slides are turned with the two buttons or the
+  four slide keys.
+- **A picture that cannot be decoded is a black slide.** `show` still moves to it, and the
+  count includes it.
+- **The Previous and Next row is not always on screen.** While the presenter waits alone
+  ("Everyone else left") the call screen is unmounted and there are no buttons; the deck
+  keeps its slide and the row is back, on that slide, when the call is. On a phone, while
+  chat covers the stage, the row is hidden with the control bar.
+- **Only the presenter turns the slides.** Nobody else in the call can, and a slide change
+  drops no chapter marker.
+- **The slide keys do nothing while a field, a fader or a list has the keyboard,** and a window
+  narrower than 640 px has no shortcut list to read them in. They turn nothing while chat covers
+  a phone's stage, as the row is hidden then.
+- **With incoming video stopped only the first screen carries the note and Show video.** The
+  other screens are black tiles under their names, which still play their sound. With four or
+  more screens on a phone each tile is small, and nothing enlarges one.
+- **A portrait picture is the middle of the camera's wide picture.** A 1080p camera gives
+  608 x 1080, not 1080 x 1920, and the lobby's "Capturing" line shows the real size. It is
+  encoded at the chosen quality's bitrate, which is more than that many pixels need. It is not
+  offered on a phone, has no framing guide, cannot be changed during a call, and was checked
+  with test cameras only.
+- **The host is not told the answer to a help request.** "Asked <name>" reads the same whatever
+  the person does; the host sees a restart as that person's tile leaving and returning.
+- **A help request reaches a page still on "Connecting…" but is drawn only on the call screen.**
+  The page keeps it and shows it when its call screen appears.
+- **A restart gives that person a new id.** A screen they present starts a new file, and their
+  Levels fader and the chat's **To** are forgotten, as on every reconnect.
+- **A page that does not know `peer-help` shows nothing.** A Worker deployed before this
+  message drops it too. In both cases the host's line still reads that the person was asked.
+- **Nothing limits how often the host asks.** After **Not now** the same question can be sent
+  again at once.
+- **The host does not see which device a person is on or what they have.** The microphone and
+  camera asks name no device, and the host names the one it wants by voice.
+- **A person who joined with the microphone only gets the camera ask.** Their camera menu then
+  reads "You joined without a camera. To use one, leave and join again."
+- **A producer and a present-only device are not asked about devices.** The host's row offers
+  them **Restart connection** alone, and a page without device menus drops a device ask.
+- **Where a browser cannot switch a device mid-take, the opened menu reads "Switch after this
+  take".**
+- **A title is not remembered and cannot be changed in the call.** It is typed in the lobby
+  for one visit; a person who wants another leaves and joins again.
+- **A producer and a Present-only device have no title.** Their lobby has no field and they
+  have no tile to show it on.
+- **A small tile shows the name alone.** In a tile narrower than 224 px the title is hidden;
+  its owner's tag still holds it in the tooltip.
+- **A title is its owner's own text and nobody checks it.** Only its type and length are
+  checked, and the only file it is written to is the sync file's `nameTags`.
+- **A take saved from its crash copy has no `nameTags`.** Its sync file lists names only, in
+  `guests[]`.
+- **After a host reload `nameTags` holds only the titles of people in the room after it.** A
+  guest who left before the reload is listed by name only, or not at all when nobody else has a
+  title.
+- **`nameTags` leaves some people out.** A guest set as not recorded, a producer and a
+  Present-only device have no file of their own, so they are not listed.
+- **The look can only be chosen in the host's lobby.** A change needs the host to leave and
+  join again, which ends the host's part of a running take.
+- **While the host is away, a person who joins sees the plain look.** The people already there
+  keep the last one.
+- **The waiting room and the lobby preview have the plain look.**
+- **The look is the host's in one browser.** Another browser starts without it.
+- **A Worker deployed before `look` passes nothing on.** Guests then see the plain look.
+- **The logo passes through the signalling server like every `look`.** It is relayed and never
+  stored, and it is sent again to everyone each time someone joins.
+- **Someone who shares their entire screen shows the logo,** and that screen recording holds it.
+  The logo is drawn by the page, so no recording of a camera or a microphone holds it.
+- **A notice at the top of the stage can cover the logo on a phone.**
+- **The waiting room has no logo.**
+- **A room's colour and logo stay in the host's browser after the room has expired.** The look
+  is kept under `om_look_<slug>` in `localStorage` and is not removed with the room, so it
+  stays until the site's data is cleared.
 - **The program command shows cameras only.** It has no screen recording, no names on the tiles
   and one fixed grid; `leftOut` in the sync file names each file it does not read.
 - **A resumed take's host tile is black until the reload.** The program command places the host's

@@ -16,7 +16,7 @@ class FakePC {
     replaceTrack: (t: unknown) => Promise<void>;
     params: RTCRtpSendParameters;
   }[] = [];
-  ontrack: ((ev: { streams: MediaStream[] }) => void) | null = null;
+  ontrack: ((ev: { streams: MediaStream[]; track?: unknown; transceiver?: unknown }) => void) | null = null;
   onicecandidate: ((ev: { candidate: RTCIceCandidate | null }) => void) | null = null;
   onnegotiationneeded: (() => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
@@ -152,10 +152,12 @@ describe('PeerConnection screen-share routing', () => {
         if (e === 'ended') endedCb = cb;
       },
     };
+    const screen = fakeStream('screen', vt);
     pc.ontrack?.({ streams: [fakeStream('cam')] });
-    pc.ontrack?.({ streams: [fakeStream('screen', vt)] });
+    pc.ontrack?.({ streams: [screen] });
     endedCb!();
     expect(onRemoteScreenEnded).toHaveBeenCalledOnce();
+    expect(onRemoteScreenEnded).toHaveBeenCalledWith(screen);
   });
 
   it('removeTrack removes the matching sender', () => {
@@ -184,6 +186,32 @@ describe('PeerConnection screen-share routing', () => {
     pc.ontrack?.({ streams: [fakeStream('producer-or-companion-stream')] });
     expect(onRemoteScreen).toHaveBeenCalledOnce();
     expect(onRemoteStream).not.toHaveBeenCalled();
+  });
+
+  it("hands the ended callback a companion's or producer's stream that ended", () => {
+    const pc = new FakePC();
+    const onRemoteScreenEnded = vi.fn();
+    const peer = new PeerConnection({
+      polite: false,
+      iceServers: [],
+      sendSignal: () => {},
+      onRemoteStream: vi.fn(),
+      onRemoteScreen: vi.fn(),
+      onRemoteScreenEnded,
+      screenOnly: true,
+      pcFactory: () => pc as unknown as RTCPeerConnection,
+    });
+    peer.start();
+    let endedCb: (() => void) | null = null;
+    const vt = {
+      addEventListener: (e: string, cb: () => void) => {
+        if (e === 'ended') endedCb = cb;
+      },
+    };
+    const screen = fakeStream('producer-or-companion-stream', vt);
+    pc.ontrack?.({ streams: [screen] });
+    endedCb!();
+    expect(onRemoteScreenEnded).toHaveBeenCalledWith(screen);
   });
 });
 
@@ -493,5 +521,154 @@ describe('PeerConnection.setIncomingVideoOff', () => {
     pc.transceivers[1] = refusing;
     expect(() => peer.setIncomingVideoOff(true)).not.toThrow();
     expect(directions()).toEqual(['sendrecv', 'sendrecv', 'inactive']);
+  });
+});
+
+describe('PeerConnection with audioOnly', () => {
+  const t = (kind: string, direction: string) => ({ direction, receiver: { track: { kind } } });
+  const stream = (id: string) => Object.assign(new EventTarget(), { id, getVideoTracks: () => [] }) as unknown as MediaStream;
+
+  function build(audioOnly: boolean, polite = false) {
+    const pc = new FakePC();
+    const onRemoteStream = vi.fn();
+    const onRemoteScreen = vi.fn();
+    const peer = new PeerConnection({
+      polite,
+      iceServers: [],
+      sendSignal: () => {},
+      onRemoteStream,
+      onRemoteScreen,
+      audioOnly,
+      pcFactory: () => pc as unknown as RTCPeerConnection,
+    });
+    peer.start();
+    return { peer, pc, onRemoteStream, onRemoteScreen };
+  }
+
+  // The tracks a person's microphone and camera bring: one stream, two transceivers.
+  function arrive(pc: FakePC, id: string, direction: string) {
+    const audio = t('audio', 'sendrecv');
+    const video = t('video', direction);
+    pc.transceivers.push(audio, video);
+    pc.ontrack?.({ streams: [stream(id)], track: audio.receiver.track, transceiver: audio });
+    pc.ontrack?.({ streams: [stream(id)], track: video.receiver.track, transceiver: video });
+    return { audio, video };
+  }
+
+  function described(pc: FakePC) {
+    const seen: string[][] = [];
+    const real = pc.setLocalDescription.bind(pc);
+    pc.setLocalDescription = async (desc) => {
+      seen.push(pc.transceivers.map((x) => x.direction));
+      await real(desc);
+    };
+    return seen;
+  }
+
+  it('does not receive the camera video, still plays the sound, and leaves audio alone', () => {
+    const { pc, onRemoteStream } = build(true);
+    const { audio, video } = arrive(pc, 'cam', 'recvonly');
+    expect(video.direction).toBe('inactive');
+    expect(audio.direction).toBe('sendrecv');
+    expect(onRemoteStream).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps sending its own camera on a connection that also sends', () => {
+    const { pc } = build(true);
+    const { video } = arrive(pc, 'cam', 'sendrecv');
+    expect(video.direction).toBe('sendonly');
+  });
+
+  it('keeps the camera video off in the next offer', async () => {
+    const { pc } = build(true);
+    const { video } = arrive(pc, 'cam', 'recvonly');
+    video.direction = 'recvonly';
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toEqual([['sendrecv', 'inactive']]);
+  });
+
+  it('keeps the camera video off in the answer to an offer', async () => {
+    const { pc, peer } = build(true, true);
+    const apply = pc.setRemoteDescription.bind(pc);
+    let video = t('video', 'recvonly');
+    pc.setRemoteDescription = async (desc) => {
+      const audio = t('audio', 'recvonly');
+      video = t('video', 'recvonly');
+      pc.transceivers = [audio, video];
+      await apply(desc);
+      pc.ontrack?.({ streams: [stream('cam')], track: audio.receiver.track, transceiver: audio });
+      pc.ontrack?.({ streams: [stream('cam')], track: video.receiver.track, transceiver: video });
+    };
+    const seen = described(pc);
+    await peer.handleSignal({ type: 'webrtc-offer', sdp: 'remote-offer', from: 'guest', fromPeerId: 'p-guest' });
+    expect(seen).toEqual([['recvonly', 'inactive']]);
+  });
+
+  it('keeps the camera video off in the answer to a later offer', async () => {
+    const { pc, peer } = build(true, true);
+    const { video } = arrive(pc, 'cam', 'recvonly');
+    const apply = pc.setRemoteDescription.bind(pc);
+    // A later offer changes no track, so nothing arrives; the direction is whatever the offer left.
+    pc.setRemoteDescription = async (desc) => {
+      video.direction = 'recvonly';
+      await apply(desc);
+    };
+    const seen = described(pc);
+    await peer.handleSignal({ type: 'webrtc-offer', sdp: 'remote-offer', from: 'guest', fromPeerId: 'p-guest' });
+    expect(seen).toEqual([['sendrecv', 'inactive']]);
+  });
+
+  it('does not take the camera video again when incoming video is turned off and on', () => {
+    const { peer, pc } = build(true);
+    const { audio, video } = arrive(pc, 'cam', 'recvonly');
+    const screen = t('video', 'recvonly');
+    pc.transceivers.push(screen);
+    pc.ontrack?.({ streams: [stream('screen')], track: screen.receiver.track, transceiver: screen });
+    peer.setIncomingVideoOff(true);
+    peer.setIncomingVideoOff(false);
+    expect([audio.direction, video.direction, screen.direction]).toEqual(['sendrecv', 'inactive', 'recvonly']);
+  });
+
+  it('receives a video on another stream id as a shared screen and leaves its transceiver alone', () => {
+    const { pc, onRemoteScreen } = build(true);
+    arrive(pc, 'cam', 'recvonly');
+    const screen = t('video', 'recvonly');
+    pc.transceivers.push(screen);
+    pc.ontrack?.({ streams: [stream('screen')], track: screen.receiver.track, transceiver: screen });
+    expect(onRemoteScreen).toHaveBeenCalledOnce();
+    expect(screen.direction).toBe('recvonly');
+  });
+
+  it('survives a transceiver that refuses the change, and still offers', async () => {
+    const { pc } = build(true);
+    const refusing = { receiver: { track: { kind: 'video' } } } as { direction: string; receiver: { track: { kind: string } } };
+    Object.defineProperty(refusing, 'direction', { get: () => 'recvonly', set: () => { throw new Error('InvalidStateError'); } });
+    pc.transceivers.push(refusing);
+    expect(() => pc.ontrack?.({ streams: [stream('cam')], track: refusing.receiver.track, transceiver: refusing })).not.toThrow();
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toHaveLength(1);
+  });
+
+  it('leaves another video alone while only sound has arrived from the person', async () => {
+    const { pc } = build(true);
+    const audio = t('audio', 'sendrecv');
+    const nobodys = t('video', 'inactive');
+    pc.transceivers.push(audio, nobodys);
+    pc.ontrack?.({ streams: [stream('cam')], track: audio.receiver.track, transceiver: audio });
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toEqual([['sendrecv', 'inactive']]);
+  });
+
+  it('without the option leaves the camera video as it was', async () => {
+    const { pc, onRemoteStream } = build(false);
+    const { video } = arrive(pc, 'cam', 'recvonly');
+    expect(video.direction).toBe('recvonly');
+    const seen = described(pc);
+    await pc.onnegotiationneeded?.();
+    expect(seen).toEqual([['sendrecv', 'recvonly']]);
+    expect(onRemoteStream).toHaveBeenCalledTimes(2);
   });
 });

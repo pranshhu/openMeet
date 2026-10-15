@@ -25,6 +25,11 @@ export function isTrackGeneratorSupported(): boolean {
   );
 }
 
+/** The number a constraint asks for: a bare number, or the `ideal` of an object. */
+function ideal(c: ConstrainULong | undefined): number | undefined {
+  return typeof c === 'number' ? c : c?.ideal;
+}
+
 export function isPhone(): boolean {
   return typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 }
@@ -65,6 +70,7 @@ export class SwitchableMedia {
   private stopMicWatch: (() => void) | null = null;
   private qualityId: string;
   private frameRate: number;
+  private portrait: boolean;
   private echoCancellation: boolean;
   private options: SwitchableMediaOptions;
 
@@ -80,6 +86,20 @@ export class SwitchableMedia {
       (typeof asked === 'number' ? asked : asked?.ideal) ||
       rawCamTrack?.getSettings?.().frameRate ||
       RECORDING_FRAME_RATE;
+    // The shape rides on the track as well: a switched-to camera is asked for
+    // the picture shape the lobby camera was, so the recording keeps one shape.
+    // Once a camera setting has been applied the constraints hold no size, and
+    // the delivered size says the shape instead, on a computer: a phone is never
+    // offered the portrait shape, and held upright it delivers a tall picture.
+    const askedSize = rawCamTrack?.getConstraints?.();
+    let shapeWidth = ideal(askedSize?.width);
+    let shapeHeight = ideal(askedSize?.height);
+    if ((!shapeWidth || !shapeHeight) && !isPhone()) {
+      const delivered = rawCamTrack?.getSettings?.();
+      shapeWidth = delivered?.width;
+      shapeHeight = delivered?.height;
+    }
+    this.portrait = !!shapeWidth && !!shapeHeight && shapeHeight > shapeWidth;
     // Read from the track like the frame rate, asked-for before delivered: a
     // switched-to microphone is processed the way the lobby's was, so what the
     // host was told about this person's audio stays true for the whole call.
@@ -112,6 +132,11 @@ export class SwitchableMedia {
     if (typeof generator.getCapabilities === 'function' || rawCamTrack?.getCapabilities) {
       generator.getCapabilities = () => this._currentCameraTrack?.getCapabilities?.() ?? {};
     }
+    // A request to the stable track is a request to the camera behind it: the
+    // generator's own would change nothing the person sees.
+    generator.getConstraints = () => this._currentCameraTrack?.getConstraints?.() ?? {};
+    generator.applyConstraints = (constraints) =>
+      this._currentCameraTrack?.applyConstraints?.(constraints) ?? Promise.resolve();
     if (rawCamTrack) {
       generator.enabled = rawCamTrack.enabled;
     }
@@ -243,7 +268,7 @@ export class SwitchableMedia {
       }
       if (oldTrack) oldTrack.stop?.();
 
-      const constraints = cameraConstraints(target, qualityId, this.frameRate);
+      const constraints = cameraConstraints(target, qualityId, this.frameRate, this.portrait);
       const newStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
       const newTrack = newStream.getVideoTracks()[0];
       if (!newTrack) return;
@@ -265,14 +290,14 @@ export class SwitchableMedia {
 
     let newStream: MediaStream;
     try {
-      const constraints = cameraConstraints(target, qualityId, this.frameRate);
+      const constraints = cameraConstraints(target, qualityId, this.frameRate, this.portrait);
       newStream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
     } catch (err) {
       if (phone && oldTrack) {
         try {
           const oldDevId = oldTrack.getSettings?.().deviceId;
           const restored = await navigator.mediaDevices.getUserMedia({
-            video: cameraConstraints(oldDevId, qualityId, this.frameRate),
+            video: cameraConstraints(oldDevId, qualityId, this.frameRate, this.portrait),
             audio: false,
           });
           const restoredTrack = restored.getVideoTracks()[0] ?? null;

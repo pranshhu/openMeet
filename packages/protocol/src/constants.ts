@@ -134,11 +134,34 @@ export const WAV_SAMPLE_RATE = 48_000; // requested; the actual rate is read fro
 export const MAX_RECORDED_PEERS = 4;
 
 /**
+ * Recorded seats in a room where every recorded seat joined with the
+ * microphone only. No camera video crosses the mesh there, so the cost per
+ * guest is its audio: the host receives about 1.3 Mbps per guest.
+ */
+export const MAX_AUDIO_ONLY_PEERS = 8;
+
+/**
  * The longest teleprompter script one participant can send to the others, in
  * UTF-16 units (`String.length`): about 55 minutes of speech, and about
  * 300 KB as JSON at the very worst.
  */
 export const MAX_SCRIPT_LENGTH = 50_000;
+
+/**
+ * The longest title a person can give under their name, in UTF-16 units
+ * (`String.length`). A longer one is dropped, never cut.
+ */
+export const MAX_TITLE_LENGTH = 60;
+
+/**
+ * The longest host logo, in UTF-16 units (`String.length`) of the whole
+ * `data:` text: a 160 by 160 pixel PNG redrawn by the host's page is a small
+ * fraction of it.
+ */
+export const MAX_LOGO_LENGTH = 150_000;
+
+/** The most pixels a logo is wide or high. The host's page scales a picture down to it. */
+export const LOGO_MAX_PX = 160;
 
 export const WS_CLOSE_CAPACITY_FULL = 4001;
 export const WS_CLOSE_INVALID_SLUG = 4002;
@@ -147,3 +170,9 @@ export const WS_CLOSE_INVALID_MESSAGE = 4005;
 export const WS_CLOSE_REPLACED = 4006;
 // The host removed this participant. The same tab is refused until the session ends.
 export const WS_CLOSE_REMOVED = 4007;
+// The room is locked and this tab was not seated in this session. Refused until the host unlocks.
+export const WS_CLOSE_NOT_ADMITTED = 4008;
+
+// The length of a room passcode, in UTF-16 units (`String.length`).
+export const MIN_PASSCODE_LENGTH = 6;
+export const MAX_PASSCODE_LENGTH = 64;

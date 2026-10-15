@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { RoomView } from '@/components/RoomView';
 import { fakeBoard } from './board-fakes';
@@ -328,6 +328,63 @@ describe('lobby', () => {
   });
 });
 
+describe('lobby, on the microphone-only link', () => {
+  const stubMics = () => {
+    const mic = { kind: 'audio', stop: vi.fn(), getSettings: () => ({ deviceId: 'mic1' }) };
+    const micAlone = Object.assign(new EventTarget(), {
+      getTracks: () => [mic],
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => [],
+    }) as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(micAlone);
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]) },
+    });
+    return getUserMedia;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the lobby on Microphone only for ?audio=1', async () => {
+    const getUserMedia = stubMics();
+    window.history.replaceState({}, '', '/r/abc-defg-hij/?audio=1');
+    Object.assign(state, { phase: 'lobby' });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Microphone only' })).toHaveAttribute('aria-pressed', 'true')
+    );
+    expect(getUserMedia.mock.calls[0]![0].video).toBe(false);
+  });
+
+  it('opens the lobby on the camera with no ?audio=1', async () => {
+    const getUserMedia = stubMics();
+    Object.assign(state, { phase: 'lobby' });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    expect(getUserMedia.mock.calls[0]![0].video).not.toBe(false);
+  });
+
+  it('is the producer’s lobby, with no capture, when the link also says producer', () => {
+    const getUserMedia = stubMics();
+    window.history.replaceState({}, '', '/r/abc-defg-hij/?audio=1&producer=1');
+    Object.assign(state, { phase: 'lobby' });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByRole('heading', { name: /join as a producer/i })).toBeInTheDocument();
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe('recording', () => {
   it('hands the call the room’s load reading', async () => {
     Object.assign(state, {
@@ -652,6 +709,28 @@ describe('the first person’s tile', () => {
     expect(screen.queryByTitle('Deck')).toBeNull();
     expect(screen.queryByRole('img', { name: 'Muted' })).toBeNull();
     expect(screen.queryByRole('img', { name: 'Camera off' })).toBeNull();
+  });
+});
+
+describe('two people present', () => {
+  it('hands the call the screens, so the first one is named for its presenter', () => {
+    const presenting = { micOn: true, camOn: true, screenSharing: true };
+    const first = new EventTarget() as unknown as MediaStream;
+    const second = new EventTarget() as unknown as MediaStream;
+    Object.assign(state, inCall, {
+      remoteScreenStream: second,
+      remoteScreens: [
+        { peerId: 'p-cara', stream: second },
+        { peerId: 'p-bob', stream: first },
+      ],
+      remotePeers: [
+        { peerId: 'p-bob', name: 'Bob', stream: null, role: 'guest', presence: presenting },
+        { peerId: 'p-cara', name: 'Cara', stream: null, role: 'guest', presence: presenting },
+      ],
+    });
+    render(<RoomView slug="abc-defg-hij" />);
+
+    expect(screen.getByText("Cara's screen")).toBeInTheDocument();
   });
 });
 

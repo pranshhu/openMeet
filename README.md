@@ -54,7 +54,8 @@ retention policy to trust, because there's nothing retained.
 - Screen share recorded as its **own** track, one file per sharing stretch, with the
   shared tab's audio (when the browser offers it) and a crash-safe backup on the sharer
 - Selectable capture quality: 720p / 1080p / 1440p / 4K, at 24, 25, 29.97 or
-  30 fps, and 50 or 60 where the camera offers them
+  30 fps, and 50 or 60 where the camera offers them, and on a computer a portrait
+  (9:16) shape for vertical video
 - Raw audio — echo cancellation, noise suppression and AGC are all **off**, unless
   someone on speakers turns echo cancellation on for their own microphone in the lobby
   (see [Headphones](#headphones-really))
@@ -67,11 +68,14 @@ retention policy to trust, because there's nothing retained.
   records from the call screen; anyone who joins during the take is recorded from then on
 
 **During the session**
-- Up to **4 recorded participants**, plus 2 unrecorded slots shared by **producers**
+- Up to **4 recorded participants**, or **8** when everyone recorded, the host too,
+  joined with **Microphone only**, plus 2 unrecorded slots shared by **producers**
   (who run the session without appearing in any file) and **Present-only** screens —
   see [Producers and Present only](#producers-and-present-only)
 - Host controls in **People**: turn a participant's microphone off for the call (they
-  are told, and turn it back on themselves), or remove someone from the room
+  are told, and turn it back on themselves), ask someone to restart their connection
+  or to switch microphone or camera (they decide on their own screen), or remove
+  someone from the room
 - Teleprompter, chapter markers, and a media board for stingers, ad reads and looping
   music beds
 - A typed note on a chapter marker: press **N** during a take, type a few words and
@@ -102,7 +106,8 @@ retention policy to trust, because there's nothing retained.
   entry for the session, with the room link and a short checklist for the guest
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
-  the rear camera)
+  the rear camera), and so can a deck of slide pictures, turned with Previous and Next
+  or the arrow keys, and several people can present at once
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
   first, and a file it accepts goes peer-to-peer into the recording folder
 - Private messages: with three or more in the call, a chat message can go to one
@@ -122,6 +127,11 @@ retention policy to trust, because there's nothing retained.
 - **Raise hand**: one click puts a mark on your tile for everyone, so a panel can take
   turns without talking over the recording (a phone held upright shows the hands and
   has no button)
+- **A title under your name**: type it in the lobby and it shows as a second line on your
+  name tag, on your tile and on everyone's screen
+- **A colour and a logo for the show**: the host picks a colour in the lobby and every
+  name tag in the call carries a bar in it; the host can also add a logo, which sits in
+  the top left corner of the call for everyone and is not drawn into any recording
 - Quick reactions (thumbs up, applause, laugh, heart) from the arrow beside **Raise
   hand**: the picture shows on your tile for a few seconds, silently, for everyone
 - Screen kept awake during a take, REC badge when the tab is hidden, and
@@ -132,6 +142,10 @@ retention policy to trust, because there's nothing retained.
   cameras and shared screens, you still hear everyone, and your recording goes on
 - **Pop out** one person into a small window that stays on top of everything else and
   put it just under your webcam, so looking at them is looking at the lens (computers)
+- **Camera settings** in the call's camera menu: exposure and colour temperature for the
+  camera you are on. It lists only what your camera offers the browser (zoom, pan and tilt
+  only where the browser lists them without a further permission), and the change is in the
+  call and in your recording. The lobby and the check page have it too, under the preview
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 
@@ -140,7 +154,8 @@ retention policy to trust, because there's nothing retained.
 - `sync.json` with the start-time offset between tracks, the size of every file and a
   verdict on whether it is complete, and ready-to-run `ffmpeg` commands for remuxing,
   for pairing each video with its WAV master and for aligned copies that start at
-  00:00, downloaded from the summary
+  00:00, downloaded from the summary; when people gave a title, each recorded person's
+  name and title with their files, ready for lower thirds
 - Smaller audio masters when you want them: an `ffmpeg` command per WAV that writes a
   lossless FLAC copy beside it, and one that checks the copy before you delete the WAV
 - One `ffmpeg` command that mixes a take with two or more people into a single video:
@@ -416,18 +431,24 @@ switched during the call is opened the same way as the one chosen in the lobby.
 
 ### Producers and Present only
 
-A room has 4 recorded seats plus 2 unrecorded slots, and the unrecorded slots are
-shared by these two:
+A room has 4 recorded seats (8 when every recorded person joined with **Microphone
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link and the Present-only link.
+  waiting room and in the call, copies this link, the Present-only link and the
+  microphone-only link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+
+For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
+**Microphone only**, so nobody's camera comes back on. The host copies this link from
+the same arrow beside **Copy invite link**. A browser also remembers, per room, that a
+person joined with the microphone only, and opens that room's lobby that way again.
 
 ### What lands on disk
 
@@ -437,7 +458,7 @@ All in the one folder the host picks, per take:
 |---|---|
 | `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
 | `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
-| `guest2_<id>.*`, `guest3_<id>.*` | The same pair for the third and fourth participant |
+| `guest2_<id>.*`, `guest3_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8_` in a take, and higher numbers after reconnects |
 | `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
@@ -496,7 +517,10 @@ it** (all-party-consent jurisdictions, GDPR).
 The host can turn a participant's microphone off from **People** in the call. That
 person is told at once and turns it back on with their own microphone button. While
 it is off their recording has no sound from the microphone, exactly as when they turn
-it off themselves; nobody can turn another person's microphone on.
+it off themselves; nobody can turn another person's microphone on. The host can also
+ask a participant to restart their connection, or to switch microphone or camera, and
+that person decides on their own screen. For a device the participant picks it from
+their own list; the host is not shown the participant's devices.
 
 The host can also remove a participant from **People**. That person is told the host
 removed them. What they recorded before the removal stays in the host's folder and
@@ -504,6 +528,10 @@ ends there; the rest is in their own browser's backup, which is never deleted fo
 them. If a take was running, their browser keeps recording into that backup until
 they press **Stop and save**; their page then offers the backup as a download, and
 the lobby in that browser lists it afterwards.
+
+The host can also tick **Lock the room** in **People**. Nobody new can join until it is
+unticked; the people already in the call can reconnect. The lock ends with the session,
+and it does not remove anyone who is already in the call.
 Each take's `sync_<id>.json` holds a record of who was told (`recordingNotice`): when the
 host's browser announced the take, everyone the room listed then or who joined while it
 ran, and for each of them the moment their own recording channel reached the host. A
@@ -686,11 +714,11 @@ exercised end-to-end in real Chrome.
 
 Known gaps, listed below:
 
-- **Screen share reconnect starts a new segment rather than appending to the old file.**
-  A guest's camera and WAV recording pick up again by themselves, from the last acknowledged
-  chunk, into the same files on the host's disk. A screen share comes back for everyone and
-  recording continues in a new numbered segment; the interrupted segment's tail is only in
-  the sharer's screen backup, and the session summary marks that segment incomplete.
+- **Some screen shares still end their file early.** A share that is being recorded
+  continues in the same file when its connection drops and comes back. One stopped while the
+  connection is down, one on a page that reloads, one that is being sent later, and one
+  whose file the host no longer holds end the file there; the session summary marks it
+  incomplete and the sharer's screen backup holds all of it.
 - **Taking the call over in a second tab during a take ends the first tab's files.**
   A second tab in the host's browser asks before it joins while a recording is running.
   If you join there anyway, the first tab's files end at the takeover (it shows "Press
@@ -721,8 +749,14 @@ Known gaps, listed below:
   (rate-limited to 20 per minute per IP) — the invite link is the only
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
-  removed tab until everyone has left, but the invite link is the only credential: a new
-  tab or another browser joins again.
+  removed tab until everyone has left, but the invite link is the only credential for joining
+  (unless the host has set a passcode or turned the waiting room on): a new tab or another
+  browser joins again.
+  The host can lock the room against new joins, which keeps out a new tab for as long as it is
+  locked; the lock ends with the session, and a tab that was in the call can still reconnect.
+  With the waiting room on, a new tab waits until the host lets it in or refuses it.
+  With a passcode set, a new tab is asked for it before it joins; the Room keeps only a digest
+  of it, limits the tries, and the passcode does not gate the TURN credentials a link mints.
 
 See [SECURITY.md](SECURITY.md) for the trust model and how to report a vulnerability.
 
