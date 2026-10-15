@@ -18,6 +18,9 @@ interface Take {
 type Phase = 'idle' | 'counting' | 'recording' | 'saving';
 
 const focusRing = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0b57d0]';
+const START_FAILED = 'Recording could not start. Check your camera and microphone, then press Record again.';
+const DEVICE_STOPPED = 'Your microphone or camera stopped. Press Stop to keep what was recorded.';
+
 const button = `min-h-11 w-full rounded-full bg-[#0b57d0] px-6 text-[15px] font-medium text-white shadow-sm transition-colors enabled:hover:bg-[#0842a0] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
 
 /**
@@ -47,6 +50,7 @@ export function SoloTake({
   const [endsAt, setEndsAt] = useState<number | null>(null);
   const [takes, setTakes] = useState<Take[]>([]);
   const [warned, setWarned] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const countRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordersRef = useRef<{ camera: BackupRecorder; wav: BackupRecorder | null } | null>(null);
   const warnedRef = useRef(false);
@@ -68,12 +72,14 @@ export function SoloTake({
   useEffect(
     () => () => {
       if (countRef.current) clearTimeout(countRef.current);
+      recordersRef.current?.camera.stop().catch(() => {});
+      recordersRef.current?.wav?.stop().catch(() => {});
       for (const url of urlsRef.current) URL.revokeObjectURL(url);
     },
     []
   );
 
-  function begin(source: MediaStream) {
+  async function begin(source: MediaStream) {
     countRef.current = null;
     const mimeType = pickRecordingMime();
     if (!mimeType) {
@@ -90,14 +96,25 @@ export function SoloTake({
       warnedRef.current = true;
       setWarned(true);
     };
-    const camera = new BackupRecorder({ mimeType, stream: source, fileName: 'openmeet-backup-solo', room: slug, onWarn });
+    const onError = () => setProblem(DEVICE_STOPPED);
+    const camera = new BackupRecorder({ mimeType, stream: source, fileName: 'openmeet-backup-solo', room: slug, onWarn, onError });
     const wav =
       isPcmCaptureSupported() && source.getAudioTracks().length > 0
-        ? new BackupRecorder({ mimeType: 'audio/wav', stream: source, fileName: 'openmeet-backup-solo-audio', room: slug, onWarn })
+        ? new BackupRecorder({ mimeType: 'audio/wav', stream: source, fileName: 'openmeet-backup-solo-audio', room: slug, onWarn, onError })
         : null;
     recordersRef.current = { camera, wav };
-    camera.start();
-    wav?.start();
+    try {
+      camera.start();
+      wav?.start();
+    } catch {
+      await Promise.all([camera.stop().catch(() => null), wav?.stop().catch(() => null)]);
+      recordersRef.current = null;
+      setProblem(START_FAILED);
+      setEndsAt(null);
+      setPhase('idle');
+      onLive(false);
+      return;
+    }
     setEndsAt(null);
     setPhase('recording');
   }
@@ -105,9 +122,10 @@ export function SoloTake({
   function record() {
     if (!stream) return;
     onLive(true);
+    setProblem(null);
     setEndsAt(Date.now() + RECORD_COUNTDOWN_S * 1000);
     setPhase('counting');
-    countRef.current = setTimeout(() => begin(stream), RECORD_COUNTDOWN_S * 1000);
+    countRef.current = setTimeout(() => void begin(stream), RECORD_COUNTDOWN_S * 1000);
   }
 
   function cancel() {
@@ -187,6 +205,11 @@ export function SoloTake({
         <p role="alert" className="text-sm text-[#b3261e]">
           This browser isn’t keeping this recording. When you stop, download the files before you close this
           tab.
+        </p>
+      )}
+      {problem && (
+        <p role="alert" className="text-sm text-[#b3261e]">
+          {problem}
         </p>
       )}
       <button

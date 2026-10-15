@@ -43,6 +43,7 @@ class FakeMediaRecorder {
   static isTypeSupported = () => true;
   static made: FakeMediaRecorder[] = [];
   static failStop = false;
+  static failStart = false;
   ondataavailable: ((ev: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   state = 'inactive';
@@ -50,6 +51,7 @@ class FakeMediaRecorder {
     FakeMediaRecorder.made.push(this);
   }
   start() {
+    if (FakeMediaRecorder.failStart) throw new Error('recorder cannot start');
     this.state = 'recording';
   }
   stop() {
@@ -73,6 +75,32 @@ class FakeTrackProcessor {
         close: () => {},
       });
       c.close();
+    },
+  });
+}
+
+/** What Chrome does for a microphone that has ended: building the processor throws. */
+class EndedTrackProcessor {
+  constructor() {
+    throw new TypeError('The track has ended');
+  }
+}
+
+/** A microphone that dies mid-take: the capture stream errors instead of ending. */
+class DyingTrackProcessor {
+  readable = new ReadableStream({
+    start(c) {
+      c.error(new Error('capture died'));
+    },
+  });
+}
+
+/** A microphone that keeps running until its reader is cancelled. */
+class OpenTrackProcessor {
+  static cancelled = 0;
+  readable = new ReadableStream({
+    cancel() {
+      OpenTrackProcessor.cancelled++;
     },
   });
 }
@@ -155,6 +183,8 @@ beforeEach(() => {
   root = new FakeDirectoryHandle('root');
   FakeMediaRecorder.made = [];
   FakeMediaRecorder.failStop = false;
+  FakeMediaRecorder.failStart = false;
+  OpenTrackProcessor.cancelled = 0;
   join.mockClear();
   wakeLockRequest.mockReset().mockResolvedValue(wakeLock);
   wakeLock.release.mockClear();
@@ -477,6 +507,90 @@ describe('recording alone', () => {
     await until(() => expect(screen.getByText('Take 1')).toBeInTheDocument());
     view.unmount();
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('a take that cannot start or loses a device', () => {
+  const START_ALERT = 'Recording could not start. Check your camera and microphone, then press Record again.';
+  const DEVICE_ALERT = 'Your microphone or camera stopped. Press Stop to keep what was recorded.';
+
+  it('stops the camera recorder, lists no take and offers Record when the microphone cannot be captured', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', EndedTrackProcessor);
+    await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(screen.getByRole('alert')).toHaveTextContent(START_ALERT));
+
+    expect(FakeMediaRecorder.made).toHaveLength(1);
+    expect(FakeMediaRecorder.made.every((r) => r.state === 'inactive')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Record' })).toBeEnabled();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText('Take 1')).toBeNull();
+    expect(screen.getByLabelText('Camera')).toBeEnabled();
+    const leave = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(leave);
+    expect(leave.defaultPrevented).toBe(false);
+  });
+
+  it('keeps no recorder of a failed start to stop again when the page is left', async () => {
+    const { BackupRecorder } = await import('@/lib/backup-recorder');
+    const stop = vi.spyOn(BackupRecorder.prototype, 'stop');
+    vi.stubGlobal('MediaStreamTrackProcessor', EndedTrackProcessor);
+    const view = await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(screen.getByRole('alert')).toHaveTextContent(START_ALERT));
+    const stopped = stop.mock.calls.length;
+    view.unmount();
+    expect(stop).toHaveBeenCalledTimes(stopped);
+    stop.mockRestore();
+  });
+
+  it('returns to Record when the camera recorder cannot start', async () => {
+    FakeMediaRecorder.failStart = true;
+    await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(screen.getByRole('alert')).toHaveTextContent(START_ALERT));
+    expect(screen.getByRole('button', { name: 'Record' })).toBeEnabled();
+    expect(screen.queryByText('Take 1')).toBeNull();
+  });
+
+  it('takes the start alert away at the next Record', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', EndedTrackProcessor);
+    await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(screen.getByRole('alert')).toHaveTextContent(START_ALERT));
+    press('Record');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('tells the guest when the microphone dies mid-take, and keeps the take stoppable', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', DyingTrackProcessor);
+    await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(screen.getByRole('alert')).toHaveTextContent(DEVICE_ALERT));
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Recording. Press Stop when you’re done.');
+    press('Stop');
+    await until(() => expect(screen.getByText('Take 1')).toBeInTheDocument());
+  });
+
+  it('stops both recorders when the page is left during a take', async () => {
+    vi.stubGlobal('MediaStreamTrackProcessor', OpenTrackProcessor);
+    const view = await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(dirNames()).toHaveLength(2));
+    expect(FakeMediaRecorder.made[0]!.state).toBe('recording');
+    view.unmount();
+    expect(FakeMediaRecorder.made[0]!.state).toBe('inactive');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(OpenTrackProcessor.cancelled).toBe(1);
   });
 });
 
