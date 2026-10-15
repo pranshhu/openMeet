@@ -17,7 +17,7 @@ import {
   recordingChannelKind,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported } from '@/lib/pcm-recorder';
-import { patchWavHeader, wavFrameBytes, WAV_HEADER_BYTES } from '@/lib/wav';
+import { resizeWavHeader, WAV_HEAD_MAX_BYTES } from '@/lib/wav';
 import { openTakeJournal, type JournalFileNote, type TakeJournal } from '@/lib/take-journal';
 import { copyBackupInto } from '@/lib/take-recovery';
 import type { PeerConnection } from '@/lib/peer';
@@ -1021,12 +1021,12 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
       continue;
     }
 
-    // The WAV's own header, in the first part, says how long a sample frame is.
-    let frameBytes = 1;
+    // The WAV's own header, in the first part, says where its size fields are and how long a sample frame is.
+    let wavHead: ArrayBuffer | undefined;
     const replayed = await args.journal.replay(note.file, {
       write: async (position, data) => {
         if (note.kind === 'wav' && position === 0) {
-          frameBytes = wavFrameBytes(await data.slice(0, WAV_HEADER_BYTES).arrayBuffer());
+          wavHead = await data.slice(0, WAV_HEAD_MAX_BYTES).arrayBuffer();
         }
         await writer.write(position, data);
       },
@@ -1056,7 +1056,7 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
         if (c && c.readyState === 'open') c.send(json);
       },
       ...(resumeFrom ? { resumeFrom } : {}),
-      frameBytes,
+      ...(wavHead ? { wavHead } : {}),
       ...(args.onError ? { onError: args.onError } : {}),
       ...(args.onWarn ? { onWarn: args.onWarn } : {}),
       journalFile: args.journal.file(note.file),
@@ -1848,10 +1848,11 @@ export async function endHostRecording(
     // A file reopened after a reload holds more than this receiver saw: the
     // folder's own bytes were carried into it. The header declares the file.
     const total = Math.max(receiver.lastOffsetValue ?? 0, receiver.bytesWritten, writer.size ?? 0);
-    if (total > 44) {
-      const dataBytes = total - 44;
+    // A file whose first bytes never reached this host has no header to mend.
+    const header = receiver.wavHead && resizeWavHeader(receiver.wavHead, total);
+    if (header) {
       try {
-        await patchWavHeader(writer, dataBytes, receiver.frameBytes);
+        await writer.write(0, header);
       } catch {
         // Writer may be closed or failing
       }

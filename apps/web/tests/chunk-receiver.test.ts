@@ -50,6 +50,30 @@ describe('ChunkReceiver', () => {
     expect(r.bytesWritten).toBe(4);
   });
 
+  it('keeps a copy of the first bytes of what was last written at offset 0, and no more than a header can take', async () => {
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: fakeWriter() as never, sendControl: vi.fn() });
+    expect(r.wavHead).toBeNull();
+
+    const first = new Uint8Array(200).map((_, i) => i);
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 200, ts: 1 }));
+    await r.handleMessage(first.buffer);
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 200, size: 4, ts: 2 }));
+    await r.handleMessage(new Uint8Array([9, 9, 9, 9]).buffer);
+    // The caller's buffer is not shared: what the receiver holds does not follow it.
+    first.fill(0);
+    expect(Array.from(new Uint8Array(r.wavHead!))).toEqual(Array.from({ length: 80 }, (_, i) => i));
+
+    await r.handleMessage(encodeChunkHeader({ idx: 2, offset: 0, size: 3, ts: 3 }));
+    await r.handleMessage(new Uint8Array([7, 8, 9]).buffer);
+    expect(Array.from(new Uint8Array(r.wavHead!))).toEqual([7, 8, 9]);
+  });
+
+  it('starts from the head it is given for a file reopened after a crash', () => {
+    const head = new Uint8Array([1, 2, 3]).buffer;
+    const r = new ChunkReceiver({ recordingId: 'r1', writer: fakeWriter() as never, sendControl: vi.fn(), wavHead: head });
+    expect(r.wavHead).toBe(head);
+  });
+
   it('acks every 5 chunks', async () => {
     const writer = fakeWriter();
     const acks: string[] = [];
