@@ -1315,3 +1315,27 @@ describe('saveRecoveredTake: the clock section of a take saved from its crash co
     ]);
   });
 });
+
+describe('The program file command in a take saved from its crash copy', () => {
+  it('names the host camera backup and the guest camera file in one command', async () => {
+    const start = 1_700_000_000_000;
+    const notes = notesWith({
+      hostStartMs: start,
+      files: [{ file: 'guest_r.mp4', kind: 'camera', slot: 0, guestStartHostMs: start + 1500 }],
+      backups: [{ dir: HOST_CAM, file: 'host_r.mp4', kind: 'camera' }],
+    });
+    const root = new FakeDir('root');
+    root.entries.set(HOST_CAM, backupDir(HOST_CAM, [new Uint8Array(10)]));
+    const { journal } = fakeJournal(notes, { 'guest_r.mp4': { parts: [part(0, 3)] } }, root);
+    const folder = fakeFolder();
+
+    await saveRecoveredTake(journal, folderOf(folder));
+
+    const json = JSON.parse(new TextDecoder().decode(folder.written.get('sync_rec-1.json')!.data)) as {
+      program: { cmd: string; video: string[] };
+    };
+    expect(json.program.video).toEqual(['host_r.mp4', 'guest_r.mp4']);
+    expect(json.program.cmd).toContain('-i "host_r.mp4" -i "guest_r.mp4"');
+    expect(json.program.cmd).toContain('tpad=start_duration=1.500[v1]');
+  });
+});

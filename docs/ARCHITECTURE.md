@@ -1150,6 +1150,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `fileVerdict`), lossless `+faststart` remux and WAV-pairing commands, an `aligned` section:
   per file (except call-audio copies, which carry their own `offsetMs`), its delay from the host
   start and an `ffmpeg` command that writes a copy starting there,
+  a `program` section (`lib/program-mix.ts`): one command that lays each camera in a grid and mixes
+  everyone's sound, or, when nobody has a camera, mixes it into one WAV at the depth of the masters,
+  putting each voice on both channels at its own level before the mix and placing each file by its
+  `aligned` pad, with `leftOut` naming every file it does not read and why;
+  it reads only files whose `checks` entry holds bytes, so a report built without `checks` has none,
   and a `frameRate` section: the default requested rate, each camera file's track-reported rate where known,
   and per video file a `measure` (ffmpeg `vfrdet`) and a re-encoding `conform` command), saved to the
   recording folder alongside chapters and chat sidecars and surfaced in the session summary as
@@ -2342,3 +2347,19 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A room's colour and logo stay in the host's browser after the room has expired.** The look
   is kept under `om_look_<slug>` in `localStorage` and is not removed with the room, so it
   stays until the site's data is cleared.
+- **The program command shows cameras only.** It has no screen recording, no names on the tiles
+  and one fixed grid; `leftOut` in the sync file names each file it does not read.
+- **A resumed take's host tile is black until the reload.** The program command places the host's
+  camera file from after the reload, and the file from before it is left out; the host's sound is
+  whole.
+- **A returned backup is not in the program command.** It reads the files the take wrote, and a
+  person whose file ended early stays as a still picture from there.
+- **A camera file with no sound track and no WAV makes the program command stop.** ffmpeg says the
+  stream specifier matches no streams; the sync file's note says to take that file's input and
+  its `adelay` out.
+- **A camera file that holds no picture and is not marked audio only makes the program command
+  stop.** A guest recorded without a camera whose take did not finish cleanly, and any take saved
+  from its crash copy, have such a file; ffmpeg says `:v` matches no streams, and the sync file's
+  note says how to take that file out.
+- **In a resumed take whose resumed WAV is empty, the host's voice after the reload is not in the
+  program file.** The sound is read per person, so the earlier WAV stands for the host.
