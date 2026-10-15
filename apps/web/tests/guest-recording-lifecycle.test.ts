@@ -6354,7 +6354,14 @@ describe('private messages in useRoom', () => {
     expect(result.current.state.messages).toEqual([
       { ...own, text: 'to everyone' },
       { ...own, text: 'for Bob', private: true, toPeerId: 'p-bob', toRole: 'guest' },
-      { ...own, text: 'for someone gone', private: true, toPeerId: 'p-gone', toRole: 'guest' },
+      {
+        ...own,
+        text: 'for someone gone',
+        private: true,
+        toPeerId: 'p-gone',
+        toRole: 'guest',
+        notDeliveredTo: [{ peerId: 'p-gone', role: 'guest' }],
+      },
     ]);
   });
 

@@ -26,6 +26,8 @@ export interface ChatMessage {
   /** On a private line this tab sent: who it went to, by id and by the Room's role. */
   toPeerId?: string;
   toRole?: Role;
+  /** On a line this tab sent: the people it was not handed to. */
+  notDeliveredTo?: { peerId: string; role: Role }[];
 }
 
 export interface GuestSyncInput {

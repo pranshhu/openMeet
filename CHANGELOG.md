@@ -323,6 +323,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After a take with two or more people, the summary and `sync.json` give one `ffmpeg`
   command that mixes the take into a single video: the cameras in a grid and everyone's
   audio mixed, each placed by its start offset.
+- A chat message that could not reach someone, because their connection was not up,
+  says "Not delivered to …" under it.
 
 ### Changed
 

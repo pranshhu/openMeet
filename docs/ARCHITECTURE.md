@@ -988,6 +988,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `state.messages` at once. A line from a connection reaches `startPeer`'s `onChat`, which adds it
   with the role, id and name of that connection's far end. The `chat` and `private-message` handlers
   show the lines of pages loaded before this build, which the Room still relays.
+  A connection whose `sendChat` returned false, or a person with no connection, goes into the
+  sender's line as `notDeliveredTo` (peer id and the Room's role, in the order of the Room's
+  list, never a Present-only device); `ChatPanel` draws under the sender's own line a
+  `role="status"` note, "Not delivered." for a private line and "Not delivered to Guest 2, Host."
+  for a line to everyone, from the page's own words and never a name. The line is not sent again.
   A private line carries `private` (plus `toPeerId` and `toRole` on the sender's side: who it went
   to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
   pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
@@ -2128,9 +2133,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
 - **A private message is not confirmed as delivered.** The sender's line appears the moment it
-  is sent. If the other person left in that instant, if the connection to them is not up yet or
-  has failed, or if their page was loaded before this build, nobody receives it and nothing says
-  so.
+  is sent. A line that was not handed to a person, because the connection to them is not up yet
+  or has failed, or because their page was loaded before this build, reads "Not delivered…" on
+  the sender's screen and is not sent again. In the first moment of a connection, before the
+  other page's hello has arrived, a line reads "Not delivered" to that person. A line handed to
+  a connection in the moment it drops is lost and nothing says so. A Present-only device is
+  never named in the note.
 - **A private message is kept from the other people in the call, and from the server, not from
   a shared screen.** It goes over the connection to that one person. Its pop-up shows its text, so someone who shares their whole screen, or the
   window the call is in, shows it to the call, and a recording of that screen holds it. The

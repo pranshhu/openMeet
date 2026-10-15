@@ -2741,10 +2741,18 @@ export function useRoom(slug: string) {
     const ts = Date.now();
     // Lines go over the connections to the other browsers, not through the
     // Room. A line for one person goes to that connection alone. A line that
-    // does not get through is not sent later.
-    if (to) peersRef.current.get(to)?.sendChat(text, true);
-    else for (const peer of peersRef.current.values()) peer.sendChat(text, false);
+    // does not get through is not sent later; the sender's own line says to
+    // whom it did not get through. A Present-only device gets the line and is
+    // never named: it is someone's second screen, not a person.
+    const handed = new Map<string, boolean | undefined>();
+    if (to) handed.set(to, peersRef.current.get(to)?.sendChat(text, true));
+    else for (const [id, peer] of peersRef.current) handed.set(id, peer.sendChat(text, false));
     const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
+    const notDeliveredTo = to
+      ? handed.get(to) ? [] : [{ peerId: to, role: toRole }]
+      : remotePeersRef.current
+          .filter((r) => !r.companion && !handed.get(r.peerId))
+          .map((r) => ({ peerId: r.peerId, role: r.role ?? 'guest' }));
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
       from,
@@ -2753,6 +2761,7 @@ export function useRoom(slug: string) {
       self: true,
       ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
       ...(to ? { private: true, toPeerId: to, toRole } : {}),
+      ...(notDeliveredTo.length ? { notDeliveredTo } : {}),
     };
     messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({

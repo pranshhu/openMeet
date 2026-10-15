@@ -176,3 +176,64 @@ describe('chat in useRoom goes over the connections', () => {
     expect(log).not.toContain('private from Eve');
   });
 });
+
+describe('a line that was not handed to someone says so', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    chatSpies.clear();
+    connectionOpts.clear();
+    vi.mocked(PeerConnection).mockClear();
+  });
+
+  it('lists the people whose connection returned false, never a Present-only device', async () => {
+    const result = await hostWithFour();
+    chatSpies.get('p-bob')!.mockReturnValue(false);
+    chatSpies.get('p-dev')!.mockReturnValue(false);
+    act(() => result.current.sendChat('hi'));
+
+    expect(chatSpies.get('p-dev')!.mock.calls).toEqual([['hi', false]]);
+    expect(result.current.state.messages[0]!.notDeliveredTo).toEqual([{ peerId: 'p-bob', role: 'guest' }]);
+  });
+
+  it('keeps the order of the Room’s people and gives each one their role', async () => {
+    const result = await hostWithFour();
+    chatSpies.get('p-pat')!.mockReturnValue(false);
+    chatSpies.get('p-bob')!.mockReturnValue(false);
+    act(() => result.current.sendChat('hi'));
+
+    expect(result.current.state.messages[0]!.notDeliveredTo).toEqual([
+      { peerId: 'p-bob', role: 'guest' },
+      { peerId: 'p-pat', role: 'producer' },
+    ]);
+  });
+
+  it('leaves the field out when every connection took the line', async () => {
+    const result = await hostWithFour();
+    act(() => result.current.sendChat('hi'));
+
+    expect('notDeliveredTo' in result.current.state.messages[0]!).toBe(false);
+  });
+
+  it('lists the one person a private line is for when their connection returned false', async () => {
+    const result = await hostWithFour();
+    chatSpies.get('p-bob')!.mockReturnValue(false);
+    act(() => result.current.sendChat('psst', 'p-bob'));
+
+    expect(result.current.state.messages[0]!.notDeliveredTo).toEqual([{ peerId: 'p-bob', role: 'guest' }]);
+  });
+
+  it('leaves the field out of a private line that was handed over', async () => {
+    const result = await hostWithFour();
+    act(() => result.current.sendChat('psst', 'p-bob'));
+
+    expect('notDeliveredTo' in result.current.state.messages[0]!).toBe(false);
+  });
+
+  it('lists the one person a private line is for when there is no connection to them', async () => {
+    const result = await hostWithFour();
+    act(() => result.current.sendChat('psst', 'p-gone'));
+
+    expect(result.current.state.messages[0]!.notDeliveredTo).toEqual([{ peerId: 'p-gone', role: 'guest' }]);
+  });
+});
