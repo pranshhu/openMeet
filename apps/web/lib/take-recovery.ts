@@ -117,7 +117,7 @@ async function rebuild(journal: TakeJournal, folder: FsDirectoryHandle, notes: J
       hasParts = true;
       const partBytes = parts.reduce((n, p) => n + p.size, 0);
       // A WAV that closed by rewriting its header ends with a part at offset 0,
-      // so the last part's end would read 44. The parts' furthest byte is the length.
+      // so the last part's end would read the header's size. The parts' furthest byte is the length.
       const journalEnd = Math.max(...parts.map((p) => p.offset + p.size));
       const existing = await existingSize(folder, note.file);
       if (existing !== null && existing >= journalEnd) {

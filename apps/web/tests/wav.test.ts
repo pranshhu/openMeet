@@ -223,6 +223,49 @@ describe('resizeWavHeader', () => {
     expect(bytesOf(resizeWavHeader(rf64, 80 + 600))).toEqual(bytesOf(roomy(fmt(2), 600)));
   });
 
+  it('saturates a header whose 28-byte JUNK chunk sits after fmt, leaving every other byte as it is', () => {
+    const base = new Uint8Array(plain44(fmt(1)));
+    const late = new Uint8Array(base.length + 36);
+    late.set(base.subarray(0, 36));
+    const v = new DataView(late.buffer);
+    ascii(v, 36, 'JUNK');
+    v.setUint32(40, 28, true);
+    late.fill(0xab, 44, 72);
+    late.set(base.subarray(36), 72);
+    const expected = new Uint8Array(late);
+    const e = new DataView(expected.buffer);
+    e.setUint32(4, 0xffff_ffff, true);
+    e.setUint32(76, 0xffff_ffff, true);
+    const out = resizeWavHeader(late.buffer, late.length + 2 ** 32 + 5)!;
+    expect(bytesOf(out)).toEqual(Array.from(expected));
+    expect(str(new DataView(out), 0, 4)).toBe('RIFF');
+    expect(str(new DataView(out), 12, 4)).toBe('fmt ');
+  });
+
+  it('is RIFF when the RIFF size is exactly 0xFFFFFFFF and RF64 one frame more', () => {
+    const whole = 0xffff_ffff - 72;
+    const exact = new DataView(resizeWavHeader(roomy(fmt(1)), 80 + whole)!);
+    expect(str(exact, 0, 4)).toBe('RIFF');
+    expect(exact.getUint32(4, true)).toBe(0xffff_ffff);
+    expect(str(exact, 12, 4)).toBe('JUNK');
+    expect(exact.getUint32(76, true)).toBe(whole);
+
+    const past = new DataView(resizeWavHeader(roomy(fmt(1)), 80 + whole + 3)!);
+    expect(str(past, 0, 4)).toBe('RF64');
+    expect(past.getBigUint64(20, true)).toBe(BigInt(72 + whole + 3));
+  });
+
+  it('writes a ds64 table length of 0 whatever the header had there', () => {
+    const rf64 = roomy(fmt(1));
+    const v = new DataView(rf64);
+    ascii(v, 0, 'RF64');
+    ascii(v, 12, 'ds64');
+    v.setUint32(44, 0xdead_beef, true);
+    const out = new DataView(resizeWavHeader(rf64, 80 + 2 ** 32 + 5)!);
+    expect(str(out, 12, 4)).toBe('ds64');
+    expect(out.getUint32(44, true)).toBe(0);
+  });
+
   it('saturates both fields of a 44-byte header, which has no reserved room', () => {
     const out = resizeWavHeader(plain44(fmt(1)), 44 + 2 ** 32 + 5)!;
     expect(bytesOf(out)).toEqual(bytesOf(plain44(fmt(1), 2 ** 32 + 5)));
