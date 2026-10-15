@@ -201,7 +201,7 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
-looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join` (a handshake whose address carries `producer=1` is not read for the cookie, so a producer or view link opened in the host's own browser never replaces the host's tab); capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
@@ -957,7 +957,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   again on the open socket, and every later `join` (a reconnect) carries it; a `door` message
   with state `passcode` makes the client forget it, so a wrong one is never sent twice.
   After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
-  `useRoom` calls on a connection's second `failed`, returns at once.
+  `useRoom` calls on a connection's second `failed`, returns at once. A producer's address
+  carries `?producer=1`, on every reconnect too.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /

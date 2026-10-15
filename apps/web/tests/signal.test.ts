@@ -303,6 +303,23 @@ describe('SignalClient', () => {
     ws2.fireOpen();
     expect(JSON.parse(ws2.sent[0]!).type).toBe('join');
   });
+
+  it('puts producer=1 on the address of a producer, on every reconnect', () => {
+    const c = new SignalClient({
+      slug: 'xyz-abcd-pqr',
+      wsBase: 'ws://localhost:8787',
+      displayName: 'View',
+      userAgent: 'test-ua',
+      producer: true,
+      wsFactory: (url) => new FakeWS(url) as unknown as WebSocket,
+    });
+    c.connect();
+    expect(FakeWS.instances[0]!.url).toBe('ws://localhost:8787/ws/r/xyz-abcd-pqr?producer=1');
+
+    FakeWS.instances[0]!.fireClose(1006);
+    vi.advanceTimersByTime(1000);
+    expect(FakeWS.instances[1]!.url).toBe('ws://localhost:8787/ws/r/xyz-abcd-pqr?producer=1');
+  });
 });
 
 describe('SignalClient: removed by the host', () => {

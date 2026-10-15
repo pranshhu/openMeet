@@ -359,6 +359,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 | 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
+| 10.6 | A producer or view link in the host's own browser | In local development (page and Worker on one site), with a take running, open `?producer=1` and then `?view=host` in a new tab of the host's own profile | The host's tab never reads "You joined from another tab or device", and End & save writes whole files | ☐ | |
 
 ---
 

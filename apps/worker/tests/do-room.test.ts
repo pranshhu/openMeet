@@ -27,8 +27,8 @@ async function seedRoom(slug: string, hostToken: string): Promise<void> {
     .run();
 }
 
-async function openWs(slug: string, cookie?: string): Promise<WebSocket> {
-  const res = await SELF.fetch(`https://test/ws/r/${slug}`, {
+async function openWs(slug: string, cookie?: string, search = ''): Promise<WebSocket> {
+  const res = await SELF.fetch(`https://test/ws/r/${slug}${search}`, {
     headers: {
       Upgrade: 'websocket',
       ...(cookie ? { Cookie: cookie } : {}),
@@ -2864,5 +2864,77 @@ describe('Room DO — only a joined socket is in the room', () => {
 
       [h.ws, a.ws, late.ws].forEach((w) => w.close());
     });
+  });
+});
+
+describe('Room DO — a producer address never takes the host seat by cookie', () => {
+  const hostJoin = { type: 'join', displayName: 'Host', userAgent: 'ua' };
+
+  it('leaves the host socket open and joins the second socket as a producer', async () => {
+    const slug = 'prd-addr-aaa';
+    const hostToken = 'tok-prod-addr-a';
+    await seedRoom(slug, hostToken);
+    const cookie = `host_token__${slug}=${hostToken}`;
+
+    const host = await openWs(slug, cookie);
+    const heard = new Promise<ServerMessage | { code: number; reason: string }>((resolve) => {
+      host.addEventListener('message', (e) => {
+        const msg = JSON.parse((e as MessageEvent).data as string) as ServerMessage;
+        if (msg.type === 'chat') resolve(msg);
+      });
+      host.addEventListener('close', (e) => resolve({ code: e.code, reason: e.reason }));
+    });
+    host.send(JSON.stringify(hostJoin));
+    expect((await waitForRoleAssigned(host)).role).toBe('host');
+
+    const viewer = await openWs(slug, cookie, '?producer=1');
+    viewer.send(
+      JSON.stringify({ type: 'join', displayName: 'View', userAgent: 'ua', producer: true })
+    );
+    expect((await waitForRoleAssigned(viewer)).role).toBe('producer');
+
+    viewer.send(JSON.stringify({ type: 'chat', text: 'hello host', ts: 1 }));
+    expect(await heard).toMatchObject({ type: 'chat', text: 'hello host', from: 'producer' });
+
+    host.close();
+    viewer.close();
+  });
+
+  it('still replaces the host when the same second socket has no producer parameter', async () => {
+    const slug = 'prd-addr-bbb';
+    const hostToken = 'tok-prod-addr-b';
+    await seedRoom(slug, hostToken);
+    const cookie = `host_token__${slug}=${hostToken}`;
+
+    const host = await openWs(slug, cookie);
+    const hostClosed = waitForClose(host);
+    host.send(JSON.stringify(hostJoin));
+    expect((await waitForRoleAssigned(host)).role).toBe('host');
+
+    const second = await openWs(slug, cookie);
+    second.send(
+      JSON.stringify({ type: 'join', displayName: 'View', userAgent: 'ua', producer: true })
+    );
+    expect(await hostClosed).toEqual({ code: 4006, reason: 'replaced' });
+
+    second.close();
+  });
+
+  it('reads only the exact value 1: another value keeps the host cookie in force', async () => {
+    const slug = 'prd-addr-ccc';
+    const hostToken = 'tok-prod-addr-c';
+    await seedRoom(slug, hostToken);
+    const cookie = `host_token__${slug}=${hostToken}`;
+
+    const host = await openWs(slug, cookie);
+    const hostClosed = waitForClose(host);
+    host.send(JSON.stringify(hostJoin));
+    expect((await waitForRoleAssigned(host)).role).toBe('host');
+
+    const second = await openWs(slug, cookie, '?producer=0');
+    second.send(JSON.stringify({ type: 'join', displayName: 'Two', userAgent: 'ua' }));
+    expect(await hostClosed).toEqual({ code: 4006, reason: 'replaced' });
+
+    second.close();
   });
 });

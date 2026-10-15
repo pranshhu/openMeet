@@ -368,6 +368,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A producer or view link opened in the browser that made the room joins as a producer
+  and leaves the host's tab, and its recording, alone.
 - When two people presented and one of them stopped, the stage could keep a frozen
   picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own

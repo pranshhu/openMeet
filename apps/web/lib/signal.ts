@@ -70,7 +70,9 @@ export class SignalClient {
 
   connect(): void {
     this.closed = false;
-    const url = `${this.opts.wsBase}/ws/r/${this.opts.slug}`;
+    // The Room does not read the host cookie on this address, so a producer
+    // link opened in the host's own browser leaves the host's tab alone.
+    const url = `${this.opts.wsBase}/ws/r/${this.opts.slug}${this.opts.producer ? '?producer=1' : ''}`;
     const ws = this.factory(url);
     this.ws = ws;
     ws.onopen = () => {
