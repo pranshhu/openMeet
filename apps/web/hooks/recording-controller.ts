@@ -1729,6 +1729,10 @@ export async function endHostRecording(
     callCopies,
   ]);
 
+  // A guest file still opening gets its writer and receiver only when the open
+  // settles; collecting before that would leave it unclosed and unwaited.
+  await Promise.allSettled(h.guestOpenings?.values() ?? []);
+
   const pReceivers = pendingReceivers(h);
   const liveScreens = liveScreenReceivers(h);
 

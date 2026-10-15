@@ -2692,4 +2692,97 @@ describe('guest file names', () => {
     await bindHostAudioChannel(fakeChannel('recording-audio#kb'), h, 'peer-r', undefined, 'Robert');
     expect([...folder.sizes.keys()]).toEqual(['guest-bob_rec.mp4', 'guest-robert_rec.wav']);
   });
+
+  it('opens its own camera file for a second guest after a resume kept slot 0\'s', async () => {
+    const sizes = new Map([['guest-bob_rec.mp4', 300]]);
+    const folder = {
+      getFileHandle: async (name: string, o?: { create?: boolean }) => {
+        if (!sizes.has(name)) {
+          if (!o?.create) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+          sizes.set(name, 0);
+        }
+        return {
+          name,
+          getFile: async () => ({ size: sizes.get(name)! }),
+          createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+        };
+      },
+    };
+    const note: ResumeNote = { file: 'guest-bob_rec.mp4', kind: 'camera', key: 'kb', slot: 0, who: 'Bob' };
+    const j = resumeJournal([note], { 'guest-bob_rec.mp4': { nextIdx: 2, end: 200 } });
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      dir: folder as never,
+      channels: [],
+      onError: () => {},
+    });
+
+    const other = fakeChannel('recording#kc');
+    await bindHostGuestChannel(other, h, 'peer-a', undefined, 'Ana');
+
+    expect([...sizes.keys()]).toEqual(['guest-bob_rec.mp4', 'guest2-ana_rec.mp4']);
+    expect(other.onmessage).not.toBeNull();
+  });
+});
+
+describe('a guest file still opening when the take ends', () => {
+  it('is closed once it has opened, after the host waited for its channel to finish', async () => {
+    const opened: string[] = [];
+    const closed: string[] = [];
+    const real = fakeDir(opened, [], closed);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const dir = {
+      getFileHandle: async (name: string, o?: { create?: boolean }) => {
+        await gate;
+        return real.getFileHandle(name, o);
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h = bareHandles(opened, [], dir);
+    const channel = fakeChannel('recording#kb');
+    const binding = bindHostGuestChannel(channel, h, 'peer-b', undefined, 'Bob');
+
+    let ended = false;
+    const ending = endHostRecording(h).then(() => {
+      ended = true;
+    });
+    release();
+    await binding;
+    await new Promise((r) => setTimeout(r, 20));
+
+    // The channel is bound, so the host is still waiting for the guest's finish message.
+    expect(ended).toBe(false);
+    expect(closed).toEqual([]);
+
+    await channel.deliver(
+      JSON.stringify({ type: 'recording-finalized', recordingId: 'r', totalBytes: 0, sha256: 'd0' })
+    );
+    await ending;
+    expect(opened).toEqual(['guest-bob_r.mp4']);
+    expect(closed).toEqual(['guest-bob_r.mp4']);
+  });
+
+  it('does not stop the take from ending when its open fails', async () => {
+    let fail: (e: Error) => void = () => {};
+    const gate = new Promise<void>((_, reject) => {
+      fail = reject;
+    });
+    const dir = {
+      getFileHandle: async () => {
+        await gate;
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h = bareHandles([], [], dir);
+    const binding = bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob');
+    const bound = expect(binding).rejects.toThrow('refused');
+
+    const ending = endHostRecording(h);
+    fail(new Error('refused'));
+
+    await expect(ending).resolves.toBeDefined();
+    await bound;
+  });
 });
