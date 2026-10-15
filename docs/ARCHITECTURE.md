@@ -514,8 +514,11 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   quality, picture shape, bitrate and frame-rate pickers and **Microphone only** are disabled.
   The browser that holds the room's host token is told to use the room, and a browser that
   cannot record is told so, in both cases with no Record button. The take reaches the host
-  from the room's ordinary lobby: it is listed under **Backups on this device** with
-  **Send to host**, and the host's `BackupIntake` saves it as any returned backup.
+  from the room's ordinary lobby: it is listed under **Backups on this device** as "Recorded
+  alone" with **Send to host**, and the host's `BackupIntake` saves it as a returned backup. The
+  solo page lists the takes already kept in the browser in the same section, read once when the
+  page opens, with **Download** and **Delete** and no **Send to host**; a take recorded during the
+  visit is listed in the record panel until the page is opened again.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
@@ -524,8 +527,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
-  the Present-only link and the microphone-only link (the plain link plus `?producer=1`,
-  `?present=1` or `?audio=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  the Present-only link, the microphone-only link and the record-alone link (the plain link plus
+  `?producer=1`, `?present=1`, `?audio=1` or `?solo=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -1369,7 +1372,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   transfer is written through a `ChunkReceiver` bounded to the size its sender declared, and answers a
   `resume_query` only with the key of the offer that holds it. On the sender's finalize the file is
   closed first, then its digest and byte count are compared with the sender's, and a verified backup
-  gets a `<name>.json` note beside it; a failed or cut-off transfer keeps the bytes that arrived with
+  gets a `<name>.json` note beside it; a take a guest recorded alone (`solo: true` from
+  `parseBackupName`) is written as `solo_<who>_<kind>_<UTC start>.<ext>`, its note carries
+  `recordedAlone: true` and says it belongs to no take, and the host's offer reads "recorded on
+  their own" when every file offered is one; a failed or cut-off transfer keeps the bytes that arrived with
   no note (an empty file is removed), and a dropped connection shows `stalled` until the sender asks
   where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
   its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
@@ -1827,10 +1833,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
-- **The producer, Present-only and microphone-only links are offered only to the host, in the
-  waiting room and in the call's top bar before a take.** The lobby and the take summary offer
-  the plain invite link alone, and during a take and after one the top bar has none of them.
-  Each is still the invite link plus `?producer=1`, `?present=1` or `?audio=1`.
+- **The producer, Present-only, microphone-only and record-alone links are offered only to the
+  host, in the waiting room and in the call's top bar before a take.** The lobby and the take
+  summary offer the plain invite link alone, and during a take and after one the top bar has none
+  of them. Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1` or `?solo=1`.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a

@@ -43,7 +43,7 @@ export function returnedBackupName(backup: BackupName, from: string | null): str
   who = [...who].slice(0, 40).join('');
   if (!who) who = 'guest';
   const stamp = new Date(backup.startedMs).toISOString().replace(/[-:.]/g, '');
-  return `backup_${who}_${backup.kind}_${stamp}.${backup.ext}`;
+  return `${backup.solo ? 'solo' : 'backup'}_${who}_${backup.kind}_${stamp}.${backup.ext}`;
 }
 
 const FLAC_BACKUP_NOTE =
@@ -63,8 +63,10 @@ export function buildBackupNote(note: {
   sha256Written: string;
 }): string {
   const fromClean = [...sanitizeText(note.from).trim()].slice(0, 64).join('');
-  const alignment =
-    note.backup.kind === 'screen'
+  const alone = note.backup.solo === true;
+  const alignment = alone
+    ? 'Recorded by the participant on their own, with nobody else in the room. It belongs to no take and has no sync file: line it up with other recordings by audio waveform.'
+    : note.backup.kind === 'screen'
       ? "This is the sharer's backup of one screen segment. It holds the same recording as the live segment, so that segment's offset in the take's sync file applies when the segment is listed there."
       : "This is the participant's own backup copy, from a separate recorder that started at its own instant. The offsets in the take's sync file do not apply to it: align it by audio waveform.";
 
@@ -73,13 +75,15 @@ export function buildBackupNote(note: {
     backupOf: note.backupOf,
     kind: note.backup.kind,
     room: note.backup.room,
+    ...(alone ? { recordedAlone: true } : {}),
     from: fromClean,
     sizeBytes: note.sizeBytes,
     sha256: note.sha256Written,
     integrity: integrityVerdict(note.sha256Sent, note.sha256Written).text,
     startedUnixMs: note.backup.startedMs,
-    startedUnixMsNote:
-      "Read from the sender's device clock, not measured against the host's. Compare it with timeline.hostStartUnixMs in a take's sync file to tell which take this belongs to.",
+    startedUnixMsNote: alone
+      ? "Read from the sender's device clock when their recording started."
+      : "Read from the sender's device clock, not measured against the host's. Compare it with timeline.hostStartUnixMs in a take's sync file to tell which take this belongs to.",
     alignment,
     // Only a WAV has a lossless copy to make: a camera or a screen backup is an MP4.
     ...(note.backup.kind === 'audio'

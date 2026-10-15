@@ -300,8 +300,9 @@ export function Lobby({
 
   const chosen = backups.filter((b) => toSend.includes(b.file.name));
   // A host's own screen backup has the same name shape as a guest's, so only a
-  // visitor gets the button, and only for a backup recorded in this room.
-  const canSendRow = (name: string) => !isHost && parseBackupName(name)?.room === slug;
+  // visitor gets the button, and only for a backup recorded in this room. The
+  // record-alone page is not in the room: the host cannot receive there.
+  const canSendRow = (name: string) => !solo && !isHost && parseBackupName(name)?.room === slug;
   const hasSendableRow = backups.some((b) => canSendRow(b.file.name));
 
   function toggleSend(fileName: string) {
@@ -1151,7 +1152,7 @@ export function Lobby({
           {invite}
           {/* Beside Join, not under the checklist: a guest back after a crash may
               hold the only copy of their part, and has to see it without scrolling. */}
-          {!checkOnly && backups.length > 0 && (
+          {(!checkOnly || solo) && backups.length > 0 && (
             <section
               aria-labelledby="backups-title"
               className="w-full rounded-3xl border border-[#e1e5ea] bg-[#f8fafd] px-5 py-4 text-left"
@@ -1160,7 +1161,12 @@ export function Lobby({
                 Backups on this device
               </h2>
               <p className="mt-1 text-[13px] leading-relaxed text-[#5f6368]">
-                {hasSendableRow ? (
+                {solo ? (
+                  <>
+                    Recordings kept in this browser. To send one to the host, go to the room while they’re
+                    there and press Send to host.
+                  </>
+                ) : hasSendableRow ? (
                   <>
                     Safety copies of recordings made in this browser. If the host’s recording is missing your
                     part, press Send to host on the matching backup and join — it goes straight to their
@@ -1181,8 +1187,9 @@ export function Lobby({
                   // Rows from every room land in every lobby, so say which one —
                   // and give each row's controls a name of their own.
                   const details = `from ${new Date(b.file.lastModified).toLocaleString()}${room ? ` in room ${room}` : ''}`;
-                  const what = `${isScreen ? 'screen backup' : `backup${typeLabel}`} ${details}`;
-                  const title = `${isScreen ? 'Screen backup' : `Recording backup${typeLabel}`} ${details}`;
+                  const alone = parseBackupName(b.file.name)?.solo === true;
+                  const what = `${isScreen ? 'screen backup' : alone ? `recording made alone${typeLabel}` : `backup${typeLabel}`} ${details}`;
+                  const title = `${isScreen ? 'Screen backup' : alone ? `Recorded alone${typeLabel}` : `Recording backup${typeLabel}`} ${details}`;
                   const sendable = canSendRow(b.file.name);
                   const isChosen = toSend.includes(b.file.name);
                   return (

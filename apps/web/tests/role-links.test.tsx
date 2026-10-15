@@ -36,6 +36,9 @@ describe('RoleLinks', () => {
     expect(screen.getByRole('button', { name: /^Copy microphone-only link/ })).toHaveTextContent(
       'Sound only, recorded. For rooms of 5 to 8.'
     );
+    expect(screen.getByRole('button', { name: /^Copy record-alone link/ })).toHaveTextContent(
+      'Records on their own. Sends it to you later.'
+    );
     expect(screen.getByRole('status')).toHaveTextContent('To record someone, send the invite link.');
 
     fireEvent.click(arrow);
@@ -69,6 +72,12 @@ describe('RoleLinks', () => {
     });
     expect(writeText).toHaveBeenLastCalledWith(`${location.origin}/r/xyz-abcd-pqr/?audio=1`);
     expect(screen.getByRole('status')).toHaveTextContent('Microphone-only link copied.');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Copy record-alone link/ }));
+    });
+    expect(writeText).toHaveBeenLastCalledWith(`${location.origin}/r/xyz-abcd-pqr/?solo=1`);
+    expect(screen.getByRole('status')).toHaveTextContent('Record-alone link copied.');
 
     // What was copied last time is not said again at the next opening.
     fireEvent.click(arrow);
@@ -141,8 +150,10 @@ describe('RoleLinks', () => {
     const audio = screen.getByRole('button', { name: /^Copy microphone-only link/ });
     expect(producer.compareDocumentPosition(present) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(present.compareDocumentPosition(audio) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const solo = screen.getByRole('button', { name: /^Copy record-alone link/ });
+    expect(audio.compareDocumentPosition(solo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Each is a button of its own, 44px to tap on a phone.
-    for (const entry of [producer, present, audio]) {
+    for (const entry of [producer, present, audio, solo]) {
       expect(entry).toHaveAttribute('type', 'button');
       expect(entry).toHaveClass('block', 'w-full', 'min-h-11');
     }

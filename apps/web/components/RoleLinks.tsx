@@ -23,6 +23,12 @@ const LINKS = [
     hint: 'Sound only, recorded. For rooms of 5 to 8.',
     copied: 'Microphone-only link copied.',
   },
+  {
+    query: 'solo',
+    title: 'Copy record-alone link',
+    hint: 'Records on their own. Sends it to you later.',
+    copied: 'Record-alone link copied.',
+  },
 ] as const;
 
 type Link = (typeof LINKS)[number];
@@ -30,12 +36,14 @@ type Link = (typeof LINKS)[number];
 const LABEL = 'Other links';
 
 /**
- * The three other links, behind an arrow beside the host's Copy invite link:
+ * The four other links, behind an arrow beside the host's Copy invite link:
  * the producer and Present-only links, which join with no camera or
- * microphone, and the microphone-only link, which opens the lobby on
- * Microphone only. Each says what happens to whoever opens it: sent to a guest
- * by mistake, the first two join that guest unrecorded, and the third records
- * their sound alone.
+ * microphone, the microphone-only link, which opens the lobby on Microphone
+ * only, and the record-alone link, which records the guest into their own
+ * browser with nobody else in the room. Each says what happens to whoever
+ * opens it: sent to a guest by mistake, the first two join that guest
+ * unrecorded, the third records their sound alone and the fourth records them
+ * without joining.
  *
  * The caller places the panel (`menuClassName`) from the row the arrow sits
  * in, not from the arrow: the arrow moves as the label beside it changes, and

@@ -2865,8 +2865,8 @@ describe('Lobby: a take recorded alone, listed in the room’s own lobby', () =>
       render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
       const sends = await screen.findAllByRole('button', { name: /^Send to host:/ });
       expect(sends.map((b) => b.getAttribute('aria-label'))).toEqual([
-        expect.stringMatching(/^Send to host: backup \(MP4\) from .* in room xyz-abcd-pqr$/),
-        expect.stringMatching(/^Send to host: backup \(WAV\) from .* in room xyz-abcd-pqr$/),
+        expect.stringMatching(/^Send to host: recording made alone \(MP4\) from .* in room xyz-abcd-pqr$/),
+        expect.stringMatching(/^Send to host: recording made alone \(WAV\) from .* in room xyz-abcd-pqr$/),
       ]);
     } finally {
       findBackupsSpy.mockRestore();

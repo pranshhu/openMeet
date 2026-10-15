@@ -597,3 +597,53 @@ describe('while a take records', () => {
     expect(screen.getByRole('button', { name: 'Microphone only' })).toBeEnabled();
   });
 });
+
+describe('takes kept in this browser', () => {
+  const STORED = 1700000000000;
+  const when = new Date(STORED).toLocaleString();
+  const keep = async (...names: string[]) =>
+    vi
+      .spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue(names.map((n) => new File([new Uint8Array(2048)], n, { lastModified: STORED })));
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('lists them on the record-alone page with Download and Delete, and no Send to host', async () => {
+    await keep(`openmeet-backup-solo-${STORED}-${SLUG}.mp4`, `openmeet-backup-solo-audio-${STORED}-${SLUG}.wav`);
+    await openSolo();
+    expect(await screen.findByRole('heading', { name: 'Backups on this device' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Recordings kept in this browser. To send one to the host, go to the room while they’re there and press Send to host.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText(`Recorded alone (MP4) from ${when} in room ${SLUG}`)).toBeInTheDocument();
+    expect(screen.getByText(`Recorded alone (WAV) from ${when} in room ${SLUG}`)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: `Download recording made alone (MP4) from ${when} in room ${SLUG}` })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: `Delete recording made alone (WAV) from ${when} in room ${SLUG}` })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Send to host/ })).toBeNull();
+  });
+
+  it('stays out of the check page', async () => {
+    await keep(`openmeet-backup-solo-${STORED}-${SLUG}.mp4`);
+    await openSolo('?check=1');
+    expect(screen.queryByRole('heading', { name: 'Backups on this device' })).toBeNull();
+  });
+
+  it('reads Recorded alone in the ordinary lobby, where it can be sent to the host', async () => {
+    await keep(`openmeet-backup-solo-${STORED}-${SLUG}.mp4`, `openmeet-backup-${STORED}-${SLUG}.mp4`);
+    await openSolo('');
+    expect(await screen.findByText(`Recorded alone (MP4) from ${when} in room ${SLUG}`)).toBeInTheDocument();
+    expect(screen.getByText(`Recording backup (MP4) from ${when} in room ${SLUG}`)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: `Send to host: recording made alone (MP4) from ${when} in room ${SLUG}` })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: `Send to host: backup (MP4) from ${when} in room ${SLUG}` })
+    ).toBeInTheDocument();
+  });
+});

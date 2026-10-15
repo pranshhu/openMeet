@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host copies the record-alone link from the arrow beside **Copy invite link**; a
+  recording made alone lands in the folder as `solo_…` with a note saying so.
 - Guests can record on their own from the room link with `?solo=1`; the recording stays in
   their browser until they send it to the host from the lobby.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's

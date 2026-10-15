@@ -441,8 +441,8 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these tw
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link, the Present-only link and the
-  microphone-only link.
+  waiting room and in the call, copies this link, the Present-only link, the
+  microphone-only link and the record-alone link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
@@ -594,14 +594,16 @@ the screen that follows offers them too.
    Leftover backups are listed in the lobby, with Download and Delete. A guest can reopen the room link in the same
    browser, press **Send to host** on a backup there and join while the host is in the room; the host presses
    **Save to folder** in the in-call notice, and the file lands in the recording folder as
-   `backup_<name>_<camera|audio|screen>_<UTC start>.<ext>` (`_2`, `_3` when that name is taken), with a `.json`
+   `backup_<name>_<camera|audio|screen>_<UTC start>.<ext>` (`_2`, `_3` when that name is taken; a take a guest
+   recorded alone is `solo_<name>_<camera|audio>_<UTC start>.<ext>`), with a `.json`
    beside it once its SHA-256 matched. The offsets in `sync_<id>.json` do not apply to it — its own `.json` says how
    to align it. A returned backup with no `.json` beside it did not finish. A guest's backup is never deleted
    automatically — their browser can't know the host's file was saved — so it stays until they delete it.
    The host's own backup is cleared at their next lobby visit after a take that ended cleanly.
    When part of a guest's take did not reach the host while it recorded, that guest's page offers its backup
    by itself as soon as the host ends the take: the host gets the same **Save to folder** question, with no rejoin.
-   A take a guest recorded alone from the `?solo=1` link is listed and sent the same way.
+   A take a guest recorded alone from the `?solo=1` link is listed and sent the same way, and its `.json` says
+   `"recordedAlone": true`. The `?solo=1` page lists the takes kept in that browser too, with Download and Delete.
 4. **Constant frame rate (only if needed):** The files can have a variable frame rate. `sync.json` (`frameRate`) lists the rate cameras are asked for by default and, where known, the rate each one reported, with two commands per video file: `measure` shows how much the frame intervals vary, and `conform` re-encodes the file to a constant rate. Conforming is not lossless and is slow; run it only if an editor drifts or refuses a file.
 5. **Smaller audio masters (optional):** openMeet records WAV. `sync.json` (`flac`) and
    Editor commands in the summary give two commands for each WAV master. The first
