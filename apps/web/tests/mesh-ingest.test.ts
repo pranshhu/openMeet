@@ -4,7 +4,7 @@ import { recordingErrorMessage } from '@/hooks/useRoom';
 import { buildSyncReport, fileVerdict } from '@/lib/sync-report';
 import { MAX_OFFSET_JUMP_BYTES } from '@/lib/chunk-receiver';
 import { StreamingSha256 } from '@/lib/sha256';
-import { wavHeader } from '@/lib/wav';
+import { wavHeader, WAV_HEADER_BYTES } from '@/lib/wav';
 import type { TakeJournal, TakeNotes } from '@/lib/take-journal';
 import {
   bindHostGuestChannel,
@@ -2059,17 +2059,17 @@ describe('a take resumed from its journal', () => {
   });
 
   it("declares all of a guest's WAV when the folder held more of it than the crash copy and the guest never sends again", async () => {
-    // The closing page committed 344 bytes of the WAV; the crash copy trails at 244.
+    // The closing page committed the header and 300 bytes of sound; the crash copy trails at the header and 200.
     const mono = { sampleRate: 48000, channels: 1, bitDepth: 24 };
     const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
     const j = resumeJournal(
       [wavNote],
-      { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
-      { 'guest_rec.wav': [{ offset: 0, size: 44, data: new Uint8Array(wavHeader(mono, 0)) }, { offset: 44, size: 200 }] }
+      { 'guest_rec.wav': { nextIdx: 2, end: WAV_HEADER_BYTES + 200 } },
+      { 'guest_rec.wav': [{ offset: 0, size: WAV_HEADER_BYTES, data: new Uint8Array(wavHeader(mono, 0)) }, { offset: WAV_HEADER_BYTES, size: 200 }] }
     );
     // The last bytes written at the start of the file as a buffer: the mended header.
     let header: number[] | undefined;
-    let size = 344;
+    let size = WAV_HEADER_BYTES + 300;
     const dir = {
       getFileHandle: async (name: string) => ({
         name,
@@ -2093,7 +2093,7 @@ describe('a take resumed from its journal', () => {
     const h = await resumeHostRecording({ localStream: emptyFakeStream(), journal: j.journal, dir, channels: [] });
     await endHostRecording(h);
 
-    expect(size).toBe(344);
+    expect(size).toBe(WAV_HEADER_BYTES + 300);
     expect(header).toEqual(Array.from(new Uint8Array(wavHeader(mono, 300))));
   });
 
@@ -2103,10 +2103,10 @@ describe('a take resumed from its journal', () => {
     const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
     const j = resumeJournal(
       [wavNote],
-      { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
-      { 'guest_rec.wav': [{ offset: 0, size: 44, data: header }, { offset: 44, size: 200 }] }
+      { 'guest_rec.wav': { nextIdx: 2, end: WAV_HEADER_BYTES + 200 } },
+      { 'guest_rec.wav': [{ offset: 0, size: WAV_HEADER_BYTES, data: header }, { offset: WAV_HEADER_BYTES, size: 200 }] }
     );
-    const folder = swapFolder({ 'guest_rec.wav': 244 });
+    const folder = swapFolder({ 'guest_rec.wav': WAV_HEADER_BYTES + 200 });
     const channel = fakeChannel('recording-audio#R1');
     const h = await resumeHostRecording({
       localStream: emptyFakeStream(),
@@ -2116,11 +2116,11 @@ describe('a take resumed from its journal', () => {
     });
 
     // 101 bytes more: 301 bytes of 3-byte frames, the last one unfinished.
-    await sendChunk(channel, 2, 244, 101);
+    await sendChunk(channel, 2, WAV_HEADER_BYTES + 200, 101);
     (channel as unknown as { readyState: string }).readyState = 'closed';
     await endHostRecording(h);
 
-    expect(folder.size('guest_rec.wav')).toBe(345);
+    expect(folder.size('guest_rec.wav')).toBe(WAV_HEADER_BYTES + 301);
     expect(folder.header()).toEqual(Array.from(new Uint8Array(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 300))));
   });
 

@@ -49,9 +49,12 @@ For a WAV, check the header's declared size matches the file:
 python3 - <<'EOF'
 import struct, os, sys
 f = sys.argv[1] if len(sys.argv) > 1 else input('wav path: ')
-d = open(f,'rb').read(48)
-print('declared data =', struct.unpack('<I', d[40:44])[0])
-print('actual data   =', os.path.getsize(f) - 44)
+d = open(f,'rb').read(80)
+# RF64 files (past 4 GiB) hold the data size at 28 as 64 bits; others hold it at 76.
+declared = struct.unpack('<Q', d[28:36])[0] if d[:4] == b'RF64' else struct.unpack('<I', d[76:80])[0]
+print('first chunk   =', d[12:16].decode())
+print('declared data =', declared)
+print('actual data   =', os.path.getsize(f) - 80)
 EOF
 ```
 
@@ -115,7 +118,7 @@ kept saying "Recording".
 | 3.3 | Host closes the tab mid-recording | Record 30 s, close the host tab entirely | Every file is non-zero — **including both WAVs**. This is the one that used to leave 6 of 8 files empty | ☐ | |
 | 3.4 | Leave instead of End & save | Record 30 s, host clicks **Leave call** | Files are still finalized and play | ☐ | |
 | 3.5 | Long recording | Record **5+ minutes** | No gaps or freezes mid-file. Scrub through the whole guest MP4 | ☐ | |
-| 3.6 | Very long WAV *(optional, slow)* | Record **4+ hours** | WAV reports its real duration, not ~51 min | ☐ | |
+| 3.6 | Very long WAV *(optional, slow)* | Record in **Stereo** to pass 4 GiB in about 4 hours (8 in mono). Run `ffprobe` on the WAV, and open it in an editor | `ffprobe` reads an `RF64` file and its full duration, not ~51 min; the editor shows the full length | ☐ | |
 | 3.7 | Disk pressure | Fill the host disk to near-full, then record | A visible disk error — not a silent stop | ☐ | |
 | 3.8 | Return a backup | Guest records a take, host ends it, guest leaves, reopens the link, presses **Send to host** on the row and joins; host presses **Save to folder** | `backup_…mp4` and `backup_…json` in the folder; the mp4 plays; both sides say saved and verified | ☐ | |
 | 3.9 | Return a backup across a reconnect | During a large transfer, turn the guest's network off for 10 s | The transfer continues and still verifies | ☐ | |
@@ -305,7 +308,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.84 | FLAC commands after a reload and after a crash | Host and one guest record; the host reloads the tab during the take, joins and presses **Resume recording**, records ~20 s more, End & save. Then record again, close the host's tab during the take, open the room and press **Save to folder** under **Unsaved recording** | After the resume the summary and `sync_<id>.json` list the guest's WAV and both of the host's, `host_<id>_resumed.wav` and the one from before the reload, and every check prints two equal `MD5=` lines. After the save from the lobby `sync_<id>.json` has the same `flac` section for the WAVs it names | ☐ | |
 | 8.85 | FLAC commands for a returned WAV backup | Host and one guest record a take; End & save. The guest reopens the room link in the same browser, presses **Send to host** on its WAV backup and on its camera backup, and joins; the host presses **Save to folder**. Open the two `.json` notes in the folder and run the WAV note's `encode` and then its `check` there | `backup_<guest>_audio_<start>.json` has a `flac` entry whose two commands name `backup_<guest>_audio_<start>.wav`; the first writes the `.flac` beside it and the second prints two `MD5=` lines that are the same. The camera backup's `.json` has no `flac` entry | ☐ | |
 | 8.86 | FLAC check after a crash | Host and one guest record ~30 s; kill the host's browser (not a tab close). Open the room, press **Save to folder** under **Unsaved recording**, and run the guest WAV's **FLAC copy** command and then its **check** command from `sync_<id>.json` | Neither command prints `Invalid PCM packet` or `Decoding error`; the check prints two `MD5=` lines that are the same | ☐ | |
-| 8.87 | A guest's WAV after a reload and a resume | Host and two guests record ~30 s. The host reloads the tab; while it loads, close one guest's tab. The host joins, presses **Resume recording**, then **End & save**. In the recording folder run `ffprobe -v error -show_entries format=duration,size -of csv=p=0` on the WAV of the guest who left | The duration times 144000 (288000 for a stereo master) is the size minus 44, to within one sample frame: the header declares all the audio the file holds | ☐ | |
+| 8.87 | A guest's WAV after a reload and a resume | Host and two guests record ~30 s. The host reloads the tab; while it loads, close one guest's tab. The host joins, presses **Resume recording**, then **End & save**. In the recording folder run `ffprobe -v error -show_entries format=duration,size -of csv=p=0` on the WAV of the guest who left | The duration times 144000 (288000 for a stereo master) is the size minus 80, to within one sample frame: the header declares all the audio the file holds | ☐ | |
 | 8.88 | In a call with the microphone only | One person joins with **Microphone only**, the other with a camera, both on computers. Both talk. The first opens the arrow beside their camera button, then presses **V**. The camera person chooses **Pop out** for the first person. Repeat with three people | Each hears the other from the first second. The camera person sees the other's initial with the name tag and the mic badge; the first person sees the other's picture. The first person's camera button is greyed out and reads "No camera in this call"; its menu shows **Stop incoming video**, **Pop out** for the other person and "You joined without a camera. To use one, leave and join again.", and lists no camera. **V** changes nothing on either screen. The camera person's **Pop out** of the first person opens no window and shows "Could not open the pop-out window. Try again once you can see them." In the waiting room the first person has a mic toggle and no camera toggle | ☐ | |
 | 8.89 | Send my recording later | Host and one guest in a call. The guest opens the arrow beside the camera button and ticks **Send my recording later**. The host records 20 s and presses **End & save**, then **Save to folder** on the notice | Guest, during the take: the line "Your recording stays on this device during a take…", no error banner, and in the track panel "Stopped. Your backup has the rest."; the host's track panel reads "Stopped. Their backup has the rest." for that guest. **End & save** does not wait for the guest. The summary lists the guest's `guest_….mp4` as Empty. Then the host is asked "<guest> wants to send you 2 backup files …"; after **Save to folder** the folder has `backup_<guest>_camera_….mp4` and `backup_<guest>_audio_….wav`, each with a `.json`, both play, and both sides read saved and verified | ☐ | |
 | 8.90 | Send later, chosen during a take | Host and one guest record. Ten seconds in, the guest ticks **Send my recording later**; ten seconds later opens the camera menu again; End & save; the guest opens the menu once more | From the tick on the host's track panel reads "Stopped. Their backup has the rest." and the guest's `guest_….mp4` stops growing; during the take the item is ticked and greyed; after the take it can be unticked. The summary lists the guest's file as Incomplete ("The upload from <guest> stopped before the end, so this file ends early. Their backup has the rest."), and the backup is offered and saves as in the row above | ☐ | |
@@ -336,6 +339,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.115 | Microphone-only link | The host copies the microphone-only link from the arrow beside **Copy invite link**, also in a window 390 px wide. A guest opens it, joins, and reloads. Then the guest presses **Microphone only** to turn it off, joins with the camera, and reloads | The panel stays on the screen and the entry is a full-width button; the guest's lobby opens with **Microphone only** pressed and no camera light, both times; after pressing the button and joining with the camera, the plain invite link opens the camera preview, while the microphone-only link still opens on **Microphone only** | ☐ | |
 | 8.116 | Program file command | Host and one guest record ~20 s; End & save. Open **Editor commands (ffmpeg)** in the summary, once in a window about 800 px wide and once in one 390 px wide. In the recording folder run the **Program file** command (it is also in `sync_<id>.json` under `program`) | The row is the last one, its label wraps and the summary never scrolls sideways. `<host file>_program.mp4` plays both cameras side by side with both voices; `ffprobe` reads 1920x1080, 30 fps, H.264 and two-channel AAC. `sync_<id>.json` has `program` with the same `cmd` | ☐ | |
 | 8.117 | Program file, microphones only | Host and one guest both join with the microphone only, record ~20 s; End & save. In the recording folder run the **Program file** command | The last row of **Editor commands (ffmpeg)** reads "Program file: everyone's audio mixed into one WAV…". `<first file>_program.wav` plays both voices; `ffprobe` reads `pcm_s24le`, 48000 Hz, two channels | ☐ | |
+| 8.118 | WAV header | Host and a guest record ~20 s; End & save. Run the Python snippet under **Inspecting the output** on both WAVs. Then add a ready sound to the media board and play it | Both report `JUNK` as the first chunk, and the declared data equals the file size minus 80; `ffprobe` durations match the take; the ready sound plays | ☐ | |
 
 ## 9 — Deploy
 
@@ -396,9 +400,10 @@ Also not covered automatically. Needs 3 browser profiles.
   running when the board was first opened keeps the channels it started with.
 - **Clock sync needs the host recording within ~8 s of the guest.** Otherwise
   `sync.json` has no offset and says to align by waveform.
-- **WAV past 4 GiB** (~4 h 08 m at 24-bit/48 kHz stereo) declares a clamped
-  size. It plays in full; the header just cannot express the real number
-  without RF64.
+- **A WAV master past 4 GiB is RF64.** Its header is an RF64 one with 64-bit sizes, which
+  ffmpeg and most audio editors read in full; Python's `wave` module and other tools that
+  read only plain WAV refuse it. A WAV whose 44-byte header has no reserved chunk still
+  declares 4 GiB past that point, and only ffmpeg reads it to the end.
 - **No TURN configured** means two people behind strict NATs cannot connect.
 - **A host's mute turns off the microphone only.** That person's media board pads
   and the sound of a video they present keep playing.

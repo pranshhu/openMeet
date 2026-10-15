@@ -1,14 +1,19 @@
 /**
- * Canonical 44-byte RIFF/WAVE header for linear PCM, plus the float->int
- * conversion the recorder needs.
+ * RIFF/WAVE header for linear PCM, plus the float->int conversion the recorder
+ * needs.
  *
  * The header carries the total data size, which isn't known until recording
  * ends. That's fine here: FileWriter does POSITIONAL writes, so we emit a
- * placeholder header at offset 0, stream samples from offset 44, and rewrite
+ * placeholder header at offset 0, stream samples from offset 80, and rewrite
  * offset 0 at finalize. An append-only transport would need a rewrite pass.
+ *
+ * Every header this app writes keeps a 28-byte `JUNK` chunk after `WAVE`. When
+ * a master passes 4 GiB the chunk becomes `ds64` and the file is RF64, which
+ * ffmpeg and most audio editors read in full. A 44-byte header, from a file
+ * written without that room, has nowhere to put 64-bit sizes and saturates.
  */
 
-export const WAV_HEADER_BYTES = 44;
+export const WAV_HEADER_BYTES = 80;
 
 /** Largest value a RIFF size field can hold. */
 const U32_MAX = 0xffff_ffff;
@@ -16,18 +21,17 @@ const U32_MAX = 0xffff_ffff;
 /**
  * Saturate rather than wrap.
  *
- * These fields are 32-bit, and `setUint32` silently takes the value mod 2^32 —
- * so a session past 4 GiB (24-bit/48k stereo crosses it at 4h08m) declared a
- * WRONG SMALL number and every decoder stopped there. A 5-hour recording read
- * as 51 minutes with no error anywhere.
+ * These fields are 32-bit, and `setUint32` silently takes the value mod 2^32,
+ * so a header with no reserved chunk that described a session past 4 GiB
+ * (24-bit/48k stereo crosses it at 4h08m) declared a WRONG SMALL number and
+ * every decoder stopped there. A 5-hour recording read as 51 minutes with no
+ * error anywhere.
  *
  * Clamping declares more data than the file holds, which decoders handle by
  * reading to EOF. Measured with ffprobe on a 1-second file: honest header reads
  * 1.000s, clamped reads 1.000s, wrapped reads 0.244s. Clamping recovers
- * everything; wrapping loses most of it.
- *
- * The real fix for >4 GiB is RF64, which openMeet does not write. Until then
- * this turns silent truncation into a fully readable file.
+ * everything; wrapping loses most of it. Only a 44-byte header reaches this,
+ * because a header with the reserved chunk is written as RF64 instead.
  */
 function u32(n: number): number {
   return n > U32_MAX ? U32_MAX : n;
@@ -39,7 +43,11 @@ export interface WavFormat {
   bitDepth: number;
 }
 
-/** 44-byte header. `dataBytes` may be 0 for the placeholder written at start. */
+/**
+ * 80-byte header: RIFF, a reserved `JUNK` chunk, `fmt `, `data`. `dataBytes`
+ * may be 0 for the placeholder written at start. The sizes come from
+ * `resizeWavHeader`, so a header and a later resize of it never disagree.
+ */
 export function wavHeader(fmt: WavFormat, dataBytes: number): ArrayBuffer {
   const { sampleRate, channels, bitDepth } = fmt;
   const bytesPerSample = bitDepth / 8;
@@ -50,19 +58,20 @@ export function wavHeader(fmt: WavFormat, dataBytes: number): ArrayBuffer {
   };
 
   ascii(0, 'RIFF');
-  view.setUint32(4, u32(36 + dataBytes), true); // size of everything after this field
+  view.setUint32(4, WAV_HEADER_BYTES - 8, true); // size of everything after this field
   ascii(8, 'WAVE');
-  ascii(12, 'fmt ');
-  view.setUint32(16, 16, true); // PCM fmt chunk length
-  view.setUint16(20, 1, true); // 1 = linear PCM
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * channels * bytesPerSample, true); // byte rate
-  view.setUint16(32, channels * bytesPerSample, true); // block align
-  view.setUint16(34, bitDepth, true);
-  ascii(36, 'data');
-  view.setUint32(40, u32(dataBytes), true);
-  return buf;
+  ascii(12, 'JUNK');
+  view.setUint32(16, RESERVED_BYTES, true);
+  ascii(48, 'fmt ');
+  view.setUint32(52, 16, true); // PCM fmt chunk length
+  view.setUint16(56, 1, true); // 1 = linear PCM
+  view.setUint16(58, channels, true);
+  view.setUint32(60, sampleRate, true);
+  view.setUint32(64, sampleRate * channels * bytesPerSample, true); // byte rate
+  view.setUint16(68, channels * bytesPerSample, true); // block align
+  view.setUint16(70, bitDepth, true);
+  ascii(72, 'data');
+  return dataBytes > 0 ? (resizeWavHeader(buf, WAV_HEADER_BYTES + dataBytes) ?? buf) : buf;
 }
 
 /**

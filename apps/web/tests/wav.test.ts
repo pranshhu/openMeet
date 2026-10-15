@@ -5,29 +5,33 @@ const str = (v: DataView, off: number, len: number) =>
   Array.from({ length: len }, (_, i) => String.fromCharCode(v.getUint8(off + i))).join('');
 
 describe('wavHeader', () => {
-  it('writes a canonical 44-byte RIFF/WAVE PCM header', () => {
+  it('writes an 80-byte RIFF/WAVE PCM header that reserves a JUNK chunk', () => {
     const buf = wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 1_440_000);
     expect(buf.byteLength).toBe(WAV_HEADER_BYTES);
+    expect(WAV_HEADER_BYTES).toBe(80);
     const v = new DataView(buf);
     expect(str(v, 0, 4)).toBe('RIFF');
     expect(str(v, 8, 4)).toBe('WAVE');
-    expect(str(v, 12, 4)).toBe('fmt ');
-    expect(str(v, 36, 4)).toBe('data');
-    expect(v.getUint32(4, true)).toBe(36 + 1_440_000); // everything after this field
-    expect(v.getUint32(16, true)).toBe(16); // PCM fmt chunk length
-    expect(v.getUint16(20, true)).toBe(1); // linear PCM
-    expect(v.getUint16(22, true)).toBe(1); // channels
-    expect(v.getUint32(24, true)).toBe(48000);
-    expect(v.getUint32(28, true)).toBe(48000 * 1 * 3); // byte rate
-    expect(v.getUint16(32, true)).toBe(3); // block align
-    expect(v.getUint16(34, true)).toBe(24);
-    expect(v.getUint32(40, true)).toBe(1_440_000);
+    expect(str(v, 12, 4)).toBe('JUNK');
+    expect(v.getUint32(16, true)).toBe(28);
+    expect(Array.from(new Uint8Array(buf, 20, 28))).toEqual(new Array(28).fill(0));
+    expect(str(v, 48, 4)).toBe('fmt ');
+    expect(str(v, 72, 4)).toBe('data');
+    expect(v.getUint32(4, true)).toBe(72 + 1_440_000); // everything after this field
+    expect(v.getUint32(52, true)).toBe(16); // PCM fmt chunk length
+    expect(v.getUint16(56, true)).toBe(1); // linear PCM
+    expect(v.getUint16(58, true)).toBe(1); // channels
+    expect(v.getUint32(60, true)).toBe(48000);
+    expect(v.getUint32(64, true)).toBe(48000 * 1 * 3); // byte rate
+    expect(v.getUint16(68, true)).toBe(3); // block align
+    expect(v.getUint16(70, true)).toBe(24);
+    expect(v.getUint32(76, true)).toBe(1_440_000);
   });
 
   it('derives byte rate and block align from channel count', () => {
     const v = new DataView(wavHeader({ sampleRate: 44100, channels: 2, bitDepth: 24 }, 0));
-    expect(v.getUint32(28, true)).toBe(44100 * 2 * 3);
-    expect(v.getUint16(32, true)).toBe(6);
+    expect(v.getUint32(64, true)).toBe(44100 * 2 * 3);
+    expect(v.getUint16(68, true)).toBe(6);
   });
 
   // The placeholder written at offset 0 before any samples exist. It must still
@@ -36,8 +40,40 @@ describe('wavHeader', () => {
   it('is valid with dataBytes 0 (the placeholder case)', () => {
     const v = new DataView(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 0));
     expect(str(v, 0, 4)).toBe('RIFF');
-    expect(v.getUint32(4, true)).toBe(36);
-    expect(v.getUint32(40, true)).toBe(0);
+    expect(v.getUint32(4, true)).toBe(72);
+    expect(v.getUint32(76, true)).toBe(0);
+  });
+
+  it('is RIFF at the largest plain size and RF64 one frame past it', () => {
+    const f: WavFormat = { sampleRate: 48000, channels: 2, bitDepth: 24 };
+    const frame = 6;
+    const plain = Math.floor((0xffff_ffff - 72) / frame) * frame;
+    const below = new DataView(wavHeader(f, plain));
+    expect(str(below, 0, 4)).toBe('RIFF');
+    expect(below.getUint32(4, true)).toBe(72 + plain);
+    expect(below.getUint32(76, true)).toBe(plain);
+
+    const whole = plain + frame;
+    const past = new DataView(wavHeader(f, whole));
+    expect(past.byteLength).toBe(WAV_HEADER_BYTES);
+    expect(str(past, 0, 4)).toBe('RF64');
+    expect(past.getUint32(4, true)).toBe(0xffff_ffff);
+    expect(str(past, 12, 4)).toBe('ds64');
+    expect(past.getUint32(16, true)).toBe(28);
+    expect(past.getBigUint64(20, true)).toBe(BigInt(72 + whole));
+    expect(past.getBigUint64(28, true)).toBe(BigInt(whole));
+    expect(past.getBigUint64(36, true)).toBe(BigInt(whole / frame));
+    expect(past.getUint32(76, true)).toBe(0xffff_ffff);
+  });
+
+  it.each([1, 2])('is the header resizeWavHeader writes for the same length, %i channel(s)', (channels) => {
+    const f: WavFormat = { sampleRate: 48000, channels, bitDepth: 24 };
+    const frame = channels * 3;
+    for (const n of [frame, 1000 * frame, Math.ceil(2 ** 32 / frame) * frame, 2 ** 34 + frame]) {
+      expect(Array.from(new Uint8Array(wavHeader(f, n)))).toEqual(
+        Array.from(new Uint8Array(resizeWavHeader(wavHeader(f, 0), WAV_HEADER_BYTES + n)!))
+      );
+    }
   });
 });
 
@@ -100,6 +136,25 @@ describe('resizeWavHeader', () => {
     v.setUint16(70, f.bitDepth, true);
     ascii(v, 72, 'data');
     v.setUint32(76, dataBytes, true);
+    return buf;
+  };
+  /** A 44-byte header with no reserved chunk, as a file written before the room was reserved starts. */
+  const plain44 = (f: WavFormat, dataBytes = 0): ArrayBuffer => {
+    const buf = new ArrayBuffer(44);
+    const v = new DataView(buf);
+    ascii(v, 0, 'RIFF');
+    v.setUint32(4, Math.min(36 + dataBytes, 0xffff_ffff), true);
+    ascii(v, 8, 'WAVE');
+    ascii(v, 12, 'fmt ');
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, f.channels, true);
+    v.setUint32(24, f.sampleRate, true);
+    v.setUint32(28, (f.sampleRate * f.channels * f.bitDepth) / 8, true);
+    v.setUint16(32, (f.channels * f.bitDepth) / 8, true);
+    v.setUint16(34, f.bitDepth, true);
+    ascii(v, 36, 'data');
+    v.setUint32(40, Math.min(dataBytes, 0xffff_ffff), true);
     return buf;
   };
   const bytesOf = (b: ArrayBuffer | null) => (b ? Array.from(new Uint8Array(b)) : null);
@@ -168,29 +223,36 @@ describe('resizeWavHeader', () => {
     expect(bytesOf(resizeWavHeader(rf64, 80 + 600))).toEqual(bytesOf(roomy(fmt(2), 600)));
   });
 
-  it('saturates both fields of a header with no reserved room', () => {
-    const out = resizeWavHeader(wavHeader(fmt(1), 0), WAV_HEADER_BYTES + 2 ** 32 + 5)!;
-    expect(bytesOf(out)).toEqual(bytesOf(wavHeader(fmt(1), 2 ** 32 + 5)));
+  it('saturates both fields of a 44-byte header, which has no reserved room', () => {
+    const out = resizeWavHeader(plain44(fmt(1)), 44 + 2 ** 32 + 5)!;
+    expect(bytesOf(out)).toEqual(bytesOf(plain44(fmt(1), 2 ** 32 + 5)));
     const v = new DataView(out);
+    expect(out.byteLength).toBe(44);
     expect(v.getUint32(4, true)).toBe(0xffff_ffff);
-    expect(v.getUint32(WAV_HEADER_BYTES - 4, true)).toBe(0xffff_ffff);
+    expect(v.getUint32(40, true)).toBe(0xffff_ffff);
+  });
+
+  it('sizes a 44-byte header below the limit', () => {
+    const out = new DataView(resizeWavHeader(plain44(fmt(2)), 44 + 600)!);
+    expect(out.getUint32(4, true)).toBe(36 + 600);
+    expect(out.getUint32(40, true)).toBe(600);
   });
 
   it('reads the frame as 1 when the header states one that does not fit its channels and depth, or is over 64', () => {
+    const at = WAV_HEADER_BYTES - 4;
     const lying = wavHeader(fmt(1), 0);
-    new DataView(lying).setUint16(32, 60, true);
-    const out = new DataView(resizeWavHeader(lying, WAV_HEADER_BYTES + 7)!);
-    expect(out.getUint32(WAV_HEADER_BYTES - 4, true)).toBe(7);
+    new DataView(lying).setUint16(68, 60, true);
+    expect(new DataView(resizeWavHeader(lying, WAV_HEADER_BYTES + 7)!).getUint32(at, true)).toBe(7);
     const huge = wavHeader({ sampleRate: 48000, channels: 64, bitDepth: 24 }, 0);
-    expect(new DataView(resizeWavHeader(huge, WAV_HEADER_BYTES + 200)!).getUint32(WAV_HEADER_BYTES - 4, true)).toBe(200);
+    expect(new DataView(resizeWavHeader(huge, WAV_HEADER_BYTES + 200)!).getUint32(at, true)).toBe(200);
     const big = wavHeader({ sampleRate: 48000, channels: 16, bitDepth: 32 }, 0);
-    expect(new DataView(resizeWavHeader(big, WAV_HEADER_BYTES + 130)!).getUint32(WAV_HEADER_BYTES - 4, true)).toBe(128);
+    expect(new DataView(resizeWavHeader(big, WAV_HEADER_BYTES + 130)!).getUint32(at, true)).toBe(128);
     const wide = wavHeader({ sampleRate: 48000, channels: 65, bitDepth: 8 }, 0);
-    expect(new DataView(resizeWavHeader(wide, WAV_HEADER_BYTES + 130)!).getUint32(WAV_HEADER_BYTES - 4, true)).toBe(130);
+    expect(new DataView(resizeWavHeader(wide, WAV_HEADER_BYTES + 130)!).getUint32(at, true)).toBe(130);
   });
 
   it('walks past a chunk of odd size and its pad byte to find the data', () => {
-    const base = new Uint8Array(wavHeader(fmt(1), 0));
+    const base = new Uint8Array(plain44(fmt(1)));
     const withList = new Uint8Array(base.length + 12);
     withList.set(base.subarray(0, 36));
     const v = new DataView(withList.buffer);
@@ -204,7 +266,7 @@ describe('resizeWavHeader', () => {
 
   it('treats a first chunk as reserved room only when it is JUNK or ds64 of 28 bytes', () => {
     // A JUNK chunk of 20 bytes ahead of fmt: padding of some other tool, kept as it is.
-    const base = new Uint8Array(wavHeader(fmt(1), 0));
+    const base = new Uint8Array(plain44(fmt(1)));
     const padded = new Uint8Array(base.length + 28);
     padded.set(base.subarray(0, 12));
     const v = new DataView(padded.buffer);
@@ -218,7 +280,7 @@ describe('resizeWavHeader', () => {
   });
 
   it('reads only the first bytes a header can take', () => {
-    const base = new Uint8Array(wavHeader(fmt(1), 0));
+    const base = new Uint8Array(plain44(fmt(1)));
     const far = new Uint8Array(base.length + 60);
     far.set(base.subarray(0, 36));
     const v = new DataView(far.buffer);
@@ -229,7 +291,7 @@ describe('resizeWavHeader', () => {
   });
 
   it('returns null for a fmt chunk shorter than 16 bytes, even when data follows it', () => {
-    const base = new Uint8Array(wavHeader(fmt(1), 0));
+    const base = new Uint8Array(plain44(fmt(1)));
     const short = new Uint8Array(base.length - 2);
     short.set(base.subarray(0, 34));
     short.set(base.subarray(36), 34);
@@ -238,8 +300,8 @@ describe('resizeWavHeader', () => {
   });
 
   it('returns null for a head that is not a header it can read', () => {
-    const good = () => new Uint8Array(wavHeader(fmt(1), 0));
-    expect(resizeWavHeader(wavHeader(fmt(1), 0).slice(0, 43), 1000)).toBeNull();
+    const good = () => new Uint8Array(plain44(fmt(1)));
+    expect(resizeWavHeader(plain44(fmt(1)).slice(0, 43), 1000)).toBeNull();
     const magic = good();
     magic[0] = 0x58;
     expect(resizeWavHeader(magic.buffer, 1000)).toBeNull();

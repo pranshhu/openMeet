@@ -371,24 +371,31 @@ describe('ChunkRecorder.stopAndFlush — cannot hang finalize', () => {
   });
 });
 
-describe('wavHeader — saturates instead of wrapping past 4 GiB', () => {
+describe('wavHeader — RF64 past 4 GiB', () => {
   const u32 = (b: ArrayBuffer, off: number) => new DataView(b).getUint32(off, true);
+  const tag = (b: ArrayBuffer, off: number) => new TextDecoder().decode(new Uint8Array(b, off, 4));
 
-  // setUint32 takes the value mod 2^32, so a >4 GiB session declared a wrong
-  // SMALL number and every decoder stopped there. Measured: a wrapped header
-  // reads 0.244s of a 1.0s file; a clamped one reads the full 1.0s.
-  it('clamps rather than wrapping a data size past 2^32', () => {
+  // setUint32 takes the value mod 2^32, so a >4 GiB session would declare a wrong
+  // SMALL number and every decoder would stop there. RF64 carries the real size
+  // in 64 bits instead.
+  it('writes the real 64-bit data size instead of wrapping a data size past 2^32', () => {
     const fmt = { sampleRate: 48000, channels: 2, bitDepth: 24 };
     const over = 5_184_000_000; // ~5 hours of 24-bit/48k stereo
     const h = wavHeader(fmt, over);
-    expect(u32(h, 40), 'wrapped to a wrong small number').toBe(0xffff_ffff);
+    const v = new DataView(h);
+    expect(tag(h, 0)).toBe('RF64');
+    expect(tag(h, 12)).toBe('ds64');
+    expect(v.getBigUint64(28, true), 'wrapped to a wrong small number').toBe(5_184_000_000n);
+    expect(v.getBigUint64(36, true)).toBe(864_000_000n);
     expect(u32(h, 4)).toBe(0xffff_ffff);
+    expect(u32(h, 76)).toBe(0xffff_ffff);
   });
 
   it('leaves ordinary sizes exactly as they are', () => {
     const h = wavHeader({ sampleRate: 44100, channels: 2, bitDepth: 24 }, 2_669_814);
-    expect(u32(h, 40)).toBe(2_669_814);
-    expect(u32(h, 4)).toBe(2_669_814 + 36);
+    expect(tag(h, 0)).toBe('RIFF');
+    expect(u32(h, 76)).toBe(2_669_814);
+    expect(u32(h, 4)).toBe(2_669_814 + 72);
   });
 });
 
