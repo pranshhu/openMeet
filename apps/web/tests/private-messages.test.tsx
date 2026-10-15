@@ -39,6 +39,7 @@ vi.mock('@/lib/peer', () => ({
     rawConnection: null,
     setPeerCount: vi.fn(),
     whenConnected: vi.fn().mockResolvedValue(undefined),
+    sendChat: vi.fn().mockReturnValue(true),
     createRecordingChannel: vi.fn().mockReturnValue({
       readyState: 'open',
       addEventListener: vi.fn(),

@@ -326,6 +326,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- Chat messages and private messages go directly between the browsers in the call, over
+  its encrypted connection; the server does not see them.
 - A screen share that is being recorded continues in the same file after the
   presenter's connection drops and comes back, instead of starting a second file.
   When the host no longer has that file, the share is recorded in a new numbered

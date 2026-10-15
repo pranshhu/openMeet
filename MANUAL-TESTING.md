@@ -358,6 +358,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 | 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
+| 10.6 | Chat does not pass the server | Host and two guests in a call; on each page watch the WebSocket frames (DevTools, Network, WS, Messages); send a line to everyone and a private line | Both arrive as before, and no frame of type `chat` or `private-message` is on any socket | ☐ | |
 
 ---
 

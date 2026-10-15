@@ -6,6 +6,7 @@ import type {
   ServerWebrtcOffer,
 } from '@openmeet/protocol';
 import { sendEncoding, type SendKind } from './send-quality';
+import { encodePeerChat, PEER_CHAT_HELLO, readPeerChat } from './peer-chat';
 import {
   DATA_CHANNEL_BACKUP,
   DATA_CHANNEL_RECORDING,
@@ -47,6 +48,8 @@ export interface PeerOpts {
   screenOnly?: boolean;
   /** The Room admitted this peer as microphone only: no camera video is received from it. A shared screen still is. */
   audioOnly?: boolean;
+  /** A chat line that arrived on the `control` channel. Who sent it is this connection's remote peer. */
+  onChat?: (line: { text: string; private: boolean }) => void;
 }
 
 export class ConnectionTimeoutError extends Error {
@@ -90,6 +93,8 @@ export class PeerConnection {
   private pendingLocalStream: MediaStream | null = null;
   private pendingScreenStream: MediaStream | null = null;
   private controlChannel: RTCDataChannel | null = null;
+  /** The page at the other end has said it reads chat on this connection. */
+  private farReadsChat = false;
 
   constructor(opts: PeerOpts) {
     this.opts = opts;
@@ -161,6 +166,10 @@ export class PeerConnection {
       // exactly one file. The consumer routes on label. A label may carry a
       // stable key after '#' (see recordingChannelKind) — filter on the base.
       // `backup` carries a leftover backup going back to the host.
+      if (ev.channel.label === 'control') {
+        this.takeControlChannel(ev.channel);
+        return;
+      }
       const { base } = recordingChannelKind(ev.channel.label);
       if (
         base === DATA_CHANNEL_RECORDING ||
@@ -422,8 +431,47 @@ export class PeerConnection {
   createControlChannel(): RTCDataChannel {
     if (this.controlChannel) return this.controlChannel;
     const pc = this.requirePc();
-    this.controlChannel = pc.createDataChannel('control', { ordered: true });
-    return this.controlChannel;
+    return this.takeControlChannel(pc.createDataChannel('control', { ordered: true }));
+  }
+
+  /**
+   * Both ends' `control` channel carries chat. Each one is listened to; this
+   * connection sends on the first it took. A page says hello once its channel is
+   * open, and a line is sent only to a page that has said it.
+   */
+  private takeControlChannel(channel: RTCDataChannel): RTCDataChannel {
+    this.controlChannel ??= channel;
+    channel.addEventListener('message', (ev) => {
+      const frame = readPeerChat((ev as MessageEvent).data);
+      if (frame?.type === 'hello') this.farReadsChat = true;
+      else if (frame?.type === 'chat') this.opts.onChat?.({ text: frame.text, private: frame.private });
+    });
+    const hello = () => {
+      try {
+        channel.send(PEER_CHAT_HELLO);
+      } catch {
+        // The channel closed meanwhile; there is nobody to greet.
+      }
+    };
+    if (channel.readyState === 'open') hello();
+    else channel.addEventListener('open', hello);
+    return channel;
+  }
+
+  /**
+   * Send a chat line to the page at the other end, for everyone or for that
+   * person alone. False when nothing was sent: the channel is not open, the far
+   * page has not said hello, or the send failed. A line is never held back.
+   */
+  sendChat(text: string, isPrivate: boolean): boolean {
+    const channel = this.controlChannel;
+    if (!channel || channel.readyState !== 'open' || !this.farReadsChat) return false;
+    try {
+      channel.send(encodePeerChat(text, isPrivate));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -571,6 +619,7 @@ export class PeerConnection {
     this.pendingLocalStream = null;
     this.connectedListeners = [];
     this.controlChannel = null;
+    this.farReadsChat = false;
   }
 
   private requirePc(): RTCPeerConnection {

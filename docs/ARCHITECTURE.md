@@ -43,12 +43,12 @@ is derived by swapping `http`→`ws`. **No linter** (there is no `lint` script).
 ## Architecture (data flow)
 
 ```
-GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel)──▶  HOST browser
+GUEST browser  ──WebRTC PeerConnection (media tracks + recording and control DataChannels)──▶  HOST browser
    getUserMedia                                                                     getUserMedia
    MediaRecorder ──chunks──▶ DataChannel "recording" ──▶ ChunkReceiver ──▶ FileWriter ──▶ host disk
    BackupRecorder (OPFS chunk files, safety net)                                    (own track -> disk + own BackupRecorder)
         │                                                                                  │
-        └──────────────── WS signaling (SDP/ICE/chat/presence) ────────────────────────────┘
+        └──────────────── WS signaling (SDP/ICE/presence) ─────────────────────────────────┘
                                           │
                        Cloudflare Worker (REST) + Room Durable Object (WS hub, per slug) + D1 (metadata only)
 ```
@@ -115,6 +115,14 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
   channel and carries the file size and the sender's key). Recording acks flow here, **not**
   over WS.
+- **DataChannel `control`** (`lib/peer-chat.ts`): every connection has one, made by the joiner
+  before its first offer. It carries chat and nothing else, as three JSON frames: `{"type":"hello"}`,
+  sent once by each side when its channel is open and saying that page reads chat here;
+  `{"type":"chat","text":…}` for everyone; and the same with `"private":true` for the one person
+  at the other end. `readPeerChat` checks every frame before anything reads it (a string of at most
+  `MAX_PEER_CHAT_FRAME` units, a known `type`, a `text` of at most `MAX_CHAT_MESSAGE_LENGTH`,
+  `private` a boolean or absent) and copies out the known fields. The sender's role, id and name
+  come from the connection, never from a frame. The Worker never sees these frames.
 - `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
@@ -946,7 +954,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
-  `recording-audio` / `backup`, or prefix `recording-screen`). Guest **creates** the recording
+  `recording-audio` / `backup`, or prefix `recording-screen`) and takes the `control` channel
+  itself: the connection listens on the `control` channel of both ends (the one it made and the one
+  that arrives), sends on the first it took, and `sendChat(text, isPrivate)` sends a line only when
+  that channel is open and the far page has said hello. Guest **creates** the recording
   DataChannels;
   host **receives** them; the guest also creates one `backup#<file name>` channel per returned backup
   (`createBackupChannel`). `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
@@ -971,8 +982,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   received as usual. `CallStage` draws that person as an initial whatever their presence says.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
-- Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
-  `private-message` to one person, and adds the sender's own line to `state.messages` at once.
+- Chat: `sendChat(text, to?)` sends the line on the connections, not on the socket: to everyone,
+  `PeerConnection.sendChat(text, false)` on every connection in `peersRef`; with `to` (a peerId),
+  `sendChat(text, true)` on that connection alone. It adds the sender's own line to
+  `state.messages` at once. A line from a connection reaches `startPeer`'s `onChat`, which adds it
+  with the role, id and name of that connection's far end. The `chat` and `private-message` handlers
+  show the lines of pages loaded before this build, which the Room still relays.
   A private line carries `private` (plus `toPeerId` and `toRole` on the sender's side: who it went
   to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
   pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
@@ -1434,8 +1449,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    that file, so the sharer ends the stretch and starts a new numbered segment. Host rebinds new
    channel to existing receiver, found by a stable key (see below), not by the DO's
    fresh-per-socket peerId.
-5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
-   optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
+5. **Aux** — presence relayed by DO (`broadcastExcept`, never persisted); chat is not relayed by
+   the DO for pages of this build, it goes over each connection's `control` channel, and is echoed
+   optimistically client-side. Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
    `Stage` presenting mode renders it (+ a `presence` flag). Backup (host's or guest's own) → object
    URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete), where a
@@ -1505,6 +1521,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (nobody offers into an empty room). The joiner also opens a `control` data channel before its first offer
   so every later recording channel opens without renegotiation (the first data channel on a connection is
   the only one that renegotiates, and that renegotiation would collide with the host's track offer and wedge the channels).
+  The same channel carries chat (`lib/peer-chat.ts`).
 - Time units: D1 timestamps are uniformly ms (TURN TTL stays seconds).
 - **Recording is Chromium + MP4 only (by design), and the codec is PROBED, never assumed.**
   Which codecs `MediaRecorder` can encode varies **by OS**, not by Chrome build. Measured on
@@ -2111,12 +2128,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
 - **A private message is not confirmed as delivered.** The sender's line appears the moment it
-  is sent. If the other person left in that instant, if this tab's socket was down, or if the
-  Worker or the other page is older than private messages, nobody receives it and nothing says
+  is sent. If the other person left in that instant, if the connection to them is not up yet or
+  has failed, or if their page was loaded before this build, nobody receives it and nothing says
   so.
-- **A private message is kept from the other people in the call, not from the signalling
-  server or from a shared screen.** It passes through the Worker like every chat line, relayed
-  and never stored. Its pop-up shows its text, so someone who shares their whole screen, or the
+- **A private message is kept from the other people in the call, and from the server, not from
+  a shared screen.** It goes over the connection to that one person. Its pop-up shows its text, so someone who shares their whole screen, or the
   window the call is in, shows it to the call, and a recording of that screen holds it. The
   chat file never does.
 - **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
@@ -2363,3 +2379,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   note says how to take that file out.
 - **In a resumed take whose resumed WAV is empty, the host's voice after the reload is not in the
   program file.** The sound is read per person, so the earlier WAV stands for the host.
+- **During a deploy, a page loaded before it sends its chat through the server and does not read
+  chat sent directly.** Its person does not see lines from pages of this build. Pages of this
+  build still show that page's lines, which the Room relays.
+- **The server still relays connection setup.** Chat goes over an encrypted connection between the
+  browsers, but SDP and ICE pass through the Room, so a person who changes the server's code could
+  place it between two browsers.

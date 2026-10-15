@@ -1519,6 +1519,22 @@ export function useRoom(slug: string) {
             setState((s) => withRemoteScreens(withScreen(s.remoteScreens, remotePeerId, stream), s)),
           onRemoteScreenEnded: (stream) =>
             setState((s) => withRemoteScreens(withoutScreen(s.remoteScreens, remotePeerId, stream), s)),
+          // The sender is this connection's far end, never anything the frame says.
+          onChat: ({ text, private: isPrivate }) => {
+            const fromName = remotePeersRef.current.find((r) => r.peerId === remotePeerId)?.name;
+            const msg: ChatMessage = {
+              from: remoteRole === 'host' || remoteRole === 'producer' ? remoteRole : 'guest',
+              text,
+              // This tab's clock, as for a line the Room relays.
+              ts: Date.now(),
+              fromPeerId: remotePeerId,
+              ...(typeof fromName === 'string' && fromName ? { fromName } : {}),
+              ...(isPrivate ? { private: true } : {}),
+              ...(!isPrivate && isNotRecordedPeer(remotePeersRef.current, remotePeerId) ? { notRecorded: true } : {}),
+            };
+            messagesRef.current = [...messagesRef.current, msg];
+            setState((s) => ({ ...s, messages: messagesRef.current }));
+          },
           onNegotiationError: (e) => {
             console.error('openMeet: negotiation failed', e);
             setState((s) => ({
@@ -2723,10 +2739,11 @@ export function useRoom(slug: string) {
 
   const sendChat = useCallback((text: string, to?: string) => {
     const ts = Date.now();
-    // A message for one person is a type of its own: a Room that does not
-    // know it drops it, where it would send a `chat` with one more field
-    // to everyone.
-    signalRef.current?.send(to ? { type: 'private-message', to, text } : { type: 'chat', text, ts });
+    // Lines go over the connections to the other browsers, not through the
+    // Room. A line for one person goes to that connection alone. A line that
+    // does not get through is not sent later.
+    if (to) peersRef.current.get(to)?.sendChat(text, true);
+    else for (const peer of peersRef.current.values()) peer.sendChat(text, false);
     const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
