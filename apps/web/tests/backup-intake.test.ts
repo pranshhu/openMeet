@@ -2314,3 +2314,25 @@ describe('live take receivers are unbounded', () => {
     expect(state.items[0]!.status).toBe('offered');
   });
 });
+
+describe('BackupIntake: a take a guest recorded alone', () => {
+  it('lists the offer of either solo file, and refuses a solo screen name', async () => {
+    const { state, intake } = setup();
+
+    const video = fakeChannel(validLabel(1700000000000, ROOM, 'mp4', 'solo-'));
+    intake.offer(video, { peerId: 'peer-1', name: 'Alice' });
+    video.deliver(offerMsg(1000, 'video-key'));
+    const audio = fakeChannel(validLabel(1700000000000, ROOM, 'wav', 'solo-audio-'));
+    intake.offer(audio, { peerId: 'peer-1', name: 'Alice' });
+    audio.deliver(offerMsg(2000, 'audio-key'));
+    const screen = fakeChannel(validLabel(1700000000000, ROOM, 'mp4', 'solo-screen-'));
+    intake.offer(screen, { peerId: 'peer-1', name: 'Alice' });
+    screen.deliver(offerMsg(3000, 'screen-key'));
+    await flush();
+
+    expect(state.items.map((i) => [i.id, i.kind, i.status])).toEqual([
+      [`openmeet-backup-solo-1700000000000-${ROOM}.mp4`, 'camera', 'offered'],
+      [`openmeet-backup-solo-audio-1700000000000-${ROOM}.wav`, 'audio', 'offered'],
+    ]);
+  });
+});

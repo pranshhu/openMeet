@@ -45,6 +45,7 @@ import { FramingGuide } from './FramingGuide';
 import { CameraSettings } from './CameraSettings';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
+import { SoloTake } from './SoloTake';
 import { CalendarInvite } from './CalendarInvite';
 import { ShowLook } from './ShowLook';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
@@ -152,6 +153,7 @@ export function Lobby({
   producer = false,
   present = false,
   checkOnly = false,
+  solo = false,
   audio = false,
 }: {
   slug: string;
@@ -170,6 +172,8 @@ export function Lobby({
   present?: boolean;
   /** The check link: the lobby's preview and checks, with no way into the room. */
   checkOnly?: boolean;
+  /** The record-alone link, with `checkOnly`: the preview is recorded into this browser, and nothing joins. */
+  solo?: boolean;
   /** The microphone-only link: the first preview opens the microphone alone. */
   audio?: boolean;
 }) {
@@ -234,6 +238,12 @@ export function Lobby({
   const reopeningRef = useRef(false);
   // The same fact for the page to draw from: Join is off while a capture change is under way.
   const [reopening, setReopening] = useState(false);
+  // A take of the record-alone page is being counted in or recorded: the capture
+  // is the one being recorded and must not be replaced. A ref the take's own
+  // callback writes, so the guard in reacquire never reads a value that is a
+  // render behind.
+  const liveRef = useRef(false);
+  const [live, setLive] = useState(false);
   // Set while a capture change has stopped the microphone before asking for the
   // new one, so the stream the lobby holds has no live microphone to hand over.
   const micStoppedRef = useRef(false);
@@ -451,7 +461,7 @@ export function Lobby({
     nextPortrait: boolean = portrait
   ) {
     const mm = mmRef.current;
-    if (!mm || reopeningRef.current) return;
+    if (!mm || reopeningRef.current || liveRef.current) return;
     reopeningRef.current = true;
     setReopening(true);
     const old = stream;
@@ -953,7 +963,7 @@ export function Lobby({
               // Off while a preview is being opened and none has failed: a press
               // then would ask for a second capture beside it, and whichever of
               // the two the preview did not keep would stay open.
-              disabled={!stream && !previewError}
+              disabled={(!stream && !previewError) || live}
               onClick={() => void chooseMicOnly(!micOnly)}
               className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
             >
@@ -970,7 +980,7 @@ export function Lobby({
               {error}
             </p>
           )}
-          {recordingNotice && (
+          {!solo && recordingNotice && (
             <p className="mt-4 rounded-2xl bg-[#fef7e0] px-4 py-3 text-left text-sm leading-relaxed text-[#7a4f01]">
               {recordingNotice}
             </p>
@@ -981,13 +991,14 @@ export function Lobby({
             column under the preview fills in. */}
         <div className="flex w-full max-w-sm flex-col items-center gap-6 text-center lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start">
           <h1 className="text-[28px] font-normal leading-tight tracking-tight">
-            {checkOnly ? 'Check your setup' : 'Ready to join?'}
+            {solo ? 'Record on your own' : checkOnly ? 'Check your setup' : 'Ready to join?'}
           </h1>
           {checkOnly && (
             <div className="flex w-full flex-col items-center gap-2">
               <p className="text-[15px] leading-relaxed text-[#5f6368]">
-                You’re not in the room. This page tests your camera, microphone and connection on
-                this device.
+                {solo
+                  ? 'You’re not in the room, and nobody sees or hears you. Record yourself here and send the files to the host later.'
+                  : 'You’re not in the room. This page tests your camera, microphone and connection on this device.'}
               </p>
               {stream && (
                 <a
@@ -1004,6 +1015,18 @@ export function Lobby({
                 Go to the room
               </a>
             </div>
+          )}
+          {solo && (
+            <SoloTake
+              slug={slug}
+              stream={stream}
+              bitrateId={shownBitrate}
+              isHost={isHost}
+              onLive={(on) => {
+                liveRef.current = on;
+                setLive(on);
+              }}
+            />
           )}
           {/* The check link has no way in: the name field, Join and Present only are
               hidden with the form. */}
@@ -1124,7 +1147,7 @@ export function Lobby({
               the whole room, so by the time the in-call notice appears the
               guest is already being captured — consent has to be offered while
               declining still costs nothing. */}
-          <RecordingDisclosure isHost={isHost} />
+          {!solo && <RecordingDisclosure isHost={isHost} />}
           {invite}
           {/* Beside Join, not under the checklist: a guest back after a crash may
               hold the only copy of their part, and has to see it without scrolling. */}
@@ -1298,7 +1321,7 @@ export function Lobby({
                     aria-label="Camera"
                     title={devices.videoInputs.find((d) => d.deviceId === camId)?.label}
                     value={camId}
-                    disabled={!stream}
+                    disabled={!stream || live}
                     onChange={(e) => void changeDevice('cam', e.target.value)}
                     className={select}
                   >
@@ -1317,7 +1340,7 @@ export function Lobby({
                     aria-label="Microphone"
                     title={devices.audioInputs.find((d) => d.deviceId === micId)?.label}
                     value={micId}
-                    disabled={!stream}
+                    disabled={!stream || live}
                     onChange={(e) => void changeDevice('mic', e.target.value)}
                     className={select}
                   >
@@ -1347,7 +1370,7 @@ export function Lobby({
                   </select>
                 </label>
               )}
-              {canStereo && (
+              {canStereo && !solo && (
                 <label className={`${picker} sm:col-span-2`}>
                   <Icon name="mic" size={18} className="shrink-0" />
                   <select
@@ -1366,7 +1389,7 @@ export function Lobby({
                 <select
                   aria-label="Recording quality"
                   value={shownQuality}
-                  disabled={!stream}
+                  disabled={!stream || live}
                   onChange={(e) => void reacquire(micId, camId, e.target.value, frameRate)}
                   className={select}
                 >
@@ -1383,7 +1406,7 @@ export function Lobby({
                   <select
                     aria-label="Picture shape"
                     value={portrait ? 'portrait' : 'landscape'}
-                    disabled={!stream}
+                    disabled={!stream || live}
                     onChange={(e) =>
                       void reacquire(micId, camId, qualityId, frameRate, listening, e.target.value === 'portrait')
                     }
@@ -1399,6 +1422,7 @@ export function Lobby({
                 <select
                   aria-label="Recording bitrate"
                   value={shownBitrate}
+                  disabled={live}
                   onChange={(e) => changeBitrate(e.target.value)}
                   className={select}
                 >
@@ -1414,7 +1438,7 @@ export function Lobby({
                 <select
                   aria-label="Frame rate"
                   value={shownFrameRate}
-                  disabled={!stream}
+                  disabled={!stream || live}
                   onChange={(e) => void reacquire(micId, camId, qualityId, Number(e.target.value))}
                   className={select}
                 >

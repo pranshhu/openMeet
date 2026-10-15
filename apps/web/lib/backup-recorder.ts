@@ -46,7 +46,7 @@ const MEMORY_ONLY_WARNING = 'Local storage is unavailable — backup lives in me
 
 /** The room a backup was recorded in, or null for older backups that don't say. */
 export function backupRoom(name: string): string | null {
-  return /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
+  return /^openmeet-backup-(?:host-|solo-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
 }
 
 /** Whether a backup is a screen share backup. */
@@ -60,6 +60,8 @@ export interface BackupName {
   startedMs: number;
   room: string;
   ext: 'mp4' | 'wav';
+  /** Present only when true: a take its guest recorded alone, outside any call. */
+  solo?: true;
 }
 
 /**
@@ -68,16 +70,19 @@ export interface BackupName {
  * wrote.
  */
 export function parseBackupName(name: string): BackupName | null {
-  const m = /^openmeet-backup-(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
+  const m = /^openmeet-backup-(solo-)?(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
   if (!m) return null;
-  const prefix = m[1];
-  const startedMs = Number(m[2]);
-  const room = m[3]!;
-  const ext = m[4] as 'mp4' | 'wav';
+  const solo = m[1] !== undefined;
+  const prefix = m[2];
+  const startedMs = Number(m[3]);
+  const room = m[4]!;
+  const ext = m[5] as 'mp4' | 'wav';
   const kind: BackupName['kind'] = prefix === 'audio-' ? 'audio' : prefix === 'screen-' ? 'screen' : 'camera';
+  // A take recorded alone has no screen share.
+  if (solo && kind === 'screen') return null;
   if (kind === 'audio' && ext !== 'wav') return null;
   if ((kind === 'camera' || kind === 'screen') && ext !== 'mp4') return null;
-  return { kind, startedMs, room, ext };
+  return { kind, startedMs, room, ext, ...(solo ? { solo: true as const } : {}) };
 }
 
 function chunkFileName(idx: number): string {

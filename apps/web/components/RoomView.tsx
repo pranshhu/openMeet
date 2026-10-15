@@ -100,6 +100,12 @@ function isCheckLink(): boolean {
   return new URLSearchParams(window.location.search).get('check') === '1';
 }
 
+/** `?solo=1` on the room link: a guest records alone into their own browser, with no way into the room. */
+function isSoloLink(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('solo') === '1';
+}
+
 /** Download links for files this tab holds only as links in memory. */
 function FileLinks({ files }: { files: readonly (readonly [string | null, string, string])[] }) {
   return (
@@ -154,6 +160,7 @@ export function RoomView({ slug }: { slug: string }) {
   const present = isPresentLink();
   const check = isCheckLink();
   const audio = isAudioLink();
+  const solo = isSoloLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
   // A host who went on without anyone else. Kept while this tab stays in the
   // room: the call screen then stays up while they are alone, while someone
@@ -257,7 +264,8 @@ export function RoomView({ slug }: { slug: string }) {
         slug={slug}
         producer={producer}
         present={present}
-        checkOnly={check}
+        checkOnly={check || solo}
+        solo={solo}
         audio={audio}
         onSendBackups={sendBackups}
         onJoin={(stream, name, asCompanion, screenStream, stereo) =>

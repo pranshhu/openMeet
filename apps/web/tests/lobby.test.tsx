@@ -2837,3 +2837,39 @@ describe('Lobby: the host adds a logo', () => {
     expect(screen.getByAltText('Your logo').getAttribute('src')).toBe(logoOf(20, 20));
   });
 });
+
+describe('Lobby: a take recorded alone, listed in the room’s own lobby', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'test',
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(fakeStream()),
+        enumerateDevices: vi.fn().mockResolvedValue([]),
+      },
+    });
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:x');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('offers a guest Send to host on both files of a solo take of this room', async () => {
+    const video = new File(['a'], 'openmeet-backup-solo-1700000000000-xyz-abcd-pqr.mp4', { lastModified: 1700000000000 });
+    const wav = new File(['b'], 'openmeet-backup-solo-audio-1700000000000-xyz-abcd-pqr.wav', { lastModified: 1700000000000 });
+    const elsewhere = new File(['c'], 'openmeet-backup-solo-1700000001000-abc-defg-hij.mp4', { lastModified: 1700000001000 });
+    const findBackupsSpy = vi.spyOn(await import('@/lib/backup-recorder'), 'findBackups')
+      .mockResolvedValue([video, wav, elsewhere]);
+    try {
+      render(<Lobby slug="xyz-abcd-pqr" onJoin={vi.fn()} onSendBackups={vi.fn()} />);
+      const sends = await screen.findAllByRole('button', { name: /^Send to host:/ });
+      expect(sends.map((b) => b.getAttribute('aria-label'))).toEqual([
+        expect.stringMatching(/^Send to host: backup \(MP4\) from .* in room xyz-abcd-pqr$/),
+        expect.stringMatching(/^Send to host: backup \(WAV\) from .* in room xyz-abcd-pqr$/),
+      ]);
+    } finally {
+      findBackupsSpy.mockRestore();
+    }
+  });
+});

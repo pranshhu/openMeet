@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Guests can record on their own from the room link with `?solo=1`; the recording stays in
+  their browser until they send it to the host from the lobby.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
 - A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
