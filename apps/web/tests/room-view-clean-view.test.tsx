@@ -74,7 +74,7 @@ describe('joining', () => {
     state.phase = 'lobby';
     const join = vi.fn();
     hook.join = join;
-    for (const search of ['?view=nope', '?view=guest', '?view=stage']) {
+    for (const search of ['?view=nope', '?view=guest']) {
       open(search);
       const { unmount } = render(<RoomView slug="abc-defg-hij" />);
       expect(screen.getByText('This view link is incomplete. Ask the host to copy it again.')).toBeInTheDocument();
@@ -335,5 +335,144 @@ describe('the sound', () => {
     await act(async () => {});
     expect(screen.queryByRole('button')).toBeNull();
     expect(container.querySelector('video')!.muted).toBe(false);
+  });
+});
+
+describe('the stage view', () => {
+  const stream = () => new EventTarget() as unknown as MediaStream;
+  const benStream = stream();
+  const ben = { peerId: 'p-ben', name: 'Ben', stream: benStream, role: 'guest' };
+  const producer = { peerId: 'p-prod', name: 'Desk', stream: stream(), role: 'producer' };
+  const screenStream = stream();
+
+  beforeEach(() => {
+    names.clear();
+    names.set(anaStream, 'ana').set(benStream, 'ben').set(screenStream, 'screen');
+    open('?view=stage');
+    state.remotePeers = [ana, ben, producer];
+    state.remoteScreens = [{ peerId: 'p-ben', stream: screenStream }];
+  });
+
+  const names = new Map<unknown, string>();
+  const sources = (container: HTMLElement) =>
+    [...container.querySelectorAll('video')].map((v) => names.get(v.srcObject) ?? 'unknown');
+
+  it('joins as the stage view', () => {
+    state.phase = 'lobby';
+    hook.join = vi.fn();
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(hook.join).toHaveBeenCalledWith(expect.anything(), 'Stage view', true);
+  });
+
+  it('draws the screens first, then each person, and never a producer', () => {
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(sources(container)).toEqual(['screen', 'ana', 'ben']);
+    expect(container.firstElementChild!.className).toMatch(/fixed inset-0/);
+    expect(container.firstElementChild!.className).toMatch(/bg-black/);
+    expect(document.body.textContent).toBe('');
+  });
+
+  it('draws a Present-only device’s screen but not the device as a person', () => {
+    const deck = { peerId: 'p-deck', name: 'Deck', stream: null, role: 'guest', companion: true };
+    state.remotePeers = [ana, deck];
+    state.remoteScreens = [{ peerId: 'p-deck', stream: screenStream }];
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(sources(container)).toEqual(['screen', 'ana']);
+  });
+
+  it('leaves out a guest set as not recorded, and their screen', () => {
+    state.remotePeers = [ana, { ...ben, notRecorded: true }, producer];
+    const anaScreen = stream();
+    names.set(anaScreen, 'ana-screen');
+    state.remoteScreens = [{ peerId: 'p-ben', stream: screenStream }, { peerId: 'p-ana', stream: anaScreen }];
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(sources(container)).toEqual(['ana-screen', 'ana']);
+  });
+
+  it('keeps a guest whose not-recorded flag is anything but true', () => {
+    state.remotePeers = [ana, { ...ben, notRecorded: 'true' }];
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(sources(container)).toEqual(['screen', 'ana', 'ben']);
+  });
+
+  it('gives the person their initial when their camera is off, and no name otherwise', () => {
+    state.remotePeers = [ana, { ...ben, presence: { ...camOn, camOn: false } }];
+    state.remoteScreens = [];
+    render(<RoomView slug="abc-defg-hij" />);
+    expect(screen.getByText('B')).toBeInTheDocument();
+    expect(document.body.textContent).toBe('B');
+  });
+
+  it.each([
+    [1, 'grid-cols-1'],
+    [2, 'grid-cols-2'],
+    [3, 'grid-cols-2'],
+    [4, 'grid-cols-2'],
+    [5, 'grid-cols-3'],
+    [9, 'grid-cols-3'],
+  ])('lays %i cells in a grid with the class %s', (count, columns) => {
+    state.remotePeers = Array.from({ length: count }, (_, i) => ({ peerId: `g${i}`, name: `G${i}`, stream: stream(), role: 'guest' }));
+    state.remoteScreens = [];
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    const grid = container.firstElementChild!;
+    expect(grid.className).toMatch(/\bgrid\b/);
+    expect(grid.className.split(' ')).toContain(columns);
+    expect(container.querySelectorAll('video')).toHaveLength(count);
+    for (const video of container.querySelectorAll('video')) expect(video.className).toMatch(/object-contain/);
+  });
+
+  it('waits for someone when there is no cell', () => {
+    state.remotePeers = [producer];
+    state.remoteScreens = [];
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(container).toHaveTextContent('Waiting for someone to join');
+    expect(container.querySelector('video')).toBeNull();
+  });
+
+  it('keeps the door’s lines', () => {
+    state.door = 'waiting';
+    const { container } = render(<RoomView slug="abc-defg-hij" />);
+    expect(container).toHaveTextContent('Waiting for the host to let this view in');
+    expect(container.querySelector('video')).toBeNull();
+  });
+
+  it('mutes and plays every cell when one is refused, with one button that turns them all on', async () => {
+    play.mockRejectedValueOnce(refusal());
+    const { container, rerender } = render(<RoomView slug="abc-defg-hij" />);
+    const videos = [...container.querySelectorAll('video')];
+
+    const button = await screen.findByRole('button', { name: 'Turn on sound' });
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(videos.map((v) => v.muted)).toEqual([true, true, true]);
+    expect(play).toHaveBeenCalledTimes(3 + 3);
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(videos.map((v) => v.muted)).toEqual([false, false, false]);
+    expect(play).toHaveBeenCalledTimes(3 + 3 + 3);
+    expect(screen.queryByRole('button')).toBeNull();
+
+    state = { ...state, remotePeers: [...(state.remotePeers as object[]), { peerId: 'p-cy', name: 'Cy', stream: stream(), role: 'guest' }] };
+    rerender(<RoomView slug="abc-defg-hij" />);
+    const added = container.querySelectorAll('video')[3]!;
+    expect(added.muted).toBe(false);
+    expect(play).toHaveBeenCalledTimes(3 + 3 + 3 + 1);
+  });
+
+  it('mutes cells that start after a refusal as well', async () => {
+    play.mockRejectedValueOnce(refusal());
+    const { container, rerender } = render(<RoomView slug="abc-defg-hij" />);
+    await screen.findByRole('button', { name: 'Turn on sound' });
+
+    state = { ...state, remotePeers: [...(state.remotePeers as object[]), { peerId: 'p-cy', name: 'Cy', stream: stream(), role: 'guest' }] };
+    play.mockRejectedValueOnce(refusal());
+    rerender(<RoomView slug="abc-defg-hij" />);
+    await act(async () => {});
+
+    const videos = [...container.querySelectorAll('video')];
+    expect(videos.map((v) => v.muted)).toEqual([true, true, true, true]);
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(play).toHaveBeenCalledTimes(3 + 3 + 1 + 1);
   });
 });

@@ -37,7 +37,6 @@ describe('parseViewLink', () => {
   it('is incomplete for any other value', () => {
     expect(parseViewLink('?view=nope')).toEqual({ kind: 'incomplete' });
     expect(parseViewLink('?view=')).toEqual({ kind: 'incomplete' });
-    expect(parseViewLink('?view=stage')).toEqual({ kind: 'incomplete' });
     expect(parseViewLink('?view=nope&name=Ana')).toEqual({ kind: 'incomplete' });
   });
 });
@@ -104,5 +103,20 @@ describe('viewCamOff', () => {
   it('with no presence, is off exactly when there is no stream', () => {
     expect(viewCamOff({ stream: null })).toBe(true);
     expect(viewCamOff({ stream })).toBe(false);
+  });
+});
+
+describe('the stage view link', () => {
+  it('parses view=stage to the stage, whatever else the address holds', () => {
+    expect(parseViewLink('?view=stage')).toEqual({ kind: 'stage' });
+    expect(parseViewLink('?view=stage&name=Ana')).toEqual({ kind: 'stage' });
+  });
+
+  it('names the seat for the stage view', () => {
+    expect(viewName({ kind: 'stage' })).toBe('Stage view');
+  });
+
+  it('finds nobody by name or role for the stage', () => {
+    expect(findViewed([{ name: 'Ana', role: 'host' as const }], { kind: 'stage' })).toBeNull();
   });
 });

@@ -3,11 +3,12 @@ import { isStagePeer } from '@/lib/stage-peers';
 
 /**
  * A room link with a `view` parameter is a page that shows one person's camera
- * and sound, for a browser source in streaming software or a second screen.
- * A peer id changes on every socket and a client id is never shared, so the
- * person is named by their role (the host) or by their display name (a guest).
+ * and sound, or with `view=stage` everyone's, for a browser source in streaming
+ * software or a second screen. A peer id changes on every socket and a client
+ * id is never shared, so the person is named by their role (the host) or by
+ * their display name (a guest).
  */
-export type ViewLink = { kind: 'host' } | { kind: 'guest'; name: string } | { kind: 'incomplete' };
+export type ViewLink = { kind: 'host' } | { kind: 'guest'; name: string } | { kind: 'stage' } | { kind: 'incomplete' };
 
 // The length the Room keeps of a display name.
 const MAX_NAME_LENGTH = 64;
@@ -18,6 +19,7 @@ export function parseViewLink(search: string): ViewLink | null {
   const view = params.get('view');
   if (view === null) return null;
   if (view === 'host') return { kind: 'host' };
+  if (view === 'stage') return { kind: 'stage' };
   const name = (params.get('name') ?? '').trim();
   if (view !== 'guest' || name === '') return { kind: 'incomplete' };
   // Cut as the Room cuts a name, so a long one still matches the person it names.
@@ -26,6 +28,7 @@ export function parseViewLink(search: string): ViewLink | null {
 
 /** The name this page joins the room under, as the host's People panel lists it. */
 export function viewName(link: ViewLink): string {
+  if (link.kind === 'stage') return 'Stage view';
   return link.kind === 'guest' ? `View of ${link.name}` : 'View of the host';
 }
 
@@ -37,7 +40,7 @@ export function findViewed<P extends { name: string | null; role?: Role | undefi
   link: ViewLink
 ): P | null {
   if (link.kind === 'host') return peers.find((p) => p.role === 'host') ?? null;
-  if (link.kind === 'incomplete') return null;
+  if (link.kind === 'incomplete' || link.kind === 'stage') return null;
   return peers.find((p) => isStagePeer(p) && p.role === 'guest' && p.name !== null && same(p.name, link.name)) ?? null;
 }
 

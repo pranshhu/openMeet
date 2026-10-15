@@ -512,6 +512,16 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (`NotAllowedError` from `play()`) gets the element muted so the picture runs, and a **Turn on
   sound** button; any other refusal is ignored. A view with no `name`, or any other `view` value,
   joins nothing and reads "This view link is incomplete."
+  `?view=stage` makes the page the stage view: `stageCells` draws one cell per presented screen
+  (`remoteScreens` order), then one per person `isStagePeer` accepts (`remotePeers` order), in an
+  equal grid that fills the page (one column for one cell, two for two to four, three for five or
+  more), each cell black with its picture `object-contain`, the initial for a person whose camera is
+  off, and no name or ring. It joins as "Stage view". Every cell's sound plays: the page holds one
+  sound state, so when any cell's `play()` is refused with `NotAllowedError` every cell is muted
+  and played and one **Turn on sound** button shows, and pressing it unmutes and plays them all; a
+  cell added later plays with sound. A guest the host set as not recorded (`notRecorded` exactly
+  `true`) is left out, and so is a screen they present. With no cell it reads "Waiting for someone
+  to join".
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
@@ -1862,6 +1872,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   can watch. It shows the call's live picture, not the recording, and it adds one more connection,
   by which everyone's live budget is divided. It takes one of the two unrecorded slots; refused at
   the cap it reads "This room is full" until the source is reloaded.
+- **The stage view's grid is fixed and has no names.** It carries the live picture of up to eight
+  cameras and the shared screens, so on a weak link it is the first to stutter.
 - **Two people of one name: the one listed first is shown by a view link.** The order is that of
   `remotePeers`.
 - **A view page left open keeps the session going,** and with it the lock and the lists that end

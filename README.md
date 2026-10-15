@@ -449,7 +449,8 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these th
   source or on a second screen. The page joins by itself and shows that person's camera
   and sound alone on a black page, with no buttons and no name. It takes an unrecorded
   slot, is never recorded, and is as private as the invite link: anyone who has it can
-  watch.
+  watch. `?view=stage` shows everyone's camera and every shared screen in one grid, with
+  everyone's sound, and leaves out a guest you set as not recorded.
 
 For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
 **Microphone only**, so nobody's camera comes back on. The host copies this link from

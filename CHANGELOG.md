@@ -14,6 +14,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 - A view link shows one person's camera and sound on a black page with no controls, for an
   OBS browser source or a second screen; it joins by itself and is never recorded.
+- A stage view link shows everyone's camera and every shared screen in one grid, with
+  everyone's sound.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
 - A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite

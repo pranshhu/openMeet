@@ -201,7 +201,15 @@ export function RoomView({ slug }: { slug: string }) {
   useEffect(() => (hostTakeLive ? holdTakeLock(slug) : undefined), [hostTakeLive, slug]);
 
   if (view && !ENDED_PHASES.includes(state.phase)) {
-    return <CleanView link={view} peers={state.remotePeers} door={state.door} onPasscode={sendPasscode} />;
+    return (
+      <CleanView
+        link={view}
+        peers={state.remotePeers}
+        screens={state.remoteScreens}
+        door={state.door}
+        onPasscode={sendPasscode}
+      />
+    );
   }
   if (state.phase === 'checking') {
     return <StatusScreen spinner>Checking room…</StatusScreen>;
