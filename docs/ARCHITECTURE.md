@@ -397,7 +397,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (`script-src 'self' 'unsafe-inline'` for the export's inline bootstrap scripts; `connect-src
   'self' https: wss:` stays generic because each deploy's Worker URL differs), `X-Frame-Options:
   DENY`, `Referrer-Policy`, `nosniff`, `Permissions-Policy` (camera/mic/display-capture/fullscreen
-  self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change.
+  self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change. The
+  PDF renderer's worker is a script served from the site itself, which `script-src 'self'` allows,
+  and it evaluates no code, so the policy needs no `'unsafe-eval'`.
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`; while `state.door` is `'waiting'` it reads
   "Waiting for the host to let you in", without a spinner, in `connecting`, `waiting` and
@@ -1247,7 +1249,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   connections in `told` that the room still lists, and `saveRecoveredTake` writes the
   list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
-- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll.
+- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll. One PDF is a deck as well (a PDF chosen with any other file presents nothing): `lib/pdf-slides.ts` opens it in the presenter's tab and draws one page at a time, with the same single canvas and stream, so a page and a picture take the same path through `show` and the same stale-slide rule. It is the only file that imports PDF.js, and it does so with a dynamic `import()` the first time a PDF is presented, so no other page carries the library. PDF.js reads the bytes in a worker of its own, a module script served from the site itself (`pdf.worker.min.mjs`), with `isEvalSupported: false` and no URL for fonts, color profiles or code: nothing is fetched and nothing is evaluated as code. The bounds: a file over 100 MB is refused before it is read, an open that takes over 15 s is given up and its worker ended, a deck has at most 1000 pages, an embedded picture is limited to 50 megapixels, and one page renders at a time (a newer page, or the end of the deck, cancels the render in flight) and is cancelled after 10 s. A page is drawn to fit 1920 x 1080 in its own canvas, which is freed when the next page is shown. A PDF that cannot be opened presents nothing, and a page that cannot be drawn is a black slide.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
@@ -2275,10 +2277,22 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
-- **A deck takes pictures only.** The Present menu's **Slides (pictures)** picker offers
-  images. A PDF or a slides file picked anyway is left out, and when nothing is left nothing
-  is presented and the menu closes. The slides are turned with the two buttons or the
-  four slide keys.
+- **A deck is pictures or one PDF.** The Present menu's **Slides (PDF or pictures)** picker
+  offers images and PDFs. A PDF picked with anything else, or several PDFs, presents
+  nothing and the menu closes; a slides file such as a .pptx picked anyway is left out of a
+  set of pictures, and when nothing is left nothing is presented and the menu closes. The
+  slides are turned with the two buttons or the four slide keys.
+- **A PDF with a password, or a broken one, presents nothing.** The menu closes with no
+  line, as for a file that is too big (over 100 MB).
+- **A page that takes over 10 s to draw, or fails, is a black slide.** `show` still moves to it.
+- **Pages past 1000 are not in the deck.**
+- **A picture over 50 megapixels inside a PDF, and a JPEG 2000 picture, can be missing from
+  its page.**
+- **Text in a font the PDF does not embed is drawn with a font of the computer.** Nothing
+  is fetched to replace it.
+- **The PDF's links and text are not usable.** Everyone receives the page as a picture.
+- **A page is drawn on the presenter's main thread,** so a heavy page can cost a recording
+  tab a moment of work.
 - **A picture that cannot be decoded is a black slide.** `show` still moves to it, and the
   count includes it.
 - **The Previous and Next row is not always on screen.** While the presenter waits alone

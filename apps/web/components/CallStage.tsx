@@ -1648,10 +1648,10 @@ export function CallStage({
                           role="menuitem"
                           className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
                         >
-                          <span>Slides (pictures)</span>
+                          <span>Slides (PDF or pictures)</span>
                           <input
                             type="file"
-                            accept="image/*"
+                            accept="image/*,application/pdf,.pdf"
                             multiple
                             className="sr-only"
                             onChange={(e) => {

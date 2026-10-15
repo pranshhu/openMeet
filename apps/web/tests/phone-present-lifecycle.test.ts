@@ -586,7 +586,7 @@ describe('present presentation lifecycle with useRoom', () => {
       const peer = mockPeers[0];
 
       await act(async () => {
-        await result.current.toggleScreenShare([new File(['pdf'], 'deck.pdf', { type: 'application/pdf' })]);
+        await result.current.toggleScreenShare([new File(['text'], 'notes.txt', { type: 'text/plain' })]);
       });
 
       expect(result.current.state.screenSharing).toBe(false);
@@ -608,6 +608,84 @@ describe('present presentation lifecycle with useRoom', () => {
 
       expect(result.current.state.slides).toBeNull();
       expect(mockCanvasStreamTracks[0].stop).toHaveBeenCalled();
+    });
+  });
+
+  describe('a second present while the first is waiting for its picture', () => {
+    let loads: (() => void)[];
+    let failures: (() => void)[];
+    let origImage: typeof Image;
+
+    class WaitingImage {
+      naturalWidth = 1200;
+      naturalHeight = 800;
+      complete = false;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_v: string) {
+        loads.push(() => {
+          this.complete = true;
+          this.onload?.();
+        });
+        failures.push(() => this.onerror?.());
+      }
+    }
+    const photo = (name: string) => new File(['image-bytes'], name, { type: 'image/png' });
+
+    beforeEach(() => {
+      loads = [];
+      failures = [];
+      origImage = globalThis.Image;
+      globalThis.Image = WaitingImage as unknown as typeof Image;
+    });
+
+    afterEach(() => {
+      globalThis.Image = origImage;
+    });
+
+    it('does nothing, so one presentation and one track are made', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      let pictures = 0;
+      await act(async () => {
+        const first = result.current.toggleScreenShare(photo('a.png'));
+        const second = result.current.toggleScreenShare(photo('b.png'));
+        pictures = loads.length;
+        loads.forEach((load) => load());
+        await Promise.all([first, second]);
+      });
+
+      expect(pictures).toBe(1);
+      expect(mockCaptureStream).toHaveBeenCalledTimes(1);
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(peer.addTrack).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(peer.removeTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the next present start once the first has failed to get its source', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      await act(async () => {
+        const first = result.current.toggleScreenShare(photo('broken.png'));
+        failures.forEach((fail) => fail());
+        await first;
+      });
+      expect(result.current.state.screenSharing).toBe(false);
+
+      await act(async () => {
+        const next = result.current.toggleScreenShare(photo('a.png'));
+        loads.at(-1)!();
+        await next;
+      });
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(peer.addTrack).toHaveBeenCalledTimes(1);
     });
   });
 });

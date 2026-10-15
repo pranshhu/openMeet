@@ -68,15 +68,15 @@ const openPresentMenu = () => {
 };
 
 describe('CallStage: slides', () => {
-  it('offers Slides (pictures) in the Present menu and hands the chosen files over as a list', () => {
+  it('offers Slides (PDF or pictures) in the Present menu and hands the chosen files over as a list', () => {
     const onToggleScreen = vi.fn();
     render(<CallStage {...props} onToggleScreen={onToggleScreen} />);
     const menu = openPresentMenu();
-    const item = within(menu).getByText('Slides (pictures)').closest('label') as HTMLLabelElement;
+    const item = within(menu).getByText('Slides (PDF or pictures)').closest('label') as HTMLLabelElement;
     expect(item).toHaveAttribute('role', 'menuitem');
     expect(item.className).toContain('min-h-11');
     const input = item.querySelector('input') as HTMLInputElement;
-    expect(input.accept).toBe('image/*');
+    expect(input.accept).toBe('image/*,application/pdf,.pdf');
     expect(input.multiple).toBe(true);
 
     const a = new File(['a'], 'a.png', { type: 'image/png' });
@@ -92,7 +92,7 @@ describe('CallStage: slides', () => {
     render(<CallStage {...props} screenShareSupported={false} onToggleScreen={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Present a photo, video or your rear camera' }));
     const items = within(screen.getByRole('menu', { name: 'Present options' })).getAllByRole('menuitem');
-    expect(items.map((item) => item.textContent)).toEqual(['A photo or video', 'Slides (pictures)', 'Rear camera']);
+    expect(items.map((item) => item.textContent)).toEqual(['A photo or video', 'Slides (PDF or pictures)', 'Rear camera']);
     expect(items.filter((item) => !item.className.split(' ').includes('min-h-11'))).toEqual([]);
   });
 
@@ -100,7 +100,7 @@ describe('CallStage: slides', () => {
     const onToggleScreen = vi.fn();
     render(<CallStage {...props} onToggleScreen={onToggleScreen} />);
     const menu = openPresentMenu();
-    const input = within(menu).getByText('Slides (pictures)').closest('label')!.querySelector('input')!;
+    const input = within(menu).getByText('Slides (PDF or pictures)').closest('label')!.querySelector('input')!;
     fireEvent.change(input, { target: { files: [] } });
     expect(onToggleScreen).not.toHaveBeenCalled();
     expect(screen.getByRole('menu', { name: 'Present options' })).toBeInTheDocument();

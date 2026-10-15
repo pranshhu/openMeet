@@ -799,6 +799,8 @@ export function useRoom(slug: string) {
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
   const screenSharingRef = useRef(false);
+  // A present that is still waiting for its source: a picker, a file, a deck.
+  const presentPendingRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
   // Written by setSendLater itself: a take that starts before the next render reads it.
@@ -2820,6 +2822,8 @@ export function useRoom(slug: string) {
       // connected.
       if (!peer && roleRef.current !== 'host') return;
       if (!screenSharingRef.current) {
+        if (presentPendingRef.current) return;
+        presentPendingRef.current = true;
         let screen: MediaStream;
         let isRearCamera = false;
         let customStop: (() => void) | null = null;
@@ -2844,6 +2848,8 @@ export function useRoom(slug: string) {
           }
         } catch {
           return; // user dismissed the screen-picker — no-op, not an error
+        } finally {
+          presentPendingRef.current = false;
         }
         const track = screen.getVideoTracks()[0];
         if (!track) return;
