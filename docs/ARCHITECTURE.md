@@ -1257,10 +1257,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
   Every guest file opens when that guest's channel arrives, named for its slot and its guest
   (`guest-<name>_<id>.*`, `guest2-<name>_<id>.*`, `guest3-<name>_…`), as does each screen segment
-  (`host_screen_<id>.mp4`, `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
-  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  (`host_screen_<id>.mp4`, `guest-<name>_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest-<name>_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
   A person's files carry that person's display name after the role (`host-ana_<id>.mp4`,
-  `host-ana_screen_<id>.mp4`, `guest-bob_<id>.wav`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
+  `host-ana_screen_<id>.mp4`, `guest-bob_<id>.wav`; the sharer's name goes into a guest's screen file,
+  `guest-bob_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take

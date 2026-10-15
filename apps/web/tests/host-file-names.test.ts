@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   guestName,
+  bindHostScreenChannel,
   startHostRecording,
   endHostRecording,
   startScreenRecording,
   stopScreenRecording,
+  type RecordingHandles,
 } from '@/hooks/recording-controller';
 import { FakeDirectoryHandle } from './fake-opfs';
 
@@ -224,5 +226,68 @@ describe('guest file names', () => {
     expect(handles.journal?.notes.files).toEqual([]);
     await endHostRecording(handles);
     expect(opened.filter((n) => n.startsWith('guest'))).toEqual([]);
+  });
+});
+
+describe('guest screen file names', () => {
+  /** A folder that holds `held` and records the names it is asked about and the names it opens. */
+  function heldDir(held: string[] = []) {
+    const opened: string[] = [];
+    const probed: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string, opts?: { create?: boolean }) => {
+        if (opts?.create) {
+          if (held.includes(name)) throw new Error(`would replace ${name}`);
+          opened.push(name);
+        } else {
+          probed.push(name);
+          if (!held.includes(name)) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+        }
+        return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+      },
+    };
+    return { dir: dir as never, opened, probed };
+  }
+  const channel = () =>
+    Object.assign(new EventTarget(), { label: 'recording-screen-1', readyState: 'open', send: () => {} }) as unknown as RTCDataChannel;
+
+  it("puts the sharer's name in each guest screen file, shares counted across guests", async () => {
+    const { dir, opened } = heldDir();
+    const h = { recordingId: 'r', dir } as RecordingHandles;
+    await bindHostScreenChannel(channel(), h, undefined, 'p-bob', 'Bob');
+    await bindHostScreenChannel(channel(), h, undefined, 'p-ana', 'Ana');
+    expect(opened).toEqual(['guest-bob_screen_r.mp4', 'guest-ana_screen_r_2.mp4']);
+  });
+
+  it('ends a later take\'s guest screen file in _take<n>', async () => {
+    const { dir, opened } = heldDir();
+    await bindHostScreenChannel(channel(), { recordingId: 'r', take: 2, dir } as RecordingHandles, undefined, 'p-bob', 'Bob');
+    expect(opened).toEqual(['guest-bob_screen_r_take2.mp4']);
+  });
+
+  it('keeps the plain name for a sharer with nothing usable in the name', async () => {
+    const { dir, opened } = heldDir();
+    await bindHostScreenChannel(channel(), { recordingId: 'r', dir } as RecordingHandles, undefined, 'p-x', '🙂');
+    expect(opened).toEqual(['guest_screen_r.mp4']);
+  });
+
+  it("names a sharer the page does not list after the name of the peer's slot", async () => {
+    const { dir, opened } = heldDir();
+    const h = {
+      recordingId: 'r',
+      dir,
+      slotPeerIds: new Map([[0, 'p-cam']]),
+      slotNames: new Map([[0, 'Cam']]),
+    } as RecordingHandles;
+    await bindHostScreenChannel(channel(), h, undefined, 'p-cam');
+    expect(opened).toEqual(['guest-cam_screen_r.mp4']);
+  });
+
+  it('asks the folder about the named file after a resume, so it is not opened over', async () => {
+    const { dir, opened, probed } = heldDir(['guest-bob_screen_r.mp4']);
+    const h = { recordingId: 'r', dir, resumed: true } as RecordingHandles;
+    await bindHostScreenChannel(channel(), h, undefined, 'p-bob', 'Bob');
+    expect(probed).toEqual(['guest-bob_screen_r.mp4', 'guest-bob_screen_r_2.mp4']);
+    expect(opened).toEqual(['guest-bob_screen_r_2.mp4']);
   });
 });

@@ -999,6 +999,20 @@ describe('saving a take from its crash copy', () => {
     ]);
   });
 
+  it('reads a named screen file as a screen file, and a guest named screen as a camera file, when no note names them', async () => {
+    const take = await crashedTake({ 'guest-screen_rec1.mp4': 1, 'guest-bob_screen_rec1_2.mp4': 1 }, []);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    const report = reportIn(folder, result.json!);
+    expect(report.guests).toHaveLength(1);
+    expect(report.guests[0]).toMatchObject({ slot: 0, file: 'guest-screen_rec1.mp4' });
+    expect(report.timeline.screenSegments).toEqual([
+      { file: 'guest-bob_screen_rec1_2.mp4', offsetMs: 0, endedEarly: true },
+    ]);
+  });
+
   it('rebuilds the directories no note names in name order', async () => {
     // Both are un-noted, and the crash copy made guest_rec1 first while its name sorts last.
     const take = await crashedTake({ 'guest_rec1.mp4': 1, 'guest2_rec1.mp4': 1 }, []);

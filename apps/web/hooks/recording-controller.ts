@@ -1067,9 +1067,8 @@ export async function resumeHostRecording(args: ResumeHostArgs): Promise<Recordi
   // share takes a new number, so the crashed segment is never written over. The
   // number has to clear both the notes' count and the highest number any note
   // carries, since a share that stopped while its file was opening left none.
-  const screenNotes = notes.files.filter(
-    (note) => note.kind === 'screen' && note.file.startsWith('guest_screen')
-  );
+  // Whatever name a file carries after `guest`, it counts.
+  const screenNotes = notes.files.filter((note) => note.kind === 'screen' && note.file.startsWith('guest'));
   h.guestScreenSegments = Math.max(screenNotes.length, ...screenNotes.map((note) => note.segment ?? 0));
 
   // The host's own files are not journaled, so these notes hold only the
@@ -2198,6 +2197,14 @@ export async function bindHostScreenChannel(
     held.receiver.answerResume();
     return;
   }
+  // The name is in the file's name, and it is what a recovered report shows.
+  // The peer id means nothing to the host once the tab that knew it is gone, so
+  // it is never stored.
+  const who = (
+    (typeof sharerName === 'string' ? sanitizeText(sharerName).trim() : '') ||
+    (sharerPeerIdOrName ? slotNameForPeer(h, sharerPeerIdOrName) : undefined) ||
+    ''
+  ).slice(0, 200);
   // A number is claimed before anything is awaited, so two shares arriving
   // together never hold the same one.
   const claim = () =>
@@ -2208,14 +2215,19 @@ export async function bindHostScreenChannel(
     // A number the folder already holds is given up for the next unclaimed one,
     // which keeps a segment saved before the crash from being opened over. A
     // fresh take reuses its own number.
-    segment = await freeNumber(h.dir, (n) => screenFileName('guest', h.recordingId, n, h.take ?? 1), segment, claim);
+    segment = await freeNumber(
+      h.dir,
+      (n) => screenFileName('guest', h.recordingId, n, h.take ?? 1, who),
+      segment,
+      claim
+    );
   }
   if (segment === null) {
     refuseScreenSegment(h, 'guest', onError);
     return;
   }
   const writer = new FileWriter();
-  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment, h.take ?? 1));
+  await writer.openIn(h.dir, screenFileName('guest', h.recordingId, segment, h.take ?? 1, who));
   // The share can stop while the file is opening. Its close event has fired by
   // now, so nothing below would ever close this file or drop its row.
   if (channel.readyState === 'closed') {
@@ -2231,13 +2243,6 @@ export async function bindHostScreenChannel(
   // recovery needs.
   const sharer = sharerPeerIdOrName ?? '';
   const sharerNotes = h.screenNotesBySharer?.get(sharer) ?? 0;
-  // The name is what a recovered report shows. The peer id means nothing to
-  // the host once the tab that knew it is gone, so it is never stored.
-  const who = (
-    (typeof sharerName === 'string' ? sanitizeText(sharerName).trim() : '') ||
-    (sharerPeerIdOrName ? slotNameForPeer(h, sharerPeerIdOrName) : undefined) ||
-    ''
-  ).slice(0, 200);
   // The peer id this file was bound under can leave the room and its slot be
   // rebound to a new one, so the name is kept for the file itself.
   if (who) (h.screenSharersByFile ??= new Map()).set(writer.fileName, who);

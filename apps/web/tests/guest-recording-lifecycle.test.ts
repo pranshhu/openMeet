@@ -2494,7 +2494,7 @@ describe('host backup after a take in useRoom', () => {
     await vi.waitFor(() =>
       expect(notes.files).toEqual([
         {
-          file: `guest_screen_${recordingId}.mp4`,
+          file: `guest-guest_screen_${recordingId}.mp4`,
           kind: 'screen',
           segment: 1,
           startedAtMs: expect.any(Number),
@@ -2713,9 +2713,9 @@ describe('host backup after a take in useRoom', () => {
       opts.onDataChannel?.(screenChannel());
     }, { dir });
     await vi.waitFor(() =>
-      expect(opened.filter((n) => n.startsWith('guest_screen_'))).toEqual([
-        `guest_screen_${recordingId}.mp4`,
-        `guest_screen_${recordingId}_2.mp4`,
+      expect(opened.filter((n) => n.includes('_screen_'))).toEqual([
+        `guest-guest_screen_${recordingId}.mp4`,
+        `guest-guest_screen_${recordingId}_2.mp4`,
       ])
     );
   });

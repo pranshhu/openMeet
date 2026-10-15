@@ -1917,6 +1917,22 @@ describe('a take resumed from its journal', () => {
     expect(opened).not.toContain('guest_screen_rec_2.mp4');
   });
 
+  it('counts a named guest screen note when it sets the next screen number', async () => {
+    const opened: string[] = [];
+    const j = resumeJournal([{ file: 'guest-bob_screen_rec_3.mp4', kind: 'screen', segment: 3 }]);
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      directoryPicker: async () => fakeDir(opened, []),
+      channels: [],
+    });
+
+    expect(h.guestScreenSegments).toBe(3);
+    await bindHostScreenChannel(fakeChannel('recording-screen-1'), h, undefined, 'peer-bob', 'Bob');
+    expect(opened).toContain('guest-bob_screen_rec_4.mp4');
+    expect(opened).not.toContain('guest-bob_screen_rec_3.mp4');
+  });
+
   it('never replaces a screen file the folder already holds after a resume', async () => {
     const opened: string[] = [];
     const probes: string[] = [];
