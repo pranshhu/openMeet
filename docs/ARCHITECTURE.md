@@ -779,8 +779,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
 - **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
-  lists **Camera settings** when the camera behind the call's video track lists any of exposure
-  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  lists **Camera settings** when the camera behind the call's video track lists any of background
+  blur, exposure mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
   tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
   turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
   draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
@@ -790,6 +790,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
   video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
   track, so the panel works on the track the call holds and a camera switch needs no change.
+  **Background blur** is a tick box shown only when `backgroundBlur` lists both `true` and `false`,
+  and it sends the boolean itself. The blur is made by the computer before the browser gets the
+  frame, so the call, the camera file and the backup all carry it.
   Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
   component under the preview, on the previewed video track and keyed by its `id`; that track is the
   one handed to the call, so what is set there is what the call and the recording get.
@@ -2020,6 +2023,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
   controls the browser opens only after its "use and move your camera" permission shows no such
   rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **Background blur only where the computer does it.** openMeet runs no blur of its own, so Linux
+  and most cameras have no row. A blur set in the system's own video menu has no row either, and
+  it is in the recording all the same. A camera switched to during the call starts with its own
+  blur setting.
 - **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
   the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
   and frame-rate entries from a track's constraints once a camera setting is applied to it

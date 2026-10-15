@@ -54,6 +54,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   in the call and in your recording.
 - **Camera settings** under the lobby preview, and on the check link: set exposure
   and colour before you join.
+- **Background blur** in Camera settings, where your computer can blur the camera
+  itself. The blur is in the call and in your recording.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
