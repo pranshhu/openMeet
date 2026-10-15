@@ -518,7 +518,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   alone" with **Send to host**, and the host's `BackupIntake` saves it as a returned backup. The
   solo page lists the takes already kept in the browser in the same section, read once when the
   page opens, with **Download** and **Delete** and no **Send to host**; a take recorded during the
-  visit is listed in the record panel until the page is opened again.
+  visit is listed in the record panel until the page is opened again. The page has the
+  teleprompter, the same script per room as the call's: **Teleprompter** opens it in a `fixed
+  inset-0` wrapper so its saved position means the same as in the call, and opening it asks
+  nothing of the capture.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for

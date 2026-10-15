@@ -46,6 +46,7 @@ import { CameraSettings } from './CameraSettings';
 import { Icon } from './Icon';
 import { SiteHeader } from './Logo';
 import { SoloTake } from './SoloTake';
+import { Teleprompter } from './Teleprompter';
 import { CalendarInvite } from './CalendarInvite';
 import { ShowLook } from './ShowLook';
 import { backupRoom, findBackups, deleteBackup, isScreenBackup, parseBackupName } from '@/lib/backup-recorder';
@@ -254,6 +255,9 @@ export function Lobby({
   // The camera's settings panel under the preview. Only whether it is open is kept: the
   // panel starts over on whatever the track in the preview reports.
   const [cameraSettingsOpen, setCameraSettingsOpen] = useState(false);
+  // The record-alone page's script panel: its text is the call's, per room, and opening it
+  // asks nothing of the capture.
+  const [prompterOpen, setPrompterOpen] = useState(false);
   const previewTrack = stream?.getVideoTracks()[0];
   // Asked of the camera once per track, not on every key typed in the name field.
   const hasCameraControls = useMemo(() => !!previewTrack && cameraControls(previewTrack).length > 0, [previewTrack]);
@@ -957,19 +961,41 @@ export function Lobby({
                 )}
               </>
             )}
-            <button
-              type="button"
-              aria-pressed={micOnly}
-              aria-describedby="mic-only-hint"
-              // Off while a preview is being opened and none has failed: a press
-              // then would ask for a second capture beside it, and whichever of
-              // the two the preview did not keep would stay open.
-              disabled={(!stream && !previewError) || live}
-              onClick={() => void chooseMicOnly(!micOnly)}
-              className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
-            >
-              Microphone only
-            </button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                aria-pressed={micOnly}
+                aria-describedby="mic-only-hint"
+                // Off while a preview is being opened and none has failed: a press
+                // then would ask for a second capture beside it, and whichever of
+                // the two the preview did not keep would stay open.
+                disabled={(!stream && !previewError) || live}
+                onClick={() => void chooseMicOnly(!micOnly)}
+                className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors enabled:hover:bg-[#0b57d0]/10 disabled:cursor-not-allowed disabled:opacity-50 ${micOnly ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
+              >
+                Microphone only
+              </button>
+              {solo && !isHost && isRecordingSupported() && (
+                <>
+                  <button
+                    type="button"
+                    aria-pressed={prompterOpen}
+                    onClick={() => setPrompterOpen((open) => !open)}
+                    className={`min-h-11 rounded-full px-4 text-sm font-medium text-[#0b57d0] transition-colors hover:bg-[#0b57d0]/10 ${prompterOpen ? 'bg-[#0b57d0]/10 ' : ''}${focusRing}`}
+                  >
+                    Teleprompter
+                  </button>
+                  {/* The panel is placed against its containing block, and a drag stores
+                      viewport coordinates: the wrapper starts at the viewport's top left,
+                      as the call's stage does. */}
+                  {prompterOpen && (
+                    <div className="pointer-events-none fixed inset-0 z-40">
+                      <Teleprompter slug={slug} onClose={() => setPrompterOpen(false)} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
             <span id="mic-only-hint" className="text-center text-xs text-[#5f6368]">
               {micOnly
                 ? 'You’ll join with sound only: your audio is recorded, with no video. Press again to use your camera.'

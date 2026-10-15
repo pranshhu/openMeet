@@ -647,3 +647,87 @@ describe('takes kept in this browser', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('the teleprompter on the record-alone page', () => {
+  const SCRIPT = 'Welcome to the show.';
+  const KEY = `om_prompter_${SLUG}`;
+  // The describe above restores every mock, which empties the lock's release.
+  beforeEach(() => wakeLock.release.mockResolvedValue(undefined));
+  afterEach(() => localStorage.removeItem(KEY));
+
+  it('opens and closes from its button, and keeps the typed script for the room', async () => {
+    await openSolo();
+    const button = screen.getByRole('button', { name: 'Teleprompter' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    expect(button.className).toMatch(/(^|\s)min-h-11(\s|$)/);
+    expect(screen.queryByPlaceholderText(/Paste your script/)).toBeNull();
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(screen.getByPlaceholderText(/Paste your script/), { target: { value: SCRIPT } });
+    expect(localStorage.getItem(KEY)).toBe(SCRIPT);
+
+    fireEvent.click(button);
+    expect(screen.queryByPlaceholderText(/Paste your script/)).toBeNull();
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Close teleprompter' }));
+    expect(screen.queryByPlaceholderText(/Paste your script/)).toBeNull();
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('draws the panel inside a fixed full-screen wrapper that lets clicks through', async () => {
+    await openSolo();
+    press('Teleprompter');
+    const wrapper = screen.getByRole('button', { name: 'Close teleprompter' }).closest('.fixed')!;
+    expect(wrapper.className).toMatch(/(^|\s)inset-0(\s|$)/);
+    expect(wrapper.className).toMatch(/(^|\s)pointer-events-none(\s|$)/);
+    expect(wrapper.firstElementChild!.contains(screen.getByPlaceholderText(/Paste your script/))).toBe(true);
+  });
+
+  it('leaves a take in progress alone while it is opened and closed', async () => {
+    await openSolo();
+    await settle();
+    await startTake();
+    await until(() => expect(dirNames()).toHaveLength(2));
+    const made = FakeMediaRecorder.made.length;
+    const calls = getUserMedia.mock.calls.length;
+
+    press('Teleprompter');
+    fireEvent.change(screen.getByPlaceholderText(/Paste your script/), { target: { value: SCRIPT } });
+    press('Close teleprompter');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(FakeMediaRecorder.made).toHaveLength(made);
+    expect(FakeMediaRecorder.made.every((r) => r.state === 'recording')).toBe(true);
+    expect(getUserMedia).toHaveBeenCalledTimes(calls);
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+  });
+
+  it('is not on the ordinary lobby, the check page, the host line or a browser that cannot record', async () => {
+    const plain = await openSolo('');
+    expect(screen.queryByRole('button', { name: 'Teleprompter' })).toBeNull();
+    plain.unmount();
+
+    const check = await openSolo('?check=1');
+    expect(screen.queryByRole('button', { name: 'Teleprompter' })).toBeNull();
+    check.unmount();
+
+    const alone = await openSolo();
+    expect(screen.getByRole('button', { name: 'Teleprompter' })).toBeInTheDocument();
+    alone.unmount();
+
+    localStorage.setItem(`om_host_${SLUG}`, 'host-tok');
+    const host = await openSolo();
+    expect(screen.queryByRole('button', { name: 'Teleprompter' })).toBeNull();
+    host.unmount();
+    localStorage.removeItem(`om_host_${SLUG}`);
+
+    stubBrowser({ recorder: false });
+    await openSolo();
+    expect(screen.queryByRole('button', { name: 'Teleprompter' })).toBeNull();
+  });
+});

@@ -67,8 +67,9 @@ retention policy to trust, because there's nothing retained.
 - Record alone: a host with nobody else in the room presses **Continue alone** and
   records from the call screen; anyone who joins during the take is recorded from then on
 - Record alone as a guest: open the room link with `?solo=1`, press **Record** and record
-  your own camera and microphone with nobody else present. The take stays in your browser;
-  later, from the room's ordinary link, press **Send to host** on it and join while the host is there
+  your own camera and microphone, with the teleprompter, and nobody else present. The take stays
+  in your browser; later, from the room's ordinary link, press **Send to host** on it and join
+  while the host is there
 
 **During the session**
 - Up to **4 recorded participants**, or **8** when everyone recorded, the host too,
