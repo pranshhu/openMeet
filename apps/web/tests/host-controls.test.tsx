@@ -739,6 +739,21 @@ describe('PeoplePanel: the host copies a guest’s view link', () => {
     }
   });
 
+  it('gives no View link to a guest whose name is only spaces', () => {
+    render(
+      <PeoplePanel
+        people={[
+          { peerId: 'p-sp', name: '   ', stream: null, role: 'guest' },
+          { peerId: 'p-ana', name: 'Ana Lee', stream: null, role: 'guest' },
+        ]}
+        onMute={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getAllByRole('button', { name: /view link/i })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Copy view link for Ana Lee' })).toBeInTheDocument();
+  });
+
   it('says so when the link cannot be copied', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn(() => Promise.reject(new Error('denied'))) },

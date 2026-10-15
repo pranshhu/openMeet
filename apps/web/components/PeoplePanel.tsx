@@ -200,7 +200,7 @@ export function PeoplePanel({
                   Help
                 </button>
               )}
-              {isStagePeer(p) && p.role === 'guest' && p.name && (
+              {isStagePeer(p) && p.role === 'guest' && p.name?.trim() && (
                 <button
                   type="button"
                   aria-label={`Copy view link for ${name}`}

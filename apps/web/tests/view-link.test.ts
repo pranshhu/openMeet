@@ -81,6 +81,17 @@ describe('findViewed', () => {
     expect(findViewed([peers[2]!], { kind: 'guest', name: 'Ana' })).toBeNull();
   });
 
+  it('finds the guest, not the host, when both have the name', () => {
+    const both = [peers[3]!, peers[5]!];
+    expect(findViewed(both, { kind: 'guest', name: 'Ana' })?.peerId).toBe('p5');
+    expect(findViewed([peers[3]!], { kind: 'guest', name: 'Ana' })).toBeNull();
+  });
+
+  it('finds a guest whose own name has spaces around it', () => {
+    const spaced = [{ peerId: 'p6', name: ' Ana ', stream: null, role: 'guest' as const }];
+    expect(findViewed(spaced, { kind: 'guest', name: 'Ana' })?.peerId).toBe('p6');
+  });
+
   it('never finds a guest as the host', () => {
     expect(findViewed(peers.filter((p) => p.role !== 'host'), { kind: 'host' })).toBeNull();
   });
