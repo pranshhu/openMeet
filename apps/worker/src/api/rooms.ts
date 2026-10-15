@@ -10,6 +10,8 @@ import { getRoomBySlug, insertRoom } from '../db/queries.js';
 let warnedMissingRateLimiter = false;
 
 const MAX_COLLISION_RETRIES = 5;
+// A body holds at most a name; anything longer is not a request this route answers.
+const MAX_BODY_CHARS = 1024;
 
 export async function postRooms(c: Context<{ Bindings: Env }>): Promise<Response> {
   const ip = c.req.header('CF-Connecting-IP') ?? c.req.header('X-Forwarded-For') ?? 'unknown';
@@ -26,8 +28,21 @@ export async function postRooms(c: Context<{ Bindings: Env }>): Promise<Response
       console.error('rooms:no_rate_limiter');
     }
   }
+  // The declared size is checked first so an honest oversized body is never read; a body without one is bounded by its text.
+  if (Number(c.req.header('Content-Length')) > MAX_BODY_CHARS) {
+    return c.json({ error: 'invalid_name' }, 400);
+  }
+  const text = await c.req.text().catch(() => '');
+  if (text.length > MAX_BODY_CHARS) {
+    return c.json({ error: 'invalid_name' }, 400);
+  }
   // A missing or unreadable body is a request with no name.
-  const body: unknown = await c.req.json().catch(() => null);
+  let body: unknown = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // no name
+  }
   const named = typeof body === 'object' && body !== null && 'name' in body;
   const name = named ? (body as { name: unknown }).name : undefined;
   if (named && !isRoomName(name)) {

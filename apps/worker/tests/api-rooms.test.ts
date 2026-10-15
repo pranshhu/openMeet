@@ -206,6 +206,56 @@ describe('POST /api/rooms with a chosen name', () => {
     }
   });
 
+  it('answers 400 invalid_name to a 2 KiB body and creates no room', async () => {
+    const big = { name: 'big-show', pad: 'x'.repeat(2048) };
+    const sized = await post(big, '203.0.113.50');
+    expect(sized.status).toBe(400);
+    expect(await sized.json()).toEqual({ error: 'invalid_name' });
+
+    // A streamed body has no content-length, so only its text length can refuse it.
+    const bytes = new TextEncoder().encode(JSON.stringify(big));
+    const streamed = await SELF.fetch('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.51', 'content-type': 'application/json' },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit);
+    expect(streamed.status).toBe(400);
+    expect(await streamed.json()).toEqual({ error: 'invalid_name' });
+    expect(await rowFor('big-show')).toBeNull();
+  });
+
+  it('refuses a body that declares more than 1024 bytes without reading it', async () => {
+    const req = new Request('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.54', 'content-type': 'application/json', 'content-length': '1025' },
+      body: '{"name":"declared-show"}',
+    });
+    expect(req.headers.get('content-length')).toBe('1025');
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_name' });
+    expect(await rowFor('declared-show')).toBeNull();
+  });
+
+  it('takes a body of exactly 1024 characters and refuses one more', async () => {
+    const padded = (length: number) => {
+      const head = '{"name":"edge-show","pad":"';
+      const tail = '"}';
+      return head + 'x'.repeat(length - head.length - tail.length) + tail;
+    };
+    const fits = await post(padded(1024), '203.0.113.52', true);
+    expect(fits.status).toBe(201);
+    expect(((await fits.json()) as { slug: string }).slug).toBe('edge-show');
+    const over = await post(padded(1025), '203.0.113.53', true);
+    expect(over.status).toBe(400);
+  });
+
   it('spends the same rate limit slot, and checks it before the name', async () => {
     let limited: Response | undefined;
     let sent = 0;

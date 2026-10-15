@@ -2334,4 +2334,50 @@ describe('a room with a chosen name', () => {
       { dir: 'openmeet-backup-host-1700000000000-my-show', file: 'guest_r.mp4', kind: 'camera' },
     ]);
   });
+
+  it('opens no crash copy for text before or after a name', async () => {
+    for (const room of ['my-show!', '!my-show', 'my-show/x', ' my-show']) {
+      const root = new FakeDirectoryHandle('root');
+      await expect(openTakeJournal({ ...INIT, room }, async () => root as never), room).resolves.toBeNull();
+      expect(root.entries.size, room).toBe(0);
+    }
+  });
+
+  it('neither lists nor removes a take directory with text around the name', async () => {
+    for (const odd of [`${TAKE_DIR}/x`, `${TAKE_DIR}!`, `x-${TAKE_DIR}`]) {
+      const root = new FakeDirectoryHandle('root');
+      const journal = (await open(root))!;
+      journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+      journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+      await journal.file('guest_r.mp4').commit(1);
+
+      const dir = root.entries.get(TAKE_DIR)!;
+      dir.name = odd;
+      root.entries.set(odd, dir);
+      root.entries.delete(TAKE_DIR);
+
+      expect(await findTakeJournals(async () => root as never), odd).toEqual([]);
+      await deleteTakeJournal(odd, async () => root as never);
+      expect(root.entries.has(odd), odd).toBe(true);
+    }
+  });
+
+  it('drops a backup note whose directory has anything but a name after the date', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dirs = [
+      'openmeet-backup-host-1700000000000-my-show',
+      'openmeet-backup-host-1700000000000-my-show-',
+      'openmeet-backup-host-1700000000000-my-show!',
+      'openmeet-backup-host-1700000000000-!my-show',
+      'openmeet-backup-host-1700000000000-my-show-x/y',
+      'x-openmeet-backup-host-1700000000000-my-show',
+    ];
+    journal.note((n) => dirs.forEach((dir) => n.backups.push({ dir, file: 'guest_r.mp4', kind: 'camera' })));
+    journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal.file('guest_r.mp4').commit(1);
+
+    const [found] = await findTakeJournals(async () => root as never);
+    expect(found!.notes.backups.map((b) => b.dir)).toEqual([dirs[0]]);
+  });
 });
