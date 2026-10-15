@@ -497,6 +497,21 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   key removed otherwise, inside a `try`); a producer's and a Present-only join do not write it,
   and the check page only reads it. A link that also carries `producer=1` or `present=1` is that
   link and opens no capture.
+  `?view=host` and `?view=guest&name=<name>` (`parseViewLink` in `lib/view-link.ts`) make the page a
+  view of one person, for an OBS browser source or a second screen. `RoomView` never renders `Lobby`
+  for it, ignores `producer`, `present`, `check` and `audio`, and from an effect guarded by a ref
+  (StrictMode runs effects twice) calls `join(new MediaStream(), viewName(link), true)` with no
+  click: a producer with no camera or microphone, listed as "View of <name>". It renders `CleanView`
+  in every phase except the ending ones (`not-found`, `full`, `replaced`, `removed`, `refused`,
+  `error`, `left`), which keep their `StatusScreen`. `CleanView` is one `<video>` on black with no
+  name tag and no controls; `findViewed` picks the person from `remotePeers`, and when their camera
+  is off (`viewCamOff`, the rule `CallStage` uses) their initial is drawn and the sound plays on. The
+  person is named by role (the host) or by display name (a guest) because a peer id changes on every
+  socket and a client id is never shared. A guest is never found by name when they are the host, a
+  producer or a Present-only device. A browser that refuses sound to a page nobody clicked
+  (`NotAllowedError` from `play()`) gets the element muted so the picture runs, and a **Turn on
+  sound** button; any other refusal is ignored. A view with no `name`, or any other `view` value,
+  joins nothing and reads "This view link is incomplete."
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
@@ -1842,6 +1857,16 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A view link is the invite link with a flag, so it is exactly as private.** Anyone who has it
+  can watch. It shows the call's live picture, not the recording, and it adds one more connection,
+  by which everyone's live budget is divided. It takes one of the two unrecorded slots; refused at
+  the cap it reads "This room is full" until the source is reloaded.
+- **Two people of one name: the one listed first is shown by a view link.** The order is that of
+  `remotePeers`.
+- **A view page left open keeps the session going,** and with it the lock and the lists that end
+  with the session. The viewed person is not told that a view is open, and a Help ask sent to a
+  view does nothing. Opened on a computer that is in the call, its sound plays the person a second
+  time: mute that tab.
 - **A check link works only while its room does, and it is the invite link.** The checks
   run against the room, so an expired room shows "Room not found or expired"; opening a
   check link joins nothing and so does not extend the room's 30 days. Without `?check=1`

@@ -432,7 +432,7 @@ switched during the call is opened the same way as the one chosen in the lobby.
 ### Producers and Present only
 
 A room has 4 recorded seats (8 when every recorded person joined with **Microphone
-only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these three:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
@@ -444,6 +444,12 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these tw
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+- **View link.** Add `?view=host` or `?view=guest&name=<name>` to the invite link
+  (`https://<your-site>/r/<room>/?view=guest&name=Ana`) and use it as an OBS browser
+  source or on a second screen. The page joins by itself and shows that person's camera
+  and sound alone on a black page, with no buttons and no name. It takes an unrecorded
+  slot, is never recorded, and is as private as the invite link: anyone who has it can
+  watch.
 
 For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
 **Microphone only**, so nobody's camera comes back on. The host copies this link from
