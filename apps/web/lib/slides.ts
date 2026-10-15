@@ -1,6 +1,9 @@
 import { isPdf, openPdf } from './pdf-slides';
 import { CANVAS_HEIGHT, CANVAS_WIDTH, drawLetterboxed } from './screen';
 
+// What the presenter reads when the choice has nothing to present.
+const WRONG_CHOICE = 'Pick one PDF, or one or more pictures.';
+
 // The same rate presentFile repaints a photo at: it keeps the captured stream
 // giving frames while the picture does not change.
 const REPAINT_MS = 200;
@@ -50,7 +53,7 @@ export async function presentSlides(files: File[]): Promise<PresentedSlides> {
   let closeDeck: (() => void) | undefined;
   if (files.some(isPdf)) {
     // Pages are read by one PDF; mixing it with other files has no order to follow.
-    if (files.length !== 1) throw new Error('A PDF is presented on its own');
+    if (files.length !== 1) throw new Error(WRONG_CHOICE);
     const pdf = await openPdf(files[0]!);
     count = pdf.count;
     load = pdf.render;
@@ -59,7 +62,7 @@ export async function presentSlides(files: File[]): Promise<PresentedSlides> {
     const deck = files
       .filter((f) => f.type.startsWith('image/'))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    if (deck.length === 0) throw new Error('No pictures to present');
+    if (deck.length === 0) throw new Error(WRONG_CHOICE);
     count = deck.length;
     load = (i) => decode(deck[i]!);
   }

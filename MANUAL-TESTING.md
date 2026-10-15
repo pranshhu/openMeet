@@ -170,6 +170,7 @@ Not covered by the automated test at all.
 | 5.14 | Turn slides with the keys | While presenting three slides, press **Right**, **Right**, **Left**, **Page Down**; then click into the chat field and press **Right** | The presenter reads slide 2, 3, 2, 3 in turn; in the chat field the slide stays and the cursor moves | ☐ | |
 | 5.15 | Present menu on a phone | At 390 px of width (or on a phone), in a call with one other person, open the Present menu and tap the middle of each item in turn | The file picker opens for **A photo or video** and for **Slides (PDF or pictures)**, and the rear camera is presented for **Rear camera**; the spotlight is not swapped | ☐ | |
 | 5.16 | Present a PDF | During a take, click the arrow beside **Present**, pick **Slides (PDF or pictures)** and choose a three-page PDF; press **Next** twice, then **Previous** once | Everyone else sees pages 1, 2, 3, 2 in that order; the presenter reads `Slide 2 of 3`; the take's `*_screen_*.mp4` shows the same four pages; the browser console shows no Content-Security-Policy error | ☐ | |
+| 5.17 | A PDF that cannot be presented | Click the arrow beside **Present**, pick **Slides (PDF or pictures)** and choose a PDF with a password; then choose a text file renamed `deck.pdf` | The call shows `This PDF has a password. Save a copy without one and present that.`, then `Could not open this PDF.`; nothing is presented either time | ☐ | |
 
 ## 6 — Mesh (3–4 people)
 

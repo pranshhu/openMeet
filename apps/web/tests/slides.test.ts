@@ -349,3 +349,18 @@ describe('presentSlides: a PDF', () => {
     expect(captureStream).not.toHaveBeenCalled();
   });
 });
+
+describe('presentSlides: a choice that cannot be presented', () => {
+  const choose = (files: File[]) => presentSlides(files).then(() => 'presented', (e: Error) => e.message);
+
+  it('tells a choice with no picture to pick a PDF or pictures', async () => {
+    await expect(choose([new File(['text'], 'notes.txt', { type: 'text/plain' })])).resolves.toBe(
+      'Pick one PDF, or one or more pictures.'
+    );
+  });
+
+  it('tells a PDF chosen with a picture to pick a PDF or pictures', async () => {
+    const files = [new File(['%PDF'], 'deck.pdf', { type: 'application/pdf' }), png('a.png')];
+    await expect(choose(files)).resolves.toBe('Pick one PDF, or one or more pictures.');
+  });
+});

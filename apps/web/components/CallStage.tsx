@@ -274,7 +274,7 @@ export function CallStage({
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
   onDismissScript?: () => void;
-  onToggleScreen: (source?: PresentSource) => void;
+  onToggleScreen: (source?: PresentSource) => void | Promise<string | null>;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
@@ -1658,7 +1658,10 @@ export function CallStage({
                               const files = e.target.files;
                               if (!files || files.length === 0) return;
                               setPresentMenuOpen(false);
-                              onToggleScreen(Array.from(files));
+                              setDeviceError(null);
+                              void Promise.resolve(onToggleScreen(Array.from(files))).then((reason) => {
+                                if (typeof reason === 'string') setDeviceError(reason);
+                              });
                             }}
                           />
                         </label>

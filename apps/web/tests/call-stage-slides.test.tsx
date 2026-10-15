@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within, waitFor } from '@testing-library/react';
 import type { PresentedSlides } from '@/lib/slides';
 import { CallStage } from '@/components/CallStage';
 
@@ -138,5 +138,25 @@ describe('CallStage: slides', () => {
 
     rerender(<CallStage {...props} screenSharing slides={second} />);
     expect(screen.getByText('Slide 1 of 5')).toBeInTheDocument();
+  });
+
+  it('says why the files cannot be presented, and shows nothing when they can', async () => {
+    const onToggleScreen = vi
+      .fn()
+      .mockResolvedValueOnce('Could not open this PDF.')
+      .mockResolvedValueOnce(null);
+    render(<CallStage {...props} onToggleScreen={onToggleScreen} />);
+    const choose = () => {
+      const menu = openPresentMenu();
+      const input = within(menu).getByText('Slides (PDF or pictures)').closest('label')!.querySelector('input')!;
+      fireEvent.change(input, { target: { files: [new File(['x'], 'deck.pdf', { type: 'application/pdf' })] } });
+    };
+
+    choose();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not open this PDF.');
+
+    choose();
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(onToggleScreen).toHaveBeenCalledTimes(2);
   });
 });

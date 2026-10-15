@@ -2815,14 +2815,14 @@ export function useRoom(slug: string) {
   }, []);
 
   const toggleScreenShare = useCallback(
-    async (source?: PresentSource) => {
+    async (source?: PresentSource): Promise<string | null> => {
       const peer = peerRef.current;
       // A guest's screen recording travels over its connection to the host.
       // The host writes its own to the folder, so it can present with nobody
       // connected.
-      if (!peer && roleRef.current !== 'host') return;
+      if (!peer && roleRef.current !== 'host') return null;
       if (!screenSharingRef.current) {
-        if (presentPendingRef.current) return;
+        if (presentPendingRef.current) return null;
         presentPendingRef.current = true;
         let screen: MediaStream;
         let isRearCamera = false;
@@ -2846,13 +2846,14 @@ export function useRoom(slug: string) {
           } else {
             screen = await getScreenStream();
           }
-        } catch {
-          return; // user dismissed the screen-picker — no-op, not an error
+        } catch (e) {
+          // A dismissed screen picker is no error. A list of files that cannot be presented says why.
+          return Array.isArray(source) && e instanceof Error ? e.message : null;
         } finally {
           presentPendingRef.current = false;
         }
         const track = screen.getVideoTracks()[0];
-        if (!track) return;
+        if (!track) return null;
         screenTrackRef.current = track;
         screenStreamRef.current = screen;
 
@@ -2917,6 +2918,7 @@ export function useRoom(slug: string) {
       } else {
         stopScreenShare();
       }
+      return null;
     },
     [sendPresence, stopScreenShare, switchCamera, setCam]
   );

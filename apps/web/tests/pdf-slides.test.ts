@@ -137,10 +137,10 @@ describe('openPdf', () => {
     expect((params.worker as InstanceType<typeof FakePDFWorker>).opts).toEqual({ port: worker });
   });
 
-  it('rejects a document that cannot be loaded, as a password does, and ends the worker', async () => {
+  it('rejects a document that cannot be loaded and ends the worker', async () => {
     const task = { promise: Promise.reject(new Error('password')), destroy: vi.fn(async () => {}) };
     h.getDocument.mockReturnValue(task);
-    await expect(openPdf(pdfFile())).rejects.toThrow('password');
+    await expect(openPdf(pdfFile())).rejects.toThrow('Could not open this PDF.');
     expect(FakeWorker.made[0]!.terminate).toHaveBeenCalledTimes(1);
   });
 
@@ -385,5 +385,56 @@ describe('openPdf', () => {
     expect(p.renders[0]!.cancel).not.toHaveBeenCalled();
     expect(task.destroy).toHaveBeenCalledTimes(1);
     expect(FakeWorker.made[0]!.terminate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('openPdf: what the presenter reads when it rejects', () => {
+  beforeEach(() => {
+    FakeWorker.made = [];
+    h.getDocument.mockReset();
+    vi.stubGlobal('Worker', FakeWorker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const opening = (reason: unknown) => {
+    h.getDocument.mockReturnValue({ promise: Promise.reject(reason), destroy: vi.fn(async () => {}) });
+    return openPdf(pdfFile());
+  };
+
+  it('says a file over the size limit is too big', async () => {
+    const file = pdfFile();
+    Object.defineProperty(file, 'size', { value: MAX_PDF_BYTES + 1 });
+    await expect(openPdf(file)).rejects.toThrow(new Error('This PDF is over 100 MB.'));
+  });
+
+  it('says a PDF with a password cannot be presented, and what to do', async () => {
+    await expect(opening({ name: 'PasswordException' })).rejects.toThrow(
+      new Error('This PDF has a password. Save a copy without one and present that.')
+    );
+  });
+
+  it('says any other failure to open is a file that does not open', async () => {
+    await expect(opening(new Error('Invalid PDF structure'))).rejects.toThrow(new Error('Could not open this PDF.'));
+  });
+
+  it('says a PDF with no page does not open', async () => {
+    h.getDocument.mockReturnValue(fakeTask(0));
+    await expect(openPdf(pdfFile())).rejects.toThrow(new Error('Could not open this PDF.'));
+  });
+
+  it('says a PDF that takes 15 seconds to open does not open', async () => {
+    vi.useFakeTimers();
+    try {
+      h.getDocument.mockReturnValue({ promise: new Promise(() => {}), destroy: vi.fn(async () => {}) });
+      const outcome = openPdf(pdfFile()).catch((e: Error) => e.message);
+      await flush();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(outcome).resolves.toBe('Could not open this PDF.');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

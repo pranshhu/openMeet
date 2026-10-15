@@ -5,6 +5,10 @@ import { CANVAS_HEIGHT, CANVAS_WIDTH } from './screen';
 // a hostile or oversized one from taking the tab.
 export const MAX_PDF_BYTES = 100 * 1024 * 1024;
 export const MAX_PDF_PAGES = 1000;
+// What the presenter reads when a PDF cannot be presented.
+const TOO_BIG = 'This PDF is over 100 MB.';
+const HAS_PASSWORD = 'This PDF has a password. Save a copy without one and present that.';
+const WONT_OPEN = 'Could not open this PDF.';
 const MAX_IMAGE_PIXELS = 50_000_000;
 const OPEN_MS = 15_000;
 const RENDER_MS = 10_000;
@@ -44,7 +48,7 @@ const usable = (n: number) => Number.isFinite(n) && n > 0;
  * no font, color profile or script, and evaluates nothing as code.
  */
 export async function openPdf(file: File): Promise<PdfDeck> {
-  if (file.size > MAX_PDF_BYTES) throw new Error('PDF too large');
+  if (file.size > MAX_PDF_BYTES) throw new Error(TOO_BIG);
   const pdfjs = await import('pdfjs-dist');
   const worker = new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url), {
     type: 'module',
@@ -75,7 +79,7 @@ export async function openPdf(file: File): Promise<PdfDeck> {
   } catch (e) {
     if (task) quietly(() => task!.destroy());
     worker.terminate();
-    throw e;
+    throw new Error((e as { name?: unknown } | null)?.name === 'PasswordException' ? HAS_PASSWORD : WONT_OPEN);
   } finally {
     clearTimeout(timer);
   }
