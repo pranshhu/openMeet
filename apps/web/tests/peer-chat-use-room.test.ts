@@ -177,6 +177,38 @@ describe('chat in useRoom goes over the connections', () => {
   });
 });
 
+describe('a line that arrives on a guest page from the host', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    chatSpies.clear();
+    connectionOpts.clear();
+    vi.mocked(PeerConnection).mockClear();
+  });
+
+  it('reads as the host’s', async () => {
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(stream, 'Bob');
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'guest',
+        peerId: 'p-bob',
+        ordinal: 2,
+        peers: [{ peerId: 'p-host', ordinal: 1, role: 'host', displayName: 'Hana' }],
+        recording: false,
+      });
+    });
+    line('p-host', 'welcome');
+
+    expect(result.current.state.messages).toEqual([
+      { from: 'host', text: 'welcome', ts: expect.any(Number), fromPeerId: 'p-host', fromName: 'Hana' },
+    ]);
+  });
+});
+
 describe('a line that was not handed to someone says so', () => {
   beforeEach(() => {
     signalHandlers = {};

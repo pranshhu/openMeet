@@ -93,6 +93,7 @@ export class PeerConnection {
   private pendingLocalStream: MediaStream | null = null;
   private pendingScreenStream: MediaStream | null = null;
   private controlChannel: RTCDataChannel | null = null;
+  private tookReceivedControl = false;
   /** The page at the other end has said it reads chat on this connection. */
   private farReadsChat = false;
 
@@ -166,8 +167,14 @@ export class PeerConnection {
       // exactly one file. The consumer routes on label. A label may carry a
       // stable key after '#' (see recordingChannelKind) — filter on the base.
       // `backup` carries a leftover backup going back to the host.
+      // A connection takes one received `control` channel; a page that opens
+      // more would otherwise make this one hold any number of chat listeners.
       if (ev.channel.label === 'control') {
-        this.takeControlChannel(ev.channel);
+        if (this.tookReceivedControl) ev.channel.close();
+        else {
+          this.tookReceivedControl = true;
+          this.takeControlChannel(ev.channel);
+        }
         return;
       }
       const { base } = recordingChannelKind(ev.channel.label);
@@ -435,9 +442,10 @@ export class PeerConnection {
   }
 
   /**
-   * Both ends' `control` channel carries chat. Each one is listened to; this
-   * connection sends on the first it took. A page says hello once its channel is
-   * open, and a line is sent only to a page that has said it.
+   * Both ends' `control` channel carries chat. This connection takes the one it
+   * created and one it received, and sends on the first it took. A page says
+   * hello once its channel is open, and a line is sent only to a page that has
+   * said it.
    */
   private takeControlChannel(channel: RTCDataChannel): RTCDataChannel {
     this.controlChannel ??= channel;
@@ -619,6 +627,7 @@ export class PeerConnection {
     this.pendingLocalStream = null;
     this.connectedListeners = [];
     this.controlChannel = null;
+    this.tookReceivedControl = false;
     this.farReadsChat = false;
   }
 

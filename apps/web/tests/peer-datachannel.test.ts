@@ -32,6 +32,7 @@ class FakeChannel {
   readyState = 'connecting';
   sent: string[] = [];
   throwOnSend = false;
+  closed = false;
   private listeners = new Map<string, Listener[]>();
   constructor(readonly label: string, readonly opts?: unknown) {}
   addEventListener(type: string, fn: Listener) {
@@ -40,6 +41,9 @@ class FakeChannel {
   send(data: string) {
     if (this.throwOnSend) throw new Error('closed');
     this.sent.push(data);
+  }
+  close() {
+    this.closed = true;
   }
   open() {
     this.readyState = 'open';
@@ -239,7 +243,7 @@ describe('PeerConnection control channel chat', () => {
     expect(onDataChannel).not.toHaveBeenCalled();
   });
 
-  it('listens on every control channel and sends on the first it took', () => {
+  it('takes the control channel it created and one received, and sends on the created one', () => {
     const onChat = vi.fn();
     const { peer, pc } = make({ onChat });
     const first = made(peer, pc);
@@ -254,6 +258,28 @@ describe('PeerConnection control channel chat', () => {
     expect(peer.sendChat('hi', false)).toBe(true);
     expect(first.sent).toEqual([hello, JSON.stringify({ type: 'chat', text: 'hi' })]);
     expect(second.sent).toEqual([hello]);
+  });
+
+  it('closes a second received control channel and gives it no listener and no hello', () => {
+    const onChat = vi.fn();
+    const { peer, pc } = make({ onChat });
+    peer.start();
+    const first = new FakeChannel('control');
+    const second = new FakeChannel('control');
+    pc.ondatachannel!({ channel: first });
+    pc.ondatachannel!({ channel: second });
+    first.open();
+    second.open();
+    second.receive(JSON.stringify({ type: 'chat', text: 'from second' }));
+    second.receive(hello);
+    expect(second.closed).toBe(true);
+    expect(first.closed).toBe(false);
+    expect(second.sent).toEqual([]);
+    expect(onChat).not.toHaveBeenCalled();
+    expect(peer.sendChat('hi', false)).toBe(false);
+    first.receive(hello);
+    expect(peer.sendChat('hi', false)).toBe(true);
+    expect(second.sent).toEqual([]);
   });
 
   it('returns false when the channel is not open, and when send throws', () => {
