@@ -438,3 +438,92 @@ describe('openPdf: what the presenter reads when it rejects', () => {
     }
   });
 });
+
+// PDF.js is a chunk fetched on first use: the tab can have outlived a deploy, or
+// the network can be down, and then the import itself fails or never answers.
+describe('openPdf: when PDF.js cannot be fetched', () => {
+  const WONT_OPEN = 'Could not open this PDF.';
+
+  beforeEach(() => {
+    FakeWorker.made = [];
+    h.getDocument.mockReset();
+    vi.resetModules();
+    vi.stubGlobal('Worker', FakeWorker);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('says the file does not open when the import fails, and makes no worker', async () => {
+    vi.doMock('pdfjs-dist', () => {
+      throw new Error('Failed to fetch dynamically imported module: /_next/static/chunks/pdf.js');
+    });
+    const { openPdf: open } = await import('@/lib/pdf-slides');
+    await expect(open(pdfFile())).rejects.toThrow(new Error(WONT_OPEN));
+    expect(FakeWorker.made).toHaveLength(0);
+  });
+
+  it('says the file does not open when the import has not answered after 15 seconds', async () => {
+    vi.doMock('pdfjs-dist', () => new Promise(() => {}));
+    const { openPdf: open } = await import('@/lib/pdf-slides');
+    vi.useFakeTimers();
+    const outcome = open(pdfFile()).then(
+      () => 'opened',
+      (e: Error) => e.message
+    );
+    await flush();
+    await vi.advanceTimersByTimeAsync(14_999);
+    await expect(Promise.race([outcome, Promise.resolve('waiting')])).resolves.toBe('waiting');
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(outcome).resolves.toBe(WONT_OPEN);
+  });
+
+  it('says the file does not open when the worker cannot be made', async () => {
+    vi.doMock('pdfjs-dist', () => ({ getDocument: h.getDocument, PDFWorker: h.PDFWorker }));
+    vi.stubGlobal(
+      'Worker',
+      class {
+        constructor() {
+          throw new Error('SecurityError');
+        }
+      }
+    );
+    const { openPdf: open } = await import('@/lib/pdf-slides');
+    await expect(open(pdfFile())).rejects.toThrow(new Error(WONT_OPEN));
+    expect(h.getDocument).not.toHaveBeenCalled();
+  });
+
+  it('makes no worker when the import answers after the 15 seconds', async () => {
+    let arrive!: (m: object) => void;
+    vi.doMock('pdfjs-dist', () => new Promise<object>((resolve) => (arrive = resolve)));
+    const { openPdf: open } = await import('@/lib/pdf-slides');
+    vi.useFakeTimers();
+    const outcome = open(pdfFile()).catch((e: Error) => e.message);
+    await flush();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(outcome).resolves.toBe(WONT_OPEN);
+    arrive({ getDocument: h.getDocument, PDFWorker: h.PDFWorker });
+    await flush();
+    expect(FakeWorker.made).toHaveLength(0);
+    expect(h.getDocument).not.toHaveBeenCalled();
+  });
+
+  it('starts no document when the file is read after the 15 seconds, and ends the worker', async () => {
+    vi.doMock('pdfjs-dist', () => ({ getDocument: h.getDocument, PDFWorker: h.PDFWorker }));
+    const { openPdf: open } = await import('@/lib/pdf-slides');
+    let read!: (b: ArrayBuffer) => void;
+    const file = new File(['%PDF'], 'deck.pdf', { type: 'application/pdf' });
+    Object.defineProperty(file, 'arrayBuffer', { value: () => new Promise<ArrayBuffer>((r) => (read = r)) });
+    vi.useFakeTimers();
+    const outcome = open(file).catch((e: Error) => e.message);
+    await flush();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(outcome).resolves.toBe(WONT_OPEN);
+    read(new Uint8Array([1]).buffer);
+    await flush();
+    expect(h.getDocument).not.toHaveBeenCalled();
+    expect(FakeWorker.made[0]!.terminate).toHaveBeenCalledTimes(1);
+  });
+});

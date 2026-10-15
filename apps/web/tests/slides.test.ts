@@ -343,6 +343,24 @@ describe('presentSlides: a PDF', () => {
     expect(captureStream).not.toHaveBeenCalled();
   });
 
+  it('closes the PDF when a step after it opened throws, and rethrows', async () => {
+    HTMLCanvasElement.prototype.captureStream = undefined as never;
+    vi.stubGlobal(
+      'MediaStream',
+      class {
+        constructor() {
+          throw new Error('no MediaStream');
+        }
+      }
+    );
+    try {
+      await expect(presentSlides([pdfFile()])).rejects.toThrow('no MediaStream');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects when the PDF cannot be opened, and makes no stream', async () => {
     pdf.openPdf.mockRejectedValue(new Error('password'));
     await expect(presentSlides([pdfFile()])).rejects.toThrow('password');

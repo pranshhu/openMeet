@@ -801,6 +801,9 @@ export function useRoom(slug: string) {
   const screenSharingRef = useRef(false);
   // A present that is still waiting for its source: a picker, a file, a deck.
   const presentPendingRef = useRef(false);
+  // Set when the room is let go of, by Leave or by unmount: a source that is
+  // ready after that belongs to nobody and is stopped, not added to the call.
+  const releasedRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
   // Written by setSendLater itself: a take that starts before the next render reads it.
@@ -1263,6 +1266,7 @@ export function useRoom(slug: string) {
       // Read once, here: this stream never gets a video track during the call.
       const audioOnly = !asProducer && !asCompanion && lobbyStream.getVideoTracks().length === 0;
       companionRef.current = asCompanion;
+      releasedRef.current = false;
       // A present-only companion or a producer has no camera or mic: wrapping its empty
       // stream would conjure a silent audio track, which a companion would then send.
       const switchableMedia = asCompanion || asProducer
@@ -2852,6 +2856,13 @@ export function useRoom(slug: string) {
         } finally {
           presentPendingRef.current = false;
         }
+        if (releasedRef.current) {
+          try {
+            if (customStop) customStop();
+            else screen.getTracks().forEach((t) => t.stop());
+          } catch {}
+          return null;
+        }
         const track = screen.getVideoTracks()[0];
         if (!track) return null;
         screenTrackRef.current = track;
@@ -3369,6 +3380,7 @@ export function useRoom(slug: string) {
     // The tracks are stopped below. startRecording reads this ref, so a
     // countdown that is still running when the host leaves starts nothing.
     localStreamRef.current = null;
+    releasedRef.current = true;
     if (customStopRef.current) {
       try {
         customStopRef.current();
@@ -3456,6 +3468,7 @@ export function useRoom(slug: string) {
       for (const p of peersRef.current.values()) p.close();
       peersRef.current.clear();
       peerRef.current?.close();
+      releasedRef.current = true;
       if (customStopRef.current) {
         try {
           customStopRef.current();

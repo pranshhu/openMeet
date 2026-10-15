@@ -1,4 +1,4 @@
-import type { PDFPageProxy, RenderTask } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './screen';
 
 // A PDF is a file the presenter downloaded: untrusted content. These bounds keep
@@ -49,36 +49,49 @@ const usable = (n: number) => Number.isFinite(n) && n > 0;
  */
 export async function openPdf(file: File): Promise<PdfDeck> {
   if (file.size > MAX_PDF_BYTES) throw new Error(TOO_BIG);
-  const pdfjs = await import('pdfjs-dist');
-  const worker = new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url), {
-    type: 'module',
-  });
-  let task: ReturnType<typeof pdfjs.getDocument> | undefined;
+  let worker: Worker | undefined;
+  let task: PDFDocumentLoadingTask | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let count = 0;
-  let doc: Awaited<ReturnType<typeof pdfjs.getDocument>['promise']>;
+  let doc: PDFDocumentProxy;
+  // Set once opening has failed: a step that finishes after that makes nothing more.
+  let abandoned = false;
+  const stopIfAbandoned = () => {
+    if (abandoned) throw new Error('PDF took too long to open');
+  };
   try {
-    const data = new Uint8Array(await file.arrayBuffer());
-    // This PDF.js has no code evaluation to switch off and ignores the option, which is
-    // kept so a version that adds one stays off. Its types declare `port` as null
-    // although it takes the Worker.
-    const params = {
-      data,
-      worker: new pdfjs.PDFWorker({ port: worker as unknown as null }),
-      isEvalSupported: false,
-      maxImageSize: MAX_IMAGE_PIXELS,
-    };
-    const loading = pdfjs.getDocument(params);
-    task = loading;
     const late = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('PDF took too long to open')), OPEN_MS);
     });
-    doc = await Promise.race([loading.promise, late]);
+    // The bound covers fetching PDF.js too: a chunk that cannot be fetched fails
+    // or hangs, and the presenter waits for it.
+    const load = async () => {
+      const pdfjs = await import('pdfjs-dist');
+      stopIfAbandoned();
+      worker = new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url), {
+        type: 'module',
+      });
+      const data = new Uint8Array(await file.arrayBuffer());
+      stopIfAbandoned();
+      // This PDF.js has no code evaluation to switch off and ignores the option, which is
+      // kept so a version that adds one stays off. Its types declare `port` as null
+      // although it takes the Worker.
+      const params = {
+        data,
+        worker: new pdfjs.PDFWorker({ port: worker as unknown as null }),
+        isEvalSupported: false,
+        maxImageSize: MAX_IMAGE_PIXELS,
+      };
+      task = pdfjs.getDocument(params);
+      return task.promise;
+    };
+    doc = await Promise.race([load(), late]);
     if (!(doc.numPages > 0)) throw new Error('PDF has no page');
     count = Math.min(doc.numPages, MAX_PDF_PAGES);
   } catch (e) {
+    abandoned = true;
     if (task) quietly(() => task!.destroy());
-    worker.terminate();
+    worker?.terminate();
     throw new Error((e as { name?: unknown } | null)?.name === 'PasswordException' ? HAS_PASSWORD : WONT_OPEN);
   } finally {
     clearTimeout(timer);
@@ -160,7 +173,7 @@ export async function openPdf(file: File): Promise<PdfDeck> {
       cancelInFlight?.();
       cancelInFlight = null;
       quietly(() => task!.destroy());
-      worker.terminate();
+      worker!.terminate();
     },
   };
 }

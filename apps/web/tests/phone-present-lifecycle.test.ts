@@ -200,7 +200,7 @@ describe('present presentation lifecycle with useRoom', () => {
       getVideoTracks: () => [rawVideo],
     } as any;
 
-    const { result } = renderHook(() => useRoom('test-room'));
+    const { result, unmount } = renderHook(() => useRoom('test-room'));
 
     await act(async () => {
       await result.current.join(lobbyStream, 'Alice', false);
@@ -218,7 +218,7 @@ describe('present presentation lifecycle with useRoom', () => {
       });
     });
 
-    return { result, rawVideo, rawAudio };
+    return { result, rawVideo, rawAudio, unmount };
   }
 
   it('picking an image yields a 1920x1080 canvas stream through toggleScreenShare path', async () => {
@@ -386,7 +386,7 @@ describe('present presentation lifecycle with useRoom', () => {
     it('a present-only device does not', async () => {
       Object.defineProperty(navigator, 'userAgent', { value: 'test-desktop', configurable: true });
       const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as any;
-      const { result } = renderHook(() => useRoom('test-room'));
+      const { result, unmount } = renderHook(() => useRoom('test-room'));
       await act(async () => {
         await result.current.join(empty, 'Alice', false, true);
       });
@@ -615,6 +615,135 @@ describe('present presentation lifecycle with useRoom', () => {
 
       expect(result.current.state.slides).toBeNull();
       expect(mockCanvasStreamTracks[0].stop).toHaveBeenCalled();
+    });
+  });
+
+  describe('a source that is ready after the presenter has left', () => {
+    const track = () => ({ kind: 'video', id: 'late-track', stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const streamOf = (t: ReturnType<typeof track>) =>
+      Object.assign(new EventTarget(), {
+        getTracks: () => [t],
+        getVideoTracks: () => [t],
+        getAudioTracks: () => [],
+      }) as unknown as MediaStream;
+    const lateDeck = () => {
+      const t = track();
+      const deck = { stream: streamOf(t), stop: vi.fn(), count: 1, index: 0, show: vi.fn() };
+      let ready!: () => void;
+      vi.mocked(presentSlides).mockImplementationOnce(
+        () => new Promise((resolve) => (ready = () => resolve(deck as never)))
+      );
+      return { deck, ready: () => ready() };
+    };
+    const pictures = [new File(['image-bytes'], 'a.png', { type: 'image/png' })];
+
+    it('stops a deck that opens after leave, and presents nothing', async () => {
+      const { result } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        await result.current.leave();
+      });
+
+      let reason: string | null = 'unset';
+      await act(async () => {
+        ready();
+        reason = await pending;
+      });
+
+      expect(reason).toBeNull();
+      expect(deck.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.slides).toBeNull();
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(result.current.state.localScreenStream).toBeNull();
+    });
+
+    it('resolves with null even when stopping the late deck throws', async () => {
+      const { result } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      deck.stop.mockImplementation(() => {
+        throw new Error('already gone');
+      });
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        await result.current.leave();
+      });
+
+      await act(async () => {
+        ready();
+      });
+
+      await expect(pending).resolves.toBeNull();
+    });
+
+    it('stops a deck that opens after the page was closed', async () => {
+      const { result, unmount } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+      });
+      unmount();
+
+      await act(async () => {
+        ready();
+        await pending;
+      });
+
+      expect(deck.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.slides).toBeNull();
+    });
+
+    it('presents again once the room is joined again', async () => {
+      const { result } = await setupConnectedRoom();
+      await act(async () => {
+        await result.current.leave();
+      });
+      const t = track();
+      await act(async () => {
+        await result.current.join(streamOf(t), 'Alice', false);
+      });
+      await act(async () => {
+        signalHandlers['peer-joined']?.at(-1)?.({
+          type: 'peer-joined',
+          peerId: 'peer-bob',
+          ordinal: 1,
+          role: 'host',
+          displayName: 'Bob',
+        });
+      });
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        ready();
+        await pending;
+      });
+
+      expect(deck.stop).not.toHaveBeenCalled();
+      expect(result.current.state.screenSharing).toBe(true);
+    });
+
+    it('stops every track of a screen that is picked after leave', async () => {
+      const { result } = await setupConnectedRoom();
+      const t = track();
+      let picked!: () => void;
+      mockGetDisplayMedia.mockImplementationOnce(() => new Promise((resolve) => (picked = () => resolve(streamOf(t)))));
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare();
+        await result.current.leave();
+      });
+
+      await act(async () => {
+        picked();
+        await pending;
+      });
+
+      expect(t.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.screenSharing).toBe(false);
     });
   });
 

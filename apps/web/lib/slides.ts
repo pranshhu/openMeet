@@ -67,63 +67,69 @@ export async function presentSlides(files: File[]): Promise<PresentedSlides> {
     load = (i) => decode(deck[i]!);
   }
 
-  const canvas = document.createElement('canvas');
-  canvas.width = CANVAS_WIDTH;
-  canvas.height = CANVAS_HEIGHT;
-  const ctx = canvas.getContext('2d');
+  // The deck is open now: whatever fails from here on must not leave its worker running.
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
+    const ctx = canvas.getContext('2d');
 
-  // Null shows black: before the first slide arrives and for one that cannot be decoded.
-  let shown: Slide | null = null;
-  let index = 0;
-  let asked = 0;
-  let stopped = false;
+    // Null shows black: before the first slide arrives and for one that cannot be decoded.
+    let shown: Slide | null = null;
+    let index = 0;
+    let asked = 0;
+    let stopped = false;
 
-  const paint = () => {
-    if (!ctx) return;
-    if (shown) {
-      drawLetterboxed(ctx, shown.source, shown.width, shown.height);
-    } else {
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    }
-  };
+    const paint = () => {
+      if (!ctx) return;
+      if (shown) {
+        drawLetterboxed(ctx, shown.source, shown.width, shown.height);
+      } else {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+    };
 
-  const show = async (i: number) => {
-    if (stopped || !Number.isInteger(i) || i < 0 || i >= count) return;
-    index = i;
-    const ticket = ++asked;
-    const next = await load(i);
-    // A later request, or the end of the deck, got here first: this one is stale.
-    if (stopped || ticket !== asked) {
-      next?.release();
-      return;
-    }
-    shown?.release();
-    shown = next;
-    paint();
-  };
-
-  const stream: MediaStream =
-    typeof (canvas as any).captureStream === 'function'
-      ? (canvas as any).captureStream(30)
-      : new MediaStream();
-  const timer = setInterval(paint, REPAINT_MS);
-  await show(0);
-
-  return {
-    stream,
-    count,
-    get index() {
-      return index;
-    },
-    show,
-    stop: () => {
-      stopped = true;
-      clearInterval(timer);
+    const show = async (i: number) => {
+      if (stopped || !Number.isInteger(i) || i < 0 || i >= count) return;
+      index = i;
+      const ticket = ++asked;
+      const next = await load(i);
+      // A later request, or the end of the deck, got here first: this one is stale.
+      if (stopped || ticket !== asked) {
+        next?.release();
+        return;
+      }
       shown?.release();
-      shown = null;
-      closeDeck?.();
-      stream.getTracks().forEach((t) => t.stop?.());
-    },
-  };
+      shown = next;
+      paint();
+    };
+
+    const stream: MediaStream =
+      typeof (canvas as any).captureStream === 'function'
+        ? (canvas as any).captureStream(30)
+        : new MediaStream();
+    const timer = setInterval(paint, REPAINT_MS);
+    await show(0);
+
+    return {
+      stream,
+      count,
+      get index() {
+        return index;
+      },
+      show,
+      stop: () => {
+        stopped = true;
+        clearInterval(timer);
+        shown?.release();
+        shown = null;
+        closeDeck?.();
+        stream.getTracks().forEach((t) => t.stop?.());
+      },
+    };
+  } catch (e) {
+    closeDeck?.();
+    throw e;
+  }
 }
