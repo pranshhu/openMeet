@@ -326,6 +326,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Changed
 
+- A guest's camera file and WAV master carry that guest's name, like the host's:
+  `guest-bob_<id>.mp4`, `guest2-ana_<id>.wav`.
 - A screen share that is being recorded continues in the same file after the
   presenter's connection drops and comes back, instead of starting a second file.
   When the host no longer has that file, the share is recorded in a new numbered

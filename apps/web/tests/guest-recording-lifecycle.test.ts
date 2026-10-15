@@ -1087,6 +1087,7 @@ describe('host backup after a take in useRoom', () => {
 
   /** Stands in for the browser-storage journal: note() edits the notes in place. */
   const fakeJournal = (notes: ReturnType<typeof fakeNotes>) => ({
+    notes,
     note: (change: (n: typeof notes) => void) => change(notes),
     finish: vi.fn().mockResolvedValue(undefined),
     file: () => ({
@@ -2403,23 +2404,18 @@ describe('host backup after a take in useRoom', () => {
 
   it('names the guest on the note its camera file opened', async () => {
     const notes = fakeNotes();
-    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
-    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+    const { dir } = fakeDirectory();
+    const channel = { label: 'recording', readyState: 'open', send: vi.fn() } as unknown as RTCDataChannel;
 
-    await hostTake(
+    const { recordingId } = await hostTake(
       () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
-      {
-        channelRef: { current: null },
-        journal: fakeJournal(notes),
-        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
-        receiver: guestReceiver('guest_rec-host-1.mp4'),
-      }
+      { dir, journal: fakeJournal(notes) }
     );
 
     await vi.waitFor(() =>
       expect(notes.files).toEqual([
         {
-          file: 'guest_rec-host-1.mp4',
+          file: `guest-guest_${recordingId}.mp4`,
           kind: 'camera',
           slot: 0,
           key: 'p-guest',
@@ -2431,24 +2427,19 @@ describe('host backup after a take in useRoom', () => {
 
   it('leaves who off the note while the guest has no name', async () => {
     const notes = fakeNotes();
-    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
-    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+    const { dir } = fakeDirectory();
+    const channel = { label: 'recording', readyState: 'open', send: vi.fn() } as unknown as RTCDataChannel;
 
-    await hostTake(
+    const { recordingId } = await hostTake(
       () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel),
-      {
-        channelRef: { current: null },
-        journal: fakeJournal(notes),
-        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
-        receiver: guestReceiver('guest_rec-host-1.mp4'),
-      },
+      { dir, journal: fakeJournal(notes) },
       [{ peerId: 'p-guest', ordinal: 2, role: 'guest', displayName: null }]
     );
 
     await vi.waitFor(() =>
       expect(notes.files).toEqual([
         {
-          file: 'guest_rec-host-1.mp4',
+          file: `guest_${recordingId}.mp4`,
           kind: 'camera',
           slot: 0,
           key: 'p-guest',
@@ -2474,7 +2465,7 @@ describe('host backup after a take in useRoom', () => {
     await vi.waitFor(() =>
       expect(notes.files).toEqual([
         {
-          file: `guest_${recordingId}.wav`,
+          file: `guest-guest_${recordingId}.wav`,
           kind: 'wav',
           key: 'p-guest',
           slot: 0,
@@ -2533,24 +2524,19 @@ describe('host backup after a take in useRoom', () => {
   // simply unknown then, and the bind still has to run with `who` absent.
   it('leaves who off the note when the socket peer is no longer listed', async () => {
     const notes = fakeNotes();
-    notes.files = [{ file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0 }];
-    const channel = { label: 'recording', readyState: 'open' } as unknown as RTCDataChannel;
+    const { dir } = fakeDirectory();
+    const channel = { label: 'recording', readyState: 'open', send: vi.fn() } as unknown as RTCDataChannel;
 
-    await hostTake(
+    const { recordingId } = await hostTake(
       () => emitSignal('peer-left', { type: 'peer-left', peerId: 'p-guest' }),
-      {
-        channelRef: { current: null },
-        journal: fakeJournal(notes),
-        guestWriter: { fileName: 'guest_rec-host-1.mp4' },
-        receiver: guestReceiver('guest_rec-host-1.mp4'),
-      },
+      { dir, journal: fakeJournal(notes) },
       undefined,
       () => vi.mocked(PeerConnection).mock.calls.at(-1)![0].onDataChannel?.(channel)
     );
 
     await vi.waitFor(() =>
       expect(notes.files).toEqual([
-        { file: 'guest_rec-host-1.mp4', kind: 'camera', slot: 0, key: 'p-guest' },
+        { file: `guest_${recordingId}.mp4`, kind: 'camera', slot: 0, key: 'p-guest' },
       ])
     );
   });
@@ -3856,7 +3842,7 @@ describe('guest slots belong to the peers a host records', () => {
     });
     await settle();
 
-    expect(opened).toEqual(['guest_rec-gate.wav']);
+    expect(opened).toEqual(['guest-bob_rec-gate.wav']);
     expect(handles.guestSlots?.get('g')).toBe(0);
     expect(handles.channel).toBe(camera);
     expect(result.current.state.recordingError).toBeNull();
@@ -6434,5 +6420,76 @@ describe('private messages in useRoom', () => {
     expect(chatContent).toContain('for the room');
     expect(chatContent).not.toContain('for the host only');
     expect(chatContent).not.toContain('from the host to Bob only');
+  });
+});
+
+describe('guest file names on a host page', () => {
+  beforeEach(() => {
+    signalHandlers = {};
+    signalSent = [];
+    globalThis.URL.createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  const ana = { peerId: 'p-ana', ordinal: 2, role: 'guest', displayName: 'Ana' };
+  const bob = { peerId: 'p-bob', ordinal: 3, role: 'guest', displayName: 'Bob' };
+
+  const channel = (label: string) =>
+    Object.assign(new EventTarget(), { label, readyState: 'open', send: () => {} }) as unknown as RTCDataChannel;
+  const channelTo = (peerId: string) =>
+    vi.mocked(PeerConnection).mock.calls.map(([o]) => o).reverse().find((o) => o.remotePeerId === peerId)!
+      .onDataChannel!;
+  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  it.each([
+    ['Ana first in the room', [ana, bob]],
+    ['Bob first in the room', [bob, ana]],
+  ])("names a guest's camera file after that guest, with %s", async (_label, peers) => {
+    const opened: string[] = [];
+    const handles: RecordingHandles = {
+      recordingId: 'rec-names',
+      take: 1,
+      dir: {
+        getFileHandle: async (name: string) => {
+          opened.push(name);
+          return { name, createWritable: async () => ({ write: async () => {}, close: async () => {} }) };
+        },
+      } as unknown as NonNullable<RecordingHandles['dir']>,
+    };
+    vi.mocked(startHostRecording).mockImplementationOnce(async () => handles as never);
+    const { result } = renderHook(() => useRoom('xyz-test-room'));
+    await act(async () => {
+      await result.current.join(
+        { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as unknown as MediaStream,
+        'Host Hana'
+      );
+    });
+    act(() => {
+      emitSignal('role-assigned', {
+        type: 'role-assigned',
+        role: 'host',
+        peerId: 'p-host',
+        ordinal: 1,
+        peers,
+        recording: false,
+      });
+    });
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    act(() => {
+      channelTo('p-bob')(channel('recording#kb'));
+    });
+    await settle();
+    act(() => {
+      channelTo('p-ana')(channel('recording#ka'));
+    });
+    await settle();
+
+    expect(opened).toEqual(['guest-bob_rec-names.mp4', 'guest2-ana_rec-names.mp4']);
+    expect(result.current.state.recordingError).toBeNull();
   });
 });

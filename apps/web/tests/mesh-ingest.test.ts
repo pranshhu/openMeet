@@ -147,6 +147,13 @@ async function hostHandles(opened: string[], written: Written[], slot0: Written[
   return h;
 }
 
+/** A take as startHostRecording leaves it: a folder and the take's id, no guest file yet. */
+function bareHandles(opened: string[], written: Written[], dir = fakeDir(opened, written)) {
+  const { journal } = fakeJournal();
+  const h: RecordingHandles = { recordingId: 'r', take: 1, dir, journal };
+  return h;
+}
+
 /** A TakeJournal whose parts are counted, so a test can tell a receiver really holds its journal file. */
 function fakeJournal() {
   const notes: TakeNotes = {
@@ -585,36 +592,38 @@ describe('host ingest routes by source peer', () => {
     }
   });
 
-  it("gives slot 0's note the channel key and the name at bind time", async () => {
+  it("gives each guest file's note the channel key and the name at bind time", async () => {
     const opened: string[] = [];
-    const written: Written[] = [];
-    const h = await hostHandles(opened, written, []);
-    const { journal } = fakeJournal();
-    h.journal = journal;
-    h.guestWriter = { fileName: 'guest_rec.mp4' } as never;
-    journal.notes.files.push({ file: 'guest_rec.mp4', kind: 'camera', slot: 0 });
+    const h = bareHandles(opened, []);
+    const journal = h.journal!;
 
     await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', undefined, 'Bob');
     expect(journal.notes.files[0]).toEqual({
-      file: 'guest_rec.mp4',
+      file: 'guest-bob_r.mp4',
       kind: 'camera',
       slot: 0,
       key: 'k1',
       who: 'Bob',
     });
 
-    // A rebind of the same slot carries the name the room knows now.
+    // A rebind continues the file it was opened with, and its note.
     await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-a', undefined, 'B'.repeat(300));
-    expect(journal.notes.files[0]?.who).toBe('B'.repeat(200));
+    expect(journal.notes.files).toEqual([
+      { file: 'guest-bob_r.mp4', kind: 'camera', slot: 0, key: 'k1', who: 'Bob' },
+    ]);
 
     // A second guest's new file gets its own key, also capped.
     await bindHostGuestChannel(fakeChannel('recording#k2'), h, 'peer-b', undefined, 'C'.repeat(300));
-    expect(journal.notes.files[1]).toMatchObject({ file: 'guest2_rec.mp4', key: 'k2', who: 'C'.repeat(200) });
+    expect(journal.notes.files[1]).toMatchObject({
+      file: `guest2-${'c'.repeat(32)}_r.mp4`,
+      key: 'k2',
+      who: 'C'.repeat(200),
+    });
 
     // The key is a channel-label key, so a key too long to be one never reaches a note.
     await bindHostGuestChannel(fakeChannel(`recording#${'k'.repeat(300)}`), h, 'peer-c', undefined, 'Carol');
     expect(journal.notes.files).toHaveLength(2);
-    expect(opened).toEqual(['guest2_rec.mp4']);
+    expect(opened).toEqual(['guest-bob_r.mp4', `guest2-${'c'.repeat(32)}_r.mp4`]);
   });
 
   it('writes a guest camera note even when the journal already holds 64', async () => {
@@ -950,7 +959,7 @@ describe("a guest who left keeps the name their slot was bound with", () => {
     const reports = await collectGuestReports(h, (id) => (id === 'peer-a' ? 'Ann' : undefined));
     expect(reports.map((g) => [g.slot, g.name, g.wavFile])).toEqual([
       [0, 'Ann', undefined],
-      [1, 'Bo', 'guest2_rec.wav'],
+      [1, 'Bo', 'guest2-bo_rec.wav'],
     ]);
 
     const report = buildSyncReport({
@@ -960,9 +969,9 @@ describe("a guest who left keeps the name their slot was bound with", () => {
       guests: reports,
       checks: await collectFileChecks(h),
     });
-    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.mp4')?.participant).toBe('Bo');
-    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.wav')?.participant).toBe('Bo');
-    expect(report.data.fileList.find((f) => f.name === 'guest2_rec.wav')?.verdict?.text).toContain('Bo');
+    expect(report.data.fileList.find((f) => f.name === 'guest2-bo_rec.mp4')?.participant).toBe('Bo');
+    expect(report.data.fileList.find((f) => f.name === 'guest2-bo_rec.wav')?.participant).toBe('Bo');
+    expect(report.data.fileList.find((f) => f.name === 'guest2-bo_rec.wav')?.verdict?.text).toContain('Bo');
   });
 
   it('prefers the name a guest is in the room with now over the stored one', async () => {
@@ -1052,10 +1061,10 @@ describe('a guest WAV that received nothing is still reported', () => {
       checks: await collectFileChecks(h),
     });
 
-    expect(reports[0]?.wavFile).toBe('guest_rec.wav');
+    expect(reports[0]?.wavFile).toBe('guest-ann_rec.wav');
     // There is a WAV master (the file), it just holds nothing.
     expect(reports[0]?.noWav).toBe(false);
-    expect(report.data.fileList.find((f) => f.name === 'guest_rec.wav')).toMatchObject({
+    expect(report.data.fileList.find((f) => f.name === 'guest-ann_rec.wav')).toMatchObject({
       kind: 'audio',
       bytes: 0,
       verdict: { status: 'incomplete', text: expect.stringContaining('Empty. Nothing arrived from Ann') },
@@ -1063,7 +1072,7 @@ describe('a guest WAV that received nothing is still reported', () => {
     type Verification = { file: string; bytes: number | null; status?: string };
     const verification = (JSON.parse(report.json) as { verification: Verification[] }).verification;
     expect(verification).toContainEqual(
-      expect.objectContaining({ file: 'guest_rec.wav', bytes: 0, status: 'incomplete' })
+      expect.objectContaining({ file: 'guest-ann_rec.wav', bytes: 0, status: 'incomplete' })
     );
     expect(report.data.warnings.some((w) => w.includes('no WAV master'))).toBe(false);
   });
@@ -2494,5 +2503,177 @@ describe('a take with seven recorded guests', () => {
     expect(errors.map((e) => (e as Error).message)).toEqual([
       'A guest opened more recordings than one take allows. The extra ones were not saved; their own backup has them.',
     ]);
+  });
+});
+
+describe('guest file names', () => {
+  it("opens the first guest's camera file when its channel arrives, under that guest's name", async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = bareHandles(opened, written);
+
+    const camera = fakeChannel('recording#kb');
+    await bindHostGuestChannel(camera, h, 'peer-b', undefined, 'Bob');
+    await sendChunk(camera, 0, 0, 40);
+
+    expect(opened).toEqual(['guest-bob_r.mp4']);
+    expect(written).toEqual([{ file: 'guest-bob_r.mp4', position: 0, bytes: 40 }]);
+    expect(h.guestWriter?.fileName).toBe('guest-bob_r.mp4');
+    expect(h.channelRef?.current).toBe(camera);
+    expect(h.channel).toBe(camera);
+    expect(h.guestReceivers?.size ?? 0).toBe(0);
+    expect(h.extraWriters ?? []).toEqual([]);
+    expect(h.journal?.notes.files).toEqual([
+      { file: 'guest-bob_r.mp4', kind: 'camera', key: 'kb', slot: 0, who: 'Bob' },
+    ]);
+
+    await bindHostAudioChannel(fakeChannel('recording-audio#kb'), h, 'peer-b', undefined, 'Bob');
+    expect(opened).toEqual(['guest-bob_r.mp4', 'guest-bob_r.wav']);
+    expect(h.guestWavWriter?.fileName).toBe('guest-bob_r.wav');
+  });
+
+  it('reports the first guest through its camera file', async () => {
+    const h = bareHandles([], []);
+    const camera = fakeChannel('recording#kb');
+    await bindHostGuestChannel(camera, h, 'peer-b', undefined, 'Bob');
+    await sendChunk(camera, 0, 0, 40);
+
+    const reports = await collectGuestReports(h);
+    expect(reports.map((g) => [g.slot, g.name, g.file])).toEqual([[0, 'Bob', 'guest-bob_r.mp4']]);
+  });
+
+  it('gives two guests of one name a file each, with the chunks of their own channel', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = bareHandles(opened, written);
+
+    const first = fakeChannel('recording#k1');
+    const second = fakeChannel('recording#k2');
+    await bindHostGuestChannel(first, h, 'peer-1', undefined, 'Sam');
+    await bindHostGuestChannel(second, h, 'peer-2', undefined, 'Sam');
+    await bindHostAudioChannel(fakeChannel('recording-audio#k1'), h, 'peer-1', undefined, 'Sam');
+    await bindHostAudioChannel(fakeChannel('recording-audio#k2'), h, 'peer-2', undefined, 'Sam');
+    await sendChunk(first, 0, 0, 10);
+    await sendChunk(second, 0, 0, 20);
+
+    expect(opened).toEqual(['guest-sam_r.mp4', 'guest2-sam_r.mp4', 'guest-sam_r.wav', 'guest2-sam_r.wav']);
+    expect(written).toEqual([
+      { file: 'guest-sam_r.mp4', position: 0, bytes: 10 },
+      { file: 'guest2-sam_r.mp4', position: 0, bytes: 20 },
+    ]);
+  });
+
+  it('continues the same file when a channel of the same key comes from a new connection', async () => {
+    const opened: string[] = [];
+    const written: Written[] = [];
+    const h = bareHandles(opened, written);
+
+    await bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob');
+    const receiver = h.receiver;
+    const again = fakeChannel('recording#kb');
+    await bindHostGuestChannel(again, h, 'peer-b2', undefined, 'Robert');
+    await sendChunk(again, 0, 0, 10);
+
+    expect(opened).toEqual(['guest-bob_r.mp4']);
+    expect(h.receiver).toBe(receiver);
+    expect(h.guestWriter?.fileName).toBe('guest-bob_r.mp4');
+    expect(h.channelRef?.current).toBe(again);
+    expect(written).toEqual([{ file: 'guest-bob_r.mp4', position: 0, bytes: 10 }]);
+  });
+
+  it('opens one file when channels of one key are bound at once', async () => {
+    const opened: string[] = [];
+    const h = bareHandles(opened, []);
+
+    await Promise.all([
+      bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob'),
+      bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob'),
+    ]);
+
+    expect(opened).toEqual(['guest-bob_r.mp4']);
+    expect(h.journal?.notes.files).toHaveLength(1);
+  });
+
+  it('tries a camera file again with the next channel after an open failed', async () => {
+    const opened: string[] = [];
+    const real = fakeDir(opened, []);
+    let failures = 1;
+    const dir = {
+      getFileHandle: async (name: string, o?: { create?: boolean }) => {
+        if (failures-- > 0) throw new Error('refused');
+        return real.getFileHandle(name, o);
+      },
+    } as unknown as NonNullable<RecordingHandles['dir']>;
+    const h = bareHandles(opened, [], dir);
+
+    await expect(bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob')).rejects.toThrow('refused');
+    expect(h.receiver).toBeUndefined();
+    await bindHostGuestChannel(fakeChannel('recording#kb'), h, 'peer-b', undefined, 'Bob');
+
+    expect(opened).toEqual(['guest-bob_r.mp4']);
+    expect(h.receiver).toBeDefined();
+  });
+
+  it("reports a slot 0 whose WAV opened and whose camera file did not, under its camera file's name", async () => {
+    const h = bareHandles([], []);
+    const wav = fakeChannel('recording-audio#kb');
+    await bindHostAudioChannel(wav, h, 'peer-b', undefined, 'Bob');
+    await sendChunk(wav, 0, 0, 44);
+
+    const reports = await collectGuestReports(h);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ slot: 0, name: 'Bob', file: 'guest-bob_r.mp4', wavFile: 'guest-bob_r.wav' });
+  });
+
+  it("names a later guest's missing camera file the way its WAV is named", async () => {
+    const h = bareHandles([], []);
+    await bindHostGuestChannel(fakeChannel('recording#k1'), h, 'peer-1', undefined, 'Ana');
+    await bindHostAudioChannel(fakeChannel('recording-audio#k2'), h, 'peer-2', undefined, 'Bob');
+
+    const reports = await collectGuestReports(h);
+    expect(reports.map((g) => [g.slot, g.file, g.wavFile])).toEqual([
+      [0, 'guest-ana_r.mp4', undefined],
+      [1, 'guest2-bob_r.mp4', 'guest2-bob_r.wav'],
+    ]);
+  });
+
+  it('never opens a camera file the resume kept, whatever name the guest has now', async () => {
+    const folder = (() => {
+      const sizes = new Map([['guest-bob_rec.mp4', 300]]);
+      return {
+        getFileHandle: async (name: string, o?: { create?: boolean }) => {
+          if (!sizes.has(name)) {
+            if (!o?.create) throw Object.assign(new Error('not found'), { name: 'NotFoundError' });
+            sizes.set(name, 0);
+          }
+          return {
+            name,
+            getFile: async () => ({ size: sizes.get(name)! }),
+            createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+          };
+        },
+        sizes,
+      };
+    })();
+    const note: ResumeNote = { file: 'guest-bob_rec.mp4', kind: 'camera', key: 'kb', slot: 0, who: 'Bob' };
+    const j = resumeJournal([note], { 'guest-bob_rec.mp4': { nextIdx: 2, end: 200 } });
+    const h = await resumeHostRecording({
+      localStream: emptyFakeStream(),
+      journal: j.journal,
+      dir: folder as never,
+      channels: [],
+      onError: () => {},
+    });
+
+    const again = fakeChannel('recording#kb');
+    await bindHostGuestChannel(again, h, 'peer-r', undefined, 'Robert');
+
+    expect(again.onmessage).toBeNull();
+    expect([...folder.sizes.keys()]).toEqual(['guest-bob_rec.mp4']);
+    expect(h.receiver).toBeUndefined();
+
+    // Only that guest's camera file is kept: its WAV is opened under the name it has now.
+    await bindHostAudioChannel(fakeChannel('recording-audio#kb'), h, 'peer-r', undefined, 'Robert');
+    expect([...folder.sizes.keys()]).toEqual(['guest-bob_rec.mp4', 'guest-robert_rec.wav']);
   });
 });

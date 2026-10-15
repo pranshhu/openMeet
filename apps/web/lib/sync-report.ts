@@ -29,7 +29,7 @@ export interface ChatMessage {
 }
 
 export interface GuestSyncInput {
-  /** 0 writes `guest_*`, n writes `guest<n+1>_*`. */
+  /** 0 writes `guest_*` or `guest-<name>_*`, n writes `guest<n+1>_*` or `guest<n+1>-<name>_*`. */
   slot: number;
   name?: string | undefined;
   file: string;

@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
+  guestName,
   startHostRecording,
   endHostRecording,
   startScreenRecording,
   stopScreenRecording,
 } from '@/hooks/recording-controller';
+import { FakeDirectoryHandle } from './fake-opfs';
 
 class FakeMediaRecorder {
   static isTypeSupported = (_m: string) => true;
@@ -172,5 +174,55 @@ describe('host file names', () => {
     await startScreenRecording(handles, screen, 'host', null);
     expect(opened).toEqual(['host-ana_screen_rec1_2.mp4']);
     await stopScreenRecording(handles);
+  });
+});
+
+describe('guest file names', () => {
+  beforeEach(() => {
+    (globalThis as { MediaRecorder?: unknown }).MediaRecorder = FakeMediaRecorder;
+    (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor = FakeTrackProcessor;
+  });
+  afterEach(() => {
+    delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+    delete (globalThis as { MediaStreamTrackProcessor?: unknown }).MediaStreamTrackProcessor;
+  });
+
+  it("puts the guest's cleaned name after the slot's role", () => {
+    expect(guestName(0, 'r', 1, 'mp4', 'Bob')).toBe('guest-bob_r.mp4');
+    expect(guestName(1, 'r', 2, 'wav', 'Sam Lee')).toBe('guest2-sam-lee_r_take2.wav');
+    expect(guestName(2, 'r', 1, 'mp4', 'Ana / María')).toBe('guest3-ana-maría_r.mp4');
+  });
+
+  it('keeps the plain name when the name has nothing usable in it', () => {
+    expect(guestName(0, 'r', 1, 'mp4', '🙂')).toBe('guest_r.mp4');
+    expect(guestName(0, 'r', 1, 'mp4', '!!!')).toBe('guest_r.mp4');
+    expect(guestName(0, 'r', 1, 'mp4', null as never)).toBe('guest_r.mp4');
+    expect(guestName(1, 'r', 1, 'wav', 42 as never)).toBe('guest2_r.wav');
+    expect(guestName(0, 'r', 1, 'mp4')).toBe('guest_r.mp4');
+  });
+
+  it('keeps a name from leaving the folder or hiding the extension', () => {
+    expect(guestName(0, 'r', 1, 'mp4', '../../x\u202e')).toBe('guest-x_r.mp4');
+    expect(guestName(0, 'r', 1, 'mp4', 'a.mp4')).toBe('guest-a-mp4_r.mp4');
+  });
+
+  it('opens no guest file and holds no guest note when the take starts', async () => {
+    const opened: string[] = [];
+    const handles = await startHostRecording({
+      recordingId: 'r',
+      localStream: avStream(),
+      dir: namedDir(opened) as never,
+      hostName: 'Ana',
+      room: 'abc-defg-hij',
+      journalRoot: async () => new FakeDirectoryHandle() as never,
+    });
+    expect(opened.filter((n) => n.startsWith('guest'))).toEqual([]);
+    expect(opened).toContain('host-ana_r.mp4');
+    expect(handles.receiver).toBeUndefined();
+    expect(handles.guestWriter).toBeUndefined();
+    expect(handles.channelRef).toBeUndefined();
+    expect(handles.journal?.notes.files).toEqual([]);
+    await endHostRecording(handles);
+    expect(opened.filter((n) => n.startsWith('guest'))).toEqual([]);
   });
 });
