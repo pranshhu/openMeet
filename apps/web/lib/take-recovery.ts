@@ -1,6 +1,6 @@
 import { FileWriter, type FsDirectoryHandle } from './fs-writer';
 import { assembleBackupFromDir } from './backup-recorder';
-import { patchWavHeader, wavFrameBytes, WAV_HEADER_BYTES } from './wav';
+import { resizeWavHeader, WAV_HEADER_BYTES, WAV_HEAD_MAX_BYTES } from './wav';
 import { isJournalFileName, type JournalFileNote, type TakeJournal } from './take-journal';
 import { buildSyncReport, type GuestSyncInput, type ScreenSegmentInput } from './sync-report';
 import { crashCopyNotice } from './notice-log';
@@ -54,17 +54,12 @@ export async function repairWavHeader(folder: FsDirectoryHandle, name: string): 
     const handle = (await folder.getFileHandle(name)) as unknown as RepairableFile;
     const file = await handle.getFile?.();
     if (!file || typeof file.slice !== 'function' || file.size <= WAV_HEADER_BYTES) return;
-    const have = new Uint8Array(await file.slice(0, WAV_HEADER_BYTES).arrayBuffer());
-    const magic = new DataView(have.buffer);
-    // 'RIFF' and 'WAVE': anything else is not a header this can repair.
-    if (magic.getUint32(0) !== 0x52494646 || magic.getUint32(8) !== 0x57415645) return;
-    // The header a rebuild would leave: the same two size fields, from the length.
-    const want = have.slice();
-    await patchWavHeader(
-      { write: async (position: number, data: ArrayBuffer) => want.set(new Uint8Array(data), position) },
-      file.size - WAV_HEADER_BYTES,
-      wavFrameBytes(have.buffer)
-    );
+    const have = new Uint8Array(await file.slice(0, WAV_HEAD_MAX_BYTES).arrayBuffer());
+    // The header a rebuild would leave: the same bytes with the size fields from the length.
+    // Anything that is not a WAV header gives null and is left alone.
+    const resized = resizeWavHeader(have.buffer, file.size);
+    if (!resized) return;
+    const want = new Uint8Array(resized);
     if (want.every((byte, i) => byte === have[i])) return;
     const writable = await handle.createWritable({ keepExistingData: true });
     await writable.write({ type: 'write', position: 0, data: want });
@@ -137,12 +132,12 @@ async function rebuild(journal: TakeJournal, folder: FsDirectoryHandle, notes: J
       // replay stops at the first part it cannot read or write, so fewer
       // writes than parts is a file that ends early or has a hole.
       let written = 0;
-      let frame = 1;
+      let head: ArrayBuffer | undefined;
       await journal.replay(note.file, {
         write: async (position, data) => {
-          // The file's own header says how long a sample frame is.
+          // The file's own header says where its size fields are and how long a sample frame is.
           if (note.kind === 'wav' && position === 0) {
-            frame = wavFrameBytes(await data.slice(0, WAV_HEADER_BYTES).arrayBuffer());
+            head = await data.slice(0, WAV_HEAD_MAX_BYTES).arrayBuffer();
           }
           await writer.write(position, data);
           written += 1;
@@ -160,7 +155,8 @@ async function rebuild(journal: TakeJournal, folder: FsDirectoryHandle, notes: J
       // one part holds no final header; the header on disk is the placeholder.
       // A copy no longer than a header holds no sound to declare.
       if (note.kind === 'wav' && last && journalEnd > WAV_HEADER_BYTES && !(last.offset === 0 && parts.length > 1)) {
-        await patchWavHeader(writer, journalEnd - WAV_HEADER_BYTES, frame);
+        const header = head && resizeWavHeader(head, journalEnd);
+        if (header) await writer.write(0, header);
       }
       await writer.close();
       files.push({ name: note.file, bytes: writer.size, source: 'journal' });

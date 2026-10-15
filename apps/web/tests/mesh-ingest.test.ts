@@ -1973,8 +1973,8 @@ describe('a take resumed from its journal', () => {
   ) {
     const sizes = new Map(Object.entries(seed));
     const writes: [string, number, number][] = [];
-    // The value of each four-byte write by its position: a WAV header's two size fields.
-    const fields = new Map<number, number>();
+    // The last bytes written at the start of a file as a buffer, not a part of the crash copy: a WAV's mended header.
+    let header: number[] | undefined;
     const dir = {
       getFileHandle: async (name: string, o?: { create?: boolean }) => {
         if (!sizes.has(name)) {
@@ -1992,7 +1992,7 @@ describe('a take resumed from its journal', () => {
                 const bytes = d.data instanceof Blob ? d.data.size : d.data.byteLength;
                 if (opts.refuseWrite?.(d.position, bytes)) throw new Error('disk full');
                 writes.push([name, d.position, bytes]);
-                if (!(d.data instanceof Blob) && bytes === 4) fields.set(d.position, new DataView(d.data).getUint32(0, true));
+                if (!(d.data instanceof Blob) && d.position === 0) header = Array.from(new Uint8Array(d.data));
                 end = Math.max(end, d.position + bytes);
               },
               close: async () => {
@@ -2003,7 +2003,7 @@ describe('a take resumed from its journal', () => {
         };
       },
     } as unknown as NonNullable<RecordingHandles['dir']>;
-    return { dir, writes, fields, size: (name: string) => sizes.get(name) };
+    return { dir, writes, header: () => header, size: (name: string) => sizes.get(name) };
   }
 
   it('carries over what the folder holds beyond the crash copy, and continues the file', async () => {
@@ -2060,14 +2060,15 @@ describe('a take resumed from its journal', () => {
 
   it("declares all of a guest's WAV when the folder held more of it than the crash copy and the guest never sends again", async () => {
     // The closing page committed 344 bytes of the WAV; the crash copy trails at 244.
+    const mono = { sampleRate: 48000, channels: 1, bitDepth: 24 };
     const wavNote: ResumeNote = { file: 'guest_rec.wav', kind: 'wav', key: 'R1', slot: 0 };
     const j = resumeJournal(
       [wavNote],
       { 'guest_rec.wav': { nextIdx: 2, end: 244 } },
-      { 'guest_rec.wav': [{ offset: 0, size: 44 }, { offset: 44, size: 200 }] }
+      { 'guest_rec.wav': [{ offset: 0, size: 44, data: new Uint8Array(wavHeader(mono, 0)) }, { offset: 44, size: 200 }] }
     );
-    // The two size fields of the header, by the position each was written at.
-    const fields = new Map<number, number>();
+    // The last bytes written at the start of the file as a buffer: the mended header.
+    let header: number[] | undefined;
     let size = 344;
     const dir = {
       getFileHandle: async (name: string) => ({
@@ -2078,7 +2079,7 @@ describe('a take resumed from its journal', () => {
           return {
             write: async (d: { position: number; data: ArrayBuffer | Blob }) => {
               const bytes = d.data instanceof Blob ? d.data.size : d.data.byteLength;
-              if (!(d.data instanceof Blob) && bytes === 4) fields.set(d.position, new DataView(d.data).getUint32(0, true));
+              if (!(d.data instanceof Blob) && d.position === 0) header = Array.from(new Uint8Array(d.data));
               end = Math.max(end, d.position + bytes);
             },
             close: async () => {
@@ -2093,8 +2094,7 @@ describe('a take resumed from its journal', () => {
     await endHostRecording(h);
 
     expect(size).toBe(344);
-    expect(fields.get(40)).toBe(300);
-    expect(fields.get(4)).toBe(336);
+    expect(header).toEqual(Array.from(new Uint8Array(wavHeader(mono, 300))));
   });
 
   it('declares only whole sample frames of a resumed guest WAV that is cut off again part-way through one', async () => {
@@ -2121,8 +2121,7 @@ describe('a take resumed from its journal', () => {
     await endHostRecording(h);
 
     expect(folder.size('guest_rec.wav')).toBe(345);
-    expect(folder.fields.get(40)).toBe(300);
-    expect(folder.fields.get(4)).toBe(336);
+    expect(folder.header()).toEqual(Array.from(new Uint8Array(wavHeader({ sampleRate: 48000, channels: 1, bitDepth: 24 }, 300))));
   });
 
   it('leaves a longer folder file as it is when its bytes cannot be carried over, and says so', async () => {

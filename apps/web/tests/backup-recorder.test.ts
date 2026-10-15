@@ -1040,6 +1040,56 @@ describe('BackupRecorder — WAV backup and crash safety', () => {
     expect(view.getUint32(40, true)).toBe(144 + 288);
   });
 
+  it('assembles a WAV whose first part is a header with room reserved after WAVE, 80 bytes long', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const br = new BackupRecorder({
+      stream: {} as MediaStream,
+      mimeType: 'audio/wav',
+      fileName: 'openmeet-backup-audio',
+      opfsRoot: async () => root as never,
+    });
+    br.start();
+    await Promise.resolve();
+
+    const head = new Uint8Array(80);
+    const v = new DataView(head.buffer);
+    const ascii = (at: number, text: string) => [...text].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+    ascii(0, 'RIFF');
+    v.setUint32(4, 72, true);
+    ascii(8, 'WAVE');
+    ascii(12, 'JUNK');
+    v.setUint32(16, 28, true);
+    ascii(48, 'fmt ');
+    v.setUint32(52, 16, true);
+    v.setUint16(56, 1, true);
+    v.setUint16(58, 1, true);
+    v.setUint32(60, 48000, true);
+    v.setUint32(64, 144000, true);
+    v.setUint16(68, 3, true);
+    v.setUint16(70, 24, true);
+    ascii(72, 'data');
+
+    br.writeChunk(head.buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+    br.writeChunk(new Uint8Array(144).fill(1).buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+    // Ends part-way through a 3-byte frame.
+    br.writeChunk(new Uint8Array(290).fill(2).buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const backups = await findBackups(async () => root as never);
+    expect(backups).toHaveLength(1);
+    const bytes = new Uint8Array(await backups[0]!.arrayBuffer());
+    expect(bytes.byteLength).toBe(80 + 144 + 290);
+    const out = new DataView(bytes.buffer);
+    expect(out.getUint32(4, true)).toBe(72 + 432);
+    expect(out.getUint32(76, true)).toBe(432);
+    // Everything but the two size fields is the head as it was, and the sound follows it untouched.
+    expect(Array.from(bytes.subarray(8, 76))).toEqual(Array.from(head.subarray(8, 76)));
+    expect(Array.from(bytes.subarray(80, 224))).toEqual(Array.from(new Uint8Array(144).fill(1)));
+    expect(Array.from(bytes.subarray(224))).toEqual(Array.from(new Uint8Array(290).fill(2)));
+  });
+
   it('a WAV BackupRecorder over a fake frameSource, stopped cleanly, assembles to exactly 44 + pcmBytes with correct size fields', async () => {
     const root = new FakeDirectoryHandle('root');
     const pcmBytes = 30; // 10 samples * 3 bytes

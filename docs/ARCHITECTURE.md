@@ -1101,16 +1101,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
   file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
   header does not match its length gets its two size fields set from the length
-  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
-  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the header from
+  `resizeWavHeader`), because a page that closes commits its files with the placeholder header;
   a resume gives the host's own WAV the same repair through `copyBackupInto`.
-  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
-  rebuilt from the crash copy, and End & save for a guest whose final header never came),
-  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
-  pieces, so a file that was cut off can end part-way through a sample, and a decoder
-  reports an error on a frame it cannot finish. The frame size is read from the file's own
-  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
-  that header states.
+  Wherever the host's page sets a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, a backup assembled from its parts, and End & save for a guest
+  whose final header never came), `resizeWavHeader` (`lib/wav.ts`) reads where those fields are
+  and how long a sample frame is from the file's own first bytes, and writes the header back
+  whole. It walks the chunks up to `data`; the frame is taken only when it agrees with the
+  channels and the depth that header states, and a head it cannot read gives null and
+  leaves the file as it was. It declares whole sample frames only: a guest's WAV arrives in
+  64 KiB pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. A header with a reserved chunk after `WAVE`
+  (28 bytes, `JUNK` or `ds64`) becomes RF64 past 4 GiB, in the layout `ffmpeg -rf64 auto`
+  writes, and is RIFF with a zeroed `JUNK` when the length fits 32 bits; a header with no such
+  room saturates both fields.
   At End & save that length is the file's own (`FileWriter.size`) when it is more than the
   receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
   the crash copy's end where its receiver starts.
