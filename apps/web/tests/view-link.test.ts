@@ -120,3 +120,12 @@ describe('the stage view link', () => {
     expect(findViewed([{ name: 'Ana', role: 'host' as const }], { kind: 'stage' })).toBeNull();
   });
 });
+
+describe('the guest view link the host copies', () => {
+  it('gives back a name with spaces, an ampersand and a non-Latin letter', () => {
+    for (const name of ['Ana Lee', 'Ana & Bo', 'Zoë Müller', 'Дмитрий', '田中 太郎', 'a=b?c#d+e%20']) {
+      const query = `?view=guest&name=${encodeURIComponent(name)}`;
+      expect(parseViewLink(query)).toEqual({ kind: 'guest', name });
+    }
+  });
+});

@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host copies view links from the arrow beside Copy invite link and from each guest's row
+  in People.
 - A view link shows one person's camera and sound on a black page with no controls, for an
   OBS browser source or a second screen; it joins by itself and is never recorded.
 - A stage view link shows everyone's camera and every shared screen in one grid, with

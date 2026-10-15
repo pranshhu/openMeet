@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within, cleanup, act } from '@testi
 import { RoomView } from '@/components/RoomView';
 import { PeoplePanel } from '@/components/PeoplePanel';
 import { CallStage } from '@/components/CallStage';
+import { parseViewLink } from '@/lib/view-link';
 import type { RemotePeer } from '@/hooks/useRoom';
 import type { HelpAsk } from '@openmeet/protocol';
 
@@ -156,8 +157,8 @@ describe('PeoplePanel', () => {
 
     const panel = screen.getByRole('region', { name: 'People' });
     expect(within(panel).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
-      'AnaMute',
-      'BoMuted',
+      'AnaMuteView link',
+      'BoMutedView link',
       'Cy (Producer)',
       'Di (Presenting)',
       'GuestMute',
@@ -347,7 +348,7 @@ describe('PeoplePanel: the host asks a person for help', () => {
 
     const rows = screen.getAllByRole('listitem');
     expect(rows.map((li) => li.textContent)).toEqual([
-      'AnaMuteHelpRemove',
+      'AnaMuteHelpView linkRemove',
       'Cy (Producer)HelpRemove',
       'Di (Presenting)HelpRemove',
     ]);
@@ -664,5 +665,95 @@ describe('the person asked to switch microphone or camera', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
     expect(onDismissHelpAsk).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
+describe('PeoplePanel: the host copies a guest’s view link', () => {
+  const people: RemotePeer[] = [
+    { peerId: 'p-ana', name: 'Ana Lee', stream: null, role: 'guest', presence: mic(true) },
+    { peerId: 'p-cy', name: 'Cy', stream: null, role: 'producer' },
+    { peerId: 'p-di', name: 'Di', stream: null, role: 'guest', companion: true },
+    { peerId: 'p-new', name: null, stream: null, role: 'guest' },
+    { peerId: 'p-hal', name: 'Hal', stream: null, role: 'host' },
+  ];
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+    window.history.pushState({}, '', '/');
+  });
+
+  function draw() {
+    render(<PeoplePanel people={people} onMute={vi.fn()} onRemove={vi.fn()} onAsk={vi.fn()} onClose={vi.fn()} />);
+  }
+
+  it('copies the guest’s view link and says so', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    window.history.pushState({}, '', '/r/xyz-abcd-pqr/?producer=1');
+    draw();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy view link for Ana Lee' }));
+    });
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/r/xyz-abcd-pqr/?view=guest&name=Ana%20Lee`);
+    expect(screen.getByRole('status')).toHaveTextContent('View link for Ana Lee copied.');
+  });
+
+  it('copies an address the view page reads back as the same guest, whatever the name holds', async () => {
+    const writeText = vi.fn((_: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const name = 'Ana & Zoë 田中=1?#';
+    render(
+      <PeoplePanel
+        people={[{ peerId: 'p-x', name, stream: null, role: 'guest' }]}
+        onMute={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: `Copy view link for ${name}` }));
+    });
+    const address = new URL(writeText.mock.calls[0]![0]);
+    expect(parseViewLink(address.search)).toEqual({ kind: 'guest', name });
+    expect(screen.getByRole('status')).toHaveTextContent(`View link for ${name} copied.`);
+  });
+
+  it('sits before Remove in the guest’s row', () => {
+    draw();
+    const row = screen.getByRole('button', { name: 'Copy view link for Ana Lee' }).closest('li')!;
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Mute', 'Help', 'View link', 'Remove']);
+    expect(within(row).getByRole('button', { name: 'Copy view link for Ana Lee' })).toHaveClass(
+      'min-h-11',
+      'shrink-0',
+      'rounded-full',
+      'ring-1'
+    );
+  });
+
+  it('gives no View link to a producer, a Present-only device, a host or a guest with no name', () => {
+    draw();
+    expect(screen.getAllByRole('button', { name: /^Copy view link for / })).toHaveLength(1);
+    for (const text of ['Cy (Producer)', 'Di (Presenting)', 'Guest', 'Hal']) {
+      const row = screen.getByText(text).closest('li')!;
+      expect(within(row).queryByRole('button', { name: /view link/i })).toBeNull();
+    }
+  });
+
+  it('says so when the link cannot be copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn(() => Promise.reject(new Error('denied'))) },
+      configurable: true,
+    });
+    draw();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy view link for Ana Lee' }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy the view link for Ana Lee.');
+  });
+
+  it('says so when there is no clipboard', () => {
+    draw();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy view link for Ana Lee' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy the view link for Ana Lee.');
   });
 });

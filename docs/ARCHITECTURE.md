@@ -530,8 +530,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
-  the Present-only link and the microphone-only link (the plain link plus `?producer=1`,
-  `?present=1` or `?audio=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  the Present-only link, the microphone-only link, the host view link and the stage view link
+  (the plain link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or `?view=stage`,
+  the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -557,6 +558,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
   time. A `role="status"` line below the list then says "Asked <name>.
   They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  A guest who has a camera tile and a name also has **View link**, before **Remove**: it copies
+  the plain link plus `?view=guest&name=` and the name through `encodeURIComponent`, and the
+  same status line says "View link for <name> copied." or "Couldn’t copy the view link for
+  <name>." A producer's, a present-only device's and a nameless guest's row has none.
   `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
   `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
   **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
@@ -1831,10 +1836,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
-- **The producer, Present-only and microphone-only links are offered only to the host, in the
-  waiting room and in the call's top bar before a take.** The lobby and the take summary offer
+- **The producer, Present-only, microphone-only and view links are offered only to the host, in
+  the waiting room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has none of them.
-  Each is still the invite link plus `?producer=1`, `?present=1` or `?audio=1`.
+  Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or
+  `?view=stage`. A guest's view link is also in People, during a take as well.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a

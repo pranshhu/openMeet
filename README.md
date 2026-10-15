@@ -438,14 +438,16 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these th
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link, the Present-only link and the
-  microphone-only link.
+  waiting room and in the call, copies this link, the Present-only link, the
+  microphone-only link and the host and stage view links.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
-- **View link.** Add `?view=host` or `?view=guest&name=<name>` to the invite link
-  (`https://<your-site>/r/<room>/?view=guest&name=Ana`) and use it as an OBS browser
+- **View link.** Copy it from the arrow beside **Copy invite link** (the host's own view
+  and the stage view) or from **View link** on a guest's row in **People**; or add
+  `?view=host` or `?view=guest&name=<name>` to the invite link
+  (`https://<your-site>/r/<room>/?view=guest&name=Ana`) yourself. Use it as an OBS browser
   source or on a second screen. The page joins by itself and shows that person's camera
   and sound alone on a black page, with no buttons and no name. It takes an unrecorded
   slot, is never recorded, and is as private as the invite link: anyone who has it can
