@@ -2138,7 +2138,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the sender's screen and is not sent again. In the first moment of a connection, before the
   other page's hello has arrived, a line reads "Not delivered" to that person. A line handed to
   a connection in the moment it drops is lost and nothing says so. A Present-only device is
-  never named in the note.
+  never named in the note. A person whose connection to the Room dropped is not in the call
+  until they are back, so a line sent meanwhile does not reach them, is not sent again, and
+  its note does not name them; when they are back they have a new number.
 - **A private message is kept from the other people in the call, and from the server, not from
   a shared screen.** It goes over the connection to that one person. Its pop-up shows its text, so someone who shares their whole screen, or the
   window the call is in, shows it to the call, and a recording of that screen holds it. The
