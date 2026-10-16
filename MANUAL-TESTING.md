@@ -195,6 +195,9 @@ Also not covered automatically. Needs 3 browser profiles.
 | 6.18 | Capacity | Try a 5th recorded participant with a camera | "This room is full" screen with **Try again** | ☐ | |
 | 6.19 | Five people, microphone only | The host and four guests each press **Microphone only** in the lobby and join. Record 20 s, **End & save**. Then a sixth person with a camera tries to join | All five are in the call as initials and hear each other. The folder has the host's MP4 and WAV and `guest_`, `guest2_`, `guest3_`, `guest4_` MP4 and WAV, all read complete. The sixth person gets "This room is full" | ☐ | |
 | 6.20 | A microphone-only seat presents a tab | Three people: the host with a camera, one guest with a camera and one guest who pressed **Microphone only** in the lobby. The microphone-only guest talks, then presents a tab, then stops presenting | The other two see that person as an initial before, during and after, see the shared tab, and hear the person throughout | ☐ | |
+| 6.21 | View link | In another profile with fake media, open `?view=guest&name=<guest>` on the invite link while that guest is in the call. The guest turns the camera off, then the view page is reloaded | No lobby, and no camera or microphone is asked for. The guest's picture fills a black page with no name tag and no buttons; with the camera off their initial is in the middle; after the reload the picture comes back by itself. The host's People panel lists "View of <guest> (Producer)" | ☐ | |
+| 6.22 | Stage view link | The host and two guests join with fake media; one guest presents a tab. In a fourth profile open `?view=stage` on the invite link. Then the host sets one guest as not recorded | No lobby. Three cells fill a black page in two columns, the shared tab first and then the two people, with no names; everyone's sound plays, or one **Turn on sound** button appears and turns it all on. When the host sets a guest as not recorded, that guest's cell goes, and their tab too if they were presenting | ☐ | |
+| 6.23 | Copy the view links | At 390 px wide, as the host with two guests in the call, copy the host view link and the stage view link from the arrow beside **Copy invite link**, and **View link** from a guest's row in **People**. Open each in another profile with fake media | Each opens the right view: the host's camera, everyone's, or that guest's. The arrow's panel and the People panel stay inside the screen, every button in a row is at least 44 px tall, and the name truncates before a button does. The status line says what was copied | ☐ | |
 
 ## 7 — Connection failure
 
@@ -358,6 +361,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 | 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
+| 10.6 | A producer or view link in the host's own browser | In local development (page and Worker on one site), with a take running, open `?producer=1` and then `?view=host` in a new tab of the host's own profile | The host's tab never reads "You joined from another tab or device", and End & save writes whole files | ☐ | |
 
 ---
 

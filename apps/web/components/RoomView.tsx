@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRoom } from '@/hooks/useRoom';
 import { detectBrowserDevice } from '@/lib/browser-guidance';
 import { isFsAccessSupported } from '@/lib/fs-writer';
@@ -9,8 +9,10 @@ import { isScreenShareSupported } from '@/lib/screen';
 import { holdTakeLock } from '@/lib/take-lock';
 import { downloadNamesFor } from '@/lib/file-names';
 import { isStagePeer } from '@/lib/stage-peers';
+import { parseViewLink, viewName } from '@/lib/view-link';
 import type { MediaBoard } from '@/lib/media-board';
 import { Lobby } from './Lobby';
+import { CleanView } from './CleanView';
 import { CallStage } from './CallStage';
 import { WaitingRoom } from './WaitingRoom';
 import { KnockNotice } from './KnockNotice';
@@ -100,6 +102,9 @@ function isCheckLink(): boolean {
   return new URLSearchParams(window.location.search).get('check') === '1';
 }
 
+/** The screens that end a visit keep their own words on a view page too. */
+const ENDED_PHASES: readonly string[] = ['not-found', 'full', 'replaced', 'removed', 'refused', 'error', 'left'];
+
 /** Download links for files this tab holds only as links in memory. */
 function FileLinks({ files }: { files: readonly (readonly [string | null, string, string])[] }) {
   return (
@@ -155,6 +160,17 @@ export function RoomView({ slug }: { slug: string }) {
   const check = isCheckLink();
   const audio = isAudioLink();
   const record = recordCapability(state.role, producer, state.notRecorded);
+  // `?view=` makes this page a view of one person: it joins by itself, asks for
+  // no camera or microphone, and ignores the flags above.
+  const [view] = useState(() => (typeof window === 'undefined' ? null : parseViewLink(window.location.search)));
+  // Once per page load: a view that left the room is not sent back in, and
+  // StrictMode runs this effect twice in development.
+  const viewJoined = useRef(false);
+  useEffect(() => {
+    if (!view || view.kind === 'incomplete' || state.phase !== 'lobby' || viewJoined.current) return;
+    viewJoined.current = true;
+    void join(new MediaStream(), viewName(view), true);
+  }, [view, state.phase, join]);
   // A host who went on without anyone else. Kept while this tab stays in the
   // room: the call screen then stays up while they are alone, while someone
   // connects and after everyone has left.
@@ -184,6 +200,17 @@ export function RoomView({ slug }: { slug: string }) {
     (state.phase === 'recording' || state.phase === 'finalizing' || state.recoveryBusy);
   useEffect(() => (hostTakeLive ? holdTakeLock(slug) : undefined), [hostTakeLive, slug]);
 
+  if (view && !ENDED_PHASES.includes(state.phase)) {
+    return (
+      <CleanView
+        link={view}
+        peers={state.remotePeers}
+        screens={state.remoteScreens}
+        door={state.door}
+        onPasscode={sendPasscode}
+      />
+    );
+  }
   if (state.phase === 'checking') {
     return <StatusScreen spinner>Checking room…</StatusScreen>;
   }
@@ -198,7 +225,7 @@ export function RoomView({ slug }: { slug: string }) {
   if (state.phase === 'full') {
     return (
       <StatusScreen title="This room is full" action="Try again">
-        A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers or
+        A room seats 4 people, or 8 when everyone joins with the microphone only, plus 2 producers, view links or
         present‑only screens. Try again once someone leaves.
       </StatusScreen>
     );

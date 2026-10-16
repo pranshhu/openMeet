@@ -6,22 +6,34 @@ import { Icon } from './Icon';
 // `query` is the flag RoomView reads from the address.
 const LINKS = [
   {
-    query: 'producer',
+    query: 'producer=1',
     title: 'Copy producer link',
     hint: 'Watches and chats. Never recorded.',
     copied: 'Producer link copied.',
   },
   {
-    query: 'present',
+    query: 'present=1',
     title: 'Copy Present-only link',
     hint: 'Shares a screen only. No camera or mic.',
     copied: 'Present-only link copied.',
   },
   {
-    query: 'audio',
+    query: 'audio=1',
     title: 'Copy microphone-only link',
     hint: 'Sound only, recorded. For rooms of 5 to 8.',
     copied: 'Microphone-only link copied.',
+  },
+  {
+    query: 'view=host',
+    title: 'Copy host view link',
+    hint: 'Your camera and sound alone, no controls. For OBS.',
+    copied: 'Host view link copied.',
+  },
+  {
+    query: 'view=stage',
+    title: 'Copy stage view link',
+    hint: 'Everyone’s cameras and sound, no controls.',
+    copied: 'Stage view link copied.',
   },
 ] as const;
 
@@ -30,12 +42,13 @@ type Link = (typeof LINKS)[number];
 const LABEL = 'Other links';
 
 /**
- * The three other links, behind an arrow beside the host's Copy invite link:
+ * The other links, behind an arrow beside the host's Copy invite link:
  * the producer and Present-only links, which join with no camera or
  * microphone, and the microphone-only link, which opens the lobby on
  * Microphone only. Each says what happens to whoever opens it: sent to a guest
  * by mistake, the first two join that guest unrecorded, and the third records
- * their sound alone.
+ * their sound alone. The host view and stage view links open a page that only
+ * shows, for a browser source in streaming software.
  *
  * The caller places the panel (`menuClassName`) from the row the arrow sits
  * in, not from the arrow: the arrow moves as the label beside it changes, and
@@ -75,7 +88,7 @@ export function RoleLinks({
 
   function copy(link: Link) {
     // origin+pathname is the plain invite link, whatever query this page has.
-    const write = navigator.clipboard?.writeText(`${location.origin}${location.pathname}?${link.query}=1`);
+    const write = navigator.clipboard?.writeText(`${location.origin}${location.pathname}?${link.query}`);
     // No clipboard (plain-http self-host) or permission denied: say how to
     // build the link by hand, so the click never does nothing.
     if (!write) return setResult({ link, ok: false });
@@ -131,7 +144,7 @@ export function RoleLinks({
               ? 'To record someone, send the invite link.'
               : result.ok
                 ? result.link.copied
-                : `Couldn’t copy. Add ?${result.link.query}=1 to this page’s address.`}
+                : `Couldn’t copy. Add ?${result.link.query} to this page’s address.`}
           </p>
         </div>
       )}
