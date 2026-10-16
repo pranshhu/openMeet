@@ -35,7 +35,7 @@ class FakePC {
 
   createDataChannel(label: string, opts?: unknown) {
     this.operations.push(`createDataChannel:${label}`);
-    const ch = { label, opts };
+    const ch = { label, opts, readyState: 'connecting', addEventListener() {} };
     this.channels.push(ch);
     return ch as unknown as RTCDataChannel;
   }

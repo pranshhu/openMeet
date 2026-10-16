@@ -336,6 +336,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.115 | Microphone-only link | The host copies the microphone-only link from the arrow beside **Copy invite link**, also in a window 390 px wide. A guest opens it, joins, and reloads. Then the guest presses **Microphone only** to turn it off, joins with the camera, and reloads | The panel stays on the screen and the entry is a full-width button; the guest's lobby opens with **Microphone only** pressed and no camera light, both times; after pressing the button and joining with the camera, the plain invite link opens the camera preview, while the microphone-only link still opens on **Microphone only** | ☐ | |
 | 8.116 | Program file command | Host and one guest record ~20 s; End & save. Open **Editor commands (ffmpeg)** in the summary, once in a window about 800 px wide and once in one 390 px wide. In the recording folder run the **Program file** command (it is also in `sync_<id>.json` under `program`) | The row is the last one, its label wraps and the summary never scrolls sideways. `<host file>_program.mp4` plays both cameras side by side with both voices; `ffprobe` reads 1920x1080, 30 fps, H.264 and two-channel AAC. `sync_<id>.json` has `program` with the same `cmd` | ☐ | |
 | 8.117 | Program file, microphones only | Host and one guest both join with the microphone only, record ~20 s; End & save. In the recording folder run the **Program file** command | The last row of **Editor commands (ffmpeg)** reads "Program file: everyone's audio mixed into one WAV…". `<first file>_program.wav` plays both voices; `ffprobe` reads `pcm_s24le`, 48000 Hz, two channels | ☐ | |
+| 8.118 | Chat not delivered | Host and two guests in a call. Open the second guest's page with a script that drops every outgoing `control` frame containing `hello` (it stands in for a page of the build before). The host sends a line to everyone and one to that guest only. Repeat the host's part on a phone about 390 px wide | The host's line to everyone reads "Not delivered to Guest 2." (the number **To** shows) and the private one "Not delivered.", under the bubble on the right. The first guest gets the line to everyone. The second guest's own lines still reach the host. On the phone the note wraps inside the sheet | ☐ | |
 
 ## 9 — Deploy
 
@@ -358,6 +359,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 | 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
+| 10.6 | Chat does not pass the server | Host and two guests in a call; on each page watch the WebSocket frames (DevTools, Network, WS, Messages); send a line to everyone and a private line | Both arrive as before, and no frame of type `chat` or `private-message` is on any socket | ☐ | |
 
 ---
 
