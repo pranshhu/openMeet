@@ -145,7 +145,9 @@ retention policy to trust, because there's nothing retained.
 - **Camera settings** in the call's camera menu: exposure and colour temperature for the
   camera you are on. It lists only what your camera offers the browser (zoom, pan and tilt
   only where the browser lists them without a further permission), and the change is in the
-  call and in your recording. The lobby and the check page have it too, under the preview
+  call and in your recording. **Background blur** is there too, where your computer offers it
+  to the browser (Linux has none), and it is in your recording as well. The lobby and the
+  check page have it too, under the preview
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 
@@ -610,8 +612,8 @@ the screen that follows offers them too.
    Delete a WAV only when its two lines are the same; when they differ, or ffmpeg prints
    an error, keep it and encode again. Run the pairing and aligned-copy commands first:
    they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
-   WAV backup you downloaded included. The one exception is a WAV that was cut off after
-   it passed 4 GiB: its size fields cannot hold its length, so ffmpeg prints an error.
+   WAV backup you downloaded included. A master past 4 GiB is an RF64 file, which
+   ffmpeg reads in full.
    A returned WAV backup's own `.json` holds the two commands for that file, under `flac`.
 
 ### If the host's browser crashes

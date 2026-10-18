@@ -54,6 +54,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   in the call and in your recording.
 - **Camera settings** under the lobby preview, and on the check link: set exposure
   and colour before you join.
+- **Background blur** in Camera settings, where your computer can blur the camera
+  itself. The blur is in the call and in your recording.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
@@ -369,6 +371,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A WAV audio master longer than about 4 hours in stereo (8 in mono) opens at its full
+  length in editors: it is written as RF64 instead of a WAV whose header stops at 4 GB.
 - When two people presented and one of them stopped, the stage could keep a frozen
   picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own
