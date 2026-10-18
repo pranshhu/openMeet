@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ChatPanel } from '@/components/ChatPanel';
+import { ChatPanel, type ChatMessage } from '@/components/ChatPanel';
 import { MAX_CHAT_MESSAGE_LENGTH } from '@/lib/sync-report';
 
 describe('ChatPanel', () => {
@@ -121,5 +121,54 @@ describe('ChatPanel', () => {
       ]);
       expect(list.scrollTop).toBe(1000);
     });
+  });
+});
+
+describe('ChatPanel: a line that was not handed to someone', () => {
+  const own = { from: 'host' as const, text: 'hello', ts: 1, self: true };
+  const show = (...messages: ChatMessage[]) =>
+    render(<ChatPanel messages={messages} onSend={vi.fn()} onClose={vi.fn()} />);
+
+  it('says to whom a line for everyone did not get through, in the page’s own words', () => {
+    show({
+      ...own,
+      notDeliveredTo: [
+        { peerId: 'p-bob', role: 'guest' },
+        { peerId: 'p-host', role: 'host' },
+      ],
+    });
+    const note = screen.getByRole('status');
+    expect(note).toHaveTextContent(/^Not delivered to Guest 1, Host\.$/);
+    expect(note.className).toBe('mt-0.5 text-xs text-[#fdd663]');
+    expect(screen.getByText('hello').nextElementSibling).toBe(note);
+  });
+
+  it('says only "Not delivered." under a private line', () => {
+    show({
+      ...own,
+      private: true,
+      toPeerId: 'p-bob',
+      toRole: 'guest',
+      notDeliveredTo: [{ peerId: 'p-bob', role: 'guest' }],
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(/^Not delivered\.$/);
+  });
+
+  it('draws no note under a line from someone else, whatever it carries', () => {
+    show({ from: 'guest', text: 'hey', ts: 1, fromName: 'Bob', notDeliveredTo: [{ peerId: 'p-ann', role: 'guest' }] });
+    expect(screen.getByText('hey')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('draws no note under a line with an empty list or none', () => {
+    show({ ...own, notDeliveredTo: [] }, { ...own, text: 'again' });
+    expect(screen.getByText('again')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('tells in the empty panel that lines go straight to each person', () => {
+    render(<ChatPanel messages={[]} onSend={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Messages are visible to everyone in the call.')).toBeInTheDocument();
+    expect(screen.getByText('They go straight to each person, not through the server.')).toBeInTheDocument();
   });
 });

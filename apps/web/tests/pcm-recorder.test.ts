@@ -53,7 +53,7 @@ describe('PcmRecorder', () => {
     expect(chunks[0]!.header.offset).toBe(0);
     expect(chunks[0]!.header.size).toBe(WAV_HEADER_BYTES);
     const v = new DataView(chunks[0]!.payload);
-    expect(v.getUint32(40, true)).toBe(0); // placeholder: no data yet
+    expect(v.getUint32(76, true)).toBe(0); // placeholder: no data yet
   });
 
   it('writes samples immediately after the header and rewrites it at finalize', async () => {
@@ -72,7 +72,7 @@ describe('PcmRecorder', () => {
     const last = chunks.at(-1)!;
     expect(last.header.offset).toBe(0);
     expect(last.header.idx).toBeGreaterThan(chunks[0]!.header.idx);
-    expect(new DataView(last.payload).getUint32(40, true)).toBe(9);
+    expect(new DataView(last.payload).getUint32(76, true)).toBe(9);
   });
 
   it('reads the real capture format instead of assuming 48k mono', async () => {
@@ -82,8 +82,8 @@ describe('PcmRecorder', () => {
     await rec.stopAndFlush();
 
     const v = new DataView(chunks[0]!.payload);
-    expect(v.getUint32(24, true)).toBe(44100);
-    expect(v.getUint16(22, true)).toBe(2);
+    expect(v.getUint32(60, true)).toBe(44100);
+    expect(v.getUint16(58, true)).toBe(2);
     expect(rec.format).toEqual({ sampleRate: 44100, channels: 2, bitDepth: 24 });
   });
 

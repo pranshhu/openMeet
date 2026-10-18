@@ -3312,3 +3312,32 @@ describe('CallStage: the host logo', () => {
     expect(z(imgs()[0]!)).toBeGreaterThan(0);
   });
 });
+
+describe('CallStage: background blur', () => {
+  function streamWith(capabilities: Record<string, unknown>) {
+    const mic = { kind: 'audio', enabled: true, getSettings: () => ({}) };
+    const cam = {
+      kind: 'video',
+      enabled: true,
+      readyState: 'live',
+      getSettings: () => ({ deviceId: 'cam1' }),
+      getCapabilities: () => capabilities,
+      getConstraints: () => ({}),
+      applyConstraints: vi.fn().mockResolvedValue(undefined),
+    };
+    return Object.assign(new EventTarget(), {
+      getTracks: () => [mic, cam],
+      getAudioTracks: () => [mic],
+      getVideoTracks: () => [cam],
+    }) as unknown as MediaStream;
+  }
+
+  it('offers Camera settings for a camera whose only setting is the blur, with a tick box for it', () => {
+    render(<CallStage {...baseProps} localStream={streamWith({ backgroundBlur: [false, true] })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select camera' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Camera settings' }));
+
+    const panel = screen.getByRole('region', { name: 'Camera settings' });
+    expect((within(panel).getByRole('checkbox', { name: 'Background blur' }) as HTMLInputElement).checked).toBe(false);
+  });
+});
