@@ -368,6 +368,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A WAV audio master longer than about 4 hours in stereo (8 in mono) opens at its full
+  length in editors: it is written as RF64 instead of a WAV whose header stops at 4 GB.
 - When two people presented and one of them stopped, the stage could keep a frozen
   picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own

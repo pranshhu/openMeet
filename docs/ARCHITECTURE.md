@@ -1075,7 +1075,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
   labels it "(WAV)") → **writes committed per-chunk files** (`NNNNNN.part`) to an OPFS directory
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
-  backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
+  backups survive tab crashes. Every WAV master starts with an 80-byte header that keeps a
+  28-byte `JUNK` chunk after `WAVE`, which becomes `ds64` when the file passes 4 GiB. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   Storage that has not answered five seconds after `start()` is treated the same way: the wait
   ends, the copy is held in RAM with that warning, and an answer that comes later is ignored
   and the directory it created is removed, so `stop()` and `whenOpen()` never wait on it for
@@ -1104,16 +1105,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
   file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
   header does not match its length gets its two size fields set from the length
-  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
-  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the header from
+  `resizeWavHeader`), because a page that closes commits its files with the placeholder header;
   a resume gives the host's own WAV the same repair through `copyBackupInto`.
-  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
-  rebuilt from the crash copy, and End & save for a guest whose final header never came),
-  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
-  pieces, so a file that was cut off can end part-way through a sample, and a decoder
-  reports an error on a frame it cannot finish. The frame size is read from the file's own
-  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
-  that header states.
+  Wherever the host's page sets a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, a backup assembled from its parts, and End & save for a guest
+  whose final header never came), `resizeWavHeader` (`lib/wav.ts`) reads where those fields are
+  and how long a sample frame is from the file's own first bytes, and writes the header back
+  whole. It walks the chunks up to `data`; the frame is taken only when it agrees with the
+  channels and the depth that header states, and a head it cannot read gives null and
+  leaves the file as it was. It declares whole sample frames only: a guest's WAV arrives in
+  64 KiB pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. A header with a reserved chunk after `WAVE`
+  (28 bytes, `JUNK` or `ds64`) becomes RF64 past 4 GiB, in the layout `ffmpeg -rf64 auto`
+  writes, and is RIFF with a zeroed `JUNK` when the length fits 32 bits; a header with no such
+  room saturates both fields.
   At End & save that length is the file's own (`FileWriter.size`) when it is more than the
   receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
   the crash copy's end where its receiver starts.
@@ -2183,10 +2189,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   page gives the file; the two commands are in the README.
 - **A returned backup's two commands are only in its `.json` note.** There the quotes are
   escaped, and no screen shows the commands with a copy button.
-- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
-  size fields are 32 bits and cannot hold its length, so they declare the most they can
-  hold, more than the file has, and the FLAC commands, like any other command on that
-  file, report it.
+- **A WAV master past 4 GiB is RF64.** Its header is an RF64 one with 64-bit sizes, which
+  ffmpeg and most audio editors read in full; Python's `wave` module and other tools that
+  read only plain WAV refuse it. A WAV whose 44-byte header has no reserved chunk still
+  declares 4 GiB past that point, and only ffmpeg reads it to the end.
 - **Microphone only is kept per room, not across rooms or browsers.** The choice is
   stored in this browser under `om_mic_only_<slug>`, so a person with no camera presses it
   once for each room. While it is pressed the lobby's storage and folder figures still

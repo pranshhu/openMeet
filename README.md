@@ -610,8 +610,8 @@ the screen that follows offers them too.
    Delete a WAV only when its two lines are the same; when they differ, or ffmpeg prints
    an error, keep it and encode again. Run the pairing and aligned-copy commands first:
    they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
-   WAV backup you downloaded included. The one exception is a WAV that was cut off after
-   it passed 4 GiB: its size fields cannot hold its length, so ffmpeg prints an error.
+   WAV backup you downloaded included. A master past 4 GiB is an RF64 file, which
+   ffmpeg reads in full.
    A returned WAV backup's own `.json` holds the two commands for that file, under `flac`.
 
 ### If the host's browser crashes

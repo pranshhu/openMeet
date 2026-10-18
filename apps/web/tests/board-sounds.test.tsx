@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { MediaBoardPanel } from '@/components/MediaBoardPanel';
 import { BOARD_SOUNDS, soundFile } from '@/lib/board-sounds';
+import { WAV_HEADER_BYTES } from '@/lib/wav';
 import { fakeBoard } from './board-fakes';
 
 // These tests are about the sounds made in the page: a recording a deploy
@@ -57,8 +58,8 @@ describe('ready sounds', () => {
     const file = soundFile(chime);
     expect(file.name).toBe('Chime');
     expect(file.type).toBe('audio/wav');
-    // 44 bytes of header, then three bytes for every sample.
-    expect(file.size).toBe(44 + 3 * samples);
+    // The header, then three bytes for every sample.
+    expect(file.size).toBe(WAV_HEADER_BYTES + 3 * samples);
     // jsdom has no Blob.prototype.arrayBuffer.
     const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
       const reader = new FileReader();
@@ -68,10 +69,10 @@ describe('ready sounds', () => {
     });
     // The header has to say what the samples are, or the board decodes noise.
     const header = new DataView(bytes);
-    expect(header.getUint16(22, true)).toBe(1); // channels
-    expect(header.getUint32(24, true)).toBe(RATE);
-    expect(header.getUint16(34, true)).toBe(24); // bits in a sample
-    expect(header.getUint32(40, true)).toBe(3 * samples); // bytes of samples
+    expect(header.getUint16(58, true)).toBe(1); // channels
+    expect(header.getUint32(60, true)).toBe(RATE);
+    expect(header.getUint16(70, true)).toBe(24); // bits in a sample
+    expect(header.getUint32(76, true)).toBe(3 * samples); // bytes of samples
   });
 });
 
