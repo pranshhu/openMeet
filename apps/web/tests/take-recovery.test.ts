@@ -946,6 +946,26 @@ describe('saving a take from its crash copy', () => {
     expect(take.root.entries.has(TAKE_DIR)).toBe(false);
   });
 
+  it("reads each named guest file's slot from its name when no note names it", async () => {
+    const take = await crashedTake(
+      { 'guest-bob_rec1.mp4': 1, 'guest2-ana_rec1.mp4': 1, 'guest-12_rec1.wav': 1, 'guest14-ana_rec1.mp4': 1 },
+      []
+    );
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    const report = reportIn(folder, result.json!);
+    expect(report.guests.map((g: { slot: number; file: string }) => [g.slot, g.file])).toEqual([
+      [0, 'guest-bob_rec1.mp4'],
+      [13, 'guest14-ana_rec1.mp4'],
+      [1, 'guest2-ana_rec1.mp4'],
+    ]);
+    expect(report.guests[0].wavFile).toBe('guest-12_rec1.wav');
+    expect(report.guests[1].wavFile).toBeNull();
+    expect(report.guests[2].wavFile).toBeNull();
+  });
+
   it('rebuilds every file when the record is missing or damaged, and names the sync file by the start time', async () => {
     for (const damage of ['missing', 'damaged'] as const) {
       const take = await crashedTake({ 'guest_rec1.mp4': 2, 'guest_rec1.wav': 1, 'guest_screen_rec1.mp4': 1 });
@@ -979,6 +999,20 @@ describe('saving a take from its crash copy', () => {
     expect(report.guests).toHaveLength(1);
     expect(report.timeline.screenSegments).toEqual([
       { file: 'guest_screen_rec1_2_take2.mp4', offsetMs: 0, endedEarly: true },
+    ]);
+  });
+
+  it('reads a named screen file as a screen file, and a guest named screen as a camera file, when no note names them', async () => {
+    const take = await crashedTake({ 'guest-screen_rec1.mp4': 1, 'guest-bob_screen_rec1_2.mp4': 1 }, []);
+    const folder = new DiskFolder();
+
+    const result = await saveRecoveredTake(await take.listed(), asFolder(folder));
+
+    const report = reportIn(folder, result.json!);
+    expect(report.guests).toHaveLength(1);
+    expect(report.guests[0]).toMatchObject({ slot: 0, file: 'guest-screen_rec1.mp4' });
+    expect(report.timeline.screenSegments).toEqual([
+      { file: 'guest-bob_screen_rec1_2.mp4', offsetMs: 0, endedEarly: true },
     ]);
   });
 

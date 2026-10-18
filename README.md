@@ -458,10 +458,10 @@ All in the one folder the host picks, per take:
 
 | File | Contents |
 |---|---|
-| `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
-| `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
-| `guest2_<id>.*`, `guest3_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8_` in a take, and higher numbers after reconnects |
-| `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
+| `host_<id>.mp4` / `guest-<name>_<id>.mp4` | H.264 video + compressed audio |
+| `host_<id>.wav` / `guest-<name>_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
+| `guest2-<name>_<id>.*`, `guest3-<name>_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8-<name>_` in a take, and higher numbers after reconnects |
+| `host_screen_<id>.mp4` / `guest-<name>_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest-bob_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
@@ -471,9 +471,11 @@ All in the one folder the host picks, per take:
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `host_screen_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
-screen file is. The host's files carry the host's name after the role, cut down to letters, digits
-and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
-the convenience copy; the WAV is the master.
+screen file is. Every person's camera file and WAV carry that person's name after the role, cut down
+to letters, digits and hyphens: `host-ana-maría_<id>.mp4`, `guest-bob_<id>.wav`; the host's screen
+files carry it too (`host-ana-maría_screen_<id>.mp4`), and a guest's screen file carries the name of whoever
+shared it (`guest-bob_screen_<id>.mp4`). A name with no letter or digit in it leaves
+the bare role. The MP4's audio track is the convenience copy; the WAV is the master.
 
 **Pause** ends a take and **Continue** starts the next one, so a paused session is one
 take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)

@@ -46,10 +46,10 @@ describe('buildSyncReport', () => {
     const r = buildSyncReport({ ...base, guests: guests(1_002_500, 30) });
     const parsed = JSON.parse(r.json);
     expect(parsed.backupNote).toBe(
-      "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant."
+      "The offset applies to the guest files the host wrote (guest-<name>_*, guest2-<name>_*, ...), not to a participant's own backup copy, which started at a different instant."
     );
     expect(r.data.backupNote).toBe(
-      "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant."
+      "The offset applies to the guest files the host wrote (guest-<name>_*, guest2-<name>_*, ...), not to a participant's own backup copy, which started at a different instant."
     );
   });
 });

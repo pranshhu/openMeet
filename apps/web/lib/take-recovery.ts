@@ -73,8 +73,9 @@ export async function repairWavHeader(folder: FsDirectoryHandle, name: string): 
 function noteFromName(file: string): JournalFileNote {
   const kind = file.endsWith('.wav') ? 'wav' : file.includes('_screen_') ? 'screen' : 'camera';
   if (kind === 'screen') return { file, kind };
-  // guest_<id>.mp4 is the first guest's file, guest2_<id>.mp4 the second's.
-  const nth = Number(/^guest(\d{1,2})_/.exec(file)?.[1] ?? 1);
+  // guest_<id>.mp4 and guest-<name>_<id>.mp4 are the first guest's files,
+  // guest2_<id>.mp4 and guest2-<name>_<id>.mp4 the second's.
+  const nth = Number(/^guest(\d{1,2})?[-_]/.exec(file)?.[1] ?? 1);
   return { file, kind, slot: Math.max(0, nth - 1) };
 }
 

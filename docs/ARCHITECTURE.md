@@ -1011,7 +1011,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `mimeForStream(stream, mime)` is what both `ChunkRecorder` and `BackupRecorder` start
   their `MediaRecorder` with: for a stream with no video track (a person who joined with no
   camera) it is the first `audio/mp4` entry of the call-audio list this browser supports, so
-  that person's `host_<id>.mp4` / `guest_<id>.mp4` and its backup are MP4 files with one audio
+  that person's `host_<id>.mp4` / `guest-<name>_<id>.mp4` and its backup are MP4 files with one audio
   track, under the names, channel and verdict a camera file has. Nothing that reads a take's
   files by name (the crash copy, a resume, the lobby's save, a returned backup) tells them
   apart.
@@ -1260,16 +1260,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
-  `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
+  `host_<id>.mp4` and `host_<id>.wav` (when PCM capture works) up front.
   A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
   WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
-  Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
-  `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
-  `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
-  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
-  The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
-  `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
+  Every guest file opens when that guest's channel arrives, named for its slot and its guest
+  (`guest-<name>_<id>.*`, `guest2-<name>_<id>.*`, `guest3-<name>_…`), as does each screen segment
+  (`host_screen_<id>.mp4`, `guest-<name>_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest-<name>_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  A person's files carry that person's display name after the role (`host-ana_<id>.mp4`,
+  `host-ana_screen_<id>.mp4`, `guest-bob_<id>.wav`; the sharer's name goes into a guest's screen file,
+  `guest-bob_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take
@@ -1394,9 +1395,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
    Host click → the one folder prompt, then a three-second countdown (`recordWithCountdown`), shown
    to the others by WS `recording-countdown` →
-   `startHostRecording` (opens `host_*.mp4` + `host_*.wav` +
-   `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
-   auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
+   `startHostRecording` (opens `host_*.mp4` + `host_*.wav`) → WS `recording-started` → DO relays →
+   every guest shows the consent notice and auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
    nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
    FileWriter at offset; acks every 5 fragments/10s (with a journal attached, after each journal
@@ -1414,7 +1414,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
-   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   tracks, no guest file is created, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
@@ -1473,7 +1473,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most fourteen guest slots
+  recorded guest. The first guest's files are `guest-<name>_<id>.*`, the second's `guest2-<name>_<id>.*`. A take opens at most fourteen guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
@@ -1528,8 +1528,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   every frame after the change decodes as garbage, under `avc3` it just decodes. The
   companion remux command (`sync-report.ts`) adds `-tag:v avc1` so the file an editor
   opens is always tagged `avc1`, whichever codec was actually recorded.
-  Every candidate stays in the **MP4 container** on purpose — the host opens `guest_<id>.mp4`
-  before the guest picks a codec, so a WebM fallback would put WebM bytes behind an `.mp4` name.
+  Every candidate stays in the **MP4 container** on purpose — the host names the guest's `.mp4`
+  before it has seen a byte of it, so a WebM fallback would put WebM bytes behind an `.mp4` name.
   Firefox can't record; Safari can't host, and a Safari guest is recorded as video only (no WAV);
   `recordCapability` and the lobby's browser notes say so before anyone records.
   WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
@@ -1783,9 +1783,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **50 and 60 fps were checked with test cameras only.** No take from a real camera running at
   50 or 60 fps has been inspected (`MANUAL-TESTING.md` row 8.19). A camera that stops at 30 fps is
   never offered them.
-- **A take saved from the lobby after a crash still lists the first guest's camera file when no
-  guest was recorded.** The crash copy notes that file at Record; the save reports it as failed,
-  nothing committed.
 - **A take saved from the lobby after a crash holds what a guest sent before they were set as not
   recorded.** The lobby has no connection to the room; it rebuilds what the crash copy holds.
 - **A guest whose browser blocks session storage is forgotten on a reload.** The Room remembers a

@@ -29,7 +29,7 @@ export interface ChatMessage {
 }
 
 export interface GuestSyncInput {
-  /** 0 writes `guest_*`, n writes `guest<n+1>_*`. */
+  /** 0 writes `guest_*` or `guest-<name>_*`, n writes `guest<n+1>_*` or `guest<n+1>-<name>_*`. */
   slot: number;
   name?: string | undefined;
   file: string;
@@ -716,7 +716,7 @@ export function buildSyncReport(input: SyncReportInput): SyncReport {
   }
 
   const backupNote =
-    "The offset applies to guest_* files written by the host, not to a participant's own backup copy, which started at a different instant.";
+    "The offset applies to the guest files the host wrote (guest-<name>_*, guest2-<name>_*, ...), not to a participant's own backup copy, which started at a different instant.";
 
   const alignment = alignmentLines.join('\n');
 
