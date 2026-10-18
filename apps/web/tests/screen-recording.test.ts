@@ -937,14 +937,14 @@ describe('screen recording', () => {
 
       expect(journal.notes.files).toEqual([
         {
-          file: 'guest_screen_r-journal.mp4',
+          file: 'guest-bob_screen_r-journal.mp4',
           kind: 'screen',
           segment: 1,
           startedAtMs: 1759824000000,
           who: 'Bob',
         },
       ]);
-      expect(names).toEqual(['guest_screen_r-journal.mp4']);
+      expect(names).toEqual(['guest-bob_screen_r-journal.mp4']);
       expect(journal.notes.backups).toEqual([]);
     } finally {
       vi.useRealTimers();
@@ -1434,6 +1434,23 @@ describe('a guest screen share whose connection is rebuilt', () => {
     expect(collectScreenSegments(h)).toEqual([{ file: 'guest_screen_r.mp4', offsetMs: 0, sharer: 'peer-new' }]);
   });
 
+  it('keeps the file and the name it was opened with when the sharer comes back under another name', async () => {
+    const f = folder();
+    const h: RecordingHandles = { recordingId: 'r', dir: f.dir };
+    const first = channel(keyed('share-key'));
+    await bindHostScreenChannel(first.ch, h, undefined, 'peer-old', 'Bob');
+    await deliver(first.ch, ...fragment(0));
+    await vi.waitFor(() => expect(h.screenReceivers?.get(1)?.bytesWritten).toBe(4));
+    first.close();
+    await new Promise((r) => setTimeout(r, 5));
+    const second = channel(keyed('share-key'));
+
+    await bindHostScreenChannel(second.ch, h, undefined, 'peer-new', 'Robert');
+
+    expect(f.opened).toEqual(['guest-bob_screen_r.mp4']);
+    expect(h.screenSharersByFile?.get('guest-bob_screen_r.mp4')).toBe('Bob');
+  });
+
   it('ignores the close of a channel the segment has moved on from', async () => {
     // Removal that must fail this test: the check that the closing channel is the current one.
     const { f, h, first } = await dropped();
@@ -1798,7 +1815,7 @@ describe('the sharer of a keyed screen file after the guest reconnects', () => {
     h.slotPeerIds = new Map([[0, 'peer-new']]);
 
     expect(collectScreenSegments(h, () => undefined)).toEqual([
-      { file: expect.stringMatching(/^guest_screen_r/), offsetMs: 0, endedEarly: true, sharer: 'Bob' },
+      { file: expect.stringMatching(/^guest-bob_screen_r/), offsetMs: 0, endedEarly: true, sharer: 'Bob' },
     ]);
   });
 });

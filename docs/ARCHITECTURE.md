@@ -787,8 +787,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
 - **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
-  lists **Camera settings** when the camera behind the call's video track lists any of exposure
-  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  lists **Camera settings** when the camera behind the call's video track lists any of background
+  blur, exposure mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
   tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
   turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
   draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
@@ -798,6 +798,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
   video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
   track, so the panel works on the track the call holds and a camera switch needs no change.
+  **Background blur** is a tick box shown only when `backgroundBlur` lists both `true` and `false`,
+  and it sends the boolean itself. The blur is made by the computer before the browser gets the
+  frame, so the call, the camera file and the backup all carry it.
   Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
   component under the preview, on the previewed video track and keyed by its `id`; that track is the
   one handed to the call, so what is set there is what the call and the recording get.
@@ -1028,7 +1031,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `mimeForStream(stream, mime)` is what both `ChunkRecorder` and `BackupRecorder` start
   their `MediaRecorder` with: for a stream with no video track (a person who joined with no
   camera) it is the first `audio/mp4` entry of the call-audio list this browser supports, so
-  that person's `host_<id>.mp4` / `guest_<id>.mp4` and its backup are MP4 files with one audio
+  that person's `host_<id>.mp4` / `guest-<name>_<id>.mp4` and its backup are MP4 files with one audio
   track, under the names, channel and verdict a camera file has. Nothing that reads a take's
   files by name (the crash copy, a resume, the lobby's save, a returned backup) tells them
   apart.
@@ -1092,7 +1095,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
   labels it "(WAV)") → **writes committed per-chunk files** (`NNNNNN.part`) to an OPFS directory
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
-  backups survive tab crashes. Missing OPFS or `createWritable` is detected up front (RAM + warning).
+  backups survive tab crashes. Every WAV master starts with an 80-byte header that keeps a
+  28-byte `JUNK` chunk after `WAVE`, which becomes `ds64` when the file passes 4 GiB. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   Storage that has not answered five seconds after `start()` is treated the same way: the wait
   ends, the copy is held in RAM with that warning, and an answer that comes later is ignored
   and the directory it created is removed, so `stop()` and `whenOpen()` never wait on it for
@@ -1121,16 +1125,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
   file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
   header does not match its length gets its two size fields set from the length
-  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
-  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the header from
+  `resizeWavHeader`), because a page that closes commits its files with the placeholder header;
   a resume gives the host's own WAV the same repair through `copyBackupInto`.
-  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
-  rebuilt from the crash copy, and End & save for a guest whose final header never came),
-  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
-  pieces, so a file that was cut off can end part-way through a sample, and a decoder
-  reports an error on a frame it cannot finish. The frame size is read from the file's own
-  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
-  that header states.
+  Wherever the host's page sets a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, a backup assembled from its parts, and End & save for a guest
+  whose final header never came), `resizeWavHeader` (`lib/wav.ts`) reads where those fields are
+  and how long a sample frame is from the file's own first bytes, and writes the header back
+  whole. It walks the chunks up to `data`; the frame is taken only when it agrees with the
+  channels and the depth that header states, and a head it cannot read gives null and
+  leaves the file as it was. It declares whole sample frames only: a guest's WAV arrives in
+  64 KiB pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. A header with a reserved chunk after `WAVE`
+  (28 bytes, `JUNK` or `ds64`) becomes RF64 past 4 GiB, in the layout `ffmpeg -rf64 auto`
+  writes, and is RIFF with a zeroed `JUNK` when the length fits 32 bits; a header with no such
+  room saturates both fields.
   At End & save that length is the file's own (`FileWriter.size`) when it is more than the
   receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
   the crash copy's end where its receiver starts.
@@ -1271,16 +1280,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
-  `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
+  `host_<id>.mp4` and `host_<id>.wav` (when PCM capture works) up front.
   A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
   WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
-  Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
-  `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
-  `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
-  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
-  The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
-  `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
+  Every guest file opens when that guest's channel arrives, named for its slot and its guest
+  (`guest-<name>_<id>.*`, `guest2-<name>_<id>.*`, `guest3-<name>_…`), as does each screen segment
+  (`host_screen_<id>.mp4`, `guest-<name>_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest-<name>_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  A person's files carry that person's display name after the role (`host-ana_<id>.mp4`,
+  `host-ana_screen_<id>.mp4`, `guest-bob_<id>.wav`; the sharer's name goes into a guest's screen file,
+  `guest-bob_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take
@@ -1405,9 +1415,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
    Host click → the one folder prompt, then a three-second countdown (`recordWithCountdown`), shown
    to the others by WS `recording-countdown` →
-   `startHostRecording` (opens `host_*.mp4` + `host_*.wav` +
-   `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
-   auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
+   `startHostRecording` (opens `host_*.mp4` + `host_*.wav`) → WS `recording-started` → DO relays →
+   every guest shows the consent notice and auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
    nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
    FileWriter at offset; acks every 5 fragments/10s (with a journal attached, after each journal
@@ -1425,7 +1434,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
-   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   tracks, no guest file is created, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
@@ -1485,7 +1494,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most fourteen guest slots
+  recorded guest. The first guest's files are `guest-<name>_<id>.*`, the second's `guest2-<name>_<id>.*`. A take opens at most fourteen guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
@@ -1541,8 +1550,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   every frame after the change decodes as garbage, under `avc3` it just decodes. The
   companion remux command (`sync-report.ts`) adds `-tag:v avc1` so the file an editor
   opens is always tagged `avc1`, whichever codec was actually recorded.
-  Every candidate stays in the **MP4 container** on purpose — the host opens `guest_<id>.mp4`
-  before the guest picks a codec, so a WebM fallback would put WebM bytes behind an `.mp4` name.
+  Every candidate stays in the **MP4 container** on purpose — the host names the guest's `.mp4`
+  before it has seen a byte of it, so a WebM fallback would put WebM bytes behind an `.mp4` name.
   Firefox can't record; Safari can't host, and a Safari guest is recorded as video only (no WAV);
   `recordCapability` and the lobby's browser notes say so before anyone records.
   WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
@@ -1796,9 +1805,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **50 and 60 fps were checked with test cameras only.** No take from a real camera running at
   50 or 60 fps has been inspected (`MANUAL-TESTING.md` row 8.19). A camera that stops at 30 fps is
   never offered them.
-- **A take saved from the lobby after a crash still lists the first guest's camera file when no
-  guest was recorded.** The crash copy notes that file at Record; the save reports it as failed,
-  nothing committed.
 - **A take saved from the lobby after a crash holds what a guest sent before they were set as not
   recorded.** The lobby has no connection to the room; it rebuilds what the crash copy holds.
 - **A guest whose browser blocks session storage is forgotten on a reload.** The Room remembers a
@@ -2042,6 +2048,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
   controls the browser opens only after its "use and move your camera" permission shows no such
   rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **Background blur only where the computer does it.** openMeet runs no blur of its own, so Linux
+  and most cameras have no row. A blur set in the system's own video menu has no row either, and
+  it is in the recording all the same. A camera switched to during the call starts with its own
+  blur setting.
 - **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
   the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
   and frame-rate entries from a track's constraints once a camera setting is applied to it
@@ -2202,10 +2212,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   page gives the file; the two commands are in the README.
 - **A returned backup's two commands are only in its `.json` note.** There the quotes are
   escaped, and no screen shows the commands with a copy button.
-- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
-  size fields are 32 bits and cannot hold its length, so they declare the most they can
-  hold, more than the file has, and the FLAC commands, like any other command on that
-  file, report it.
+- **A WAV master past 4 GiB is RF64.** Its header is an RF64 one with 64-bit sizes, which
+  ffmpeg and most audio editors read in full; Python's `wave` module and other tools that
+  read only plain WAV refuse it. A WAV whose 44-byte header has no reserved chunk still
+  declares 4 GiB past that point, and only ffmpeg reads it to the end.
 - **Microphone only is kept per room, not across rooms or browsers.** The choice is
   stored in this browser under `om_mic_only_<slug>`, so a person with no camera presses it
   once for each room. While it is pressed the lobby's storage and folder figures still
