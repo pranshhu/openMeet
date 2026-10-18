@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Role } from '@openmeet/protocol';
 import type { BackupTransfer } from '@/hooks/backup-return';
+import { parseBackupName } from '@/lib/backup-recorder';
 import { formatBytes } from '@/lib/sync-report';
 
 export const quietBtn =
@@ -103,10 +104,18 @@ export function BackupNotice(props: {
 
   if (props.role === 'host') {
     if (offered.length > 0 && !props.takeActive) {
+      // A mix keeps the usual sentence: it is the one that is true of a call's backups.
+      const alone = offered.every((t) => parseBackupName(t.id)?.solo === true);
       rows.push(
         <Row key="offered" tone="status">
           <span>
-            {`${whoOf(offered)} ${new Set(offered.map((t) => t.from)).size > 1 ? 'want' : 'wants'} to send you ${files(offered.length)} (${formatBytes(offered.reduce((sum, t) => sum + t.size, 0))}) from an earlier recording in this room.`}
+            {`${whoOf(offered)} ${new Set(offered.map((t) => t.from)).size > 1 ? 'want' : 'wants'} to send you ${
+              alone
+                ? `${offered.length} file${offered.length === 1 ? '' : 's'}`
+                : files(offered.length)
+            } (${formatBytes(offered.reduce((sum, t) => sum + t.size, 0))}) ${
+              alone ? 'recorded on their own.' : 'from an earlier recording in this room.'
+            }`}
           </span>
           <button type="button" onClick={props.onAccept} className={filledBtn}>
             Save to folder

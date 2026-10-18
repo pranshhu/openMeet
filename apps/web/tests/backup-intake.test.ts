@@ -2341,3 +2341,50 @@ describe('BackupIntake in a room with a chosen name', () => {
     expect(other.readyState).toBe('closed');
   });
 });
+
+describe('BackupIntake: a take a guest recorded alone', () => {
+  it('lists the offer of either solo file, and refuses a solo screen name', async () => {
+    const { state, intake } = setup();
+
+    const video = fakeChannel(validLabel(1700000000000, ROOM, 'mp4', 'solo-'));
+    intake.offer(video, { peerId: 'peer-1', name: 'Alice' });
+    video.deliver(offerMsg(1000, 'video-key'));
+    const audio = fakeChannel(validLabel(1700000000000, ROOM, 'wav', 'solo-audio-'));
+    intake.offer(audio, { peerId: 'peer-1', name: 'Alice' });
+    audio.deliver(offerMsg(2000, 'audio-key'));
+    const screen = fakeChannel(validLabel(1700000000000, ROOM, 'mp4', 'solo-screen-'));
+    intake.offer(screen, { peerId: 'peer-1', name: 'Alice' });
+    screen.deliver(offerMsg(3000, 'screen-key'));
+    await flush();
+
+    expect(state.items.map((i) => [i.id, i.kind, i.status])).toEqual([
+      [`openmeet-backup-solo-1700000000000-${ROOM}.mp4`, 'camera', 'offered'],
+      [`openmeet-backup-solo-audio-1700000000000-${ROOM}.wav`, 'audio', 'offered'],
+    ]);
+  });
+});
+
+describe('BackupIntake saving a take a guest recorded alone', () => {
+  it('writes the file as solo_<name>_camera_<stamp>.mp4 with a note beside it that says so', async () => {
+    const payload = payloadOf(1000, 5);
+    const { frames, sha256 } = await framesFor(payload);
+    const { state, intake } = setup();
+    const ch = fakeChannel(validLabel(1700000000000, ROOM, 'mp4', 'solo-'));
+    intake.offer(ch, { peerId: 'p1', name: 'Alice' });
+    ch.deliver(offerMsg(payload.byteLength, 'key-a'));
+    await flush();
+    const folder = fakeFolder();
+    await intake.accept(folder, state.items);
+
+    for (const f of frames) ch.deliver(f);
+    ch.deliver(finalized(payload.byteLength, sha256));
+    await settle();
+
+    const name = 'solo_alice_camera_20231114T221320000Z.mp4';
+    expect([...folder.files.keys()].sort()).toEqual([name.replace('.mp4', '.json'), name]);
+    expect(Array.from(folder.files.get(name)!.bytes)).toEqual(Array.from(payload));
+    const note = JSON.parse(new TextDecoder().decode(folder.files.get(name.replace('.mp4', '.json'))!.bytes));
+    expect(note).toMatchObject({ file: name, recordedAlone: true, from: 'Alice' });
+    expect(state.items[0]!.status).toBe('saved');
+  });
+});

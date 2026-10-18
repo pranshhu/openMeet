@@ -197,3 +197,54 @@ describe('buildBackupNote', () => {
     expect(JSON.parse(trimmedRaw).from).toBe('Asha K.');
   });
 });
+
+describe('a backup recorded alone', () => {
+  const solo: BackupName = { ...defaultBackup, solo: true };
+
+  it('is named solo_ for the camera and the audio backup, and backup_ otherwise', () => {
+    expect(returnedBackupName(solo, 'Asha K.')).toBe('solo_asha-k_camera_20231114T221320000Z.mp4');
+    expect(returnedBackupName({ ...solo, kind: 'audio', ext: 'wav' }, 'Asha K.')).toBe(
+      'solo_asha-k_audio_20231114T221320000Z.wav'
+    );
+    expect(returnedBackupName({ ...solo, kind: 'audio', ext: 'wav' }, null)).toBe(
+      'solo_guest_audio_20231114T221320000Z.wav'
+    );
+    expect(returnedBackupName(defaultBackup, 'Asha K.')).toBe('backup_asha-k_camera_20231114T221320000Z.mp4');
+  });
+
+  it('says in its note that it was recorded alone and is aligned by waveform', () => {
+    const parsed = JSON.parse(
+      buildBackupNote({
+        file: 'solo_asha-k_camera_20231114T221320000Z.mp4',
+        backupOf: 'openmeet-backup-solo-1700000000000-abc-defg-hij.mp4',
+        backup: solo,
+        from: 'Asha K.',
+        sizeBytes: 5,
+        sha256Sent: 's',
+        sha256Written: 's',
+      })
+    );
+    expect(parsed.recordedAlone).toBe(true);
+    expect(parsed.alignment).toBe(
+      'Recorded by the participant on their own, with nobody else in the room. It belongs to no take and has no sync file: line it up with other recordings by audio waveform.'
+    );
+    expect(parsed.startedUnixMsNote).toBe("Read from the sender's device clock when their recording started.");
+    expect(parsed.kind).toBe('camera');
+    expect(parsed.from).toBe('Asha K.');
+  });
+
+  it('leaves recordedAlone out of the note of a backup made in a call', () => {
+    const parsed = JSON.parse(
+      buildBackupNote({
+        file: 'f.mp4',
+        backupOf: 'b.mp4',
+        backup: defaultBackup,
+        from: 'Asha K.',
+        sizeBytes: 5,
+        sha256Sent: 's',
+        sha256Written: 's',
+      })
+    );
+    expect('recordedAlone' in parsed).toBe(false);
+  });
+});

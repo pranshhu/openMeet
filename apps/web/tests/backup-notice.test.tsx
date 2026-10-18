@@ -507,3 +507,39 @@ describe('BackupNotice', () => {
     ]);
   });
 });
+
+describe('BackupNotice offering a take recorded alone', () => {
+  const SOLO = 'openmeet-backup-solo-1700000000000-abc-defg-hij.mp4';
+  const SOLO_WAV = 'openmeet-backup-solo-audio-1700000000000-abc-defg-hij.wav';
+  const CALL = 'openmeet-backup-1700000000000-abc-defg-hij.mp4';
+
+  it('says the files were recorded on their own when every one was', () => {
+    show({
+      transfers: [item({ id: SOLO }), item({ id: SOLO_WAV, kind: 'audio', size: 500_000_000 })],
+    });
+    expect(
+      screen.getByText('Asha wants to send you 2 files (2.0 GB) recorded on their own.')
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save to folder' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeTruthy();
+  });
+
+  it('counts one file in the singular and uses "want" for several senders', () => {
+    show({ transfers: [item({ id: SOLO, from: 'Asha' }), item({ id: SOLO_WAV, from: 'Ben' })] });
+    expect(
+      screen.getByText(`Asha, Ben want to send you 2 files (${formatBytes(3_000_000_000)}) recorded on their own.`)
+    ).toBeTruthy();
+  });
+
+  it('uses the singular for one file', () => {
+    show({ transfers: [item({ id: SOLO })] });
+    expect(screen.getByText('Asha wants to send you 1 file (1.5 GB) recorded on their own.')).toBeTruthy();
+  });
+
+  it('keeps the usual sentence when a call backup is offered with them', () => {
+    show({ transfers: [item({ id: SOLO }), item({ id: CALL })] });
+    expect(
+      screen.getByText('Asha wants to send you 2 backup files (3.0 GB) from an earlier recording in this room.')
+    ).toBeTruthy();
+  });
+});

@@ -12,6 +12,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host copies the record-alone link from the arrow beside **Copy invite link**; a
+  recording made alone lands in the folder as `solo_…` with a note saying so.
+- Guests can record on their own from the room link with `?solo=1`, with the teleprompter; the
+  recording stays in their browser until they send it to the host from the lobby.
 - Present a PDF as slides: pick one PDF in the Present menu and turn its pages like a deck
   of pictures. It is read in your own browser and never sent.
 - A PDF or a set of files that cannot be presented as slides says why: too big, a password,

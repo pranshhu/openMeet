@@ -2479,3 +2479,43 @@ describe('a room with a chosen name', () => {
     expect(found!.notes.backups.map((b) => b.dir)).toEqual([dirs[0]]);
   });
 });
+
+describe('a take recorded alone', () => {
+  const ROOM = 'abc-defg-hij';
+
+  it('parses both solo names as solo, with the same kind, start, room and extension', () => {
+    expect(parseBackupName(`openmeet-backup-solo-1700000000000-${ROOM}.mp4`)).toEqual({
+      kind: 'camera',
+      startedMs: 1700000000000,
+      room: ROOM,
+      ext: 'mp4',
+      solo: true,
+    });
+    expect(parseBackupName(`openmeet-backup-solo-audio-1700000000000-${ROOM}.wav`)).toEqual({
+      kind: 'audio',
+      startedMs: 1700000000000,
+      room: ROOM,
+      ext: 'wav',
+      solo: true,
+    });
+  });
+
+  it('refuses a solo screen name and a solo name with the wrong extension or an unsafe room', () => {
+    expect(parseBackupName(`openmeet-backup-solo-screen-1700000000000-${ROOM}.mp4`)).toBeNull();
+    expect(parseBackupName(`openmeet-backup-solo-1700000000000-${ROOM}.wav`)).toBeNull();
+    expect(parseBackupName(`openmeet-backup-solo-audio-1700000000000-${ROOM}.mp4`)).toBeNull();
+    expect(parseBackupName('openmeet-backup-solo-1700000000000-../../etc.mp4')).toBeNull();
+    expect(parseBackupName(`openmeet-backup-solo-solo-1700000000000-${ROOM}.mp4`)).toBeNull();
+  });
+
+  it('leaves the result of an ordinary name without a solo key', () => {
+    const parsed = parseBackupName(`openmeet-backup-1700000000000-${ROOM}.mp4`);
+    expect(parsed).not.toBeNull();
+    expect('solo' in parsed!).toBe(false);
+  });
+
+  it('reads the room out of both solo names', () => {
+    expect(backupRoom(`openmeet-backup-solo-1790381338441-${ROOM}.mp4`)).toBe(ROOM);
+    expect(backupRoom(`openmeet-backup-solo-audio-1790381338441-${ROOM}.wav`)).toBe(ROOM);
+  });
+});

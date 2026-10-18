@@ -540,6 +540,31 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   cell added later plays with sound. A guest the host set as not recorded (`notRecorded` exactly
   `true`) is left out, and so is a screen they present. With no cell it reads "Waiting for someone
   to join".
+  `?solo=1` (`isSoloLink`) renders the same `Lobby` with `checkOnly` and `solo`, so a guest
+  records themselves alone: the heading reads "Record on your own", the lobby draws no
+  `RecordingDisclosure`, no recording notice and no **Audio channels** picker, and nothing joins
+  the room and no socket opens beyond the room lookup. `SoloTake`, drawn in the join panel, owns
+  Record: a `RECORD_COUNTDOWN_S` count (`RecordingCountdown`, **Cancel** to stop it), then two
+  `BackupRecorder`s on the preview stream, a camera one in the directory
+  `openmeet-backup-solo-<ts>-<slug>` and, where PCM capture is supported and the stream has a
+  microphone track, a WAV one in `openmeet-backup-solo-audio-<ts>-<slug>`. Nothing leaves the
+  browser. **Stop** lists the take as `Take <n>` with **Download** links named
+  `openmeet-solo-<slug>-take<n>.mp4` and `.wav`, and a line says whether it was kept in browser
+  storage; any warning from a recorder shows an alert for the take, and a `beforeunload` prompt
+  guards a running take and any take that was not kept. `useTakeGuard` holds the wake lock while
+  a take runs. From the Record press until the stop has answered, `Lobby` takes no capture
+  change: `onLive` writes a ref that `reacquire` checks first, and the camera, microphone,
+  quality, picture shape, bitrate and frame-rate pickers and **Microphone only** are disabled.
+  The browser that holds the room's host token is told to use the room, and a browser that
+  cannot record is told so, in both cases with no Record button. The take reaches the host
+  from the room's ordinary lobby: it is listed under **Backups on this device** as "Recorded
+  alone" with **Send to host**, and the host's `BackupIntake` saves it as a returned backup. The
+  solo page lists the takes already kept in the browser in the same section, read once when the
+  page opens, with **Download** and **Delete** and no **Send to host**; a take recorded during the
+  visit is listed in the record panel until the page is opened again. The page has the
+  teleprompter, the same script per room as the call's: **Teleprompter** opens it in a `fixed
+  inset-0` wrapper so its saved position means the same as in the call, and opening it asks
+  nothing of the capture.
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
@@ -548,9 +573,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
-  the Present-only link, the microphone-only link, the host view link and the stage view link
-  (the plain link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or `?view=stage`,
-  the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  the Present-only link, the microphone-only link, the host view link, the stage view link and
+  the record-alone link (the plain link plus `?producer=1`, `?present=1`, `?audio=1`,
+  `?view=host`, `?view=stage` or `?solo=1`, the flags `RoomView` reads) and says what each is.
+  The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -1138,6 +1164,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
   backups survive tab crashes. Every WAV master starts with an 80-byte header that keeps a
   28-byte `JUNK` chunk after `WAVE`, which becomes `ds64` when the file passes 4 GiB. Missing OPFS or `createWritable` is detected up front (RAM + warning).
+  backups survive tab crashes. A take a guest records alone (`SoloTake`) uses
+  `openmeet-backup-solo-<ts>-<slug>` (MP4) and `openmeet-backup-solo-audio-<ts>-<slug>` (WAV);
+  `parseBackupName` reads both, with `solo: true` (a key present only when true) and the same
+  `kind`, `startedMs`, `room` and `ext`, and a `solo-screen-` name is refused. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   Storage that has not answered five seconds after `start()` is treated the same way: the wait
   ends, the copy is held in RAM with that warning, and an answer that comes later is ignored
   and the directory it created is removed, so `stop()` and `whenOpen()` never wait on it for
@@ -1418,7 +1448,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   transfer is written through a `ChunkReceiver` bounded to the size its sender declared, and answers a
   `resume_query` only with the key of the offer that holds it. On the sender's finalize the file is
   closed first, then its digest and byte count are compared with the sender's, and a verified backup
-  gets a `<name>.json` note beside it; a failed or cut-off transfer keeps the bytes that arrived with
+  gets a `<name>.json` note beside it; a take a guest recorded alone (`solo: true` from
+  `parseBackupName`) is written as `solo_<who>_<kind>_<UTC start>.<ext>`, its note carries
+  `recordedAlone: true` and says it belongs to no take, and the host's offer reads "recorded on
+  their own" when every file offered is one; a failed or cut-off transfer keeps the bytes that arrived with
   no note (an empty file is removed), and a dropped connection shows `stalled` until the sender asks
   where to resume on a new channel. `BackupSend` is the same backup from the guest's side: it offers
   its name, size and one key per item, reads nothing until the host's `resume_offset`, then streams
@@ -1881,6 +1914,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   the plain invite link alone, and during a take and after one the top bar has none of them.
   Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or
   `?view=stage`. A guest's view link is also in People, during a take as well.
+- **The producer, Present-only, microphone-only and record-alone links are offered only to the
+  host, in the waiting room and in the call's top bar before a take.** The lobby and the take
+  summary offer the plain invite link alone, and during a take and after one the top bar has none
+  of them. Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1` or `?solo=1`.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a
@@ -2476,3 +2513,13 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **The server still relays connection setup.** Chat goes over an encrypted connection between the
   browsers, but SDP and ICE pass through the Room, so a person who changes the server's code could
   place it between two browsers.
+- **The record-alone page does not extend the room's 30 days.** It opens no socket to the room,
+  so a room nobody joins for 30 days expires and cannot receive the take. The files stay in the
+  browser, with **Download**.
+- **A browser may clear its storage under pressure.** A take recorded alone is kept in browser
+  storage, and **Download** is the second copy.
+- **A take recorded alone holds the channels the microphone delivers.** The lobby asks for two
+  as `ideal`, and the mono or stereo choice of the call does not apply to the page.
+- **The record-alone page has no elapsed clock and no microphone warnings during the take.**
+- **A host page loaded before a take recorded alone existed refuses the offer of its files.** The
+  guest reads that the file was not saved.
