@@ -18,6 +18,7 @@ import {
   isLogo,
   isLookAccent,
   isReaction,
+  isRoomName,
   titleFrom,
   type ClientMessage,
   type Role,
@@ -370,10 +371,23 @@ export class Room implements DurableObject {
     this.slug = room.slug;
     this.hostToken = room.host_token;
     await this.state.storage.put('room', { slug: room.slug, hostToken: room.host_token } satisfies RoomRow);
+    // A name can be guessed, so a room that has one starts with the waiting room
+    // on. Once `access` is stored the host's setting is the only one.
+    if (isRoomName(room.slug) && (await this.state.storage.get('access')) === undefined) {
+      this.waitingRoom = true;
+      await this.saveAccess();
+    }
     // Same-origin/local-dev path: host_token may arrive as an httpOnly cookie.
     // Cross-origin deploys (*.pages.dev + *.workers.dev) can't send it, so the
     // host also presents the token in its `join` message (see webSocketMessage).
-    const cookie = parseHostTokenCookie(req.headers.get('Cookie'), room.slug);
+    // A producer's address carries `producer=1` and is never read for the
+    // cookie: a producer or view link opened in the host's own browser would
+    // otherwise replace the host's tab before its `join` could say producer.
+    // The parameter can only give up the host seat, so it needs no check.
+    const cookie =
+      url.searchParams.get('producer') === '1'
+        ? null
+        : parseHostTokenCookie(req.headers.get('Cookie'), room.slug);
     const isHost = !!cookie && timingSafeEqualHex(cookie, room.host_token);
 
     const { 0: client, 1: server } = new WebSocketPair();

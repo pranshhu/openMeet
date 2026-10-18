@@ -104,6 +104,11 @@ retention policy to trust, because there's nothing retained.
   screen only and never in a recording (computers)
 - **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
   entry for the session, with the room link and a short checklist for the guest
+- Chat that goes directly between the browsers in the call, with a pop-up for each new
+  message while the panel is closed, presence, and screen share; a photo or a video file can be presented too (phones present those or
+- A host can choose the room's link on the home page (`/r/my-show/`). New guests wait
+  until the host lets them in, and the link lasts while it is used at least once every
+  30 days.
 - Chat with a pop-up for each new message while the panel is closed, presence, and
   screen share; a photo or a video file can be presented too (phones present those or
   the rear camera), and so can a deck of slides, a set of pictures or one PDF, turned
@@ -145,7 +150,9 @@ retention policy to trust, because there's nothing retained.
 - **Camera settings** in the call's camera menu: exposure and colour temperature for the
   camera you are on. It lists only what your camera offers the browser (zoom, pan and tilt
   only where the browser lists them without a further permission), and the change is in the
-  call and in your recording. The lobby and the check page have it too, under the preview
+  call and in your recording. **Background blur** is there too, where your computer offers it
+  to the browser (Linux has none), and it is in your recording as well. The lobby and the
+  check page have it too, under the preview
 - A live track panel during a take: every camera, WAV and screen file with its size
   growing, and a warning when one stops getting data
 
@@ -177,7 +184,7 @@ GUEST browser  ──WebRTC (media tracks + recording DataChannels)──▶  HO
   getUserMedia                                                        getUserMedia
   MediaRecorder ──chunks──▶ DataChannel ──▶ ChunkReceiver ──▶ FileWriter ──▶ host disk
        │                                                                  │
-       └────────── WebSocket signalling (SDP/ICE/chat/presence) ──────────┘
+       └────────── WebSocket signalling (SDP/ICE/presence) ───────────────┘
                                     │
               Cloudflare Worker (REST) + Durable Object (per-room hub) + D1 (metadata)
 ```
@@ -432,18 +439,27 @@ switched during the call is opened the same way as the one chosen in the lobby.
 ### Producers and Present only
 
 A room has 4 recorded seats (8 when every recorded person joined with **Microphone
-only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these three:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link, the Present-only link and the
-  microphone-only link.
+  waiting room and in the call, copies this link, the Present-only link, the
+  microphone-only link and the host and stage view links.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+- **View link.** Copy it from the arrow beside **Copy invite link** (the host's own view
+  and the stage view) or from **View link** on a guest's row in **People**; or add
+  `?view=host` or `?view=guest&name=<name>` to the invite link
+  (`https://<your-site>/r/<room>/?view=guest&name=Ana`) yourself. Use it as an OBS browser
+  source or on a second screen. The page joins by itself and shows that person's camera
+  and sound alone on a black page, with no buttons and no name. It takes an unrecorded
+  slot, is never recorded, and is as private as the invite link: anyone who has it can
+  watch. `?view=stage` shows everyone's camera and every shared screen in one grid, with
+  everyone's sound, and leaves out a guest you set as not recorded.
 
 For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
 **Microphone only**, so nobody's camera comes back on. The host copies this link from
@@ -456,10 +472,10 @@ All in the one folder the host picks, per take:
 
 | File | Contents |
 |---|---|
-| `host_<id>.mp4` / `guest_<id>.mp4` | H.264 video + compressed audio |
-| `host_<id>.wav` / `guest_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
-| `guest2_<id>.*`, `guest3_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8_` in a take, and higher numbers after reconnects |
-| `host_screen_<id>.mp4` / `guest_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest_screen_<id>_2_take2.mp4`) |
+| `host_<id>.mp4` / `guest-<name>_<id>.mp4` | H.264 video + compressed audio |
+| `host_<id>.wav` / `guest-<name>_<id>.wav` | Uncompressed 24-bit PCM master — **edit from this** |
+| `guest2-<name>_<id>.*`, `guest3-<name>_<id>.*`, and onward | The same pair for the second and later guests, numbered in the order they were first given a file: up to `guest8-<name>_` in a take, and higher numbers after reconnects |
+| `host_screen_<id>.mp4` / `guest-<name>_screen_<id>.mp4` | One per screen-share stretch; later stretches get `_2`, `_3`, …, and a later take's end in `_take<n>` (`guest-bob_screen_<id>_2_take2.mp4`) |
 | `call<n>_<id>.m4a` | The host's own copy of a recorded guest's live call audio, at call quality: a fallback for a guest track that stops arriving or ends short. It starts once that guest's own camera recording reaches the host, so a guest whose recording never starts gets no copy. One per stretch of a guest's connection, numbered in the order they start; `.webm` where the browser cannot encode MP4 audio |
 | `sync_<id>.json` | Start-time offsets, a size and a verdict for every file, and remux commands |
 | `backup_<name>_<kind>_<UTC start>.<ext>` | A guest's leftover backup, sent to the host from the lobby; its `.json` beside it says how to align it and that its SHA-256 matched |
@@ -469,9 +485,11 @@ All in the one folder the host picks, per take:
 
 `<id>` is new for every take, and files from the second take on also
 end in `_take<n>` (`host_<id>_take2.mp4`, `host_screen_<id>_take2.mp4`, `sync_<id>_take2.json`). `sync.json` names whose screen each
-screen file is. The host's files carry the host's name after the role, cut down to letters, digits
-and hyphens: `host-ana-maría_<id>.mp4`, `host-ana-maría_screen_<id>.mp4`. The MP4's audio track is
-the convenience copy; the WAV is the master.
+screen file is. Every person's camera file and WAV carry that person's name after the role, cut down
+to letters, digits and hyphens: `host-ana-maría_<id>.mp4`, `guest-bob_<id>.wav`; the host's screen
+files carry it too (`host-ana-maría_screen_<id>.mp4`), and a guest's screen file carries the name of whoever
+shared it (`guest-bob_screen_<id>.mp4`). A name with no letter or digit in it leaves
+the bare role. The MP4's audio track is the convenience copy; the WAV is the master.
 
 **Pause** ends a take and **Continue** starts the next one, so a paused session is one
 take per part. Each part's sync file (`sync_<id>.json`, then `sync_<id>_take<n>.json`)
@@ -608,8 +626,8 @@ the screen that follows offers them too.
    Delete a WAV only when its two lines are the same; when they differ, or ffmpeg prints
    an error, keep it and encode again. Run the pairing and aligned-copy commands first:
    they read the WAV. Both commands work on any WAV openMeet wrote, mono or stereo, a
-   WAV backup you downloaded included. The one exception is a WAV that was cut off after
-   it passed 4 GiB: its size fields cannot hold its length, so ffmpeg prints an error.
+   WAV backup you downloaded included. A master past 4 GiB is an RF64 file, which
+   ffmpeg reads in full.
    A returned WAV backup's own `.json` holds the two commands for that file, under `flac`.
 
 ### If the host's browser crashes

@@ -1,16 +1,24 @@
-type Mode = 'exposureMode' | 'whiteBalanceMode';
+type Mode = 'backgroundBlur' | 'exposureMode' | 'whiteBalanceMode';
 type Range = 'exposureCompensation' | 'exposureTime' | 'colorTemperature' | 'zoom' | 'pan' | 'tilt';
 
 export type CameraControl =
   | { key: Mode; label: string; kind: 'switch'; on: boolean }
   | { key: Range; label: string; kind: 'range'; min: number; max: number; step: number; value: number };
 
-// The order the panel draws them in.
-const CONTROLS: readonly { key: Mode | Range; label: string; kind: 'switch' | 'range' }[] = [
-  { key: 'exposureMode', label: 'Auto exposure', kind: 'switch' },
+type Control =
+  | { key: Mode; label: string; kind: 'switch'; on: string | boolean; off: string | boolean }
+  | { key: Range; label: string; kind: 'range' };
+
+const AUTO = { on: 'continuous', off: 'manual' } as const;
+
+// The order the panel draws them in. A switch lists the two values its capability
+// holds and sends the one that matches its state.
+const CONTROLS: readonly Control[] = [
+  { key: 'backgroundBlur', label: 'Background blur', kind: 'switch', on: true, off: false },
+  { key: 'exposureMode', label: 'Auto exposure', kind: 'switch', ...AUTO },
   { key: 'exposureCompensation', label: 'Exposure', kind: 'range' },
   { key: 'exposureTime', label: 'Exposure time', kind: 'range' },
-  { key: 'whiteBalanceMode', label: 'Auto white balance', kind: 'switch' },
+  { key: 'whiteBalanceMode', label: 'Auto white balance', kind: 'switch', ...AUTO },
   { key: 'colorTemperature', label: 'Colour temperature', kind: 'range' },
   { key: 'zoom', label: 'Zoom', kind: 'range' },
   { key: 'pan', label: 'Pan', kind: 'range' },
@@ -42,7 +50,7 @@ function capabilitiesOf(track: MediaStreamTrack): Record<string, unknown> {
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 
 /**
- * The exposure and colour settings this camera offers the browser, each only
+ * The blur, exposure and colour settings this camera offers the browser, each only
  * where its capabilities list it. A track that cannot say gives none.
  */
 export function cameraControls(track: MediaStreamTrack): CameraControl[] {
@@ -54,11 +62,12 @@ export function cameraControls(track: MediaStreamTrack): CameraControl[] {
     // The picture can be adjusted without knowing where each slider stands.
   }
   const controls: CameraControl[] = [];
-  for (const { key, label, kind } of CONTROLS) {
+  for (const control of CONTROLS) {
+    const { key, label } = control;
     const capability = capabilities[key];
-    if (kind === 'switch') {
-      if (Array.isArray(capability) && capability.includes('continuous') && capability.includes('manual')) {
-        controls.push({ key: key as Mode, label, kind, on: settings[key] === 'continuous' });
+    if (control.kind === 'switch') {
+      if (Array.isArray(capability) && capability.includes(control.on) && capability.includes(control.off)) {
+        controls.push({ key: control.key, label, kind: 'switch', on: settings[key] === control.on });
       }
       continue;
     }
@@ -68,7 +77,7 @@ export function cameraControls(track: MediaStreamTrack): CameraControl[] {
     const step = typeof range.step === 'number' && range.step > 0 ? range.step : (max - min) / 100;
     const at = settings[key];
     const value = typeof at === 'number' && Number.isFinite(at) ? clamp(at, min, max) : min;
-    controls.push({ key: key as Range, label, kind, min, max, step, value });
+    controls.push({ key: control.key, label, kind: 'range', min, max, step, value });
   }
   return controls;
 }
@@ -82,9 +91,9 @@ export function cameraControls(track: MediaStreamTrack): CameraControl[] {
 export function applyCameraSetting(track: MediaStreamTrack, key: string, value: number | boolean): Promise<void> {
   const control = CONTROLS.find((c) => c.key === key);
   if (!control) return Promise.resolve();
-  let setting: number | string;
+  let setting: number | string | boolean;
   if (control.kind === 'switch') {
-    setting = value ? 'continuous' : 'manual';
+    setting = value ? control.on : control.off;
   } else {
     if (typeof value !== 'number' || !Number.isFinite(value)) return Promise.resolve();
     const range = rangeOf(capabilitiesOf(track)[key]);

@@ -5,6 +5,7 @@ import { createRoom, getSponsors } from '@/lib/api';
 import type { SponsorsResponse } from '@/lib/api';
 import { storeHostToken } from '@/lib/host-token';
 import { Logo } from '@/components/Logo';
+import { NamedRoom } from '@/components/NamedRoom';
 import { SponsorWall } from '@/components/SponsorWall';
 
 export default function Landing() {
@@ -80,6 +81,7 @@ export default function Landing() {
               </button>
               <span className="text-sm text-[#5f6368]">Share the link — up to four people recorded.</span>
             </div>
+            <NamedRoom />
 
             {error && <p className="mt-5 text-sm text-[#ea4335]">{error}</p>}
           </div>
@@ -137,6 +139,7 @@ export default function Landing() {
             </button>
             <span className="helper">Share the link — up to four people recorded.</span>
           </div>
+          <NamedRoom />
 
           {error && <p className="mt-5 text-sm text-[#ea4335]">{error}</p>}
         </div>

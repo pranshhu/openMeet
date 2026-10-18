@@ -176,9 +176,14 @@ export function ChatPanel({
         className="flex-1 space-y-3 overflow-y-auto px-4 py-2 [scrollbar-color:rgb(255_255_255/0.25)_transparent] [scrollbar-width:thin]"
       >
         {messages.length === 0 && to === '' && (
-          <p className="mt-4 text-center text-sm text-white/70">
-            Messages are visible to everyone in the call.
-          </p>
+          <>
+            <p className="mt-4 text-center text-sm text-white/70">
+              Messages are visible to everyone in the call.
+            </p>
+            <p className="mt-4 text-center text-sm text-white/70">
+              They go straight to each person, not through the server.
+            </p>
+          </>
         )}
         {messages.map((m, i) => {
           const sender = chatSenderLabel(m);
@@ -195,6 +200,13 @@ export function ChatPanel({
               >
                 {m.text}
               </p>
+              {m.self && m.notDeliveredTo?.length ? (
+                <p role="status" className="mt-0.5 text-xs text-[#fdd663]">
+                  {m.private
+                    ? 'Not delivered.'
+                    : `Not delivered to ${m.notDeliveredTo.map((r) => personTag(r.peerId, r.role, known)).join(', ')}.`}
+                </p>
+              ) : null}
             </div>
           );
         })}

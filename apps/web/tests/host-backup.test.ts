@@ -12,6 +12,7 @@ import {
   startGuestRecording,
   startScreenRecording,
   stopScreenRecording,
+  type RecordingHandles,
 } from '@/hooks/recording-controller';
 import { BackupRecorder } from '@/lib/backup-recorder';
 import { presetById, DEFAULT_BITRATE_ID, chooseBitrate } from '@/lib/quality';
@@ -65,6 +66,22 @@ class FakeMediaRecorder {
   emit(bytes: number = 64) {
     this.ondataavailable?.({ data: new Blob([new Uint8Array(bytes)]) });
   }
+}
+
+/**
+ * Binds the first guest's camera channel, which is what opens slot 0's file and
+ * builds its receiver. The channel is closed, so ending the take waits for no one.
+ */
+async function bindFirstGuest(handles: RecordingHandles) {
+  const ch = {
+    label: '',
+    binaryType: '',
+    readyState: 'closed',
+    onmessage: null as ((ev: { data: unknown }) => void) | null,
+    send() {},
+  };
+  await bindHostGuestChannel(ch as unknown as RTCDataChannel, handles, 'peer-a');
+  return ch;
 }
 
 function fakeDir() {
@@ -293,7 +310,7 @@ describe('host backup recording', () => {
     expect(handles.hostPcm).toBeUndefined();
     expect(handles.wavBackup).toBeUndefined();
     expect(openedFiles.some((f) => f.startsWith('host_'))).toBe(false);
-    expect(openedFiles).toContain('guest_test-rec-empty.mp4');
+    expect(openedFiles.some((f) => f.startsWith('guest'))).toBe(false);
 
     const result = await endHostRecording(handles);
     expect(result.backup).toBeNull();
@@ -407,6 +424,7 @@ describe('host backup recording', () => {
       const takeDir = `openmeet-take-${handles.hostStartMs}-abc-defg-hij`;
       expect(root.entries.has(takeDir)).toBe(true);
 
+      await bindFirstGuest(handles);
       await handles.receiver!.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
       await handles.receiver!.handleMessage(new ArrayBuffer(4));
       vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
@@ -426,6 +444,7 @@ describe('host backup recording', () => {
           {
             file: 'guest_test-rec-j.mp4',
             kind: 'camera',
+            key: 'peer-a',
             slot: 0,
             // The 8 bytes of the part, and the hash state that covers them.
             sha256State: {
@@ -458,6 +477,7 @@ describe('host backup recording', () => {
 
     expect(handles.journal).toBeUndefined();
     expect(handles.unprotected).toBe(true);
+    await bindFirstGuest(handles);
     expect(handles.guestWriter?.fileName).toBe('guest_test-rec-off.mp4');
     await expect(endHostRecording(handles)).resolves.toBeDefined();
   });
@@ -475,6 +495,7 @@ describe('host backup recording', () => {
 
     expect(handles.journal).toBeUndefined();
     expect(handles.unprotected).toBe(true);
+    await bindFirstGuest(handles);
     expect(handles.guestWriter?.fileName).toBe('guest_test-rec-nostore.mp4');
     await expect(endHostRecording(handles)).resolves.toBeDefined();
   });
@@ -592,6 +613,7 @@ describe('host backup recording', () => {
       });
 
       // The note reaches storage with the next commit, and a later session reads it back.
+      await bindFirstGuest(handles);
       await handles.receiver!.handleMessage(JSON.stringify({ idx: 0, offset: 0, size: 4, ts: 0 }));
       await handles.receiver!.handleMessage(new ArrayBuffer(4));
       vi.setSystemTime(Date.now() + CHUNK_TIMESLICE_MS);
@@ -856,7 +878,7 @@ describe('host backup recording', () => {
 
     const handles = await startHostRecording({ recordingId: 'new-id', localStream: fakeStream(), dir: dir as never });
 
-    expect(opened).toEqual(['host_new-id.mp4', 'guest_new-id.mp4']);
+    expect(opened).toEqual(['host_new-id.mp4']);
     expect(handles.hostWriter?.fileName).toBe('host_new-id.mp4');
     expect(opened.some((name) => name.includes('_resumed'))).toBe(false);
     await endHostRecording(handles);
@@ -926,6 +948,7 @@ describe('host backup recording', () => {
         journalRoot: async () => root as never,
       });
       const start = Date.now() - 100;
+      await bindFirstGuest(handles);
       const receiver = handles.receiver!;
       await receiver.handleMessage(
         JSON.stringify({ type: 'recording_meta', recordingId: 'g', guestStartHostMs: start, rttMs: 12 })
@@ -1039,7 +1062,7 @@ describe('host backup recording', () => {
     }
   });
 
-  it('closes the empty first guest file before deleting it and leaves it out of the report', async () => {
+  it('opens no guest file for a take no guest sent into, and leaves nothing of it in the report', async () => {
     const events: string[] = [];
     const dir = {
       getFileHandle: async (name: string) => ({
@@ -1063,13 +1086,7 @@ describe('host backup recording', () => {
 
     await endHostRecording(handles);
 
-    // The file is committed before it is removed: an open writer would not
-    // reach the disk, and removing first would leave it unclosed.
-    expect(events).toEqual([
-      'close host_test-rec-noguest.mp4',
-      'close guest_test-rec-noguest.mp4',
-      'remove guest_test-rec-noguest.mp4',
-    ]);
+    expect(events).toEqual(['close host_test-rec-noguest.mp4']);
     expect(await collectGuestReports(handles)).toEqual([]);
     expect(allWriters(handles).map((w) => w.fileName)).toEqual(['host_test-rec-noguest.mp4']);
   });
@@ -1126,6 +1143,49 @@ describe('host backup recording', () => {
     expect(reports.map((g) => g.file)).toEqual(['guest_test-rec-wavonly.mp4']);
   });
 
+  /** A resumed take whose first guest file was reopened from its note and never fed. */
+  async function resumedWithEmptyFirstGuest(dir: unknown) {
+    const { journal } = resumeJournal();
+    journal.notes.files.push({ file: 'guest_rec.mp4', kind: 'camera', key: 'k1', slot: 0 });
+    Object.assign(journal, {
+      file: () => ({ append() {}, commit: async () => {}, position: async () => null, dead: false }),
+      replay: async () => 0,
+    });
+    return resumeHostRecording({
+      journal,
+      dir: dir as never,
+      channels: [],
+      localStream: { getTracks: () => [], getVideoTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream,
+    });
+  }
+
+  it('closes the reopened first guest file before deleting it when no guest came back, and leaves it out of the report', async () => {
+    const events: string[] = [];
+    const dir = {
+      getFileHandle: async (name: string) => ({
+        name,
+        createWritable: async () => ({
+          write: async () => {},
+          close: async () => {
+            events.push(`close ${name}`);
+          },
+        }),
+      }),
+      removeEntry: async (name: string) => {
+        events.push(`remove ${name}`);
+      },
+    };
+    const handles = await resumedWithEmptyFirstGuest(dir);
+
+    await endHostRecording(handles);
+
+    // The file is committed before it is removed: an open writer would not
+    // reach the disk, and removing first would leave it unclosed.
+    expect(events).toEqual(['close guest_rec.mp4', 'remove guest_rec.mp4']);
+    expect(await collectGuestReports(handles)).toEqual([]);
+    expect(allWriters(handles).map((w) => w.fileName)).toEqual([]);
+  });
+
   it('a failing removeEntry does not fail the take and still leaves the file out of the report', async () => {
     const dir = {
       ...fakeDir(),
@@ -1133,16 +1193,12 @@ describe('host backup recording', () => {
         throw new Error('folder is read-only');
       },
     };
-    const handles = await startHostRecording({
-      recordingId: 'test-rec-reject',
-      localStream: fakeStream(),
-      dir: dir as never,
-    });
+    const handles = await resumedWithEmptyFirstGuest(dir);
 
     await expect(endHostRecording(handles)).resolves.toBeDefined();
 
     // The empty file is still in the folder, so its writer is still open to walks.
-    expect(allWriters(handles).map((w) => w.fileName)).toContain('guest_test-rec-reject.mp4');
+    expect(allWriters(handles).map((w) => w.fileName)).toContain('guest_rec.mp4');
     expect(await collectGuestReports(handles)).toEqual([]);
   });
 });
@@ -1241,6 +1297,7 @@ describe("the crash copy keeps when a guest's clock estimate arrived", () => {
         room: 'abc-defg-hij',
         journalRoot: async () => root as never,
       });
+      await bindFirstGuest(handles);
       const receiver = handles.receiver!;
       const at = Date.now();
       await receiver.handleMessage(
@@ -1303,6 +1360,7 @@ describe("the crash copy keeps when a guest's clock estimate arrived", () => {
         room: 'abc-defg-hij',
         journalRoot: async () => root as never,
       });
+      await bindFirstGuest(handles);
       const receiver = handles.receiver!;
       const at = Date.now();
       await receiver.handleMessage(JSON.stringify({ type: 'recording_meta', recordingId: 'g', rttMs: 15 }));

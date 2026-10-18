@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, SyntheticEvent } from 'react';
 import { followSpeaker } from '@/lib/speaker';
 
-function initial(label: string): string {
+export function initial(label: string): string {
   const m = label.trim().match(/[a-z0-9]/i);
   return m ? m[0]!.toUpperCase() : '?';
 }

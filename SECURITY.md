@@ -54,11 +54,15 @@ Treat an invite link as a live secret, not a one-time ticket.
 A check link (the invite link with `?check=1`) is the same secret: whoever holds it can
 join the room.
 
-**Chat and presence pass through the server in plaintext.** Only recording bytes
-and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
-persisted, but it is not end-to-end encrypted either.
-A teleprompter script the host sends to the others travels the same way: relayed,
-not persisted, and not end-to-end encrypted.
+**Chat lines and private messages go over the call's encrypted connection between the
+browsers, and the server never receives them.** What still passes through the server in
+plaintext, and is not stored: presence (with a raised hand and a title), reactions,
+chapter markers and their notes, the teleprompter script, the host's colour and logo,
+recording start and stop, and connection setup. Display names are stored in D1. The
+server relays connection setup, so whoever runs a changed server could place it between
+two browsers. A page loaded before this release still sends its chat through the server.
+A teleprompter script the host sends to the others is relayed, not persisted, and not
+end-to-end encrypted.
 Reactions are relayed the same way and are not persisted either.
 
 **The signaling socket accepts only the site's own origin.** A WebSocket handshake
@@ -98,7 +102,9 @@ they're already known:
   is missing — a speed bump rather than a hard limit.
 - **Room slugs carry ~47 bits of entropy** and are the sole capability for
   joining a room as a guest, unless the host has set a passcode or turned the waiting room
-  on. Treat an invite link as a secret.
+  on. Treat an invite link as a secret. A named room's slug can be guessed, so such a room starts
+  with the waiting room on; a host who turns it off makes the name the only credential. Anyone can
+  check whether a name exists (`GET /api/rooms/:slug`, or a 409 from `POST /api/rooms`).
 - **A room passcode is a digest in the room's Durable Object storage.** The host
   sets it in the room controls and guests type it before they join. The Room keeps only
   the SHA-256 of the slug and the passcode, compares it in constant time, and writes the
