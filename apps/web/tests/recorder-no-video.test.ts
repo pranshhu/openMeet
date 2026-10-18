@@ -179,7 +179,7 @@ describe('a host with a microphone and no camera', () => {
     });
     try {
       expect(opened).toContain('host_r1.mp4');
-      expect(opened).toContain('guest_r1.mp4');
+      expect(opened.filter((name) => name.startsWith('guest'))).toEqual([]);
       // The take's recorder and its backup: one MediaRecorder each.
       expect(FakeMediaRecorder.instances.map((r) => r.opts.mimeType)).toEqual([AUDIO_AAC, AUDIO_AAC]);
     } finally {

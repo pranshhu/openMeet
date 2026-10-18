@@ -54,11 +54,15 @@ Treat an invite link as a live secret, not a one-time ticket.
 A check link (the invite link with `?check=1`) is the same secret: whoever holds it can
 join the room.
 
-**Chat and presence pass through the server in plaintext.** Only recording bytes
-and A/V are peer-to-peer. Chat is relayed by the Durable Object — it is not
-persisted, but it is not end-to-end encrypted either.
-A teleprompter script the host sends to the others travels the same way: relayed,
-not persisted, and not end-to-end encrypted.
+**Chat lines and private messages go over the call's encrypted connection between the
+browsers, and the server never receives them.** What still passes through the server in
+plaintext, and is not stored: presence (with a raised hand and a title), reactions,
+chapter markers and their notes, the teleprompter script, the host's colour and logo,
+recording start and stop, and connection setup. Display names are stored in D1. The
+server relays connection setup, so whoever runs a changed server could place it between
+two browsers. A page loaded before this release still sends its chat through the server.
+A teleprompter script the host sends to the others is relayed, not persisted, and not
+end-to-end encrypted.
 Reactions are relayed the same way and are not persisted either.
 
 **The signaling socket accepts only the site's own origin.** A WebSocket handshake

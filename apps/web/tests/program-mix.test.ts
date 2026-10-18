@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { programMix } from '@/lib/program-mix';
+import { WAV_HEADER_BYTES } from '@/lib/wav';
 import { buildSyncReport, type FileCheck, type SyncReportInput } from '@/lib/sync-report';
 
 const START = 1_000_000;
@@ -144,7 +145,7 @@ describe('buildSyncReport: the program file command', () => {
   });
 
   it('reads the sound of a guest whose WAV holds only a header from the guest camera file', () => {
-    const r = buildSyncReport(withChecks(take, { 'guest_r.wav': { bytes: 44 } }));
+    const r = buildSyncReport(withChecks(take, { 'guest_r.wav': { bytes: WAV_HEADER_BYTES } }));
     const program = (JSON.parse(r.json) as { program: Program }).program;
     expect(program.video).toEqual(['host_r.mp4', 'guest_r.mp4']);
     expect(program.audio).toEqual(['host_r.wav', 'guest_r.mp4']);
@@ -156,8 +157,8 @@ describe('buildSyncReport: the program file command', () => {
     expect(r.data.commands.at(-1)?.label).toBe(LABEL_TWO + LEFT_OUT_SENTENCE);
   });
 
-  it('counts a WAV of 45 bytes as holding sound', () => {
-    expect(programOf(withChecks(take, { 'guest_r.wav': { bytes: 45 } }))?.audio).toEqual(['host_r.wav', 'guest_r.wav']);
+  it('counts a WAV one byte past its header as holding sound', () => {
+    expect(programOf(withChecks(take, { 'guest_r.wav': { bytes: WAV_HEADER_BYTES + 1 } }))?.audio).toEqual(['host_r.wav', 'guest_r.wav']);
   });
 
   it('gives a guest with a microphone and no camera no tile, and its WAV a place in the mix', () => {

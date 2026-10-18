@@ -7,6 +7,7 @@ import {
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
 import { cameraVideoBps } from './quality';
 import { mimeForStream } from './recorder';
+import { resizeWavHeader, WAV_HEAD_MAX_BYTES } from './wav';
 
 type MrFactory = (stream: MediaStream, opts: MediaRecorderOptions) => MediaRecorder;
 
@@ -130,26 +131,12 @@ export function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is O
 }
 
 async function patchWavHeader(parts: Blob[]): Promise<BlobPart[] | null> {
-  if (parts.length === 0 || !parts[0] || parts[0].size < 44) return null;
+  if (parts.length === 0 || !parts[0]) return null;
   try {
-    const slice = await parts[0].slice(0, 44).arrayBuffer();
-    const view = new DataView(slice);
-    if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
-      return null;
-    }
-    const totalPcmBytes = (parts[0].size - 44) + parts.slice(1).reduce((s, p) => s + p.size, 0);
-    const clampedData = totalPcmBytes > 0xffff_ffff ? 0xffff_ffff : totalPcmBytes;
-    view.setUint32(4, clampedData + 36 > 0xffff_ffff ? 0xffff_ffff : clampedData + 36, true);
-    view.setUint32(40, clampedData, true);
-
-    const patched: BlobPart[] = [slice];
-    if (parts[0].size > 44) {
-      patched.push(parts[0].slice(44));
-    }
-    for (let i = 1; i < parts.length; i++) {
-      patched.push(parts[i]!);
-    }
-    return patched;
+    const head = await parts[0].slice(0, WAV_HEAD_MAX_BYTES).arrayBuffer();
+    const resized = resizeWavHeader(head, parts.reduce((sum, part) => sum + part.size, 0));
+    if (!resized) return null;
+    return [resized, parts[0].slice(resized.byteLength), ...parts.slice(1)];
   } catch {
     return null;
   }

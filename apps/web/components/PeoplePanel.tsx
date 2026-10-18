@@ -3,6 +3,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import type { HelpAsk } from '@openmeet/protocol';
 import type { RemotePeer } from '@/hooks/useRoom';
+import { isStagePeer } from '@/lib/stage-peers';
 import { Icon } from './Icon';
 
 const rowButton =
@@ -50,6 +51,23 @@ export function PeoplePanel({
   const [helping, setHelping] = useState<string | null>(null);
   const [askedLine, setAskedLine] = useState<string | null>(null);
   const questionId = useId();
+
+  function copyViewLink(name: string) {
+    // origin+pathname is the plain invite link, whatever query this page has.
+    const write = navigator.clipboard?.writeText(
+      `${location.origin}${location.pathname}?view=guest&name=${encodeURIComponent(name)}`
+    );
+    const done = (ok: boolean) =>
+      setAskedLine(ok ? `View link for ${name} copied.` : `Couldn’t copy the view link for ${name}.`);
+    // No clipboard (plain-http self-host) or permission denied: say so, so the
+    // click never does nothing.
+    if (!write) return done(false);
+    write.then(
+      () => done(true),
+      () => done(false)
+    );
+  }
+
   return (
     <section
       aria-label="People"
@@ -180,6 +198,16 @@ export function PeoplePanel({
                   className={`${rowButton} hover:bg-white/10`}
                 >
                   Help
+                </button>
+              )}
+              {isStagePeer(p) && p.role === 'guest' && p.name?.trim() && (
+                <button
+                  type="button"
+                  aria-label={`Copy view link for ${name}`}
+                  onClick={() => copyViewLink(name)}
+                  className={`${rowButton} hover:bg-white/10`}
+                >
+                  View link
                 </button>
               )}
               {onRemove && (
