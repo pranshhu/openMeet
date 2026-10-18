@@ -64,6 +64,7 @@ vi.mock('@/lib/peer', () => ({
     rawConnection: null,
     setPeerCount: vi.fn(),
     whenConnected: vi.fn().mockResolvedValue(undefined),
+    sendChat: vi.fn().mockReturnValue(true),
     createRecordingChannel: vi.fn().mockReturnValue({
       readyState: 'open',
       addEventListener: vi.fn(),
@@ -6334,16 +6335,19 @@ describe('private messages in useRoom', () => {
       result.current.sendChat('for someone gone', 'p-gone');
     });
 
-    expect(signalSent.filter((m) => m.type === 'chat' || m.type === 'private-message')).toEqual([
-      { type: 'chat', text: 'to everyone', ts: expect.any(Number) },
-      { type: 'private-message', to: 'p-bob', text: 'for Bob' },
-      { type: 'private-message', to: 'p-gone', text: 'for someone gone' },
-    ]);
+    expect(signalSent.filter((m) => m.type === 'chat' || m.type === 'private-message')).toEqual([]);
     const own = { from: 'host', ts: expect.any(Number), self: true, fromName: 'Host Hana' };
     expect(result.current.state.messages).toEqual([
       { ...own, text: 'to everyone' },
       { ...own, text: 'for Bob', private: true, toPeerId: 'p-bob', toRole: 'guest' },
-      { ...own, text: 'for someone gone', private: true, toPeerId: 'p-gone', toRole: 'guest' },
+      {
+        ...own,
+        text: 'for someone gone',
+        private: true,
+        toPeerId: 'p-gone',
+        toRole: 'guest',
+        notDeliveredTo: [{ peerId: 'p-gone', role: 'guest' }],
+      },
     ]);
   });
 

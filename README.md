@@ -104,8 +104,8 @@ retention policy to trust, because there's nothing retained.
   screen only and never in a recording (computers)
 - **Add to calendar** in the host's lobby: a calendar file (.ics) or a Google Calendar
   entry for the session, with the room link and a short checklist for the guest
-- Chat with a pop-up for each new message while the panel is closed, presence, and
-  screen share; a photo or a video file can be presented too (phones present those or
+- Chat that goes directly between the browsers in the call, with a pop-up for each new
+  message while the panel is closed, presence, and screen share; a photo or a video file can be presented too (phones present those or
   the rear camera), and so can a deck of slide pictures, turned with Previous and Next
   or the arrow keys, and several people can present at once
 - **Send a file to the host** from chat (a headshot, a bio, slides): the host is asked
@@ -179,7 +179,7 @@ GUEST browser  ──WebRTC (media tracks + recording DataChannels)──▶  HO
   getUserMedia                                                        getUserMedia
   MediaRecorder ──chunks──▶ DataChannel ──▶ ChunkReceiver ──▶ FileWriter ──▶ host disk
        │                                                                  │
-       └────────── WebSocket signalling (SDP/ICE/chat/presence) ──────────┘
+       └────────── WebSocket signalling (SDP/ICE/presence) ───────────────┘
                                     │
               Cloudflare Worker (REST) + Durable Object (per-room hub) + D1 (metadata)
 ```

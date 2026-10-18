@@ -343,6 +343,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 8.127 | Send later, across a host reload | Host and one guest record. Ten seconds in, the guest ticks **Send my recording later**. Ten seconds later the host reloads its tab, joins again, presses **Resume recording**, records 10 s more and presses **End & save** | **End & save** finishes in a few seconds, without waiting 45 s for the guest; the guest's `guest-<name>_….mp4` holds the first seconds and reads Incomplete; the guest's backup is offered and, saved, plays from the start of the take to its end | ☐ | |
 | 8.128 | Two screens at once | Host and two guests in a call, a take running. Guest 1 and the host both present. Watch guest 2's stage, on a computer and on a phone 390 px wide. End & save | Guest 2 sees both screens side by side under the two names, one above the other on the phone, with nothing scrolling sideways. After End & save the folder holds `host…_screen_….mp4` and `guest-<name>_screen_….mp4`, both play, and `sync_….json` lists both under `screenSegments` with the two names | ☐ | |
 | 8.129 | Screen share across a reconnect | Host and one guest; the guest presents a window; the host records; after 10 s turn the guest's network off for 10 s and on again; after 10 s more the host presses End & save | The folder holds one `guest-<name>_screen_…mp4`, the summary lists it as complete, and it plays through the gap | ☐ | |
+| 8.130 | Chat not delivered | Host and two guests in a call. Open the second guest's page with a script that drops every outgoing `control` frame containing `hello` (it stands in for a page of the build before). The host sends a line to everyone and one to that guest only. Repeat the host's part on a phone about 390 px wide | The host's line to everyone reads "Not delivered to Guest 2." (the number **To** shows) and the private one "Not delivered.", under the bubble on the right. The first guest gets the line to everyone. The second guest's own lines still reach the host. On the phone the note wraps inside the sheet | ☐ | |
 
 ## 9 — Deploy
 
@@ -365,6 +366,7 @@ Also not covered automatically. Needs 3 browser profiles.
 | 10.3 | Recordings API needs the host token | `curl "$WORKER/api/recordings/<id>"` with no auth (the id must be the host's recording id; any other id is 404) | 401 | ☐ | |
 | 10.4 | CORS is single-origin | Request with a wrong `Origin` | No CORS headers back | ☐ | |
 | 10.5 | Only the host mutes or removes | From a guest's console, send `peer-remove` and then `peer-mute` naming another participant's peer id | Nobody leaves and nobody is muted | ☐ | |
+| 10.6 | Chat does not pass the server | Host and two guests in a call; on each page watch the WebSocket frames (DevTools, Network, WS, Messages); send a line to everyone and a private line | Both arrive as before, and no frame of type `chat` or `private-message` is on any socket | ☐ | |
 
 ---
 

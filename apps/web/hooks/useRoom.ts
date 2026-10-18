@@ -1519,6 +1519,22 @@ export function useRoom(slug: string) {
             setState((s) => withRemoteScreens(withScreen(s.remoteScreens, remotePeerId, stream), s)),
           onRemoteScreenEnded: (stream) =>
             setState((s) => withRemoteScreens(withoutScreen(s.remoteScreens, remotePeerId, stream), s)),
+          // The sender is this connection's far end, never anything the frame says.
+          onChat: ({ text, private: isPrivate }) => {
+            const fromName = remotePeersRef.current.find((r) => r.peerId === remotePeerId)?.name;
+            const msg: ChatMessage = {
+              from: remoteRole === 'host' || remoteRole === 'producer' ? remoteRole : 'guest',
+              text,
+              // This tab's clock, as for a line the Room relays.
+              ts: Date.now(),
+              fromPeerId: remotePeerId,
+              ...(typeof fromName === 'string' && fromName ? { fromName } : {}),
+              ...(isPrivate ? { private: true } : {}),
+              ...(!isPrivate && isNotRecordedPeer(remotePeersRef.current, remotePeerId) ? { notRecorded: true } : {}),
+            };
+            messagesRef.current = [...messagesRef.current, msg];
+            setState((s) => ({ ...s, messages: messagesRef.current }));
+          },
           onNegotiationError: (e) => {
             console.error('openMeet: negotiation failed', e);
             setState((s) => ({
@@ -2723,11 +2739,20 @@ export function useRoom(slug: string) {
 
   const sendChat = useCallback((text: string, to?: string) => {
     const ts = Date.now();
-    // A message for one person is a type of its own: a Room that does not
-    // know it drops it, where it would send a `chat` with one more field
-    // to everyone.
-    signalRef.current?.send(to ? { type: 'private-message', to, text } : { type: 'chat', text, ts });
+    // Lines go over the connections to the other browsers, not through the
+    // Room. A line for one person goes to that connection alone. A line that
+    // does not get through is not sent later; the sender's own line says to
+    // whom it did not get through. A Present-only device gets the line and is
+    // never named: it is someone's second screen, not a person.
+    const handed = new Map<string, boolean | undefined>();
+    if (to) handed.set(to, peersRef.current.get(to)?.sendChat(text, true));
+    else for (const [id, peer] of peersRef.current) handed.set(id, peer.sendChat(text, false));
     const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
+    const notDeliveredTo = to
+      ? handed.get(to) ? [] : [{ peerId: to, role: toRole }]
+      : remotePeersRef.current
+          .filter((r) => !r.companion && !handed.get(r.peerId))
+          .map((r) => ({ peerId: r.peerId, role: r.role ?? 'guest' }));
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
       from,
@@ -2736,6 +2761,7 @@ export function useRoom(slug: string) {
       self: true,
       ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
       ...(to ? { private: true, toPeerId: to, toRole } : {}),
+      ...(notDeliveredTo.length ? { notDeliveredTo } : {}),
     };
     messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({
