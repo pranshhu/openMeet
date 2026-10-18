@@ -138,7 +138,7 @@ describe('applyCameraSetting', () => {
     expect(track.applyConstraints).toHaveBeenNthCalledWith(2, { advanced: [{ exposureMode: 'manual' }] });
   });
 
-  it('makes no call for a key that is not one of the eight', async () => {
+  it('makes no call for a key that is not one the panel lists', async () => {
     const track = fakeTrack(caps);
     await applyCameraSetting(track, 'focusDistance', 3);
     await applyCameraSetting(track, 'zoom', Number.NaN);
@@ -149,5 +149,57 @@ describe('applyCameraSetting', () => {
     const track = fakeTrack(caps);
     track.applyConstraints.mockRejectedValue(new Error('refused'));
     await expect(applyCameraSetting(track, 'zoom', 2)).rejects.toThrow('refused');
+  });
+});
+
+describe('background blur', () => {
+  const zoom = { min: 1, max: 3, step: 1 };
+
+  it('lists a switch row first, on or off by the setting', () => {
+    const caps = { backgroundBlur: [false, true], zoom, exposureMode: ['continuous', 'manual'] };
+    expect(cameraControls(fakeTrack(caps, { backgroundBlur: true })).map((c) => c.key)).toEqual([
+      'backgroundBlur',
+      'exposureMode',
+      'zoom',
+    ]);
+    expect(cameraControls(fakeTrack(caps, { backgroundBlur: true }))[0]).toEqual({
+      key: 'backgroundBlur',
+      label: 'Background blur',
+      kind: 'switch',
+      on: true,
+    });
+    expect(cameraControls(fakeTrack(caps, {}))[0]).toEqual({
+      key: 'backgroundBlur',
+      label: 'Background blur',
+      kind: 'switch',
+      on: false,
+    });
+  });
+
+  it('draws no row unless the capability lists both true and false', () => {
+    const lists = [[true], [false], 'true', [], ['true', 'false'], undefined];
+    for (const backgroundBlur of lists) {
+      expect(cameraControls(fakeTrack({ backgroundBlur, zoom })).map((c) => c.key)).toEqual(['zoom']);
+    }
+    expect(cameraControls(fakeTrack({ backgroundBlur: [true, false], zoom })).map((c) => c.key)).toEqual([
+      'backgroundBlur',
+      'zoom',
+    ]);
+  });
+
+  it('sends the boolean itself and keeps what the track was already asked for', async () => {
+    const track = fakeTrack({ backgroundBlur: [false, true] }, {}, { width: { ideal: 1280 }, deviceId: { exact: 'cam-1' } });
+    await applyCameraSetting(track, 'backgroundBlur', true);
+    await applyCameraSetting(track, 'backgroundBlur', false);
+    expect(track.applyConstraints).toHaveBeenNthCalledWith(1, {
+      width: { ideal: 1280 },
+      deviceId: { exact: 'cam-1' },
+      advanced: [{ backgroundBlur: true }],
+    });
+    expect(track.applyConstraints).toHaveBeenNthCalledWith(2, {
+      width: { ideal: 1280 },
+      deviceId: { exact: 'cam-1' },
+      advanced: [{ backgroundBlur: false }],
+    });
   });
 });
