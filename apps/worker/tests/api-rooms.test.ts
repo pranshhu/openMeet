@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SELF, env } from 'cloudflare:test';
 import app from '../src/index.js';
 import { isValidSlugFormat } from '../src/lib/slug.js';
+import { getRoomBySlug, insertRoom } from '../src/db/queries.js';
 
 describe('POST /api/rooms', () => {
   it('creates a room and sets host_token cookie', async () => {
@@ -129,5 +130,209 @@ describe('POST /api/rooms rate limit', () => {
       envWithoutLimiter as unknown as typeof env
     );
     expect(res.status).toBe(201);
+  });
+});
+
+describe('POST /api/rooms with a chosen name', () => {
+  const post = (body: unknown, ip: string, raw = false) =>
+    SELF.fetch('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': ip, 'content-type': 'application/json' },
+      body: raw ? (body as string) : JSON.stringify(body),
+    });
+  const rowFor = (slug: string) =>
+    env.DB.prepare('SELECT * FROM rooms WHERE slug = ?').bind(slug).first<{ host_token: string }>();
+
+  it('creates the room under that name, with a host token cookie and a row', async () => {
+    const res = await post({ name: 'my-show' }, '203.0.113.1');
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { slug: string; host_token: string; expires_at: number };
+    expect(body.slug).toBe('my-show');
+    expect(res.headers.get('Set-Cookie')).toContain(`host_token__my-show=${body.host_token}`);
+    expect((await rowFor('my-show'))?.host_token).toBe(body.host_token);
+  });
+
+  it('answers 409 name_taken for the same name again and leaves the row alone', async () => {
+    const first = await post({ name: 'taken-show' }, '203.0.113.2');
+    const { host_token } = (await first.json()) as { host_token: string };
+    const again = await post({ name: 'taken-show' }, '203.0.113.3');
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: 'name_taken' });
+    expect((await rowFor('taken-show'))?.host_token).toBe(host_token);
+  });
+
+  it('answers 409 for a name whose room expired', async () => {
+    await env.DB.prepare(
+      'INSERT INTO rooms (slug, host_token, created_at, expires_at, consumed) VALUES (?, ?, ?, ?, 0)'
+    )
+      .bind('old-show', 'old-tok', 1000, 2000)
+      .run();
+    const res = await post({ name: 'old-show' }, '203.0.113.4');
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'name_taken' });
+    expect((await rowFor('old-show'))?.host_token).toBe('old-tok');
+  });
+
+  it('gives one of two simultaneous requests for a free name the room and the other a 409', async () => {
+    const [a, b] = await Promise.all([
+      post({ name: 'race-show' }, '203.0.113.5'),
+      post({ name: 'race-show' }, '203.0.113.6'),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    const winner = (await (a.status === 201 ? a : b).json()) as { host_token: string };
+    expect((await rowFor('race-show'))?.host_token).toBe(winner.host_token);
+  });
+
+  it('refuses a name that is not a name with 400 invalid_name and writes nothing', async () => {
+    const bad: unknown[] = ['ab', 'a'.repeat(33), 'My-Show', '-show', 'show-', 'my_show', 'my show', '../x', '', 42, null, ['my-show'], 'abc-defg-hij'];
+    for (const [i, name] of bad.entries()) {
+      const res = await post({ name }, `203.0.113.${10 + i}`);
+      expect(res.status, JSON.stringify(name)).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_name' });
+    }
+    expect(await env.DB.prepare('SELECT 1 FROM rooms WHERE slug IN (?, ?)').bind('abc-defg-hij', 'my_show').first()).toBeNull();
+  });
+
+  it('makes a random slug when the body is missing, not JSON, or has no name', async () => {
+    const none = await SELF.fetch('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.30' },
+    });
+    const notJson = await post('{nope', '203.0.113.31', true);
+    const empty = await post({}, '203.0.113.32');
+    for (const res of [none, notJson, empty]) {
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { slug: string }).slug).toMatch(/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/);
+    }
+  });
+
+  it('answers 400 invalid_name to a 2 KiB body and creates no room', async () => {
+    const big = { name: 'big-show', pad: 'x'.repeat(2048) };
+    const sized = await post(big, '203.0.113.50');
+    expect(sized.status).toBe(400);
+    expect(await sized.json()).toEqual({ error: 'invalid_name' });
+
+    // A streamed body has no content-length, so only its text length can refuse it.
+    const bytes = new TextEncoder().encode(JSON.stringify(big));
+    const streamed = await SELF.fetch('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.51', 'content-type': 'application/json' },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit);
+    expect(streamed.status).toBe(400);
+    expect(await streamed.json()).toEqual({ error: 'invalid_name' });
+    expect(await rowFor('big-show')).toBeNull();
+  });
+
+  it('refuses a body that declares more than 1024 bytes without reading it', async () => {
+    const req = new Request('https://test/api/rooms', {
+      method: 'POST',
+      headers: { 'CF-Connecting-IP': '203.0.113.54', 'content-type': 'application/json', 'content-length': '1025' },
+      body: '{"name":"declared-show"}',
+    });
+    expect(req.headers.get('content-length')).toBe('1025');
+    const res = await app.fetch(req, env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_name' });
+    expect(await rowFor('declared-show')).toBeNull();
+  });
+
+  it('takes a body of exactly 1024 characters and refuses one more', async () => {
+    const padded = (length: number) => {
+      const head = '{"name":"edge-show","pad":"';
+      const tail = '"}';
+      return head + 'x'.repeat(length - head.length - tail.length) + tail;
+    };
+    const fits = await post(padded(1024), '203.0.113.52', true);
+    expect(fits.status).toBe(201);
+    expect(((await fits.json()) as { slug: string }).slug).toBe('edge-show');
+    const over = await post(padded(1025), '203.0.113.53', true);
+    expect(over.status).toBe(400);
+  });
+
+  it('spends the same rate limit slot, and checks it before the name', async () => {
+    let limited: Response | undefined;
+    let sent = 0;
+    while (!limited && sent < 21) {
+      const r = await post({ name: sent === 0 ? 'rate-show' : 'Bad Name' }, '203.0.113.40');
+      sent += 1;
+      if (r.status === 429) limited = r;
+    }
+    expect(sent).toBeGreaterThanOrEqual(11);
+    expect(limited?.status).toBe(429);
+    expect(await limited!.json()).toEqual({ error: 'rate_limited' });
+  });
+
+  it('serves a named room through the room, turn credential and socket routes', async () => {
+    await post({ name: 'route-show' }, '203.0.113.41');
+    expect((await SELF.fetch('https://test/api/rooms/route-show')).status).toBe(200);
+    const turn = await SELF.fetch('https://test/api/turn-cred', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'route-show' }),
+    });
+    expect(turn.status).toBe(200);
+    const ws = await SELF.fetch('https://test/ws/r/route-show', { headers: { Upgrade: 'websocket' } });
+    expect(ws.status).toBe(101);
+    ws.webSocket!.accept();
+    ws.webSocket!.close();
+  });
+});
+
+describe('insertRoom', () => {
+  it('resolves true for a new slug and false for one that exists, leaving the row alone', async () => {
+    const row = { slug: 'ins-room', host_token: 'first', created_at: 1, expires_at: 2 };
+    expect(await insertRoom(env.DB, row)).toBe(true);
+    expect(await insertRoom(env.DB, { ...row, host_token: 'second' })).toBe(false);
+    expect((await getRoomBySlug(env.DB, 'ins-room'))?.host_token).toBe('first');
+  });
+});
+
+describe('POST /api/rooms random slug collisions', () => {
+  // The three letter groups of a slug are drawn in arrays shorter than a token.
+  const zeroLetters = (limit: number) => {
+    const real = crypto.getRandomValues.bind(crypto);
+    let drawn = 0;
+    return vi.spyOn(crypto, 'getRandomValues').mockImplementation(((a: Uint8Array) => {
+      if (a.length < 32 && drawn < limit) {
+        drawn += 1;
+        return a.fill(0);
+      }
+      return real(a);
+    }) as typeof crypto.getRandomValues);
+  };
+  const create = (ip: string) =>
+    app.fetch(new Request('https://test/api/rooms', { method: 'POST', headers: { 'CF-Connecting-IP': ip } }), env);
+
+  it('draws another slug when the first is taken', async () => {
+    await insertRoom(env.DB, { slug: 'aaa-aaaa-aaa', host_token: 'held', created_at: 1, expires_at: 2 });
+    const spy = zeroLetters(3);
+    try {
+      const res = await create('203.0.113.60');
+      expect(res.status).toBe(201);
+      const { slug } = (await res.json()) as { slug: string };
+      expect(slug).not.toBe('aaa-aaaa-aaa');
+      expect((await getRoomBySlug(env.DB, 'aaa-aaaa-aaa'))?.host_token).toBe('held');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('answers 503 slug_exhausted after five taken slugs', async () => {
+    await insertRoom(env.DB, { slug: 'aaa-aaaa-aaa', host_token: 'held', created_at: 1, expires_at: 2 });
+    const spy = zeroLetters(15);
+    try {
+      const res = await create('203.0.113.61');
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: 'slug_exhausted' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

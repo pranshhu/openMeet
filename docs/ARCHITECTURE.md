@@ -43,12 +43,12 @@ is derived by swapping `http`→`ws`. **No linter** (there is no `lint` script).
 ## Architecture (data flow)
 
 ```
-GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel)──▶  HOST browser
+GUEST browser  ──WebRTC PeerConnection (media tracks + recording and control DataChannels)──▶  HOST browser
    getUserMedia                                                                     getUserMedia
    MediaRecorder ──chunks──▶ DataChannel "recording" ──▶ ChunkReceiver ──▶ FileWriter ──▶ host disk
    BackupRecorder (OPFS chunk files, safety net)                                    (own track -> disk + own BackupRecorder)
         │                                                                                  │
-        └──────────────── WS signaling (SDP/ICE/chat/presence) ────────────────────────────┘
+        └──────────────── WS signaling (SDP/ICE/presence) ─────────────────────────────────┘
                                           │
                        Cloudflare Worker (REST) + Room Durable Object (WS hub, per slug) + D1 (metadata only)
 ```
@@ -115,6 +115,14 @@ GUEST browser  ──WebRTC PeerConnection (media tracks + recording DataChannel
   `recording_meta` (last three = recording clock-sync) | `backup_offer` (opens a `backup#<name>`
   channel and carries the file size and the sender's key). Recording acks flow here, **not**
   over WS.
+- **DataChannel `control`** (`lib/peer-chat.ts`): every connection has one, made by the joiner
+  before its first offer. It carries chat and nothing else, as three JSON frames: `{"type":"hello"}`,
+  sent once by each side when its channel is open and saying that page reads chat here;
+  `{"type":"chat","text":…}` for everyone; and the same with `"private":true` for the one person
+  at the other end. `readPeerChat` checks every frame before anything reads it (a string of at most
+  `MAX_PEER_CHAT_FRAME` units, a known `type`, a `text` of at most `MAX_CHAT_MESSAGE_LENGTH`,
+  `private` a boolean or absent) and copies out the known fields. The sender's role, id and name
+  come from the connection, never from a frame. The Worker never sees these frames.
 - `Role = 'host'|'guest'|'producer'`, `RecordingKind = 'camera'|'screen'`. A producer (≤2 per
   room, `?producer=1` → `join.producer`) is recvonly and never recorded; a companion (`?present=1`
   or lobby "Present only" → `join.companion`) joins to share its screen with no camera/mic, plays
@@ -175,9 +183,12 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
 ### REST (`src/index.ts` Hono app, `src/api/*`)
 - `POST /api/rooms` → 201 `{slug, host_token, expires_at}` + `Set-Cookie host_token__<slug>` (HttpOnly,
   SameSite=Lax, Path=/, Secure only over https). Generates 32-byte hex `host_token`, slug
-  (3-4-3 lowercase, ~47 bits, 5-retry collision loop → 503 `slug_exhausted`). IP rate limit
+  (3-4-3 lowercase, ~47 bits, 5-retry collision loop → 503 `slug_exhausted`). An optional JSON body
+  `{name}` asks for that slug instead: 400 `invalid_name` when it is not a name (`isRoomName`), 409
+  `name_taken` for any existing row, expired or not; the insert decides, so two requests for one
+  name cannot both win. A missing or unreadable body is a request with no name. IP rate limit
   10/60s → 429 via the `ROOM_CREATE_LIMITER` rate-limit binding (per Cloudflare location, not
-  global; fails open if the binding is missing).
+  global; fails open if the binding is missing), checked before the body is read.
 - `GET /api/rooms/:slug` → 200 `{slug, expires_at, consumed}` | 404 `invalid_slug|not_found|expired`.
 - `POST /api/turn-cred` `{slug}` → the operator's own `TURN_URLS` (+ `TURN_USERNAME`/
   `TURN_CREDENTIAL`) if set; else mints a Cloudflare Realtime TURN cred if `TURN_API_TOKEN`+
@@ -201,7 +212,7 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
-looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join` (a handshake whose address carries `producer=1` is not read for the cookie, so a producer or view link opened in the host's own browser never replaces the host's tab); capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
@@ -323,7 +334,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the name the host was shown cannot change. Every `room-access` the Room sends carries `locked`,
   `waitingRoom` and `waiting`: the waiting sockets, in ordinal order, as `{peerId, displayName,
   role, companion?}`. A waiting socket that closes, and a socket the host answers, leave the list
-  and the hosts are told.
+  and the hosts are told. A room whose slug is a name starts with the waiting room on, until the
+  host turns it off: `fetch` sets it when the room has never stored `access`.
 - **The passcode** (`access.passcodeHash`, set by a host's `room-access` with a string `passcode`
   of 6 to 64 units, removed by `null`; either change empties `passFails`, closes nobody and is
   answered to every joined host) is the gate between the lock gate and the waiting-room gate. A
@@ -362,7 +374,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 - `lib/cors.ts`: **strict single-origin** — headers only when `Origin === PAGES_ORIGIN`
   (`isAllowedOrigin`, also the `/ws/r/:slug` Origin check).
   `handlePreflight` 204s with method/header hints. Change `PAGES_ORIGIN` per deploy.
-- `lib/slug.ts`: `crypto.getRandomValues`, `bytes%26` (minor modulo bias, non-security-critical).
+- `lib/slug.ts`: random slugs from `generateSlug`: `crypto.getRandomValues`, `bytes%26` (minor modulo
+  bias, non-security-critical). What counts as a slug is `isRoomSlug` in `@openmeet/protocol`
+  `room-slug.ts`, which the Worker and the browser share.
 - `db/queries.ts`: parameterized D1 CRUD; `updateRecordingProgress` builds SET from a fixed
   allowlist (injection-safe), early-returns if no fields. `markRoomConsumed`/`endSession`/
   `markParticipantLeft` idempotent-guarded.
@@ -386,10 +400,12 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
 
 ### Routes / UI (all components are `'use client'`; layouts are server)
 - `/` → `app/page.tsx` (Landing). "New Room" → `createRoom()` → `window.location.href =
-  '/r/${slug}/'` (**trailing slash required** for static export).
+  '/r/${slug}/'` (**trailing slash required** for static export). "Choose your own link"
+  (`NamedRoom`) → `createRoom(name)`, the same navigation.
 - `/r/[slug]` → `RoomPage` unwraps `params: Promise` via React `use()` → `<RoomView>`.
   `app/r/[slug]/layout.tsx` is **server** (hosts `generateStaticParams` placeholder shell;
-  real slug resolved client-side; `public/_redirects` rewrites every `/r/*` to that shell on Pages).
+  real slug resolved client-side and lowercased; `public/_redirects` rewrites every `/r/*` to that
+  shell on Pages).
 - Unknown paths → `app/not-found.tsx` (exported as `out/404.html`).
 - `next.config.ts`: `output:'export'` **only when `NODE_ENV==='production'`** — dev intentionally
   skips it so `/r/[slug]` resolves at runtime. **Don't unconditionally enable export.**
@@ -397,7 +413,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   (`script-src 'self' 'unsafe-inline'` for the export's inline bootstrap scripts; `connect-src
   'self' https: wss:` stays generic because each deploy's Worker URL differs), `X-Frame-Options:
   DENY`, `Referrer-Policy`, `nosniff`, `Permissions-Policy` (camera/mic/display-capture/fullscreen
-  self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change.
+  self only). A new external script/font/frame, or a `blob:` worker or AudioWorklet, needs a CSP change. The
+  PDF renderer's worker is a script served from the site itself, which `script-src 'self'` allows,
+  and it evaluates no code, so the policy needs no `'unsafe-eval'`.
 - `RoomView` switches on `state.phase` → Lobby / WaitingRoom (also for `connecting`, with a spinner
   and any connection warning, and for `peer-left`; while `state.door` is `'waiting'` it reads
   "Waiting for the host to let you in", without a spinner, in `connecting`, `waiting` and
@@ -497,6 +515,31 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   key removed otherwise, inside a `try`); a producer's and a Present-only join do not write it,
   and the check page only reads it. A link that also carries `producer=1` or `present=1` is that
   link and opens no capture.
+  `?view=host` and `?view=guest&name=<name>` (`parseViewLink` in `lib/view-link.ts`) make the page a
+  view of one person, for an OBS browser source or a second screen. `RoomView` never renders `Lobby`
+  for it, ignores `producer`, `present`, `check` and `audio`, and from an effect guarded by a ref
+  (StrictMode runs effects twice) calls `join(new MediaStream(), viewName(link), true)` with no
+  click: a producer with no camera or microphone, listed as "View of <name>". It renders `CleanView`
+  in every phase except the ending ones (`not-found`, `full`, `replaced`, `removed`, `refused`,
+  `error`, `left`), which keep their `StatusScreen`. `CleanView` is one `<video>` on black with no
+  name tag and no controls; `findViewed` picks the person from `remotePeers`, and when their camera
+  is off (`viewCamOff`, the rule `CallStage` uses) their initial is drawn and the sound plays on. The
+  person is named by role (the host) or by display name (a guest) because a peer id changes on every
+  socket and a client id is never shared. A guest is never found by name when they are the host, a
+  producer or a Present-only device. A browser that refuses sound to a page nobody clicked
+  (`NotAllowedError` from `play()`) gets the element muted so the picture runs, and a **Turn on
+  sound** button; any other refusal is ignored. A view with no `name`, or any other `view` value,
+  joins nothing and reads "This view link is incomplete."
+  `?view=stage` makes the page the stage view: `stageCells` draws one cell per presented screen
+  (`remoteScreens` order), then one per person `isStagePeer` accepts (`remotePeers` order), in an
+  equal grid that fills the page (one column for one cell, two for two to four, three for five or
+  more), each cell black with its picture `object-contain`, the initial for a person whose camera is
+  off, and no name or ring. It joins as "Stage view". Every cell's sound plays: the page holds one
+  sound state, so when any cell's `play()` is refused with `NotAllowedError` every cell is muted
+  and played and one **Turn on sound** button shows, and pressing it unmutes and plays them all; a
+  cell added later plays with sound. A guest the host set as not recorded (`notRecorded` exactly
+  `true`) is left out, and so is a screen they present. With no cell it reads "Waiting for someone
+  to join".
   `?solo=1` (`isSoloLink`) renders the same `Lobby` with `checkOnly` and `solo`, so a guest
   records themselves alone: the heading reads "Record on your own", the lobby draws no
   `RecordingDisclosure`, no recording notice and no **Audio channels** picker, and nothing joins
@@ -530,6 +573,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
+  the Present-only link, the microphone-only link, the host view link and the stage view link
+  (the plain link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or `?view=stage`,
+  the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   the Present-only link, the microphone-only link and the record-alone link (the plain link plus
   `?producer=1`, `?present=1`, `?audio=1` or `?solo=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
@@ -557,6 +603,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
   time. A `role="status"` line below the list then says "Asked <name>.
   They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  A guest who has a camera tile and a name also has **View link**, before **Remove**: it copies
+  the plain link plus `?view=guest&name=` and the name through `encodeURIComponent`, and the
+  same status line says "View link for <name> copied." or "Couldn’t copy the view link for
+  <name>." A producer's, a present-only device's and a nameless guest's row has none.
   `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
   `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
   **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
@@ -804,8 +854,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   menu. `public/_headers` needs nothing for it: `Permissions-Policy` does not name
   `picture-in-picture`, which is therefore allowed, and no new document is opened.
 - **Camera settings** (`components/CameraSettings.tsx`, `lib/camera-controls.ts`) — the camera menu
-  lists **Camera settings** when the camera behind the call's video track lists any of exposure
-  mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
+  lists **Camera settings** when the camera behind the call's video track lists any of background
+  blur, exposure mode, exposure compensation, exposure time, white-balance mode, colour temperature, zoom, pan or
   tilt in `getCapabilities()`; the list is read only while the menu is open. `cameraControls(track)`
   turns the capabilities and `getSettings()` into the rows (a missing, non-finite or inverted range
   draws none; a value is held inside its range). A moved slider sends ONE `applyCameraSetting` call:
@@ -815,6 +865,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   arrived meanwhile; a refusal shows a line and re-reads the controls from the track. The stable
   video track's `getConstraints()` and `applyConstraints()` are delegated to the real camera
   track, so the panel works on the track the call holds and a camera switch needs no change.
+  **Background blur** is a tick box shown only when `backgroundBlur` lists both `true` and `false`,
+  and it sends the boolean itself. The blur is made by the computer before the browser gets the
+  frame, so the call, the camera file and the backup all carry it.
   Nothing is stored, sent to anyone or written to a file. The lobby and the check page mount the same
   component under the preview, on the previewed video track and keyed by its `id`; that track is the
   one handed to the call, so what is set there is what the call and the recording get.
@@ -967,11 +1020,15 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   again on the open socket, and every later `join` (a reconnect) carries it; a `door` message
   with state `passcode` makes the client forget it, so a wrong one is never sent twice.
   After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
-  `useRoom` calls on a connection's second `failed`, returns at once.
+  `useRoom` calls on a connection's second `failed`, returns at once. A producer's address
+  carries `?producer=1`, on every reconnect too.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
-  `recording-audio` / `backup`, or prefix `recording-screen`). Guest **creates** the recording
+  `recording-audio` / `backup`, or prefix `recording-screen`) and takes the `control` channel
+  itself: the connection listens on the `control` channel of both ends (the one it made and the one
+  that arrives), sends on the first it took, and `sendChat(text, isPrivate)` sends a line only when
+  that channel is open and the far page has said hello. Guest **creates** the recording
   DataChannels;
   host **receives** them; the guest also creates one `backup#<file name>` channel per returned backup
   (`createBackupChannel`). `ontrack` routes any stream from a peer flagged `screenOnly` (producers or
@@ -996,8 +1053,17 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   received as usual. `CallStage` draws that person as an initial whatever their presence says.
 - `lib/ice.ts`: stub detection `username==='stub' && credential==='stub'` (or no credentials) →
   bare STUN entry. If `getTurnCred` itself fails, `join` falls back to that same STUN stub.
-- Chat: `sendChat(text, to?)` sends `chat` to the room or, with `to` (a peerId),
-  `private-message` to one person, and adds the sender's own line to `state.messages` at once.
+- Chat: `sendChat(text, to?)` sends the line on the connections, not on the socket: to everyone,
+  `PeerConnection.sendChat(text, false)` on every connection in `peersRef`; with `to` (a peerId),
+  `sendChat(text, true)` on that connection alone. It adds the sender's own line to
+  `state.messages` at once. A line from a connection reaches `startPeer`'s `onChat`, which adds it
+  with the role, id and name of that connection's far end. The `chat` and `private-message` handlers
+  show the lines of pages loaded before this build, which the Room still relays.
+  A connection whose `sendChat` returned false, or a person with no connection, goes into the
+  sender's line as `notDeliveredTo` (peer id and the Room's role, in the order of the Room's
+  list, never a Present-only device); `ChatPanel` draws under the sender's own line a
+  `role="status"` note, "Not delivered." for a private line and "Not delivered to Guest 2, Host."
+  for a line to everyone, from the page's own words and never a name. The line is not sent again.
   A private line carries `private` (plus `toPeerId` and `toRole` on the sender's side: who it went
   to, by id and by the Room's role). `PrivateMark` draws the mark in the chat list and in the
   pop-up from that flag, never from the name: "Private · from Host", "from a producer" or "from a
@@ -1033,7 +1099,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `mimeForStream(stream, mime)` is what both `ChunkRecorder` and `BackupRecorder` start
   their `MediaRecorder` with: for a stream with no video track (a person who joined with no
   camera) it is the first `audio/mp4` entry of the call-audio list this browser supports, so
-  that person's `host_<id>.mp4` / `guest_<id>.mp4` and its backup are MP4 files with one audio
+  that person's `host_<id>.mp4` / `guest-<name>_<id>.mp4` and its backup are MP4 files with one audio
   track, under the names, channel and verdict a camera file has. Nothing that reads a take's
   files by name (the crash copy, a resume, the lobby's save, a returned backup) tells them
   apart.
@@ -1097,6 +1163,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   `PcmRecorder` on the raw mic, `openmeet-backup-audio-…` / `openmeet-backup-host-audio-…`; the lobby
   labels it "(WAV)") → **writes committed per-chunk files** (`NNNNNN.part`) to an OPFS directory
   (`openmeet-backup-<ts>-<slug>`, host `openmeet-backup-host-<ts>-<slug>`; disk-backed, no picker) so
+  backups survive tab crashes. Every WAV master starts with an 80-byte header that keeps a
+  28-byte `JUNK` chunk after `WAVE`, which becomes `ds64` when the file passes 4 GiB. Missing OPFS or `createWritable` is detected up front (RAM + warning).
   backups survive tab crashes. A take a guest records alone (`SoloTake`) uses
   `openmeet-backup-solo-<ts>-<slug>` (MP4) and `openmeet-backup-solo-audio-<ts>-<slug>` (WAV);
   `parseBackupName` reads both, with `solo: true` (a key present only when true) and the same
@@ -1129,16 +1197,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   otherwise the result says `kept` and names the files that fell short in `unsaved`. A folder
   file at least as long as its crash copy is kept as it is, except that a kept `.wav` whose
   header does not match its length gets its two size fields set from the length
-  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the fields from
-  `patchWavHeader`), because a page that closes commits its files with the placeholder header;
+  (`repairWavHeader`: the file's own handle opened with `keepExistingData`, the header from
+  `resizeWavHeader`), because a page that closes commits its files with the placeholder header;
   a resume gives the host's own WAV the same repair through `copyBackupInto`.
-  Wherever the host's page writes a WAV's size fields from a length (this repair, a file
-  rebuilt from the crash copy, and End & save for a guest whose final header never came),
-  `patchWavHeader` declares whole sample frames only: a guest's WAV arrives in 64 KiB
-  pieces, so a file that was cut off can end part-way through a sample, and a decoder
-  reports an error on a frame it cannot finish. The frame size is read from the file's own
-  header (`wavFrameBytes`), and taken only when it agrees with the channels and the depth
-  that header states.
+  Wherever the host's page sets a WAV's size fields from a length (this repair, a file
+  rebuilt from the crash copy, a backup assembled from its parts, and End & save for a guest
+  whose final header never came), `resizeWavHeader` (`lib/wav.ts`) reads where those fields are
+  and how long a sample frame is from the file's own first bytes, and writes the header back
+  whole. It walks the chunks up to `data`; the frame is taken only when it agrees with the
+  channels and the depth that header states, and a head it cannot read gives null and
+  leaves the file as it was. It declares whole sample frames only: a guest's WAV arrives in
+  64 KiB pieces, so a file that was cut off can end part-way through a sample, and a decoder
+  reports an error on a frame it cannot finish. A header with a reserved chunk after `WAVE`
+  (28 bytes, `JUNK` or `ds64`) becomes RF64 past 4 GiB, in the layout `ffmpeg -rf64 auto`
+  writes, and is RIFF with a zeroed `JUNK` when the length fits 32 bits; a header with no such
+  room saturates both fields.
   At End & save that length is the file's own (`FileWriter.size`) when it is more than the
   receiver saw: a file reopened after a reload has the folder's bytes carried into it, past
   the crash copy's end where its receiver starts.
@@ -1275,20 +1348,21 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   connections in `told` that the room still lists, and `saveRecoveredTake` writes the
   list alone (`crashCopyNotice`).
 - `screen.ts`: `getDisplayMedia({video:true, audio:true})` — video and tab/system audio when available. A photo or a video file is presented through a canvas (`presentFile`): a computer picks it from the arrow beside Present, a phone from the Present menu, which also offers the rear camera (`presentRearCamera`). A phone's real screen comes from a second device joined with "Present only". A presented video's sound goes to the call; `presentFile(file, monitor)` also plays it on the presenting device when `monitor` is set, which `toggleScreenShare` does on a computer that is not a present-only device. That device plays it through an element (`playLocally`), on the chosen speaker. A presented video's track is marked `contentHint = 'motion'` in `presentFile`, and `PeerConnection.addTrack` marks a track as a screen (`'detail'`) only when it carries no hint, so the clip is sent with the camera's budget at its own frame rate; a photo and a shared screen stay capped at `SCREEN_MAX_FPS`.
-- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll.
+- `slides.ts`: `presentSlides(files)` presents a deck of pictures, the picked files whose type is an image, in name order with numbers counted as numbers (`slide2` before `slide10`). ONE canvas and ONE captured stream serve the whole deck, so `show(index)` redraws the canvas instead of changing tracks: the video track every peer receives and a screen file that is already recording go on unbroken, and a slide turned during a take stays in the same `*_screen_*.mp4`. The slide on screen is repainted every 200 ms, as a photo is, and only that slide is held decoded: showing another revokes the one before. A `show` that is overtaken by a later one before its picture has loaded draws nothing, and a picture that cannot be decoded is a black slide. `toggleScreenShare` takes a list of files for this, keeps `stop` in `customStopRef` like a presented file's, and sets `state.slides`, which `RoomView` hands to `CallStage`, which draws `SlideControls` (**Previous**, `Slide n of count`, **Next**) above the control bar while it is set. The row reads its first slide from `slides.index`, so it keeps its place across the call screen being unmounted. While it is mounted it also owns a `keydown` listener on `window`: Right and Page Down press **Next**, Left and Page Up press **Previous** (a presentation clicker sends Page Down and Page Up), so on the last slide and the first they do nothing. A held key, Ctrl, Cmd, Alt or Shift, a target inside `input, textarea, select, [contenteditable]` and a row that is not displayed (`checkVisibility`) leave the key to the browser; a key that turned a slide, or found its button disabled, is cancelled so the page does not scroll. One PDF is a deck as well (a PDF chosen with any other file presents nothing): `lib/pdf-slides.ts` opens it in the presenter's tab and draws one page at a time, with the same single canvas and stream, so a page and a picture take the same path through `show` and the same stale-slide rule. It is the only file that imports PDF.js, and it does so with a dynamic `import()` the first time a PDF is presented, so no other page carries the library. PDF.js reads the bytes in a worker of its own, a module script served from the site itself (`pdf.worker.min.mjs`), with `isEvalSupported: false` and no URL for fonts, color profiles or code: nothing is fetched and nothing is evaluated as code. The bounds: a file over 100 MB is refused before it is read, an open that takes over 15 s is given up and its worker ended, a deck has at most 1000 pages, an embedded picture is limited to 50 megapixels, and one page renders at a time (a newer page, or the end of the deck, cancels the render in flight) and is cancelled after 10 s. A page is drawn to fit 1920 x 1080 in its own canvas, which is freed when the next page is shown. A PDF that cannot be presented, or a choice of files that has no picture or mixes a PDF with other files, presents nothing and says why: `openPdf` and `presentSlides` reject with the words the presenter reads (`This PDF is over 100 MB.`, `This PDF has a password. Save a copy without one and present that.`, `Could not open this PDF.` for any other failure to open, no page, or the 15 s limit, and `Pick one PDF, or one or more pictures.`), `toggleScreenShare` resolves with that message when the source was a list of files (and with null otherwise, as for a dismissed screen picker), and `CallStage` shows it as its `deviceError` line, cleared when the next set of slides is chosen. A page that cannot be drawn is a black slide.
 - `recording-controller.ts`: HOST `startHostRecording` is handed **one folder**
   (asked for once a session by `useRoom.recordWithCountdown`, before the countdown; it asks itself
   only when handed none; later takes reuse it and get a `_take<n>` suffix) and opens
-  `host_<id>.mp4`, `host_<id>.wav` (when PCM capture works) and slot 0's `guest_<id>.mp4` up front.
+  `host_<id>.mp4` and `host_<id>.wav` (when PCM capture works) up front.
   A host companion running `startHostRecording` with an empty camera/mic stream skips host camera MP4,
   WAV, and their backups, while still opening the folder and recording guests and screens. Guest companions
   record only screen segments on `recording-started` without camera, WAV, or backup recorders.
-  Every other guest file opens lazily per slot when that guest's channel arrives (`guest_<id>.wav`,
-  `guest2_<id>.*`, `guest3_…`), as does each screen segment (`host_screen_<id>.mp4`,
-  `guest_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
-  `guest_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
-  The host's files carry the host's display name after the role (`host-ana_<id>.mp4`,
-  `host-ana_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
+  Every guest file opens when that guest's channel arrives, named for its slot and its guest
+  (`guest-<name>_<id>.*`, `guest2-<name>_<id>.*`, `guest3-<name>_…`), as does each screen segment
+  (`host_screen_<id>.mp4`, `guest-<name>_screen_<id>_2.mp4`, …; from the second take on every name ends in `_take<n>`, as in
+  `guest-<name>_screen_<id>_2_take2.mp4`). Also starts the host's `BackupRecorder` and stamps `hostStartMs`.
+  A person's files carry that person's display name after the role (`host-ana_<id>.mp4`,
+  `host-ana_screen_<id>.mp4`, `guest-bob_<id>.wav`; the sharer's name goes into a guest's screen file,
+  `guest-bob_screen_<id>.mp4`), cleaned by `safeNamePart` (`lib/file-names.ts`: letters, marks and
   digits of any script, lowercased, hyphens for the rest, 32 characters at most).
   After the folder writers are open it opens that take's crash journal and hands each guest receiver
   its journal file; when storage could not take one the handles say `unprotected` and the take
@@ -1416,9 +1490,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 3. **Recording happy path** — **host-driven**: only the host has a Record button (it owns the disk).
    Host click → the one folder prompt, then a three-second countdown (`recordWithCountdown`), shown
    to the others by WS `recording-countdown` →
-   `startHostRecording` (opens `host_*.mp4` + `host_*.wav` +
-   `guest_*.mp4`) → WS `recording-started` → DO relays → every guest shows the consent notice and
-   auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
+   `startHostRecording` (opens `host_*.mp4` + `host_*.wav`) → WS `recording-started` → DO relays →
+   every guest shows the consent notice and auto-runs `beginGuestRecording` — a guest the host set as not recorded shows the notice and starts
    nothing — opening `recording` + `recording-audio` (+ `recording-screen-N`
    while presenting) → chunk-sender (2 frames, fragmented to 64 KiB) → DC → chunk-receiver →
    FileWriter at offset; acks every 5 fragments/10s (with a journal attached, after each journal
@@ -1436,7 +1509,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
-   tracks, slot 0's `guest_<id>.mp4` stays empty and is removed at the end, and a guest who
+   tracks, no guest file is created, and a guest who
    joins meanwhile is started by `role-assigned.recording` like any late joiner.
 4. **Resilience** — DC drop/reopen: `resume_query`→`resume_offset(lastIdx)`→replay
    `buffer.since(lastIdx)`; idempotent dedupe; the queue plus the retransmit buffer are unbounded
@@ -1465,8 +1538,9 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    that file, so the sharer ends the stretch and starts a new numbered segment. Host rebinds new
    channel to existing receiver, found by a stable key (see below), not by the DO's
    fresh-per-socket peerId.
-5. **Aux** — chat + presence relayed by DO (`broadcastExcept`, never persisted; chat echoed
-   optimistically client-side). Screen share = client-side `getDisplayMedia` → `addTrack` on a
+5. **Aux** — presence relayed by DO (`broadcastExcept`, never persisted); chat is not relayed by
+   the DO for pages of this build, it goes over each connection's `control` channel, and is echoed
+   optimistically client-side. Screen share = client-side `getDisplayMedia` → `addTrack` on a
    **dedicated stream id** → renegotiation → remote `ontrack` routes it to `onRemoteScreen` →
    `Stage` presenting mode renders it (+ a `presence` flag). Backup (host's or guest's own) → object
    URL → "Download your backup"; leftover backups are listed in the lobby (Download / Delete), where a
@@ -1495,7 +1569,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **Host ingest is routed by SOURCE peer** (`bindHostGuestChannel`/`bindHostAudioChannel` take a
   `peerId`; `guestSlot`/`guestName` pick the file). Binding every guest to one receiver interleaves
   two H.264 streams into one unplayable MP4, which is the default case because one click starts every
-  recorded guest. Slot 0 keeps the original `guest_<id>.*` names. A take opens at most fourteen guest slots
+  recorded guest. The first guest's files are `guest-<name>_<id>.*`, the second's `guest2-<name>_<id>.*`. A take opens at most fourteen guest slots
   (`MAX_GUEST_SLOTS`) and one connection may introduce at most two keys
   (`MAX_GUEST_SLOTS_PER_PEER`). Only the host binds these channels, and a producer or a
   present-only companion publishes no camera or mic, so neither can claim a guest slot. A recording
@@ -1536,6 +1610,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (nobody offers into an empty room). The joiner also opens a `control` data channel before its first offer
   so every later recording channel opens without renegotiation (the first data channel on a connection is
   the only one that renegotiates, and that renegotiation would collide with the host's track offer and wedge the channels).
+  The same channel carries chat (`lib/peer-chat.ts`).
 - Time units: D1 timestamps are uniformly ms (TURN TTL stays seconds).
 - **Recording is Chromium + MP4 only (by design), and the codec is PROBED, never assumed.**
   Which codecs `MediaRecorder` can encode varies **by OS**, not by Chrome build. Measured on
@@ -1550,8 +1625,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   every frame after the change decodes as garbage, under `avc3` it just decodes. The
   companion remux command (`sync-report.ts`) adds `-tag:v avc1` so the file an editor
   opens is always tagged `avc1`, whichever codec was actually recorded.
-  Every candidate stays in the **MP4 container** on purpose — the host opens `guest_<id>.mp4`
-  before the guest picks a codec, so a WebM fallback would put WebM bytes behind an `.mp4` name.
+  Every candidate stays in the **MP4 container** on purpose — the host names the guest's `.mp4`
+  before it has seen a byte of it, so a WebM fallback would put WebM bytes behind an `.mp4` name.
   Firefox can't record; Safari can't host, and a Safari guest is recorded as video only (no WAV);
   `recordCapability` and the lobby's browser notes say so before anyone records.
   WebM fallback was deliberately *not* added — WebM is a dead-end for video editors (no Final Cut
@@ -1637,6 +1712,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 
 ## Known gaps
 
+- **A room name is never freed, and nothing reserves names.** An expired named room reads "Room not
+  found or expired" and the name cannot be created again. Any name that is not taken can be asked for.
 - **A screen file can still end where the connection did.** A share continues in the same host
   file across a reconnect, but one stopped while its connection is down, one on a page that
   reloads, one whose stream was given up or is being sent later, one whose file the host no
@@ -1805,9 +1882,6 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **50 and 60 fps were checked with test cameras only.** No take from a real camera running at
   50 or 60 fps has been inspected (`MANUAL-TESTING.md` row 8.19). A camera that stops at 30 fps is
   never offered them.
-- **A take saved from the lobby after a crash still lists the first guest's camera file when no
-  guest was recorded.** The crash copy notes that file at Record; the save reports it as failed,
-  nothing committed.
 - **A take saved from the lobby after a crash holds what a guest sent before they were set as not
   recorded.** The lobby has no connection to the room; it rebuilds what the crash copy holds.
 - **A guest whose browser blocks session storage is forgotten on a reload.** The Room remembers a
@@ -1836,6 +1910,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
+- **The producer, Present-only, microphone-only and view links are offered only to the host, in
+  the waiting room and in the call's top bar before a take.** The lobby and the take summary offer
+  the plain invite link alone, and during a take and after one the top bar has none of them.
+  Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or
+  `?view=stage`. A guest's view link is also in People, during a take as well.
 - **The producer, Present-only, microphone-only and record-alone links are offered only to the
   host, in the waiting room and in the call's top bar before a take.** The lobby and the take
   summary offer the plain invite link alone, and during a take and after one the top bar has none
@@ -1873,6 +1952,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A view link is the invite link with a flag, so it is exactly as private.** Anyone who has it
+  can watch. It shows the call's live picture, not the recording, and it adds one more connection,
+  by which everyone's live budget is divided. It takes one of the two unrecorded slots; refused at
+  the cap it reads "This room is full" until the source is reloaded.
+- **The stage view's grid is fixed and has no names.** It carries the live picture of up to eight
+  cameras and the shared screens, so on a weak link it is the first to stutter.
+- **Two people of one name: the one listed first is shown by a view link.** The order is that of
+  `remotePeers`.
+- **A view page left open keeps the session going,** and with it the lock and the lists that end
+  with the session. The viewed person is not told that a view is open, and a Help ask sent to a
+  view does nothing. Opened on a computer that is in the call, its sound plays the person a second
+  time: mute that tab.
 - **A check link works only while its room does, and it is the invite link.** The checks
   run against the room, so an expired room shows "Room not found or expired"; opening a
   check link joins nothing and so does not extend the room's 30 days. Without `?check=1`
@@ -2051,6 +2142,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   Zoom, pan and tilt are listed only where the browser already lists them: a camera whose
   controls the browser opens only after its "use and move your camera" permission shows no such
   rows. Brightness, contrast, saturation, sharpness and focus have no control.
+- **Background blur only where the computer does it.** openMeet runs no blur of its own, so Linux
+  and most cameras have no row. A blur set in the system's own video menu has no row either, and
+  it is in the recording all the same. A camera switched to during the call starts with its own
+  blur setting.
 - **After a camera setting is changed in the lobby, a camera switched to in the call is asked for
   the frame rate the lobby camera delivered, not the one that was picked.** Chrome drops the size
   and frame-rate entries from a track's constraints once a camera setting is applied to it
@@ -2142,12 +2237,16 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   "Everyone else left" nor the waiting screen has a line for it. The offer is kept and
   reaches the host when the host is back.
 - **A private message is not confirmed as delivered.** The sender's line appears the moment it
-  is sent. If the other person left in that instant, if this tab's socket was down, or if the
-  Worker or the other page is older than private messages, nobody receives it and nothing says
-  so.
-- **A private message is kept from the other people in the call, not from the signalling
-  server or from a shared screen.** It passes through the Worker like every chat line, relayed
-  and never stored. Its pop-up shows its text, so someone who shares their whole screen, or the
+  is sent. A line that was not handed to a person, because the connection to them is not up yet
+  or has failed, or because their page was loaded before this build, reads "Not delivered…" on
+  the sender's screen and is not sent again. In the first moment of a connection, before the
+  other page's hello has arrived, a line reads "Not delivered" to that person. A line handed to
+  a connection in the moment it drops is lost and nothing says so. A Present-only device is
+  never named in the note. A person whose connection to the Room dropped is not in the call
+  until they are back, so a line sent meanwhile does not reach them, is not sent again, and
+  its note does not name them; when they are back they have a new number.
+- **A private message is kept from the other people in the call, and from the server, not from
+  a shared screen.** It goes over the connection to that one person. Its pop-up shows its text, so someone who shares their whole screen, or the
   window the call is in, shows it to the call, and a recording of that screen holds it. The
   chat file never does.
 - **A person who reconnects has to be chosen again.** The Room gives a reconnecting tab a new
@@ -2207,10 +2306,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   page gives the file; the two commands are in the README.
 - **A returned backup's two commands are only in its `.json` note.** There the quotes are
   escaped, and no screen shows the commands with a copy button.
-- **A WAV cut off after it passed 4 GiB still makes `ffmpeg` print an error.** Its two
-  size fields are 32 bits and cannot hold its length, so they declare the most they can
-  hold, more than the file has, and the FLAC commands, like any other command on that
-  file, report it.
+- **A WAV master past 4 GiB is RF64.** Its header is an RF64 one with 64-bit sizes, which
+  ffmpeg and most audio editors read in full; Python's `wave` module and other tools that
+  read only plain WAV refuse it. A WAV whose 44-byte header has no reserved chunk still
+  declares 4 GiB past that point, and only ffmpeg reads it to the end.
 - **Microphone only is kept per room, not across rooms or browsers.** The choice is
   stored in this browser under `om_mic_only_<slug>`, so a person with no camera presses it
   once for each room. While it is pressed the lobby's storage and folder figures still
@@ -2306,10 +2405,25 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   to the host."** Nothing is sent then: the recorders and the backups stop, and the line
   about the backup follows. For as long as such a take records, the track panel's button
   reads "Check tracks", on the guest's page and on the host's.
-- **A deck takes pictures only.** The Present menu's **Slides (pictures)** picker offers
-  images. A PDF or a slides file picked anyway is left out, and when nothing is left nothing
-  is presented and the menu closes. The slides are turned with the two buttons or the
-  four slide keys.
+- **A deck is pictures or one PDF.** The Present menu's **Slides (PDF or pictures)** picker
+  offers images and PDFs. A PDF picked with anything else, or several PDFs, presents
+  nothing and the menu closes; a slides file such as a .pptx picked anyway is left out of a
+  set of pictures, and when nothing is left nothing is presented and the menu closes. Both
+  show `Pick one PDF, or one or more pictures.` The
+  slides are turned with the two buttons or the four slide keys.
+- **A PDF with a password, or a broken one, presents nothing.** The call shows one line
+  saying why, as for a file that is too big (over 100 MB): `This PDF is over 100 MB.`,
+  `This PDF has a password. Save a copy without one and present that.`, or
+  `Could not open this PDF.` There is no password prompt, and no line while a PDF is opening.
+- **A page that takes over 10 s to draw, or fails, is a black slide.** `show` still moves to it.
+- **Pages past 1000 are not in the deck.**
+- **A picture over 50 megapixels inside a PDF, and a JPEG 2000 picture, can be missing from
+  its page.**
+- **Text in a font the PDF does not embed is drawn with a font of the computer.** Nothing
+  is fetched to replace it.
+- **The PDF's links and text are not usable.** Everyone receives the page as a picture.
+- **A page is drawn on the presenter's main thread,** so a heavy page can cost a recording
+  tab a moment of work.
 - **A picture that cannot be decoded is a black slide.** `show` still moves to it, and the
   count includes it.
 - **The Previous and Next row is not always on screen.** While the presenter waits alone
@@ -2394,6 +2508,12 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   note says how to take that file out.
 - **In a resumed take whose resumed WAV is empty, the host's voice after the reload is not in the
   program file.** The sound is read per person, so the earlier WAV stands for the host.
+- **During a deploy, a page loaded before it sends its chat through the server and does not read
+  chat sent directly.** Its person does not see lines from pages of this build. Pages of this
+  build still show that page's lines, which the Room relays.
+- **The server still relays connection setup.** Chat goes over an encrypted connection between the
+  browsers, but SDP and ICE pass through the Room, so a person who changes the server's code could
+  place it between two browsers.
 - **The record-alone page does not extend the room's 30 days.** It opens no socket to the room,
   so a room nobody joins for 30 days expires and cannot receive the take. The files stay in the
   browser, with **Download**.

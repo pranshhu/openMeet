@@ -799,6 +799,11 @@ export function useRoom(slug: string) {
   const micOnRef = useRef(true);
   const camOnRef = useRef(true);
   const screenSharingRef = useRef(false);
+  // A present that is still waiting for its source: a picker, a file, a deck.
+  const presentPendingRef = useRef(false);
+  // Set when the room is let go of, by Leave or by unmount: a source that is
+  // ready after that belongs to nobody and is stopped, not added to the call.
+  const releasedRef = useRef(false);
   const lowPowerRef = useRef(false);
   const incomingVideoOffRef = useRef(false);
   // Written by setSendLater itself: a take that starts before the next render reads it.
@@ -1261,6 +1266,7 @@ export function useRoom(slug: string) {
       // Read once, here: this stream never gets a video track during the call.
       const audioOnly = !asProducer && !asCompanion && lobbyStream.getVideoTracks().length === 0;
       companionRef.current = asCompanion;
+      releasedRef.current = false;
       // A present-only companion or a producer has no camera or mic: wrapping its empty
       // stream would conjure a silent audio track, which a companion would then send.
       const switchableMedia = asCompanion || asProducer
@@ -1519,6 +1525,22 @@ export function useRoom(slug: string) {
             setState((s) => withRemoteScreens(withScreen(s.remoteScreens, remotePeerId, stream), s)),
           onRemoteScreenEnded: (stream) =>
             setState((s) => withRemoteScreens(withoutScreen(s.remoteScreens, remotePeerId, stream), s)),
+          // The sender is this connection's far end, never anything the frame says.
+          onChat: ({ text, private: isPrivate }) => {
+            const fromName = remotePeersRef.current.find((r) => r.peerId === remotePeerId)?.name;
+            const msg: ChatMessage = {
+              from: remoteRole === 'host' || remoteRole === 'producer' ? remoteRole : 'guest',
+              text,
+              // This tab's clock, as for a line the Room relays.
+              ts: Date.now(),
+              fromPeerId: remotePeerId,
+              ...(typeof fromName === 'string' && fromName ? { fromName } : {}),
+              ...(isPrivate ? { private: true } : {}),
+              ...(!isPrivate && isNotRecordedPeer(remotePeersRef.current, remotePeerId) ? { notRecorded: true } : {}),
+            };
+            messagesRef.current = [...messagesRef.current, msg];
+            setState((s) => ({ ...s, messages: messagesRef.current }));
+          },
           onNegotiationError: (e) => {
             console.error('openMeet: negotiation failed', e);
             setState((s) => ({
@@ -2723,11 +2745,20 @@ export function useRoom(slug: string) {
 
   const sendChat = useCallback((text: string, to?: string) => {
     const ts = Date.now();
-    // A message for one person is a type of its own: a Room that does not
-    // know it drops it, where it would send a `chat` with one more field
-    // to everyone.
-    signalRef.current?.send(to ? { type: 'private-message', to, text } : { type: 'chat', text, ts });
+    // Lines go over the connections to the other browsers, not through the
+    // Room. A line for one person goes to that connection alone. A line that
+    // does not get through is not sent later; the sender's own line says to
+    // whom it did not get through. A Present-only device gets the line and is
+    // never named: it is someone's second screen, not a person.
+    const handed = new Map<string, boolean | undefined>();
+    if (to) handed.set(to, peersRef.current.get(to)?.sendChat(text, true));
+    else for (const [id, peer] of peersRef.current) handed.set(id, peer.sendChat(text, false));
     const toRole: Role = (to && remotePeersRef.current.find((r) => r.peerId === to)?.role) || 'guest';
+    const notDeliveredTo = to
+      ? handed.get(to) ? [] : [{ peerId: to, role: toRole }]
+      : remotePeersRef.current
+          .filter((r) => !r.companion && !handed.get(r.peerId))
+          .map((r) => ({ peerId: r.peerId, role: r.role ?? 'guest' }));
     const from: Role = roleRef.current ?? 'host';
     const msg: ChatMessage = {
       from,
@@ -2736,6 +2767,7 @@ export function useRoom(slug: string) {
       self: true,
       ...(localNameRef.current ? { fromName: localNameRef.current } : {}),
       ...(to ? { private: true, toPeerId: to, toRole } : {}),
+      ...(notDeliveredTo.length ? { notDeliveredTo } : {}),
     };
     messagesRef.current = [...messagesRef.current, msg];
     setState((s) => ({
@@ -2813,13 +2845,15 @@ export function useRoom(slug: string) {
   }, []);
 
   const toggleScreenShare = useCallback(
-    async (source?: PresentSource) => {
+    async (source?: PresentSource): Promise<string | null> => {
       const peer = peerRef.current;
       // A guest's screen recording travels over its connection to the host.
       // The host writes its own to the folder, so it can present with nobody
       // connected.
-      if (!peer && roleRef.current !== 'host') return;
+      if (!peer && roleRef.current !== 'host') return null;
       if (!screenSharingRef.current) {
+        if (presentPendingRef.current) return null;
+        presentPendingRef.current = true;
         let screen: MediaStream;
         let isRearCamera = false;
         let customStop: (() => void) | null = null;
@@ -2842,11 +2876,21 @@ export function useRoom(slug: string) {
           } else {
             screen = await getScreenStream();
           }
-        } catch {
-          return; // user dismissed the screen-picker — no-op, not an error
+        } catch (e) {
+          // A dismissed screen picker is no error. A list of files that cannot be presented says why.
+          return Array.isArray(source) && e instanceof Error ? e.message : null;
+        } finally {
+          presentPendingRef.current = false;
+        }
+        if (releasedRef.current) {
+          try {
+            if (customStop) customStop();
+            else screen.getTracks().forEach((t) => t.stop());
+          } catch {}
+          return null;
         }
         const track = screen.getVideoTracks()[0];
-        if (!track) return;
+        if (!track) return null;
         screenTrackRef.current = track;
         screenStreamRef.current = screen;
 
@@ -2911,6 +2955,7 @@ export function useRoom(slug: string) {
       } else {
         stopScreenShare();
       }
+      return null;
     },
     [sendPresence, stopScreenShare, switchCamera, setCam]
   );
@@ -3361,6 +3406,7 @@ export function useRoom(slug: string) {
     // The tracks are stopped below. startRecording reads this ref, so a
     // countdown that is still running when the host leaves starts nothing.
     localStreamRef.current = null;
+    releasedRef.current = true;
     if (customStopRef.current) {
       try {
         customStopRef.current();
@@ -3448,6 +3494,7 @@ export function useRoom(slug: string) {
       for (const p of peersRef.current.values()) p.close();
       peersRef.current.clear();
       peerRef.current?.close();
+      releasedRef.current = true;
       if (customStopRef.current) {
         try {
           customStopRef.current();

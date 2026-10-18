@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRoom } from '@/hooks/useRoom';
 import { SwitchableMedia } from '@/lib/switchable-media';
+import { presentSlides } from '@/lib/slides';
 
 let signalHandlers: Record<string, ((m: any) => void)[]> = {};
 let mockPeers: any[] = [];
@@ -71,6 +72,12 @@ vi.mock('@/lib/backup-recorder', () => ({
     stop: vi.fn(),
   })),
 }));
+
+// Real unless a test makes the next deck fail.
+vi.mock('@/lib/slides', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/slides')>();
+  return { ...real, presentSlides: vi.fn(real.presentSlides) };
+});
 
 describe('present presentation lifecycle with useRoom', () => {
   let originalCreateObjectURL: any;
@@ -193,7 +200,7 @@ describe('present presentation lifecycle with useRoom', () => {
       getVideoTracks: () => [rawVideo],
     } as any;
 
-    const { result } = renderHook(() => useRoom('test-room'));
+    const { result, unmount } = renderHook(() => useRoom('test-room'));
 
     await act(async () => {
       await result.current.join(lobbyStream, 'Alice', false);
@@ -211,7 +218,7 @@ describe('present presentation lifecycle with useRoom', () => {
       });
     });
 
-    return { result, rawVideo, rawAudio };
+    return { result, rawVideo, rawAudio, unmount };
   }
 
   it('picking an image yields a 1920x1080 canvas stream through toggleScreenShare path', async () => {
@@ -379,7 +386,7 @@ describe('present presentation lifecycle with useRoom', () => {
     it('a present-only device does not', async () => {
       Object.defineProperty(navigator, 'userAgent', { value: 'test-desktop', configurable: true });
       const empty = { getTracks: () => [], getAudioTracks: () => [], getVideoTracks: () => [] } as any;
-      const { result } = renderHook(() => useRoom('test-room'));
+      const { result, unmount } = renderHook(() => useRoom('test-room'));
       await act(async () => {
         await result.current.join(empty, 'Alice', false, true);
       });
@@ -586,7 +593,7 @@ describe('present presentation lifecycle with useRoom', () => {
       const peer = mockPeers[0];
 
       await act(async () => {
-        await result.current.toggleScreenShare([new File(['pdf'], 'deck.pdf', { type: 'application/pdf' })]);
+        await result.current.toggleScreenShare([new File(['text'], 'notes.txt', { type: 'text/plain' })]);
       });
 
       expect(result.current.state.screenSharing).toBe(false);
@@ -608,6 +615,287 @@ describe('present presentation lifecycle with useRoom', () => {
 
       expect(result.current.state.slides).toBeNull();
       expect(mockCanvasStreamTracks[0].stop).toHaveBeenCalled();
+    });
+  });
+
+  describe('a source that is ready after the presenter has left', () => {
+    const track = () => ({ kind: 'video', id: 'late-track', stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const streamOf = (t: ReturnType<typeof track>) =>
+      Object.assign(new EventTarget(), {
+        getTracks: () => [t],
+        getVideoTracks: () => [t],
+        getAudioTracks: () => [],
+      }) as unknown as MediaStream;
+    const lateDeck = () => {
+      const t = track();
+      const deck = { stream: streamOf(t), stop: vi.fn(), count: 1, index: 0, show: vi.fn() };
+      let ready!: () => void;
+      vi.mocked(presentSlides).mockImplementationOnce(
+        () => new Promise((resolve) => (ready = () => resolve(deck as never)))
+      );
+      return { deck, ready: () => ready() };
+    };
+    const pictures = [new File(['image-bytes'], 'a.png', { type: 'image/png' })];
+
+    it('stops a deck that opens after leave, and presents nothing', async () => {
+      const { result } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        await result.current.leave();
+      });
+
+      let reason: string | null = 'unset';
+      await act(async () => {
+        ready();
+        reason = await pending;
+      });
+
+      expect(reason).toBeNull();
+      expect(deck.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.slides).toBeNull();
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(result.current.state.localScreenStream).toBeNull();
+    });
+
+    it('resolves with null even when stopping the late deck throws', async () => {
+      const { result } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      deck.stop.mockImplementation(() => {
+        throw new Error('already gone');
+      });
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        await result.current.leave();
+      });
+
+      await act(async () => {
+        ready();
+      });
+
+      await expect(pending).resolves.toBeNull();
+    });
+
+    it('stops a deck that opens after the page was closed', async () => {
+      const { result, unmount } = await setupConnectedRoom();
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+      });
+      unmount();
+
+      await act(async () => {
+        ready();
+        await pending;
+      });
+
+      expect(deck.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.slides).toBeNull();
+    });
+
+    it('presents again once the room is joined again', async () => {
+      const { result } = await setupConnectedRoom();
+      await act(async () => {
+        await result.current.leave();
+      });
+      const t = track();
+      await act(async () => {
+        await result.current.join(streamOf(t), 'Alice', false);
+      });
+      await act(async () => {
+        signalHandlers['peer-joined']?.at(-1)?.({
+          type: 'peer-joined',
+          peerId: 'peer-bob',
+          ordinal: 1,
+          role: 'host',
+          displayName: 'Bob',
+        });
+      });
+      const { deck, ready } = lateDeck();
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare(pictures);
+        ready();
+        await pending;
+      });
+
+      expect(deck.stop).not.toHaveBeenCalled();
+      expect(result.current.state.screenSharing).toBe(true);
+    });
+
+    it('stops every track of a screen that is picked after leave', async () => {
+      const { result } = await setupConnectedRoom();
+      const t = track();
+      let picked!: () => void;
+      mockGetDisplayMedia.mockImplementationOnce(() => new Promise((resolve) => (picked = () => resolve(streamOf(t)))));
+      let pending!: Promise<string | null>;
+      await act(async () => {
+        pending = result.current.toggleScreenShare();
+        await result.current.leave();
+      });
+
+      await act(async () => {
+        picked();
+        await pending;
+      });
+
+      expect(t.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.state.screenSharing).toBe(false);
+    });
+  });
+
+  describe('a second present while the first is waiting for its picture', () => {
+    let loads: (() => void)[];
+    let failures: (() => void)[];
+    let origImage: typeof Image;
+
+    class WaitingImage {
+      naturalWidth = 1200;
+      naturalHeight = 800;
+      complete = false;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_v: string) {
+        loads.push(() => {
+          this.complete = true;
+          this.onload?.();
+        });
+        failures.push(() => this.onerror?.());
+      }
+    }
+    const photo = (name: string) => new File(['image-bytes'], name, { type: 'image/png' });
+
+    beforeEach(() => {
+      loads = [];
+      failures = [];
+      origImage = globalThis.Image;
+      globalThis.Image = WaitingImage as unknown as typeof Image;
+    });
+
+    afterEach(() => {
+      globalThis.Image = origImage;
+    });
+
+    it('does nothing, so one presentation and one track are made', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      let pictures = 0;
+      await act(async () => {
+        const first = result.current.toggleScreenShare(photo('a.png'));
+        const second = result.current.toggleScreenShare(photo('b.png'));
+        pictures = loads.length;
+        loads.forEach((load) => load());
+        await Promise.all([first, second]);
+      });
+
+      expect(pictures).toBe(1);
+      expect(mockCaptureStream).toHaveBeenCalledTimes(1);
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(peer.addTrack).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await result.current.toggleScreenShare();
+      });
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(peer.removeTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the next present start once the first has failed to get its source', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+
+      await act(async () => {
+        const first = result.current.toggleScreenShare(photo('broken.png'));
+        failures.forEach((fail) => fail());
+        await first;
+      });
+      expect(result.current.state.screenSharing).toBe(false);
+
+      await act(async () => {
+        const next = result.current.toggleScreenShare(photo('a.png'));
+        loads.at(-1)!();
+        await next;
+      });
+      expect(result.current.state.screenSharing).toBe(true);
+      expect(peer.addTrack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a choice of files that cannot be presented', () => {
+    it('resolves with the reason and presents nothing', async () => {
+      const { result } = await setupConnectedRoom();
+      const peer = mockPeers[0];
+      vi.mocked(presentSlides).mockRejectedValueOnce(new Error('Could not open this PDF.'));
+
+      let reason: string | null = null;
+      await act(async () => {
+        reason = await result.current.toggleScreenShare([new File(['%PDF'], 'deck.pdf', { type: 'application/pdf' })]);
+      });
+
+      expect(reason).toBe('Could not open this PDF.');
+      expect(result.current.state.screenSharing).toBe(false);
+      expect(result.current.state.slides).toBeNull();
+      expect(peer.addTrack).not.toHaveBeenCalled();
+    });
+
+    it('resolves with null when the screen picker is dismissed', async () => {
+      const { result } = await setupConnectedRoom();
+      mockGetDisplayMedia.mockRejectedValueOnce(new DOMException('dismissed', 'NotAllowedError'));
+
+      let reason: string | null = 'unset';
+      await act(async () => {
+        reason = await result.current.toggleScreenShare();
+      });
+
+      expect(reason).toBeNull();
+      expect(result.current.state.screenSharing).toBe(false);
+    });
+
+    it('resolves with null when another source fails, however it fails', async () => {
+      const { result } = await setupConnectedRoom();
+      mockGetUserMedia.mockRejectedValueOnce(new Error('Permission denied'));
+
+      let reason: string | null = 'unset';
+      await act(async () => {
+        reason = await result.current.toggleScreenShare('rear-camera');
+      });
+
+      expect(reason).toBeNull();
+      expect(result.current.state.screenSharing).toBe(false);
+    });
+
+    it('resolves with null when a deck starts and when it stops', async () => {
+      const { result } = await setupConnectedRoom();
+      const pictures = [new File(['image-bytes'], 'a.png', { type: 'image/png' })];
+      const origImage = globalThis.Image;
+      globalThis.Image = class {
+        naturalWidth = 1200;
+        naturalHeight = 800;
+        onload: (() => void) | null = null;
+        set src(_v: string) {
+          setTimeout(() => this.onload?.(), 0);
+        }
+      } as unknown as typeof Image;
+
+      let started: string | null = 'unset';
+      let stopped: string | null = 'unset';
+      try {
+        await act(async () => {
+          started = await result.current.toggleScreenShare(pictures);
+        });
+        expect(result.current.state.screenSharing).toBe(true);
+        await act(async () => {
+          stopped = await result.current.toggleScreenShare();
+        });
+      } finally {
+        globalThis.Image = origImage;
+      }
+
+      expect([started, stopped]).toEqual([null, null]);
     });
   });
 });

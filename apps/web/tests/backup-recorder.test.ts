@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BackupRecorder, BACKUP_PREFIX, backupRoom, isScreenBackup, findBackups, deleteBackup, parseBackupName, type BackupRecorderOpts } from '@/lib/backup-recorder';
 import { openTakeJournal, findTakeJournals, deleteTakeJournal, isJournalFileName } from '@/lib/take-journal';
-import { wavHeader } from '@/lib/wav';
+import { wavHeader, WAV_HEADER_BYTES } from '@/lib/wav';
 import { MAX_MARKER_LABEL_LENGTH } from '@/lib/sync-report';
 import { presetById } from '@/lib/quality';
 import type { FrameSource, PcmFrame } from '@/lib/pcm-recorder';
@@ -523,7 +523,7 @@ describe('BackupRecorder — failure handling and memory boundedness', () => {
     expect(backup).toBeInstanceOf(File);
     expect((backup as File).name).toBe(`${br.dirName}.wav`);
     expect(backup?.type).toBe('audio/wav');
-    expect(backup?.size).toBe(44 + 144);
+    expect(backup?.size).toBe(WAV_HEADER_BYTES + 144);
   });
 
   it('returns a nameless copy when storage gave it no directory', async () => {
@@ -712,9 +712,9 @@ describe('backup room labels', () => {
     expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij.wav')).toBeNull();
     expect(parseBackupName('openmeet-backup-screen-1700000000000-abc-defg-hij.wav')).toBeNull();
     // malformed room shape
-    expect(parseBackupName('openmeet-backup-1700000000000-abc.mp4')).toBeNull();
-    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij-x.mp4')).toBeNull();
-    expect(parseBackupName('openmeet-backup-1700000000000-abcd-efg-hij.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-ab.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc-defg-hij-.mp4')).toBeNull();
+    expect(parseBackupName('openmeet-backup-1700000000000-abc_defg_hij.mp4')).toBeNull();
     expect(parseBackupName('openmeet-backup-1700000000000-../../etc.mp4')).toBeNull();
     // upper case
     expect(parseBackupName('openMeet-backup-1700000000000-abc-defg-hij.mp4')).toBeNull();
@@ -1027,20 +1027,70 @@ describe('BackupRecorder — WAV backup and crash safety', () => {
     const wavFile = backups[0]!;
     expect(wavFile.name).toMatch(/\.wav$/);
     expect(wavFile.type).toBe('audio/wav');
-    expect(wavFile.size).toBe(44 + 144 + 288);
+    expect(wavFile.size).toBe(WAV_HEADER_BYTES + 144 + 288);
 
     const buf = await wavFile.arrayBuffer();
     const view = new DataView(buf);
     // RIFF header
     expect(String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3))).toBe('RIFF');
-    expect(view.getUint32(4, true)).toBe(36 + 144 + 288);
+    expect(view.getUint32(4, true)).toBe(WAV_HEADER_BYTES - 8 + 144 + 288);
     expect(String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11))).toBe('WAVE');
     // data chunk
-    expect(String.fromCharCode(view.getUint8(36), view.getUint8(37), view.getUint8(38), view.getUint8(39))).toBe('data');
-    expect(view.getUint32(40, true)).toBe(144 + 288);
+    expect(String.fromCharCode(view.getUint8(72), view.getUint8(73), view.getUint8(74), view.getUint8(75))).toBe('data');
+    expect(view.getUint32(76, true)).toBe(144 + 288);
   });
 
-  it('a WAV BackupRecorder over a fake frameSource, stopped cleanly, assembles to exactly 44 + pcmBytes with correct size fields', async () => {
+  it('assembles a WAV whose first part is a header with room reserved after WAVE, 80 bytes long', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const br = new BackupRecorder({
+      stream: {} as MediaStream,
+      mimeType: 'audio/wav',
+      fileName: 'openmeet-backup-audio',
+      opfsRoot: async () => root as never,
+    });
+    br.start();
+    await Promise.resolve();
+
+    const head = new Uint8Array(80);
+    const v = new DataView(head.buffer);
+    const ascii = (at: number, text: string) => [...text].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+    ascii(0, 'RIFF');
+    v.setUint32(4, 72, true);
+    ascii(8, 'WAVE');
+    ascii(12, 'JUNK');
+    v.setUint32(16, 28, true);
+    ascii(48, 'fmt ');
+    v.setUint32(52, 16, true);
+    v.setUint16(56, 1, true);
+    v.setUint16(58, 1, true);
+    v.setUint32(60, 48000, true);
+    v.setUint32(64, 144000, true);
+    v.setUint16(68, 3, true);
+    v.setUint16(70, 24, true);
+    ascii(72, 'data');
+
+    br.writeChunk(head.buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+    br.writeChunk(new Uint8Array(144).fill(1).buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+    // Ends part-way through a 3-byte frame.
+    br.writeChunk(new Uint8Array(290).fill(2).buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const backups = await findBackups(async () => root as never);
+    expect(backups).toHaveLength(1);
+    const bytes = new Uint8Array(await backups[0]!.arrayBuffer());
+    expect(bytes.byteLength).toBe(80 + 144 + 290);
+    const out = new DataView(bytes.buffer);
+    expect(out.getUint32(4, true)).toBe(72 + 432);
+    expect(out.getUint32(76, true)).toBe(432);
+    // Everything but the two size fields is the head as it was, and the sound follows it untouched.
+    expect(Array.from(bytes.subarray(8, 76))).toEqual(Array.from(head.subarray(8, 76)));
+    expect(Array.from(bytes.subarray(80, 224))).toEqual(Array.from(new Uint8Array(144).fill(1)));
+    expect(Array.from(bytes.subarray(224))).toEqual(Array.from(new Uint8Array(290).fill(2)));
+  });
+
+  it('a WAV BackupRecorder over a fake frameSource, stopped cleanly, assembles to exactly WAV_HEADER_BYTES + pcmBytes with correct size fields', async () => {
     const root = new FakeDirectoryHandle('root');
     const pcmBytes = 30; // 10 samples * 3 bytes
     const samples = [0.1, 0.2, 0.3, 0.4, 0.5, -0.1, -0.2, -0.3, -0.4, -0.5];
@@ -1056,15 +1106,63 @@ describe('BackupRecorder — WAV backup and crash safety', () => {
 
     const file = await br.stop();
     expect(file).not.toBeNull();
-    expect(file?.size).toBe(44 + pcmBytes);
+    expect(file?.size).toBe(WAV_HEADER_BYTES + pcmBytes);
 
     const buf = await file!.arrayBuffer();
     const view = new DataView(buf);
     expect(String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3))).toBe('RIFF');
-    expect(view.getUint32(4, true)).toBe(36 + pcmBytes);
+    expect(view.getUint32(4, true)).toBe(WAV_HEADER_BYTES - 8 + pcmBytes);
     expect(String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11))).toBe('WAVE');
-    expect(String.fromCharCode(view.getUint8(36), view.getUint8(37), view.getUint8(38), view.getUint8(39))).toBe('data');
-    expect(view.getUint32(40, true)).toBe(pcmBytes);
+    expect(String.fromCharCode(view.getUint8(72), view.getUint8(73), view.getUint8(74), view.getUint8(75))).toBe('data');
+    expect(view.getUint32(76, true)).toBe(pcmBytes);
+  });
+
+  it('assembles a WAV whose first part is a 44-byte header with no reserved room', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const br = new BackupRecorder({
+      stream: {} as MediaStream,
+      mimeType: 'audio/wav',
+      fileName: 'openmeet-backup-audio',
+      opfsRoot: async () => root as never,
+    });
+    br.start();
+    await Promise.resolve();
+
+    // RIFF, size, WAVE (12 bytes), fmt (24), data (8).
+    const head = new Uint8Array(44);
+    const v = new DataView(head.buffer);
+    const ascii = (at: number, text: string) => [...text].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+    ascii(0, 'RIFF');
+    v.setUint32(4, 36, true);
+    ascii(8, 'WAVE');
+    ascii(12, 'fmt ');
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true);
+    v.setUint32(24, 48000, true);
+    v.setUint32(28, 144000, true);
+    v.setUint16(32, 3, true);
+    v.setUint16(34, 24, true);
+    ascii(36, 'data');
+
+    // The first part holds the header and the start of the sound, so the sound after it is cut from where the header ends.
+    const first = new Uint8Array(44 + 144);
+    first.set(head);
+    first.fill(1, 44);
+    br.writeChunk(first.buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+    br.writeChunk(new Uint8Array(288).fill(2).buffer as ArrayBuffer);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const backups = await findBackups(async () => root as never);
+    expect(backups).toHaveLength(1);
+    const bytes = new Uint8Array(await backups[0]!.arrayBuffer());
+    expect(bytes.byteLength).toBe(44 + 144 + 288);
+    const out = new DataView(bytes.buffer);
+    expect(out.getUint32(4, true)).toBe(36 + 432);
+    expect(out.getUint32(40, true)).toBe(432);
+    expect(Array.from(bytes.subarray(44, 188))).toEqual(Array.from(new Uint8Array(144).fill(1)));
+    expect(Array.from(bytes.subarray(188))).toEqual(Array.from(new Uint8Array(288).fill(2)));
   });
 });
 
@@ -2284,6 +2382,101 @@ describe('take journal — small closed parts in browser storage', () => {
       throw new Error('listing failed');
     };
     await expect(listed(angry)).resolves.toEqual([]);
+  });
+});
+
+describe('a room with a chosen name', () => {
+  const ROOM = 'my-show';
+  const INIT = { room: ROOM, recordingId: 'r1', take: 1, hostStartMs: 1759824000000 };
+  const TAKE_DIR = 'openmeet-take-1759824000000-my-show';
+  const open = (root: FakeDirectoryHandle) => openTakeJournal(INIT, async () => root as never);
+
+  it('parseBackupName reads the room from all three name shapes', () => {
+    expect(parseBackupName('openmeet-backup-1700000000000-my-show.mp4')).toEqual({
+      kind: 'camera',
+      startedMs: 1700000000000,
+      room: ROOM,
+      ext: 'mp4',
+    });
+    expect(parseBackupName('openmeet-backup-audio-1700000000000-my-show.wav')?.room).toBe(ROOM);
+    expect(parseBackupName('openmeet-backup-screen-1700000000000-my-show.mp4')?.room).toBe(ROOM);
+  });
+
+  it('opens a crash copy, lists it and removes it', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = await open(root);
+    expect(journal).not.toBeNull();
+    journal!.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+    journal!.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal!.file('guest_r.mp4').commit(1);
+
+    const found = await findTakeJournals(async () => root as never);
+    expect(found.map((j) => j.dirName)).toEqual([TAKE_DIR]);
+    expect(found[0]!.notes.room).toBe(ROOM);
+
+    await deleteTakeJournal(TAKE_DIR, async () => root as never);
+    expect(root.entries.has(TAKE_DIR)).toBe(false);
+  });
+
+  it('keeps a backup note whose directory carries the name', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    journal.note((n) =>
+      n.backups.push({ dir: 'openmeet-backup-host-1700000000000-my-show', file: 'guest_r.mp4', kind: 'camera' })
+    );
+    journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal.file('guest_r.mp4').commit(1);
+
+    const [found] = await findTakeJournals(async () => root as never);
+    expect(found!.notes.backups).toEqual([
+      { dir: 'openmeet-backup-host-1700000000000-my-show', file: 'guest_r.mp4', kind: 'camera' },
+    ]);
+  });
+
+  it('opens no crash copy for text before or after a name', async () => {
+    for (const room of ['my-show!', '!my-show', 'my-show/x', ' my-show']) {
+      const root = new FakeDirectoryHandle('root');
+      await expect(openTakeJournal({ ...INIT, room }, async () => root as never), room).resolves.toBeNull();
+      expect(root.entries.size, room).toBe(0);
+    }
+  });
+
+  it('neither lists nor removes a take directory with text around the name', async () => {
+    for (const odd of [`${TAKE_DIR}/x`, `${TAKE_DIR}!`, `x-${TAKE_DIR}`]) {
+      const root = new FakeDirectoryHandle('root');
+      const journal = (await open(root))!;
+      journal.note((n) => n.files.push({ file: 'guest_r.mp4', kind: 'camera' }));
+      journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+      await journal.file('guest_r.mp4').commit(1);
+
+      const dir = root.entries.get(TAKE_DIR)!;
+      dir.name = odd;
+      root.entries.set(odd, dir);
+      root.entries.delete(TAKE_DIR);
+
+      expect(await findTakeJournals(async () => root as never), odd).toEqual([]);
+      await deleteTakeJournal(odd, async () => root as never);
+      expect(root.entries.has(odd), odd).toBe(true);
+    }
+  });
+
+  it('drops a backup note whose directory has anything but a name after the date', async () => {
+    const root = new FakeDirectoryHandle('root');
+    const journal = (await open(root))!;
+    const dirs = [
+      'openmeet-backup-host-1700000000000-my-show',
+      'openmeet-backup-host-1700000000000-my-show-',
+      'openmeet-backup-host-1700000000000-my-show!',
+      'openmeet-backup-host-1700000000000-!my-show',
+      'openmeet-backup-host-1700000000000-my-show-x/y',
+      'x-openmeet-backup-host-1700000000000-my-show',
+    ];
+    journal.note((n) => dirs.forEach((dir) => n.backups.push({ dir, file: 'guest_r.mp4', kind: 'camera' })));
+    journal.file('guest_r.mp4').append(0, new Uint8Array(4).buffer);
+    await journal.file('guest_r.mp4').commit(1);
+
+    const [found] = await findTakeJournals(async () => root as never);
+    expect(found!.notes.backups.map((b) => b.dir)).toEqual([dirs[0]]);
   });
 });
 

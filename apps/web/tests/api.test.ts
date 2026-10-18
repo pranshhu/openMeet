@@ -96,3 +96,44 @@ describe('api client', () => {
     await expect(getSponsors()).rejects.toThrow();
   });
 });
+
+describe('createRoom with a chosen name', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const created = () =>
+    new Response(JSON.stringify({ slug: 'my-show', host_token: 'tok', expires_at: 1 }), { status: 201 });
+  const firstCall = () => (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+
+  it('sends the name as a JSON body', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(created());
+    const out = await createRoom('my-show');
+    expect(out.slug).toBe('my-show');
+    const [url, init] = firstCall();
+    expect(String(url)).toContain('/api/rooms');
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('include');
+    expect(init.body).toBe('{"name":"my-show"}');
+    expect(init.headers).toEqual({ 'content-type': 'application/json' });
+  });
+
+  it('sends no body and no header without a name', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(created());
+    await createRoom();
+    const [, init] = firstCall();
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toBeUndefined();
+  });
+
+  it('rejects with the HTTP status on a taken name', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(new Response('{}', { status: 409 }));
+    const err = await createRoom('my-show').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('createRoom failed: 409');
+    expect((err as Error & { status?: number }).status).toBe(409);
+  });
+});

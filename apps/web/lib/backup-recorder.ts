@@ -2,10 +2,12 @@ import {
   CHUNK_TIMESLICE_MS,
   RECORDING_MIME,
   RECORDING_AUDIO_BPS,
+  ROOM_SLUG_PATTERN,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
 import { cameraVideoBps } from './quality';
 import { mimeForStream } from './recorder';
+import { resizeWavHeader, WAV_HEAD_MAX_BYTES } from './wav';
 
 type MrFactory = (stream: MediaStream, opts: MediaRecorderOptions) => MediaRecorder;
 
@@ -44,6 +46,8 @@ const OPEN_LIMIT_MS = 5_000;
 
 const MEMORY_ONLY_WARNING = 'Local storage is unavailable — backup lives in memory only.';
 
+const BACKUP_NAME_RE = new RegExp(`^openmeet-backup-(solo-)?(audio-|screen-)?(\\d{13})-(${ROOM_SLUG_PATTERN})\\.(mp4|wav)$`);
+
 /** The room a backup was recorded in, or null for older backups that don't say. */
 export function backupRoom(name: string): string | null {
   return /^openmeet-backup-(?:host-|solo-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
@@ -70,7 +74,7 @@ export interface BackupName {
  * wrote.
  */
 export function parseBackupName(name: string): BackupName | null {
-  const m = /^openmeet-backup-(solo-)?(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
+  const m = BACKUP_NAME_RE.exec(name);
   if (!m) return null;
   const solo = m[1] !== undefined;
   const prefix = m[2];
@@ -132,26 +136,12 @@ export function isDirectoryHandle(handle: OpfsFileHandle | OpfsDir): handle is O
 }
 
 async function patchWavHeader(parts: Blob[]): Promise<BlobPart[] | null> {
-  if (parts.length === 0 || !parts[0] || parts[0].size < 44) return null;
+  if (parts.length === 0 || !parts[0]) return null;
   try {
-    const slice = await parts[0].slice(0, 44).arrayBuffer();
-    const view = new DataView(slice);
-    if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
-      return null;
-    }
-    const totalPcmBytes = (parts[0].size - 44) + parts.slice(1).reduce((s, p) => s + p.size, 0);
-    const clampedData = totalPcmBytes > 0xffff_ffff ? 0xffff_ffff : totalPcmBytes;
-    view.setUint32(4, clampedData + 36 > 0xffff_ffff ? 0xffff_ffff : clampedData + 36, true);
-    view.setUint32(40, clampedData, true);
-
-    const patched: BlobPart[] = [slice];
-    if (parts[0].size > 44) {
-      patched.push(parts[0].slice(44));
-    }
-    for (let i = 1; i < parts.length; i++) {
-      patched.push(parts[i]!);
-    }
-    return patched;
+    const head = await parts[0].slice(0, WAV_HEAD_MAX_BYTES).arrayBuffer();
+    const resized = resizeWavHeader(head, parts.reduce((sum, part) => sum + part.size, 0));
+    if (!resized) return null;
+    return [resized, parts[0].slice(resized.byteLength), ...parts.slice(1)];
   } catch {
     return null;
   }

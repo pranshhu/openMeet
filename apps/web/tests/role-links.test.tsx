@@ -314,3 +314,55 @@ describe('CallStage: role links', () => {
     expect(screen.getByRole('group', { name: ARROW })).toHaveClass('left-4', 'top-full', 'min-[861px]:left-14');
   });
 });
+
+describe('RoleLinks: view links', () => {
+  it('lists the host view and the stage view after the three role links, each with its hint', () => {
+    render(<RoleLinks menuClassName="" />);
+    fireEvent.click(screen.getByRole('button', { name: ARROW }));
+    const host = screen.getByRole('button', { name: /^Copy host view link/ });
+    const stage = screen.getByRole('button', { name: /^Copy stage view link/ });
+    expect(host).toHaveTextContent('Your camera and sound alone, no controls. For OBS.');
+    expect(stage).toHaveTextContent('Everyone’s cameras and sound, no controls.');
+    const audio = screen.getByRole('button', { name: /^Copy microphone-only link/ });
+    expect(audio.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(host.compareDocumentPosition(stage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const entry of [host, stage]) {
+      expect(entry).toHaveAttribute('type', 'button');
+      expect(entry).toHaveClass('block', 'w-full', 'min-h-11');
+    }
+  });
+
+  it('copies the room link with the view, whatever query the host’s page has', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    withClipboard(writeText);
+    window.history.pushState({}, '', '/r/xyz-abcd-pqr/?present=1');
+    render(<RoleLinks menuClassName="" />);
+    fireEvent.click(screen.getByRole('button', { name: ARROW }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Copy host view link/ }));
+    });
+    expect(writeText).toHaveBeenLastCalledWith(`${location.origin}/r/xyz-abcd-pqr/?view=host`);
+    expect(screen.getByRole('status')).toHaveTextContent('Host view link copied.');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Copy stage view link/ }));
+    });
+    expect(writeText).toHaveBeenLastCalledWith(`${location.origin}/r/xyz-abcd-pqr/?view=stage`);
+    expect(screen.getByRole('status')).toHaveTextContent('Stage view link copied.');
+  });
+
+  it('says how to build the view link by hand when it cannot be copied', async () => {
+    render(<RoleLinks menuClassName="" />);
+    fireEvent.click(screen.getByRole('button', { name: ARROW }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^Copy host view link/ }));
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy. Add ?view=host to this page’s address.');
+
+    withClipboard(vi.fn(() => Promise.reject(new Error('denied'))));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Copy stage view link/ }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy. Add ?view=stage to this page’s address.');
+  });
+});

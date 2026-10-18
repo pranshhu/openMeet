@@ -2315,6 +2315,33 @@ describe('live take receivers are unbounded', () => {
   });
 });
 
+describe('BackupIntake in a room with a chosen name', () => {
+  const NAMED = 'my-show';
+  const named = () => {
+    const items: BackupTransfer[] = [];
+    const intake = new BackupIntake({ room: NAMED, onChange: (next) => items.splice(0, items.length, ...next) });
+    return { items, intake };
+  };
+
+  it('lists an offer keyed with the name and refuses one keyed with another name', async () => {
+    const { items, intake } = named();
+    const ch = fakeChannel(validLabel(1700000000000, NAMED, 'mp4'));
+    intake.offer(ch, { peerId: 'peer-1', name: 'Alice' });
+    ch.deliver(offerMsg(1000));
+    await flush();
+    expect(items).toHaveLength(1);
+    expect(items[0]!.status).toBe('offered');
+
+    const other = fakeChannel(validLabel(1700000000001, 'other-show', 'mp4'));
+    intake.offer(other, { peerId: 'peer-2', name: 'Bob' });
+    other.deliver(offerMsg(1000));
+    await flush();
+    expect(items).toHaveLength(1);
+    expect(other.sent).toEqual([NO_COPY]);
+    expect(other.readyState).toBe('closed');
+  });
+});
+
 describe('BackupIntake: a take a guest recorded alone', () => {
   it('lists the offer of either solo file, and refuses a solo screen name', async () => {
     const { state, intake } = setup();

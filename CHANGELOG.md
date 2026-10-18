@@ -16,6 +16,18 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   recording made alone lands in the folder as `solo_…` with a note saying so.
 - Guests can record on their own from the room link with `?solo=1`, with the teleprompter; the
   recording stays in their browser until they send it to the host from the lobby.
+- Present a PDF as slides: pick one PDF in the Present menu and turn its pages like a deck
+  of pictures. It is read in your own browser and never sent.
+- A PDF or a set of files that cannot be presented as slides says why: too big, a password,
+  or a file that does not open.
+- A room can have a link you choose, such as `/r/my-show/`, for a show that sends every
+  guest the same link. New guests wait until you let them in.
+- The host copies view links from the arrow beside Copy invite link and from each guest's row
+  in People.
+- A view link shows one person's camera and sound on a black page with no controls, for an
+  OBS browser source or a second screen; it joins by itself and is never recorded.
+- A stage view link shows everyone's camera and every shared screen in one grid, with
+  everyone's sound.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
 - A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
@@ -58,6 +70,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
   in the call and in your recording.
 - **Camera settings** under the lobby preview, and on the check link: set exposure
   and colour before you join.
+- **Background blur** in Camera settings, where your computer can blur the camera
+  itself. The blur is in the call and in your recording.
 - Opening the room in a second tab of the host's browser while a recording is
   running asks before that tab takes the call over, instead of ending the first
   tab's files.
@@ -327,9 +341,16 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - After a take with two or more people, the summary and `sync.json` give one `ffmpeg`
   command that mixes the take into a single video: the cameras in a grid and everyone's
   audio mixed, each placed by its start offset.
+- A chat message that could not reach someone, because their connection was not up,
+  says "Not delivered to …" under it.
 
 ### Changed
 
+- Chat messages and private messages go directly between the browsers in the call, over
+  its encrypted connection; the server does not see them.
+- A guest's camera file and WAV master carry that guest's name, like the host's:
+  `guest-bob_<id>.mp4`, `guest2-ana_<id>.wav`, and a guest's screen recording carries the name of
+  whoever shared it (`guest-bob_screen_<id>.mp4`).
 - A screen share that is being recorded continues in the same file after the
   presenter's connection drops and comes back, instead of starting a second file.
   When the host no longer has that file, the share is recorded in a new numbered
@@ -370,6 +391,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A producer or view link opened in the browser that made the room joins as a producer
+  and leaves the host's tab, and its recording, alone.
+- A WAV audio master longer than about 4 hours in stereo (8 in mono) opens at its full
+  length in editors: it is written as RF64 instead of a WAV whose header stops at 4 GB.
 - When two people presented and one of them stopped, the stage could keep a frozen
   picture of the screen that had stopped, or name the screen after the wrong person.
 - On a phone each item of the Present menu can be tapped anywhere on it; your own
