@@ -12,6 +12,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- A room can have a link you choose, such as `/r/my-show/`, for a show that sends every
+  guest the same link. New guests wait until you let them in.
 - The host copies view links from the arrow beside Copy invite link and from each guest's row
   in People.
 - A view link shows one person's camera and sound on a black page with no controls, for an

@@ -2,6 +2,7 @@ import {
   CHUNK_TIMESLICE_MS,
   RECORDING_MIME,
   RECORDING_AUDIO_BPS,
+  ROOM_SLUG_PATTERN,
 } from '@openmeet/protocol';
 import { PcmRecorder, isPcmCaptureSupported, type FrameSource } from './pcm-recorder';
 import { cameraVideoBps } from './quality';
@@ -45,6 +46,8 @@ const OPEN_LIMIT_MS = 5_000;
 
 const MEMORY_ONLY_WARNING = 'Local storage is unavailable — backup lives in memory only.';
 
+const BACKUP_NAME_RE = new RegExp(`^openmeet-backup-(audio-|screen-)?(\\d{13})-(${ROOM_SLUG_PATTERN})\\.(mp4|wav)$`);
+
 /** The room a backup was recorded in, or null for older backups that don't say. */
 export function backupRoom(name: string): string | null {
   return /^openmeet-backup-(?:host-)?(?:audio-|screen-)?\d+-(.+)\.[^.]+$/.exec(name)?.[1] ?? null;
@@ -69,7 +72,7 @@ export interface BackupName {
  * wrote.
  */
 export function parseBackupName(name: string): BackupName | null {
-  const m = /^openmeet-backup-(audio-|screen-)?(\d{13})-([a-z]{3}-[a-z]{4}-[a-z]{3})\.(mp4|wav)$/.exec(name);
+  const m = BACKUP_NAME_RE.exec(name);
   if (!m) return null;
   const prefix = m[1];
   const startedMs = Number(m[2]);

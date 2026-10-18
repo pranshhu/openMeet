@@ -41,13 +41,14 @@ export interface RecordingRow {
 export async function insertRoom(
   db: D1Database,
   row: Pick<RoomRow, 'slug' | 'host_token' | 'created_at' | 'expires_at'>
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const res = await db
     .prepare(
-      'INSERT INTO rooms (slug, host_token, created_at, expires_at, consumed) VALUES (?, ?, ?, ?, 0)'
+      'INSERT INTO rooms (slug, host_token, created_at, expires_at, consumed) VALUES (?, ?, ?, ?, 0) ON CONFLICT(slug) DO NOTHING'
     )
     .bind(row.slug, row.host_token, row.created_at, row.expires_at)
     .run();
+  return res.meta.changes > 0;
 }
 
 export async function getRoomBySlug(db: D1Database, slug: string): Promise<RoomRow | null> {
