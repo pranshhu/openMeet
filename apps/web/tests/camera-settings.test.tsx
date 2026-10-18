@@ -175,3 +175,38 @@ describe('CameraSettings', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CameraSettings: background blur', () => {
+  const blurCaps = { backgroundBlur: [false, true], zoom: caps.zoom };
+  const box = () => screen.getByRole('checkbox', { name: 'Background blur' }) as HTMLInputElement;
+
+  it('sends the boolean when the box is ticked', async () => {
+    const track = fakeTrack(blurCaps, { backgroundBlur: false });
+    render(<CameraSettings track={track} onClose={vi.fn()} />);
+    expect(box().checked).toBe(false);
+    fireEvent.click(box());
+    expect(box().checked).toBe(true);
+    await waitFor(() => expect(calls(track)).toEqual([[{ backgroundBlur: true }]]));
+  });
+
+  it('says so and shows the camera setting again when the request is refused', async () => {
+    const track = fakeTrack(blurCaps, { backgroundBlur: false });
+    track.applyConstraints.mockRejectedValueOnce(new Error('refused'));
+    render(<CameraSettings track={track} onClose={vi.fn()} />);
+    fireEvent.click(box());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your camera did not take that setting.');
+    expect(box().checked).toBe(false);
+  });
+
+  it('sends the value the panel opened with when Reset is pressed after a tick', async () => {
+    const track = fakeTrack(blurCaps, { backgroundBlur: false, zoom: 1 });
+    render(<CameraSettings track={track} onClose={vi.fn()} />);
+    fireEvent.click(box());
+    await waitFor(() => expect(calls(track)).toHaveLength(1));
+    track.applyConstraints.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(box().checked).toBe(false);
+    await waitFor(() => expect(calls(track)).toEqual([[{ backgroundBlur: false }], [{ zoom: 1 }]]));
+  });
+});
