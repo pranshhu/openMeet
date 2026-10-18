@@ -450,8 +450,7 @@ only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these th
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
   waiting room and in the call, copies this link, the Present-only link, the
-  microphone-only link and the host and stage view links.
-  microphone-only link and the record-alone link.
+  microphone-only link, the host and stage view links, and the record-alone link.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and

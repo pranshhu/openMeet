@@ -573,11 +573,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
-  the Present-only link, the microphone-only link, the host view link and the stage view link
-  (the plain link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or `?view=stage`,
-  the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
-  the Present-only link, the microphone-only link and the record-alone link (the plain link plus
-  `?producer=1`, `?present=1`, `?audio=1` or `?solo=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  the Present-only link, the microphone-only link, the host view link, the stage view link and
+  the record-alone link (the plain link plus `?producer=1`, `?present=1`, `?audio=1`,
+  `?view=host`, `?view=stage` or `?solo=1`, the flags `RoomView` reads) and says what each is.
+  The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
