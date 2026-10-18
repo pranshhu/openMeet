@@ -274,7 +274,7 @@ export function CallStage({
   onSendScript?: (text: string) => boolean;
   /** The person took the offered script or turned it down. */
   onDismissScript?: () => void;
-  onToggleScreen: (source?: PresentSource) => void;
+  onToggleScreen: (source?: PresentSource) => void | Promise<string | null>;
   /** What each remote peer's browser can actually capture, keyed by peerId. */
   capabilities: Record<string, { mp4: boolean; wav: boolean; note?: BrowserNote; listening?: Listening }>;
   onSwitchMic?: (deviceId: string) => Promise<void>;
@@ -1648,17 +1648,20 @@ export function CallStage({
                           role="menuitem"
                           className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10 focus-within:ring-2 focus-within:ring-[#8ab4f8]"
                         >
-                          <span>Slides (pictures)</span>
+                          <span>Slides (PDF or pictures)</span>
                           <input
                             type="file"
-                            accept="image/*"
+                            accept="image/*,application/pdf,.pdf"
                             multiple
                             className="sr-only"
                             onChange={(e) => {
                               const files = e.target.files;
                               if (!files || files.length === 0) return;
                               setPresentMenuOpen(false);
-                              onToggleScreen(Array.from(files));
+                              setDeviceError(null);
+                              void Promise.resolve(onToggleScreen(Array.from(files))).then((reason) => {
+                                if (typeof reason === 'string') setDeviceError(reason);
+                              });
                             }}
                           />
                         </label>

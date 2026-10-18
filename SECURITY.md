@@ -76,6 +76,10 @@ that keeps camera, microphone and screen capture to the site itself, `nosniff` a
 strict referrer policy. The static export needs inline scripts, so the CSP restricts
 where code, fonts and media load from rather than blocking inline script.
 
+**A presented PDF is opened in the presenter's own tab.** PDF.js reads it in a worker
+served from the site itself, with code evaluation switched off and nothing fetched, and
+only the presented picture of a page leaves the page.
+
 **Display names and user agents are stored in D1 and never deleted.** There is no
 retention policy or cleanup job today.
 

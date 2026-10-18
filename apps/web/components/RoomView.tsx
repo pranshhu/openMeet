@@ -547,7 +547,7 @@ export function RoomView({ slug }: { slug: string }) {
       roomAccess={state.access}
       onRoomAccess={setRoomAccess}
       onAdmit={admitPeer}
-      onToggleScreen={(source) => void toggleScreenShare(source)}
+      onToggleScreen={(source) => toggleScreenShare(source)}
       presentingRearCamera={state.presentingRearCamera ?? false}
       slides={state.slides}
       onSwitchMic={switchMic}

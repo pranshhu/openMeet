@@ -12,6 +12,10 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- Present a PDF as slides: pick one PDF in the Present menu and turn its pages like a deck
+  of pictures. It is read in your own browser and never sent.
+- A PDF or a set of files that cannot be presented as slides says why: too big, a password,
+  or a file that does not open.
 - A room can have a link you choose, such as `/r/my-show/`, for a show that sends every
   guest the same link. New guests wait until you let them in.
 - The host copies view links from the arrow beside Copy invite link and from each guest's row
