@@ -209,7 +209,7 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
 
 ### Room Durable Object (`src/do/Room.ts`)
 One instance per slug. `fetch`: requires `/ws/r/` path (404) + `Upgrade: websocket` (426);
-looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join`; capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
+looks up room (missing → accept then close `4002`, expired → `4003`); host auth via cookie or token presented in WS `join` (a handshake whose address carries `producer=1` is not read for the cookie, so a producer or view link opened in the host's own browser never replaces the host's tab); capacity guard (4 recorded, or 8 when the joining seat and every recorded seat already in the room joined with `audioOnly: true`, + 2 unrecorded producers/companions; the peer past capacity is closed with `4001`).
 - **Uses the WebSocket Hibernation API** (`state.acceptWebSocket` + `webSocketMessage` /
   `webSocketClose` / `webSocketError`, not `server.accept()` + `addEventListener`) — the DO can be
   evicted from memory between messages and lose nothing. Per-peer state (`role`, `displayName`,
@@ -505,6 +505,31 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   key removed otherwise, inside a `try`); a producer's and a Present-only join do not write it,
   and the check page only reads it. A link that also carries `producer=1` or `present=1` is that
   link and opens no capture.
+  `?view=host` and `?view=guest&name=<name>` (`parseViewLink` in `lib/view-link.ts`) make the page a
+  view of one person, for an OBS browser source or a second screen. `RoomView` never renders `Lobby`
+  for it, ignores `producer`, `present`, `check` and `audio`, and from an effect guarded by a ref
+  (StrictMode runs effects twice) calls `join(new MediaStream(), viewName(link), true)` with no
+  click: a producer with no camera or microphone, listed as "View of <name>". It renders `CleanView`
+  in every phase except the ending ones (`not-found`, `full`, `replaced`, `removed`, `refused`,
+  `error`, `left`), which keep their `StatusScreen`. `CleanView` is one `<video>` on black with no
+  name tag and no controls; `findViewed` picks the person from `remotePeers`, and when their camera
+  is off (`viewCamOff`, the rule `CallStage` uses) their initial is drawn and the sound plays on. The
+  person is named by role (the host) or by display name (a guest) because a peer id changes on every
+  socket and a client id is never shared. A guest is never found by name when they are the host, a
+  producer or a Present-only device. A browser that refuses sound to a page nobody clicked
+  (`NotAllowedError` from `play()`) gets the element muted so the picture runs, and a **Turn on
+  sound** button; any other refusal is ignored. A view with no `name`, or any other `view` value,
+  joins nothing and reads "This view link is incomplete."
+  `?view=stage` makes the page the stage view: `stageCells` draws one cell per presented screen
+  (`remoteScreens` order), then one per person `isStagePeer` accepts (`remotePeers` order), in an
+  equal grid that fills the page (one column for one cell, two for two to four, three for five or
+  more), each cell black with its picture `object-contain`, the initial for a person whose camera is
+  off, and no name or ring. It joins as "Stage view". Every cell's sound plays: the page holds one
+  sound state, so when any cell's `play()` is refused with `NotAllowedError` every cell is muted
+  and played and one **Turn on sound** button shows, and pressing it unmutes and plays them all; a
+  cell added later plays with sound. A guest the host set as not recorded (`notRecorded` exactly
+  `true`) is left out, and so is a screen they present. With no cell it reads "Waiting for someone
+  to join".
   `WaitingRoom` (post-join, alone, connecting, or after the peer left): self-cam (initial avatar when
   the camera is off) with mic/cam toggles + role-aware copy + host Copy invite link + Leave; a
   host the Room has sent `room-access` also sees, under those buttons, a `KnockNotice` row for
@@ -513,8 +538,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the optional `extra`, in `waiting`, `connecting` and `peer-left`; a guest gets none);
   CallStage's status bar keeps the host's Copy invite link during `in-call`.
   Beside both an arrow (`components/RoleLinks.tsx`) opens a panel that copies the producer link,
-  the Present-only link and the microphone-only link (the plain link plus `?producer=1`,
-  `?present=1` or `?audio=1`, the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
+  the Present-only link, the microphone-only link, the host view link and the stage view link
+  (the plain link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or `?view=stage`,
+  the flags `RoomView` reads) and says what each is. The panel is placed from the row it sits in (the
   caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
@@ -540,6 +566,10 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
   time. A `role="status"` line below the list then says "Asked <name>.
   They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  A guest who has a camera tile and a name also has **View link**, before **Remove**: it copies
+  the plain link plus `?view=guest&name=` and the name through `encodeURIComponent`, and the
+  same status line says "View link for <name> copied." or "Couldn’t copy the view link for
+  <name>." A producer's, a present-only device's and a nameless guest's row has none.
   `components/HelpAsk.tsx` is the question on the asked person's own screen, drawn by
   `CallStage` after the `hostMuted` note unless the take is being finished, with **Restart** and
   **Not now**, and "Your recording goes on." during their own capture. It takes no focus. For
@@ -953,7 +983,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   again on the open socket, and every later `join` (a reconnect) carries it; a `door` message
   with state `passcode` makes the client forget it, so a wrong one is never sent twice.
   After a terminal close code or `close()` it opens no socket again: `reconnect()`, which
-  `useRoom` calls on a connection's second `failed`, returns at once.
+  `useRoom` calls on a connection's second `failed`, returns at once. A producer's address
+  carries `?producer=1`, on every reconnect too.
 - `lib/peer.ts`: `PeerConnection` — **perfect negotiation**; politeness is per pair by join
   `ordinal` (the lower ordinal is impolite), never by role. `onnegotiationneeded`→offer; impolite
   drops colliding offer; `ondatachannel` passes only recording channels (label base `recording` /
@@ -1833,10 +1864,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   and the line returns with the call.
 - **A sender does not spend more on the people who still watch.** `sendEncoding` divides the
   live budget by everyone in the room, including a person who has stopped incoming video.
-- **The producer, Present-only and microphone-only links are offered only to the host, in the
-  waiting room and in the call's top bar before a take.** The lobby and the take summary offer
+- **The producer, Present-only, microphone-only and view links are offered only to the host, in
+  the waiting room and in the call's top bar before a take.** The lobby and the take summary offer
   the plain invite link alone, and during a take and after one the top bar has none of them.
-  Each is still the invite link plus `?producer=1`, `?present=1` or `?audio=1`.
+  Each is still the invite link plus `?producer=1`, `?present=1`, `?audio=1`, `?view=host` or
+  `?view=stage`. A guest's view link is also in People, during a take as well.
 - **A speaker that goes away, or that the browser refuses, is forgotten.** The call goes
   back to the system default at once, and plugging the device in again does not bring the
   choice back. A producer joins without microphone permission; a browser that refuses a
@@ -1870,6 +1902,18 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A guest's note is placed when it reaches the host, not when the guest began typing.** The
   host's own note is placed at the moment its field opened. A guest's clock is not trusted and
   the `marker` message carries no time, so a guest's note sits a few seconds after its moment.
+- **A view link is the invite link with a flag, so it is exactly as private.** Anyone who has it
+  can watch. It shows the call's live picture, not the recording, and it adds one more connection,
+  by which everyone's live budget is divided. It takes one of the two unrecorded slots; refused at
+  the cap it reads "This room is full" until the source is reloaded.
+- **The stage view's grid is fixed and has no names.** It carries the live picture of up to eight
+  cameras and the shared screens, so on a weak link it is the first to stutter.
+- **Two people of one name: the one listed first is shown by a view link.** The order is that of
+  `remotePeers`.
+- **A view page left open keeps the session going,** and with it the lock and the lists that end
+  with the session. The viewed person is not told that a view is open, and a Help ask sent to a
+  view does nothing. Opened on a computer that is in the call, its sound plays the person a second
+  time: mute that tab.
 - **A check link works only while its room does, and it is the invite link.** The checks
   run against the room, so an expired room shows "Room not found or expired"; opening a
   check link joins nothing and so does not extend the room's 30 days. Without `?check=1`

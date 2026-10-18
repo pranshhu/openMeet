@@ -434,18 +434,27 @@ switched during the call is opened the same way as the one chosen in the lobby.
 ### Producers and Present only
 
 A room has 4 recorded seats (8 when every recorded person joined with **Microphone
-only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these two:
+only**) plus 2 unrecorded slots, and the unrecorded slots are shared by these three:
 
 - **Producer.** Add `?producer=1` to the invite link
   (`https://<your-site>/r/<room>/?producer=1`). A producer joins with no camera or
   mic, sees and hears everyone, can chat and present, and is never recorded. The host's
   **Copy invite link** always copies the plain link; the arrow beside it, in the
-  waiting room and in the call, copies this link, the Present-only link and the
-  microphone-only link.
+  waiting room and in the call, copies this link, the Present-only link, the
+  microphone-only link and the host and stage view links.
 - **Present only.** On a computer, choose **Present only** in the lobby (or open the
   invite link with `?present=1`) to join just to share that device's screen, with no
   camera or mic. It's for a phone-plus-laptop setup: the phone carries your face and
   voice, the laptop the screen. The screen is recorded; it takes no recorded seat.
+- **View link.** Copy it from the arrow beside **Copy invite link** (the host's own view
+  and the stage view) or from **View link** on a guest's row in **People**; or add
+  `?view=host` or `?view=guest&name=<name>` to the invite link
+  (`https://<your-site>/r/<room>/?view=guest&name=Ana`) yourself. Use it as an OBS browser
+  source or on a second screen. The page joins by itself and shows that person's camera
+  and sound alone on a black page, with no buttons and no name. It takes an unrecorded
+  slot, is never recorded, and is as private as the invite link: anyone who has it can
+  watch. `?view=stage` shows everyone's camera and every shared screen in one grid, with
+  everyone's sound, and leaves out a guest you set as not recorded.
 
 For a room of 5 to 8, add `?audio=1` to the invite link: the lobby opens on
 **Microphone only**, so nobody's camera comes back on. The host copies this link from

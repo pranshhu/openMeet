@@ -12,6 +12,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Added
 
+- The host copies view links from the arrow beside Copy invite link and from each guest's row
+  in People.
+- A view link shows one person's camera and sound on a black page with no controls, for an
+  OBS browser source or a second screen; it joins by itself and is never recorded.
+- A stage view link shows everyone's camera and every shared screen in one grid, with
+  everyone's sound.
 - A take where nobody had a camera gets one `ffmpeg` command that mixes everyone's
   audio into a single WAV.
 - A microphone-only invite link (`?audio=1`), copied from the arrow beside **Copy invite
@@ -375,6 +381,8 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 
 ### Fixed
 
+- A producer or view link opened in the browser that made the room joins as a producer
+  and leaves the host's tab, and its recording, alone.
 - A WAV audio master longer than about 4 hours in stereo (8 in mono) opens at its full
   length in editors: it is written as RF64 instead of a WAV whose header stops at 4 GB.
 - When two people presented and one of them stopped, the stage could keep a frozen
