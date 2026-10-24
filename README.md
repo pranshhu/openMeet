@@ -14,6 +14,26 @@ Self-hostable on a free Cloudflare account. MIT licensed.
 > as video only (no uncompressed WAV), which is untested. Phones present a photo/video or the
 > rear camera; a real screen comes from a second device joined with "Present only".
 
+## Set it up with one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pranshhu/openMeet/main/install.sh | sh
+```
+
+That is the whole setup. It checks for `git` and Node, installs pnpm if it is missing,
+clones the repo, installs the dependencies, opens a browser to log you in to Cloudflare,
+creates the database, deploys the Worker, builds the site against it and deploys that to
+Pages, then asks whether you want to store a TURN key. It ends by printing your own
+address, `https://<your-project>.pages.dev`. You need a free Cloudflare account, `git` and
+Node 20.11 or newer, and a terminal (the login and the two questions it asks need one).
+Only want to look around first? This sets it up on localhost and deploys nothing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pranshhu/openMeet/main/install.sh | sh -s -- --local
+```
+
+[More options](#get-your-own-instance).
+
 ## Live demo
 
 Try it at **<https://openmeet.pages.dev>** before you self-host. It is deployed from
@@ -214,10 +234,11 @@ is closed, so a take cut short by a crash is rebuilt from a copy kept in the bro
 curl -fsSL https://raw.githubusercontent.com/pranshhu/openMeet/main/install.sh | sh
 ```
 
-One command, start to finish. It clones the repo, installs everything, opens a browser
-to log you in to Cloudflare, creates the D1 database, deploys the Worker, creates the
-Pages project, builds the web app against your own Worker URL, and deploys it. You end
-up at `https://<your-project>.pages.dev`.
+One command, start to finish. It clones the repo, installs everything (pnpm too, when
+it is missing), opens a browser to log you in to Cloudflare, creates the D1 database,
+deploys the Worker, creates the Pages project, builds the web app against your own
+Worker URL, deploys it, and offers to store a TURN key. You end up at
+`https://<your-project>.pages.dev`.
 
 **All you need is a Cloudflare account** — the free tier covers it — plus `git`,
 Node ≥ 20.11 and pnpm. If pnpm is missing, the installer enables it with corepack
@@ -225,8 +246,10 @@ when your Node ships corepack; otherwise install it first with `npm i -g pnpm@9`
 wrangler comes in with the dependencies; apart from that pnpm shim, the installer puts nothing
 on your PATH.
 
-You'll be asked one question: what to name the project. Safe to re-run — every step
-reuses whatever it already created. If your Cloudflare login can see more than one
+You'll be asked what to name the project (or pass `--project NAME`) and, at the end,
+for a TURN key (press Enter to skip). Safe to re-run — every step reuses whatever it
+already created. `OPENMEET_WORKER=<name>` names the Worker if `openmeet-worker` is
+already taken in your account. If your Cloudflare login can see more than one
 account, name the one to use:
 
 ```bash
@@ -343,9 +366,10 @@ apps/worker/wrangler.toml`, stash your edit, pull, then reapply it and skip it a
 
 ### TURN — optional, but the difference between "connects" and "doesn't"
 
-The installer does **not** set this up: it needs credentials only you can create.
-Without TURN, two people behind symmetric NATs cannot connect at all. Either let
-Cloudflare mint credentials:
+The installer asks for it as its last step but cannot create it: the key is made in the
+Cloudflare dashboard (Realtime, TURN) and only you can copy it. Press Enter to skip, and
+add it later with the commands below. Without TURN, two people behind symmetric NATs
+cannot connect at all. Either let Cloudflare mint credentials:
 
 ```bash
 pnpm --filter @openmeet/worker exec wrangler secret put TURN_APP_ID      # the TURN key's Token ID

@@ -4,8 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/pranshhu/openMeet/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/pranshhu/openMeet/main/install.sh | sh -s -- --local
 #
-# Clones the repo, installs everything it needs, logs you in to Cloudflare, and
-# deploys your own instance. All you need is a Cloudflare account (free tier is
+# Clones the repo, installs everything it needs (pnpm included), logs you in to
+# Cloudflare, creates the database, deploys the Worker and the site, and offers
+# to store a TURN key. All you need is a Cloudflare account (free tier is
 # enough), plus git and Node >= 20.11 on the machine.
 #
 # --local skips Cloudflare entirely and just sets up a checkout you can run on
@@ -27,6 +28,7 @@ REPO="${OPENMEET_REPO:-https://github.com/pranshhu/openMeet.git}"
 DIR="${OPENMEET_DIR:-openMeet}"
 DB_NAME="${OPENMEET_DB:-openmeet_db}"
 PROJECT="${OPENMEET_PROJECT:-}"
+WORKER="${OPENMEET_WORKER:-openmeet-worker}"
 MODE=deploy
 
 # --- output -----------------------------------------------------------------
@@ -56,7 +58,7 @@ You need a Cloudflare account (free tier is fine), git, and Node >= 20.11.
   --dir PATH       Where to clone (default: ./openMeet).
   -h, --help       This.
 
-Environment: OPENMEET_REPO, OPENMEET_DIR, OPENMEET_DB, OPENMEET_PROJECT
+Environment: OPENMEET_REPO, OPENMEET_DIR, OPENMEET_DB, OPENMEET_PROJECT, OPENMEET_WORKER
 
   CLOUDFLARE_ACCOUNT_ID   If your Cloudflare login can see more than one
                           account, set this to the account to deploy to.
@@ -102,6 +104,10 @@ if [ -n "$PROJECT" ]; then
   esac
 fi
 
+case "$WORKER" in
+  *[!a-z0-9-]*|"") die "Worker name must be lowercase letters, digits and hyphens: got '$WORKER'" ;;
+esac
+
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # Every wrangler call goes through this. Two reasons it is not `npx wrangler`:
@@ -138,6 +144,10 @@ say "  node $(node -v)"
 if ! have pnpm && have corepack; then
   say "  pnpm missing — enabling via corepack"
   corepack enable pnpm >/dev/null 2>&1 || warn "corepack could not enable pnpm."
+fi
+if ! have pnpm && have npm; then
+  say "  pnpm missing — installing it with npm"
+  npm install -g pnpm@9 >/dev/null 2>&1 || warn "npm could not install pnpm globally (it may need a different prefix or sudo)."
 fi
 have pnpm || die "pnpm is required. Install it with \`npm i -g pnpm@9\` (or see https://pnpm.io/installation), then re-run."
 say "  pnpm $(pnpm --version)"
@@ -263,12 +273,16 @@ step "Writing your values into apps/worker/wrangler.toml"
 TOML="$ROOT/apps/worker/wrangler.toml"
 [ -f "$TOML" ] || die "missing $TOML — is this an openMeet checkout?"
 TMP=$(mktemp)
-sed -e '/^\[env\./,$b' \
-    -e "s|^database_id = \".*\"|database_id = \"$DB_ID\"|" \
-    -e "s|^PAGES_ORIGIN = \".*\"|PAGES_ORIGIN = \"$PAGES_ORIGIN\"|" \
-    "$TOML" > "$TMP"
+awk -v id="$DB_ID" -v origin="$PAGES_ORIGIN" -v worker="$WORKER" '
+  /^\[env\./ { env = 1 }
+  !env && !named && /^name = "/ { print "name = \"" worker "\""; named = 1; next }
+  !env && /^database_id = "/ { print "database_id = \"" id "\""; next }
+  !env && /^PAGES_ORIGIN = "/ { print "PAGES_ORIGIN = \"" origin "\""; next }
+  { print }' "$TOML" > "$TMP"
 mv "$TMP" "$TOML"
 grep -q "$DB_ID" "$TOML" || die "failed to write database_id into wrangler.toml"
+grep -q "^name = \"$WORKER\"" "$TOML" || die "failed to write the Worker name into wrangler.toml"
+say "  worker       $WORKER"
 say "  database_id  $DB_ID"
 say "  PAGES_ORIGIN $PAGES_ORIGIN"
 
@@ -309,6 +323,37 @@ step "Deploying to Pages"
 wr pages deploy "$ROOT/apps/web/out" \
   --project-name "$PROJECT" --branch main
 
+# 6. TURN ---------------------------------------------------------------------
+# Optional, and the one thing here that cannot be created for you: the key is made
+# in the Cloudflare dashboard (Realtime, TURN) and only its owner can copy it. The
+# secrets go straight to wrangler; nothing is written to a file or echoed back.
+step "TURN relay (optional)"
+if wr secret list 2>/dev/null | grep -q TURN_APP_ID; then
+  say "  already stored — keeping it"
+  TURN_DONE=1
+elif has_tty; then
+  say "  Without TURN, people behind strict networks cannot connect at all."
+  say "  In the Cloudflare dashboard open Realtime, TURN, create a key, and paste its two values."
+  say "  ${DIM}Press Enter at the first question to skip; the README shows how to add it later.${N}"
+  _tid=$(ask "  TURN key Token ID: ")
+  if [ -n "$_tid" ]; then
+    printf '  TURN key API token (hidden): ' > /dev/tty
+    stty -echo < /dev/tty 2>/dev/null || true
+    IFS= read -r _ttok < /dev/tty || _ttok=""
+    stty echo < /dev/tty 2>/dev/null || true
+    printf '\n' > /dev/tty
+    if [ -n "$_ttok" ] \
+      && printf %s "$_tid" | wr secret put TURN_APP_ID >/dev/null \
+      && printf %s "$_ttok" | wr secret put TURN_API_TOKEN >/dev/null; then
+      say "  stored"
+      TURN_DONE=1
+    else
+      warn "TURN was not stored; add it later with the two commands in the README."
+    fi
+    _ttok=""
+  fi
+fi
+
 # --- done --------------------------------------------------------------------
 say ""
 say "${G}Your openMeet is live.${N}"
@@ -320,11 +365,13 @@ say ""
 say "Open it in ${B}Chrome${N}, click New Room, and share the link. The host must"
 say "use a Chromium browser — recording writes files to the host's disk."
 say ""
-say "Two things worth doing next:"
-say "  ${DIM}1.${N} TURN, or people behind strict NATs can't connect at all:"
-say "     ${DIM}cd \"$ROOT\"${N}"
-say "     ${DIM}printf %s '<id>'    | pnpm --filter @openmeet/worker exec wrangler secret put TURN_APP_ID${N}"
-say "     ${DIM}printf %s '<token>' | pnpm --filter @openmeet/worker exec wrangler secret put TURN_API_TOKEN${N}"
-say "  ${DIM}2.${N} Keep the wrangler.toml change local — it now holds YOUR database"
+say "Worth doing next:"
+if [ "${TURN_DONE:-}" != 1 ]; then
+  say "  ${DIM}1.${N} TURN, or people behind strict NATs can't connect at all:"
+  say "     ${DIM}cd \"$ROOT\"${N}"
+  say "     ${DIM}printf %s '<id>'    | pnpm --filter @openmeet/worker exec wrangler secret put TURN_APP_ID${N}"
+  say "     ${DIM}printf %s '<token>' | pnpm --filter @openmeet/worker exec wrangler secret put TURN_API_TOKEN${N}"
+fi
+say "  ${DIM}-${N} Keep the wrangler.toml change local — it now holds YOUR database"
 say "     id and origin. Don't push it to a public fork; \`git stash\` it before"
 say "     pulling updates, and re-running install.sh writes it again."
