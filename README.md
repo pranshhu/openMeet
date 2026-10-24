@@ -339,6 +339,10 @@ exactly, or every browser request is blocked.
 pnpm --filter @openmeet/worker run deploy
 ```
 
+The Worker is deployed under the `name` on the first line of `apps/worker/wrangler.toml`
+(`openmeet-worker`). If your account already has a Worker with that name, change it first
+(step 4's `NEXT_PUBLIC_API_BASE` then uses the new name), or this deploy replaces that Worker.
+
 **4 — Build and deploy the web app**
 
 `NEXT_PUBLIC_API_BASE` is **inlined into the bundle at build time**, so it goes on the
