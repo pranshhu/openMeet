@@ -339,6 +339,10 @@ export class ChunkReceiver {
     const header = this.pendingHeader;
     this.pendingHeader = null;
     if (!header) return;
+    // The take was saved and this file closed. A guest that was not told to
+    // stop (the Room was down when the host pressed End & save) still sends:
+    // there is nowhere to put it, and that is not a recording failure.
+    if (this.writer.isClosed) return;
     if (this.maxBytes !== undefined) {
       if (header.idx <= this.lastIdx) return;
     } else {

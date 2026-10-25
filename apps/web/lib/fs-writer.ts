@@ -4,7 +4,7 @@ interface FsWritable {
 }
 interface FsFileHandle {
   name: string;
-  createWritable(): Promise<FsWritable>;
+  createWritable(opts?: { keepExistingData?: boolean }): Promise<FsWritable>;
   /** The browser's own handle has one; absent on a handle a test hands in. */
   getFile?(): Promise<{ size: number }>;
 }
@@ -53,6 +53,7 @@ export function isFsAccessSupported(): boolean {
 export class FileWriter {
   private readonly picker: SaveFilePicker;
   private writable: FsWritable | null = null;
+  private handle: FsFileHandle | null = null;
   private handleName = '';
   private _size = 0;
   // A FileSystemWritableFileStream serializes its own ops, but overlapping
@@ -72,6 +73,11 @@ export class FileWriter {
     return this.handleName;
   }
 
+  /** True once close() has been called: the file is committed and takes no more. */
+  get isClosed(): boolean {
+    return this.closing !== null;
+  }
+
   /** The file's length: the furthest byte any completed write has reached. */
   get size(): number {
     return this._size;
@@ -80,6 +86,7 @@ export class FileWriter {
   /** Prompts for a save location. Costs one transient user activation. */
   async openFile(suggestedName: string): Promise<void> {
     const handle = await this.picker({ suggestedName });
+    this.handle = handle;
     this.handleName = handle.name;
     this.writable = await handle.createWritable();
   }
@@ -90,17 +97,20 @@ export class FileWriter {
    */
   async openIn(dir: FsDirectoryHandle, name: string): Promise<void> {
     const handle = await dir.getFileHandle(name, { create: true });
+    this.handle = handle;
     this.handleName = handle.name;
     this.writable = await handle.createWritable();
   }
 
   write(position: number, data: ArrayBuffer | ArrayBufferView | Blob): Promise<void> {
     if (!this.writable) return Promise.reject(new Error('FileWriter: write before openFile'));
-    const writable = this.writable;
+    const opened = this.writable;
     // A Blob reaches the file by reference, so its length comes from size().
     const end = position + (data instanceof Blob ? data.size : data.byteLength);
+    // Read when the write runs: a checkpoint ahead of it in the queue has
+    // reopened the stream by then.
     const result = this.writeTail.then(() =>
-      writable.write({ type: 'write', position, data }).then(
+      (this.writable ?? opened).write({ type: 'write', position, data }).then(
         () => {
           this._size = Math.max(this._size, end);
         },
@@ -120,6 +130,28 @@ export class FileWriter {
       () => undefined
     );
     return result;
+  }
+
+  /**
+   * Commits what has been written so far and carries on in the same file. A
+   * stream reaches its file only on close(), so a browser that is killed leaves
+   * the file as it was at the last checkpoint. The copy of the file made on
+   * reopening costs its length, so only a small file that nothing else can
+   * rebuild is worth it.
+   */
+  checkpoint(): Promise<void> {
+    if (!this.writable || !this.handle || this.closing) return Promise.resolve();
+    const handle = this.handle;
+    const done = this.writeTail.then(async () => {
+      if (this.closing || !this.writable) return;
+      await this.writable.close();
+      this.writable = await handle.createWritable({ keepExistingData: true });
+    });
+    this.writeTail = done.then(
+      () => undefined,
+      () => undefined
+    );
+    return done;
   }
 
   /**

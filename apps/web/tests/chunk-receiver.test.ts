@@ -36,6 +36,28 @@ function acks(sent: string[]) {
 }
 
 describe('ChunkReceiver', () => {
+  it('drops what arrives after its file was closed, without raising an error', async () => {
+    // Removal that must fail this test: the isClosed guard before the write.
+    const writer = { ...fakeWriter(), isClosed: false };
+    const onError = vi.fn();
+    const r = new ChunkReceiver({
+      recordingId: 'r1',
+      writer: writer as never,
+      sendControl: () => {},
+      onError,
+    });
+    await r.handleMessage(encodeChunkHeader({ idx: 0, offset: 0, size: 2, ts: 1 }));
+    await r.handleMessage(new Uint8Array([1, 2]).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+
+    writer.isClosed = true;
+    await r.handleMessage(encodeChunkHeader({ idx: 1, offset: 2, size: 2, ts: 2 }));
+    await r.handleMessage(new Uint8Array([3, 4]).buffer);
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(r.bytesWritten).toBe(2);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('writes a binary payload at the offset from the preceding header', async () => {
     const writer = fakeWriter();
     const sent: string[] = [];

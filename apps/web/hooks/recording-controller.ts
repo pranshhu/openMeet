@@ -29,6 +29,14 @@ import { roleWithName } from '@/lib/file-names';
 export const CALL_COPY_MAX_FILES = 50;
 
 /**
+ * How often a running call copy is committed to its file. Nothing else holds a
+ * copy's bytes (it has no backup and no crash copy), and a stream reaches its
+ * file only on close, so a browser that is killed leaves it as it was at the
+ * last commit. A minute of audio is under a megabyte, so the reopening is cheap.
+ */
+export const CALL_COPY_CHECKPOINT_MS = 60_000;
+
+/**
  * Most files one connection may spend of that budget. Not small on purpose: the
  * host's own reconnect ends every running copy and spends one of each guest's
  * share, so four recorded guests still fit inside the take's files.
@@ -88,6 +96,8 @@ export interface CallCopy {
   finished?: Promise<void>;
   /** A write or the close failed, so what the folder holds of it is unknown. */
   failed?: boolean;
+  /** Commits the file every `CALL_COPY_CHECKPOINT_MS` while the copy runs. */
+  checkpointer?: ReturnType<typeof setInterval>;
 }
 
 /** One guest's open ingest: its receiver, the channel target and the file behind it. */
@@ -1498,6 +1508,7 @@ const warnCallCopy = (e: unknown) => console.warn('openMeet: call audio copy', e
 
 function finishCallCopy(h: RecordingHandles, c: CallCopy): Promise<void> {
   return (c.finished ??= (async () => {
+    clearInterval(c.checkpointer);
     await c.opened;
     // Separate: a stop that throws must not leave the file uncommitted, and a
     // file only reaches disk on close.
@@ -1552,6 +1563,7 @@ async function openCallCopy(
   recorder.start();
   c.recorder = recorder;
   c.startMs = Date.now();
+  c.checkpointer = setInterval(() => void c.writer.checkpoint().catch(warnCallCopy), CALL_COPY_CHECKPOINT_MS);
 }
 
 /**
