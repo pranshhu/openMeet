@@ -458,7 +458,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   replacement has not arrived (`micStoppedRef`), and the person presses Join again once the
   preview is back; Try again asks for the microphone alone when Microphone only is on.
   `Lobby` **requires a name** (Join gated; the name field is a
-  form, so Enter joins). Directly under it the main join form has an optional **title** field
+  form, so Enter joins). The name is kept for the tab in session storage (`lib/join-name.ts`,
+  `om_name`), so Try again, Rejoin and Back to the lobby, which reload the page, find it again;
+  another tab or browser starts with an empty field. Directly under it the main join form has an optional **title** field
   (`maxLength` `MAX_TITLE_LENGTH`; not on the producer or Present-only screens, and hidden with
   the form on the check page); Join does not depend on it. It also has mic/camera device pickers (`changeDevice` re-acquires with the chosen
   `deviceId`, new-stream-before-stop-old). Under the name the join panel asks **Headphones or speakers?**
@@ -577,7 +579,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the record-alone link (the plain link plus `?producer=1`, `?present=1`, `?audio=1`,
   `?view=host`, `?view=stage` or `?solo=1`, the flags `RoomView` reads) and says what each is.
   The panel is placed from the row it sits in (the
-  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
+  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. In a window
+  too short for it on that side (`fitPanel`, `opensUp`) it opens on the roomier side and
+  scrolls inside what room it has, so no entry is left above the top of the window. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.
@@ -602,6 +606,8 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   no devices to switch) and, last and focused, **Cancel**, and only one row is swapped at a
   time. A `role="status"` line below the list then says "Asked <name>.
   They answer on their own screen." or, when the send failed, "Could not ask <name>. Try again."
+  This line, like the one about a copied view link, goes after eight seconds (`ASKED_LINE_MS`): it
+  says what happened, not what is true from now on.
   A guest who has a camera tile and a name also has **View link**, before **Remove**: it copies
   the plain link plus `?view=guest&name=` and the name through `encodeURIComponent`, and the
   same status line says "View link for <name> copied." or "Couldn’t copy the view link for
@@ -655,7 +661,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   `components/BackupNotice.tsx` shows returned backups in the same flow above the stage: the
   host's Save to folder / Not now on an offer, the percent and a Stop while bytes move, a stalled
   transfer's own line with Dismiss, and the saved or failed verdict on both sides, with offers
-  held back while a take records or saves.
+  held back while a take records or saves. A saved verdict goes by itself when a take starts or
+  an offer arrives after it, so its count is never read as part of the next offer; an offer
+  that was already there when it was saved leaves it on screen.
   `components/KnockNotice.tsx` is the host's row for each person at the door of a room with a
   waiting room, right after `FileNotice`: the name in a `<bdi>` that truncates ("Guest" when empty,
   with " (Producer)" or " (Presenting)" as the People panel writes them), "wants to join", **Let
@@ -1078,7 +1086,8 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   (`recipients`, from `CallStage`: everyone else but present-only devices). Each reads as the
   page's own words first, `Host: Ana`, `Guest 1: Bob` or `Producer 2: Pat`, then the name the
   person chose, cut to 16 characters. A number is given the first time the page meets a person
-  and stays with that id for as long as the page is in the room (`chatNumbers` in `RoomView`,
+  (people are numbered in the order the Room lists them, by `numberPeers` in `CallStage`, not in the
+  order they first write) and stays with that id for as long as the page is in the room (`chatNumbers` in `RoomView`,
   handed to `CallStage`, which is unmounted while the page shows "Everyone else left"), so
   no one else is given it when someone leaves or reconnects; a person who reconnects arrives under
   a new id and gets a new number. The name sits in a `<bdi>` element wherever other words follow

@@ -74,6 +74,18 @@ export function personTag(peerId: string, role: string, numbers: Map<string, num
   return `${role === 'producer' ? 'Producer' : 'Guest'} ${n}`;
 }
 
+/**
+ * Numbers the people listed, in the order they are listed, so the numbers
+ * follow who joined first and not who first wrote. A present-only device is
+ * someone's second screen, not a person to write to, and takes none.
+ */
+export function numberPeers(
+  peers: { peerId: string; role?: string | undefined; companion?: boolean | undefined }[],
+  numbers: Map<string, number>
+): void {
+  for (const p of peers) if (!p.companion) personTag(p.peerId, p.role ?? 'guest', numbers);
+}
+
 // A person under To: this page's words for them first, then the name they
 // chose, cut to fit a phone. An option holds text only, so the name comes
 // last, where nothing this page writes can be changed by it.

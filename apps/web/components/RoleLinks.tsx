@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 
 // `query` is the flag RoomView reads from the address.
@@ -47,6 +47,29 @@ type Link = (typeof LINKS)[number];
 
 const LABEL = 'Other links';
 
+// Space kept between the panel and the window edge, and the least it shrinks to.
+const EDGE_PX = 24;
+const MIN_PANEL_PX = 160;
+
+/**
+ * Which side of its row the panel opens on, and how tall it may be there. The
+ * caller's side when the panel fits on it; otherwise the roomier side, with the
+ * panel scrolling inside what room it has, so that no entry is left above the
+ * top of the window with nothing to scroll.
+ */
+export function fitPanel(
+  rowTop: number,
+  rowBottom: number,
+  viewportHeight: number,
+  panelHeight: number,
+  wantsUp: boolean
+): { side: 'up' | 'down'; maxHeight: number } {
+  const room = { up: rowTop - EDGE_PX, down: viewportHeight - rowBottom - EDGE_PX };
+  const want = wantsUp ? 'up' : 'down';
+  const side = room[want] >= panelHeight ? want : room.up > room.down ? 'up' : 'down';
+  return { side, maxHeight: Math.max(Math.floor(room[side]), MIN_PANEL_PX) };
+}
+
 /**
  * The other links, behind an arrow beside the host's Copy invite link:
  * the producer and Present-only links, which join with no camera or
@@ -65,14 +88,33 @@ const LABEL = 'Other links';
 export function RoleLinks({
   className = '',
   menuClassName,
+  opensUp = false,
 }: {
   className?: string;
   menuClassName: string;
+  /** `menuClassName` hangs the panel above its row. */
+  opensUp?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [result, setResult] = useState<{ link: Link; ok: boolean } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const arrow = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  // The panel hangs from its positioned row, so the row is what it is fitted to.
+  useLayoutEffect(() => {
+    const el = panel.current;
+    const row = el?.offsetParent;
+    if (!open || !el || !row) return;
+    const r = row.getBoundingClientRect();
+    const fit = fitPanel(r.top, r.bottom, window.innerHeight, el.offsetHeight, opensUp);
+    el.style.maxHeight = `${fit.maxHeight}px`;
+    if ((fit.side === 'up') !== opensUp) {
+      el.style.top = fit.side === 'down' ? '100%' : 'auto';
+      el.style.bottom = fit.side === 'up' ? '100%' : 'auto';
+      el.style.margin = fit.side === 'down' ? '0.5rem 0 0' : '0 0 0.5rem';
+    }
+  }, [open, opensUp]);
 
   useEffect(() => {
     if (!open) return;
@@ -125,9 +167,10 @@ export function RoleLinks({
       </button>
       {open && (
         <div
+          ref={panel}
           role="group"
           aria-label={LABEL}
-          className={`absolute z-[60] w-72 max-w-[calc(100vw-2rem)] rounded-xl bg-[#2a2b2e] p-1.5 text-left text-white shadow-2xl ring-1 ring-white/10 ${menuClassName}`}
+          className={`absolute z-[60] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl bg-[#2a2b2e] p-1.5 text-left text-white shadow-2xl ring-1 ring-white/10 ${menuClassName}`}
         >
           {LINKS.map((link) => (
             <button

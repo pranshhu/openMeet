@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ChatPanel, type ChatMessage } from '@/components/ChatPanel';
+import { ChatPanel, numberPeers, personTag, type ChatMessage } from '@/components/ChatPanel';
 import { MAX_CHAT_MESSAGE_LENGTH } from '@/lib/sync-report';
 
 describe('ChatPanel', () => {
@@ -170,5 +170,22 @@ describe('ChatPanel: a line that was not handed to someone', () => {
     render(<ChatPanel messages={[]} onSend={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText('Messages are visible to everyone in the call.')).toBeInTheDocument();
     expect(screen.getByText('They go straight to each person, not through the server.')).toBeInTheDocument();
+  });
+});
+
+describe('numberPeers', () => {
+  it('numbers people in the order they are listed, not the order one writes first', () => {
+    const numbers = new Map<string, number>();
+    numberPeers(
+      [
+        { peerId: 'sam', role: 'guest' },
+        { peerId: 'screen', role: 'guest', companion: true },
+        { peerId: 'lee', role: 'guest' },
+      ],
+      numbers
+    );
+    expect(personTag('lee', 'guest', numbers)).toBe('Guest 2');
+    expect(personTag('sam', 'guest', numbers)).toBe('Guest 1');
+    expect(numbers.has('screen')).toBe(false);
   });
 });

@@ -1,4 +1,15 @@
 import '@testing-library/jest-dom/vitest';
+import { beforeEach } from 'vitest';
+
+// The lobby keeps the name typed in it for the tab (`lib/join-name.ts`), and the
+// storage below outlives a test: every test starts with an empty name field.
+beforeEach(() => {
+  try {
+    sessionStorage.removeItem('om_name');
+  } catch {
+    /* no storage in this environment */
+  }
+});
 
 // jsdom lacks WebRTC + media APIs. Tests that need them install fakes per-test.
 // This file only ensures the globals exist so imports of lib modules don't throw

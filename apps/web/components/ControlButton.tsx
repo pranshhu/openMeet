@@ -38,7 +38,13 @@ export function ControlButton({
   const named = shortcut && (singleKeys || shortcut.length > 1) ? shortcut : undefined;
   const base =
     'relative inline-flex h-12 items-center justify-center rounded-full transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]';
-  const shape = text ? 'w-12 sm:w-auto sm:gap-2 sm:pl-4 sm:pr-5' : wide ? 'w-16' : 'w-12';
+  // 44 px wide below 384 px: a take on a 360 px phone has nine buttons and
+  // Leave, which fit two rows only at that width.
+  const shape = text
+    ? 'w-11 min-[384px]:w-12 sm:w-auto sm:gap-2 sm:pl-4 sm:pr-5'
+    : wide
+      ? 'w-14 min-[384px]:w-16'
+      : 'w-11 min-[384px]:w-12';
   // 'record' shares the default grey skin; only its icon turns red (below).
   const skin =
     variant === 'danger'

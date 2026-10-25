@@ -62,7 +62,7 @@ describe('BackupNotice', () => {
 
     expect(
       screen.getByText(
-        'Asha wants to send you 2 backup files (2.0 GB) from an earlier recording in this room.'
+        'Asha wants to send you 2 backup files (2.0 GB) from a recording in this room.'
       )
     ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Save to folder' }));
@@ -80,7 +80,7 @@ describe('BackupNotice', () => {
     });
     expect(
       screen.getByText(
-        `Asha, Ben want to send you 2 backup files (${formatBytes(3_000_000_000)}) from an earlier recording in this room.`
+        `Asha, Ben want to send you 2 backup files (${formatBytes(3_000_000_000)}) from a recording in this room.`
       )
     ).toBeTruthy();
   });
@@ -303,6 +303,28 @@ describe('BackupNotice', () => {
     expect(screen.getByRole('status').textContent).toContain(line);
   });
 
+  it('drops a saved line when a newer offer arrives, so it is not read as part of it', () => {
+    const saved = item({ id: 'saved', status: 'saved', percent: 100 });
+    const view = show({ transfers: [saved] });
+    expect(screen.getByRole('status').textContent).toContain('1 backup file saved');
+
+    view.rerender(
+      <BackupNotice role="host" transfers={[saved, item({ id: 'next' })]} takeActive={false} />
+    );
+    expect(screen.queryByText(/backup file saved/)).toBeNull();
+    expect(screen.getByText(/wants to send you 1 backup file/)).toBeTruthy();
+  });
+
+  it('drops a guest’s saved line when the next take starts', () => {
+    const saved = item({ status: 'saved', percent: 100 });
+    const view = show({ role: 'guest', transfers: [saved] });
+    expect(screen.getByRole('status').textContent).toContain('The host saved your backup');
+
+    view.rerender(<BackupNotice role="guest" transfers={[saved]} takeActive={true} />);
+    view.rerender(<BackupNotice role="guest" transfers={[saved]} takeActive={false} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('reports a failed arrival, and a full disk in its own words', () => {
     const view = show({ transfers: [item({ status: 'failed', percent: 10 })] });
     expect(screen.getByRole('alert').textContent).toContain(
@@ -438,7 +460,7 @@ describe('BackupNotice', () => {
   it('calls a row without a sender name "A guest"', () => {
     const view = show({ transfers: [nameless()] });
     expect(
-      screen.getByText('A guest wants to send you 1 backup file (1.5 GB) from an earlier recording in this room.')
+      screen.getByText('A guest wants to send you 1 backup file (1.5 GB) from a recording in this room.')
     ).toBeTruthy();
 
     view.rerender(
@@ -539,7 +561,7 @@ describe('BackupNotice offering a take recorded alone', () => {
   it('keeps the usual sentence when a call backup is offered with them', () => {
     show({ transfers: [item({ id: SOLO }), item({ id: CALL })] });
     expect(
-      screen.getByText('Asha wants to send you 2 backup files (3.0 GB) from an earlier recording in this room.')
+      screen.getByText('Asha wants to send you 2 backup files (3.0 GB) from a recording in this room.')
     ).toBeTruthy();
   });
 });

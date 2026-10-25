@@ -151,7 +151,7 @@ export function WaitingRoom({
                 {copied ? 'Link copied' : 'Copy invite link'}
               </button>
             )}
-            {isHost && <RoleLinks className="-ml-2" menuClassName="bottom-full left-1/2 mb-2 -translate-x-1/2" />}
+            {isHost && <RoleLinks className="-ml-2" menuClassName="bottom-full left-1/2 mb-2 -translate-x-1/2" opensUp />}
             {onContinueAlone && (
               <button
                 type="button"
