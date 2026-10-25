@@ -303,6 +303,28 @@ describe('PeoplePanel: the host asks a person for help', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Asked Ana. They answer on their own screen.');
   });
 
+  it('takes the line away after a while: it says what happened, not what is true now', () => {
+    // Removal that must fail this test: the timer on askedLine in PeoplePanel.
+    vi.useFakeTimers();
+    try {
+      render(panel(vi.fn().mockReturnValue(true)));
+      fireEvent.click(screen.getByRole('button', { name: 'Help Ana' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Restart connection' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Asked Ana.');
+
+      act(() => {
+        vi.advanceTimersByTime(7_000);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Asked Ana.');
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('asks for the person whose Help was pressed, not the first', () => {
     const onAsk = vi.fn().mockReturnValue(true);
     render(panel(onAsk));

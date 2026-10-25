@@ -19,7 +19,7 @@ import type { LoadSample, PresentSource, RemotePeer } from '@/hooks/useRoom';
 import type { PresentedSlides } from '@/lib/slides';
 import type { TrackReading } from '@/hooks/recording-controller';
 import { formatTimecode, type SyncReportData } from '@/lib/sync-report';
-import { ChatPanel, chatSenderLabel, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
+import { ChatPanel, chatSenderLabel, numberPeers, PrivateMark, PublicMark, privateDetail, type ChatMessage } from './ChatPanel';
 import { PresenceBadge } from './PresenceBadge';
 import { ControlButton } from './ControlButton';
 import { Icon } from './Icon';
@@ -510,6 +510,8 @@ export function CallStage({
   // without a caller they last as long as this screen.
   const [ownNumbers] = useState(() => new Map<string, number>());
   const chatNumbers = roomNumbers ?? ownNumbers;
+  // People are numbered as they are listed, not as each one first writes.
+  useEffect(() => numberPeers(remotePeers, chatNumbers), [remotePeers, chatNumbers]);
   // Hand focus back to the Chat button, as the device menus do for theirs. A
   // tick later, because on phones the control bar is hidden until chat closes.
   function closeChat() {

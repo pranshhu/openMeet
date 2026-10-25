@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Role } from '@openmeet/protocol';
 import type { BackupTransfer } from '@/hooks/backup-return';
 import { parseBackupName } from '@/lib/backup-recorder';
@@ -72,6 +72,17 @@ export function BackupNotice(props: {
   const stalled = moving.filter((t) => t.status === 'stalled');
   const saved = byStatus('saved');
 
+  // A verdict belongs to the moment it was given: a take that starts, or an
+  // offer that arrives after it, begins a fresh page of notices. Transfers are
+  // the engine's own objects, so an offer is told from the last by identity.
+  const seenOffers = useRef<WeakSet<BackupTransfer> | null>(null);
+  seenOffers.current ??= new WeakSet(offered);
+  useEffect(() => {
+    const fresh = offered.filter((t) => !seenOffers.current?.has(t));
+    for (const t of fresh) seenOffers.current?.add(t);
+    if (saved.length > 0 && (props.takeActive || fresh.length > 0)) setDismissed((d) => [...d, ...saved]);
+  });
+
   // A row of dead transfers is the host giving up on them: the engine has to
   // hear it, so the sender's name is free again. Everything else is this screen.
   const dismiss = (row: BackupTransfer[], tellEngine: boolean) => {
@@ -114,7 +125,7 @@ export function BackupNotice(props: {
                 ? `${offered.length} file${offered.length === 1 ? '' : 's'}`
                 : files(offered.length)
             } (${formatBytes(offered.reduce((sum, t) => sum + t.size, 0))}) ${
-              alone ? 'recorded on their own.' : 'from an earlier recording in this room.'
+              alone ? 'recorded on their own.' : 'from a recording in this room.'
             }`}
           </span>
           <button type="button" onClick={props.onAccept} className={filledBtn}>
