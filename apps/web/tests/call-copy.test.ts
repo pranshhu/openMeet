@@ -7,6 +7,7 @@ import {
   collectCallCopies,
   collectFileChecks,
   endHostRecording,
+  CALL_COPY_CHECKPOINT_MS,
   type RecordingHandles,
 } from '@/hooks/recording-controller';
 import { RECORDING_AUDIO_BPS } from '@openmeet/protocol';
@@ -113,6 +114,33 @@ describe('syncCallCopies', () => {
     const file = files.get('call1_rec.m4a')!;
     expect(file.write.mock.calls.map((c) => [c[0].position, c[0].data.byteLength])).toEqual([[0, 10], [10, 7]]);
     expect(file.write.mock.invocationCallOrder[1]!).toBeLessThan(file.close.mock.invocationCallOrder[0]!);
+  });
+
+  it('a running copy is committed to its file every checkpoint, and no more once it ends', async () => {
+    // Removal that must fail this test: the interval set in openCallCopy, or its
+    // clearInterval in finishCallCopy.
+    vi.useFakeTimers();
+    try {
+      const { dir, files } = fakeDir();
+      const h = handles(dir);
+      syncCallCopies(h, [peer('p1')]);
+      await opened(h);
+      const file = files.get('call1_rec.m4a')!;
+      expect(file.close).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(CALL_COPY_CHECKPOINT_MS);
+      expect(file.close).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(CALL_COPY_CHECKPOINT_MS);
+      expect(file.close).toHaveBeenCalledTimes(2);
+
+      syncCallCopies(h, []);
+      await finished(h);
+      const closes = file.close.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3 * CALL_COPY_CHECKPOINT_MS);
+      expect(file.close).toHaveBeenCalledTimes(closes);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('when only WebM is supported the file is call1_rec.webm', async () => {

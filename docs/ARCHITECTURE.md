@@ -1387,7 +1387,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
   cannot record. A guest's copy starts when that guest's camera recording channel arrives for the
   take, because a guest opens that channel from the handler that shows it the recording notice: the
   channel arriving is the proof the guest was told, and there is no second notice. It adds no video
-  encoder, and its failures are logged, never raised as a recording error.
+  encoder, and its failures are logged, never raised as a recording error. A copy has no backup
+  and no crash copy, and a file stream reaches its file only on close, so a running copy is
+  committed every `CALL_COPY_CHECKPOINT_MS` (a minute, `FileWriter.checkpoint`: close and reopen
+  with the data kept): a browser that is killed leaves the file as of the last commit, not empty.
   Sender↔recorder backpressure cycle broken via `recorderRef` box. `rolePicker` defaults unknown
   role → `host`.
 - `media-board.ts` `MediaBoard`: mic + pads mixed in Web Audio. Once opened, the mix replaces the
@@ -1504,7 +1507,10 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
    kept open for the sharer's return and closed with the other files. A channel that closes during the wait ends the wait for its file. A screen
    file that gave no finish signal within the limits, or whose channel closed without one, is
    listed as ended early. `FileWriter.close` closes the stream once and gives every caller that one result,
-   so the channel's close and the end of the take can both ask for it.
+   so the channel's close and the end of the take can both ask for it. A guest that was not told to
+   stop (the Room was down when the host pressed End & save) may still send afterwards: a receiver
+   whose file is closed drops it without an error (`FileWriter.isClosed`), and that guest's file
+   reads incomplete, its own backup holding the rest.
    A guest's stop ends with one more clock-sync round, three seconds at most, before its
    `recording-finalized`.
    A take needs no guest: with nobody connected `startRecording` records the host's own
@@ -1772,6 +1778,11 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A file whose crash copy stopped on a commit that never answered still looks resumable.** Only
   a journal that gave up as a whole is marked; that file's guest was acknowledged from the folder
   write after the stop, so a resume of it cannot continue past the crash copy's end.
+- **A crash copy trails the take by up to about two timeslices.** A guest's file is committed to it
+  when a fragment arrives at least `CHUNK_TIMESLICE_MS` after the window that began with the first
+  fragment, so a browser killed in the first seconds keeps little: measured with test cameras, a
+  guest's WAV of a take killed at 5 s came back 0.5 to 3.4 s long, and its MP4 (one chunk every
+  two seconds) not at all. Later in a take the same lag is a few seconds.
 - **A crash copy can only be reached from the lobby of its own room.** If the room has expired
   the copy stays in browser storage until the site's data is cleared.
 - **For a moment after Record, a lobby in another tab can remove an empty crash copy.** The take

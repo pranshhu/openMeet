@@ -56,6 +56,48 @@ describe('FileWriter', () => {
     expect(order).toEqual(['write finished', 'close']);
   });
 
+  it('checkpoint() commits the stream and later writes go to the reopened one', async () => {
+    // Removal that must fail this test: the late read of the stream in write(),
+    // or the keepExistingData reopening in checkpoint().
+    const first = fakeWritable();
+    const second = fakeWritable();
+    const createWritable = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const fw = new FileWriter({ picker: vi.fn().mockResolvedValue({ createWritable, name: 'c.m4a' }) });
+    await fw.openFile('c.m4a');
+
+    const a = new Uint8Array([1, 2]).buffer;
+    const b = new Uint8Array([3]).buffer;
+    void fw.write(0, a);
+    const committed = fw.checkpoint();
+    // Issued before the checkpoint has run: it must reach the reopened stream.
+    const after = fw.write(2, b);
+    await Promise.all([committed, after]);
+
+    expect(first.write).toHaveBeenCalledWith({ type: 'write', position: 0, data: a });
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(createWritable).toHaveBeenLastCalledWith({ keepExistingData: true });
+    expect(second.write).toHaveBeenCalledWith({ type: 'write', position: 2, data: b });
+    expect(fw.size).toBe(3);
+
+    await fw.close();
+    expect(second.close).toHaveBeenCalledOnce();
+  });
+
+  it('checkpoint() does nothing before the file is open or once it is closing', async () => {
+    const fw = new FileWriter({ picker: vi.fn() });
+    await expect(fw.checkpoint()).resolves.toBeUndefined();
+
+    const writable = fakeWritable();
+    const createWritable = vi.fn().mockResolvedValue(writable);
+    const open = new FileWriter({ picker: vi.fn().mockResolvedValue({ createWritable, name: 'h.mp4' }) });
+    await open.openFile('h.mp4');
+    const closed = open.close();
+    await open.checkpoint();
+    await closed;
+    expect(writable.close).toHaveBeenCalledOnce();
+    expect(createWritable).toHaveBeenCalledOnce();
+  });
+
   it('two close() calls at the same moment close the stream once and both resolve', async () => {
     // Removal that must fail this test: the shared promise, so each call
     // reaches the stream's own close.
