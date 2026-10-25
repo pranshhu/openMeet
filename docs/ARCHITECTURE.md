@@ -577,7 +577,9 @@ looks up room (missing → accept then close `4002`, expired → `4003`); host a
   the record-alone link (the plain link plus `?producer=1`, `?present=1`, `?audio=1`,
   `?view=host`, `?view=stage` or `?solo=1`, the flags `RoomView` reads) and says what each is.
   The panel is placed from the row it sits in (the
-  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. The lobby preview and the
+  caller's `menuClassName`), not from the arrow, so it stays on a phone's screen. In a window
+  too short for it on that side (`fitPanel`, `opensUp`) it opens on the roomier side and
+  scrolls inside what room it has, so no entry is left above the top of the window. The lobby preview and the
   local camera tile (WaitingRoom and call) are mirrored via `VideoTile` `mirror` — display only, the
   recordings are not; a rear camera, a screen or a remote tile never is. Producers get no mic/cam
   controls and no media board in the call.

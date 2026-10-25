@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { RoleLinks } from '@/components/RoleLinks';
+import { RoleLinks, fitPanel } from '@/components/RoleLinks';
 import { WaitingRoom } from '@/components/WaitingRoom';
 import { CallStage } from '@/components/CallStage';
 
@@ -364,5 +364,23 @@ describe('RoleLinks: view links', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Copy stage view link/ }));
     });
     expect(screen.getByRole('status')).toHaveTextContent('Couldn’t copy. Add ?view=stage to this page’s address.');
+  });
+});
+
+describe('fitPanel', () => {
+  it('keeps the caller’s side when the panel fits there', () => {
+    expect(fitPanel(700, 740, 1080, 430, true)).toEqual({ side: 'up', maxHeight: 676 });
+  });
+
+  it('opens on the roomier side when the window is too short above the row', () => {
+    // 1440x900: the row sits at about 400, and 430 px do not fit above it.
+    const fit = fitPanel(380, 420, 900, 430, true);
+    expect(fit.side).toBe('down');
+    expect(fit.maxHeight).toBeGreaterThanOrEqual(430);
+  });
+
+  it('shrinks to the room it has, and scrolls, when neither side is tall enough', () => {
+    const fit = fitPanel(250, 290, 600, 430, true);
+    expect(fit).toEqual({ side: 'down', maxHeight: 286 });
   });
 });
