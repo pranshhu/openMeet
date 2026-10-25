@@ -3129,6 +3129,8 @@ export function useRoom(slug: string) {
       // page does not announce cannot inherit it after a save that failed.
       const noticeLog = noticeLogRef.current;
       noticeLogRef.current = null;
+      // The take ends at the press; the wait for the guests' tail is not part of its length.
+      const stoppedAtMs = Date.now();
       phaseRef.current = 'finalizing';
       setState((s) => ({ ...s, phase: 'finalizing' }));
       try {
@@ -3345,7 +3347,7 @@ export function useRoom(slug: string) {
               {
                 take: h.take ?? 1,
                 startedAt: h.hostStartMs ?? Date.now(),
-                durationMs: Date.now() - (h.hostStartMs ?? Date.now()),
+                durationMs: stoppedAtMs - (h.hostStartMs ?? stoppedAtMs),
                 discarded: false,
               },
             ],

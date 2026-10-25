@@ -64,6 +64,7 @@ import { listSpeakers, setSpeaker } from '@/lib/speaker';
 import { useSpeakerId } from '@/hooks/use-speaker';
 import { LISTENING_HINT, LISTENING_LABEL, chooseListening } from '@/lib/listening';
 import { chooseTitle } from '@/lib/name-tag';
+import { recallName, rememberName } from '@/lib/join-name';
 import { setSingleKeys, useSingleKeys } from '@/hooks/use-single-keys';
 
 export function RecordingDisclosure({ isHost, presenting = false }: { isHost: boolean; presenting?: boolean }) {
@@ -186,8 +187,9 @@ export function Lobby({
   // later failures (a device switch, Present only) that leave the preview up.
   const [previewError, setPreviewError] = useState<{ title: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  // Typed per visit, like the name: nothing keeps it for the next one.
+  // Kept for this tab, so a reload from a status screen does not ask again.
+  const [name, setName] = useState(recallName);
+  // Typed per visit: nothing keeps it for the next one.
   const [title, setTitle] = useState('');
   const [copied, setCopied] = useState(false);
   const [checkCopied, setCheckCopied] = useState(false);
@@ -239,6 +241,8 @@ export function Lobby({
   const reopeningRef = useRef(false);
   // The same fact for the page to draw from: Join is off while a capture change is under way.
   const [reopening, setReopening] = useState(false);
+  // The camera choice a capture on its way will have; camId changes only when it arrives.
+  const [pendingCam, setPendingCam] = useState<string | null>(null);
   // A take of the record-alone page is being counted in or recorded: the capture
   // is the one being recorded and must not be replaced. A ref the take's own
   // callback writes, so the guard in reacquire never reads a value that is a
@@ -469,6 +473,7 @@ export function Lobby({
     if (!mm || reopeningRef.current || liveRef.current) return;
     reopeningRef.current = true;
     setReopening(true);
+    setPendingCam(nextCam);
     const old = stream;
     const echo = nextListening === 'speakers-ec';
     // Echo cancellation belongs to the open microphone, and a browser can give
@@ -530,6 +535,7 @@ export function Lobby({
     } finally {
       reopeningRef.current = false;
       setReopening(false);
+      setPendingCam(null);
       micStoppedRef.current = false;
     }
   }
@@ -671,7 +677,10 @@ export function Lobby({
       <input
         id="lobby-name"
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => {
+          setName(e.target.value);
+          rememberName(e.target.value);
+        }}
         placeholder="What’s your name?"
         autoComplete="name"
         enterKeyHint="go"
@@ -1137,7 +1146,7 @@ export function Lobby({
               </button>
               {(!stream || reopening) && (
                 <p className="text-sm text-[#5f6368]">
-                  Join opens once your {camId === NO_CAMERA ? 'microphone is' : 'camera and mic are'} on.
+                  Join opens once your {(pendingCam ?? camId) === NO_CAMERA ? 'microphone is' : 'camera and mic are'} on.
                 </p>
               )}
               {/* A quiet alternative, not a twin of Join: picked by mistake, it
