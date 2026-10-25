@@ -1332,10 +1332,10 @@ export function CallStage({
             {hasRundown && (
               <Rundown slug={slug} open={rundownOpen} recording={phase === 'recording'} onMark={onMark} />
             )}
-            {/* Below 384 px the gaps and the side padding give up a few pixels: with
-                a take running the second row holds five buttons and Leave, 334 px
-                at this spacing, which fits a 360 px phone. At the wider spacing it
-                needs 344 px and Leave drops to a third row. */}
+            {/* Below 384 px the gaps, the side padding and the buttons give up a few
+                pixels: with a take running a recorded guest has nine buttons and
+                Leave, and at 360 px they fill two rows only at this spacing. At the
+                wider one Leave drops to a third row. */}
             <div className="flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-[32px] bg-[#2a2b2e]/80 px-1 py-2 shadow-2xl ring-1 ring-white/5 backdrop-blur min-[384px]:gap-2 min-[384px]:px-3 sm:gap-3">
               {/* A producer joins with no camera or mic, so these would only
                   show red and do nothing. */}
