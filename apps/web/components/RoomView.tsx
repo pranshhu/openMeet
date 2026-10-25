@@ -450,6 +450,8 @@ export function RoomView({ slug }: { slug: string }) {
                 'Your backup copies stay in this browser — download them now, or later from the lobby next time you open openMeet.'}
             <FileLinks files={files} />
           </>
+        ) : state.role === 'producer' || state.companion ? (
+          'You can close this tab.'
         ) : (
           'Your camera and microphone are off. You can close this tab.'
         )}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { HelpAsk } from '@openmeet/protocol';
 import type { RemotePeer } from '@/hooks/useRoom';
 import { isStagePeer } from '@/lib/stage-peers';
@@ -8,6 +8,9 @@ import { Icon } from './Icon';
 
 const rowButton =
   'min-h-11 shrink-0 rounded-full px-3 text-xs font-medium text-white ring-1 ring-white/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8] sm:min-h-8';
+
+/** How long the line about the last ask or copy stays: it says what happened, not what is true from now on. */
+const ASKED_LINE_MS = 8000;
 
 const RESTART_ASK: [string, HelpAsk][] = [['Restart connection', 'reconnect']];
 // Only a person with a microphone and camera of their own has devices to switch.
@@ -51,6 +54,11 @@ export function PeoplePanel({
   const [helping, setHelping] = useState<string | null>(null);
   const [askedLine, setAskedLine] = useState<string | null>(null);
   const questionId = useId();
+  useEffect(() => {
+    if (!askedLine) return;
+    const t = setTimeout(() => setAskedLine(null), ASKED_LINE_MS);
+    return () => clearTimeout(t);
+  }, [askedLine]);
 
   function copyViewLink(name: string) {
     // origin+pathname is the plain invite link, whatever query this page has.

@@ -2129,7 +2129,7 @@ describe('returned backups', () => {
     );
 
     const notice = screen.getByText(
-      'Asha wants to send you 1 backup file (1.5 GB) from an earlier recording in this room.'
+      'Asha wants to send you 1 backup file (1.5 GB) from a recording in this room.'
     );
     const column = screen.getByTestId('stage-column');
     expect(
@@ -2705,10 +2705,10 @@ describe('CallStage: a chat message for one person', () => {
     rerender(<CallStage {...props} messages={[fromPat]} />);
 
     // From the pop-up: the commonest way to answer.
-    fireEvent.click(screen.getByRole('button', { name: /Private · from Producer 1\s*Pat/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Producer 2\s*Pat/ }));
     expect(to().value).toBe('p-pat');
     expect(document.getElementById('chat-to-note')?.textContent).toBe(
-      'Only Producer 1 (Pat) gets it. It is left out of the recorded chat.'
+      'Only Producer 2 (Pat) gets it. It is left out of the recorded chat.'
     );
   });
 
@@ -2876,7 +2876,7 @@ describe('CallStage: a private mark no name can draw, and a recipient that stays
     const { rerender } = render(<CallStage {...props} />);
     rerender(<CallStage {...props} messages={[fromPat]} />);
     expect(screen.getByRole('status').querySelector('[data-private-mark]')).toHaveTextContent(
-      'Private · from Producer 1'
+      'Private · from Producer 2'
     );
 
     rerender(<CallStage {...props} messages={[fromPat, claim]} />);
@@ -2916,14 +2916,15 @@ describe('CallStage: the pop-up names a private sender in the page’s words', (
     rerender(<CallStage {...props} messages={[fromDee]} />);
 
     const popup = screen.getByRole('status');
-    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from Guest 1');
+    // Numbered as they are listed: Dee wrote first, Bob was met first.
+    expect(popup.querySelector('[data-private-mark]')).toHaveTextContent('Private · from Guest 2');
     expect(popup.querySelector('bdi')?.textContent).toBe('Dee');
 
-    fireEvent.click(screen.getByRole('button', { name: /Private · from Guest 1\s*Dee/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Private · from Guest 2\s*Dee/ }));
     expect(Array.from((screen.getByLabelText('To') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
       'Everyone',
-      'Guest 2: Bob',
-      'Guest 1: Dee',
+      'Guest 1: Bob',
+      'Guest 2: Dee',
     ]);
   });
 });

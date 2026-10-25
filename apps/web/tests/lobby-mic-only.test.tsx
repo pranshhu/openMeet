@@ -452,7 +452,7 @@ describe('Lobby: microphone only, the rest of its behaviour', () => {
     fireEvent.click(micOnlyButton());
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
     expect(joinNow()).toBeDisabled();
-    expect(screen.getByText('Join opens once your camera and mic are on.')).toBeInTheDocument();
+    expect(screen.getByText('Join opens once your microphone is on.')).toBeInTheDocument();
     submitJoin();
     await act(async () => {});
     expect(onJoin).not.toHaveBeenCalled();
