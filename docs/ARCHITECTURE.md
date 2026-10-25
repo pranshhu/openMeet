@@ -194,7 +194,8 @@ wrong five times on one socket or twenty times in the room, reason `passcode`).
   `TURN_CREDENTIAL`) if set; else mints a Cloudflare Realtime TURN cred if `TURN_API_TOKEN`+
   `TURN_APP_ID` set; else STUN-only **stub** (`username/credential='stub'`). **No host auth on
   this route** — a valid room slug is the only credential, rate-limited to 20/60s per IP
-  (`TURN_CRED_LIMITER`, same shape as `ROOM_CREATE_LIMITER`). Mint failure → 502 (`turn_unavailable`).
+  (`TURN_CRED_LIMITER`, same shape as `ROOM_CREATE_LIMITER`, and as approximate: it counts per
+  Cloudflare location, and a burst of 60 on the demo got its first 429 at about the 47th). Mint failure → 502 (`turn_unavailable`).
 - `GET|PATCH /api/recordings/:id` → host-token auth, cookie or `Authorization: Bearer` (does
   **not** check room expiry).
   PATCH validates field values (400 `invalid_field` on bad fields, 200 on no-op);
@@ -1857,7 +1858,7 @@ answer clears the offer. The editor shows a script's reading time at 150 words a
 - **A participant who rejoins gets a new id and a new share of the call-copy files,**
   so the take-wide limit can still be reached that way.
 - Anyone with a room's invite link can mint short-lived TURN credentials
-  (rate-limited to 20 per minute per IP) — the invite link is the only
+  (rate-limited to about 20 per minute per IP, per Cloudflare location) — the invite link is the only
   credential, so share it only with participants.
 - A guest that leaves and rejoins gets a new `peerId` and so a fresh key allowance, so a
   determined guest can still use up the take's slots; a guest who reloads or joins late can
