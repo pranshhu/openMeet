@@ -33,5 +33,11 @@
   },
   "devDependencies": {
     "typescript": "^5.6.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "source-map-js": "^1.2.2",
+      "baseline-browser-mapping": "^2.11.0"
+    }
   }
 }
