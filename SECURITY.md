@@ -94,9 +94,11 @@ they're already known:
   also means a leaked token lets its holder take the host seat over.
 - **`POST /api/turn-cred` is unauthenticated.** Any valid, unexpired room slug
   mints credentials — the invite link is the only credential, so share it only
-  with participants. Rate-limited to 20 requests per minute per IP
-  (`TURN_CRED_LIMITER`); harmless while TURN runs in STUN-only stub mode, and
-  bounded once relay credentials are live.
+  with participants. Rate-limited to about 20 requests per minute per IP
+  (`TURN_CRED_LIMITER`). Cloudflare's limiter counts per location and is
+  approximate: on the demo a burst of 60 requests got its first 429 at about
+  the 47th. Harmless while TURN runs in STUN-only stub mode, and bounded once
+  relay credentials are live.
 - **Room-creation rate limiting is per Cloudflare location**, not global
   (10 per minute per IP, `ROOM_CREATE_LIMITER`), and fails open if the binding
   is missing — a speed bump rather than a hard limit.

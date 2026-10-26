@@ -799,7 +799,7 @@ Known gaps, listed below:
   question and its answer, before it had a first estimate: that browser asks no more
   for that recording.
 - Anyone with a room's invite link can mint short-lived TURN credentials
-  (rate-limited to 20 per minute per IP) — the invite link is the only
+  (rate-limited to about 20 per minute per IP, per Cloudflare location) — the invite link is the only
   credential, so share it only with participants.
 - **Removing a participant keeps out that tab, not that person.** The room refuses the
   removed tab until everyone has left, but the invite link is the only credential for joining
