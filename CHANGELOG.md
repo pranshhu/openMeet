@@ -611,6 +611,12 @@ rather not be named. To report one, see [SECURITY.md](SECURITY.md).
 - A wrong acknowledgement from the host can no longer stop a guest's recording from
   streaming to the host.
 - CI scans every push and pull request for leaked secrets and known-bad code patterns, and its actions are pinned to exact commits.
+- Updated the packages that ship in the site and the Worker to versions with no known
+  vulnerabilities: Next.js 16.4.3 (several remote-code-execution, request-forgery and
+  denial-of-service advisories in 16.2.x, none of which is reachable in a static export, but
+  the build ran on the affected code), PDF.js 6.4.299 (a malicious PDF could run script
+  when opened), React 19.3.1, Hono 4.13.14 and Tailwind 4.3.3. `pnpm audit --prod` now
+  reports nothing.
 
 ## [0.1.0] - 2026-09-29
 
