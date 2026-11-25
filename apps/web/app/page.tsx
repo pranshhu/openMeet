@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import posthog from 'posthog-js';
 import { createRoom, getSponsors } from '@/lib/api';
 import type { SponsorsResponse } from '@/lib/api';
 import { storeHostToken } from '@/lib/host-token';
@@ -43,6 +44,11 @@ export default function Landing() {
     try {
       const { slug, host_token } = await createRoom();
       storeHostToken(slug, host_token);
+      posthog.capture('room_created', { creation_method: 'generated' });
+      posthog.logger.info('room creation completed', {
+        creation_method: 'generated',
+        result: 'success',
+      });
       window.location.href = `/r/${slug}/`;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create room');

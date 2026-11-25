@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import posthog from 'posthog-js';
 import { Icon } from './Icon';
 import { SendFile } from './SendFile';
 import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage } from '@/lib/sync-report';
@@ -231,6 +232,7 @@ export function ChatPanel({
           e.preventDefault();
           const t = text.trim();
           if (t && !gone) {
+            posthog.capture('chat_message_sent', { audience: to ? 'private' : 'room' });
             if (to) onSend(t, to);
             else onSend(t);
             setText('');

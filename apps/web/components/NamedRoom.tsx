@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useState, type FormEvent } from 'react';
+import posthog from 'posthog-js';
 import { isRoomName, isRoomSlug, MAX_ROOM_NAME_LENGTH } from '@openmeet/protocol';
 import { createRoom } from '@/lib/api';
 import { storeHostToken } from '@/lib/host-token';
@@ -33,6 +34,11 @@ export function NamedRoom() {
     try {
       const { slug, host_token } = await createRoom(name);
       storeHostToken(slug, host_token);
+      posthog.capture('room_created', { creation_method: 'named_link' });
+      posthog.logger.info('room creation completed', {
+        creation_method: 'named_link',
+        result: 'success',
+      });
       window.location.href = `/r/${slug}/`;
     } catch (err) {
       const status = (err as { status?: unknown }).status;

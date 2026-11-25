@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import posthog from 'posthog-js';
 import {
   LISTENING_CHOICES,
   MAX_TITLE_LENGTH,
@@ -646,6 +647,11 @@ export function Lobby({
       mmRef.current?.stop();
       stream?.getTracks().forEach((t) => t.stop());
       if (chosen.length > 0) onSendBackups?.(chosen.map((b) => b.file));
+      posthog.capture('room_join_requested', { join_mode: 'presenter', media_mode: 'screen_only' });
+      posthog.logger.info('room join initiated', {
+        join_mode: 'presenter',
+        media_mode: 'screen_only',
+      });
       onJoin(emptyStream(), name.trim(), true, screenStream);
     } catch (e) {
       if (e instanceof Error && e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
@@ -759,6 +765,11 @@ export function Lobby({
             onSubmit={(e) => {
               e.preventDefault();
               if (!name.trim()) return;
+              posthog.capture('room_join_requested', { join_mode: 'producer', media_mode: 'none' });
+              posthog.logger.info('room join initiated', {
+                join_mode: 'producer',
+                media_mode: 'none',
+              });
               onJoin(emptyStream(), name.trim());
             }}
           >
@@ -1094,6 +1105,17 @@ export function Lobby({
               } catch {
                 /* private mode — the choice just doesn't persist */
               }
+              const mediaMode = joined.getVideoTracks().length === 0 ? 'microphone_only' : 'camera_and_microphone';
+              posthog.capture('room_join_requested', {
+                join_mode: 'participant',
+                media_mode: mediaMode,
+                stereo,
+              });
+              posthog.logger.info('room join initiated', {
+                join_mode: 'participant',
+                media_mode: mediaMode,
+                stereo,
+              });
               onJoin(joined, name.trim(), false, undefined, stereo);
             }}
           >

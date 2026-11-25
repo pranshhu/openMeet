@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import posthog from 'posthog-js';
 import { REACTIONS } from '@openmeet/protocol';
 import { Icon } from './Icon';
 import { REACTION_FACE } from './ReactionBadge';
@@ -76,6 +77,7 @@ export function ReactionMenu({ onReact }: { onReact: (reaction: Reaction) => voi
                 setOpen(false);
                 // The button pressed is about to unmount; keep focus in the bar.
                 arrow.current?.focus();
+                posthog.capture('reaction_sent', { reaction: r });
                 onReact(r);
               }}
               className="inline-flex h-11 w-11 items-center justify-center rounded-full text-2xl leading-none hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8ab4f8]"

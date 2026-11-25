@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import posthog from 'posthog-js';
 import type { BrowserNote, HelpAsk as HelpAskCode, Listening, Role } from '@openmeet/protocol';
 import { Stage, type StageFeed } from './Stage';
 import { Teleprompter } from './Teleprompter';
@@ -793,7 +794,27 @@ export function CallStage({
   const handleRecord = () => {
     setRecordMenuOpen(false);
     requestProblemNotifications();
+    posthog.capture('recording_start_requested', { role: role ?? 'unknown' });
     onRecord();
+  };
+  const handleScreenShare = (source?: PresentSource) => {
+    posthog.capture('screen_share_requested', {
+      action: screenSharing ? 'stop' : 'start',
+      source: screenSharing
+        ? 'screen'
+        : source instanceof File
+          ? 'media_file'
+          : Array.isArray(source)
+            ? 'slides'
+            : source === 'rear-camera'
+              ? 'rear_camera'
+              : 'screen',
+    });
+    return onToggleScreen(source);
+  };
+  const handleEnd = () => {
+    posthog.capture('recording_end_requested', { role: role ?? 'unknown' });
+    onEnd();
   };
   const recordNextTake = () => {
     onNewTake();
@@ -815,7 +836,7 @@ export function CallStage({
   const handlePause = () => {
     summaryAtPause.current = summary;
     setPaused(true);
-    onEnd();
+    handleEnd();
   };
 
   const toastPlace = prompterOpen ? 'top-3 sm:top-auto sm:bottom-3' : 'top-3';
@@ -1262,7 +1283,7 @@ export function CallStage({
               })()}
               spotlight={spotlight}
               onSwapSpotlight={() => setSpotlight((s) => (s === 'remote' ? 'local' : 'remote'))}
-              onStopPresenting={() => onToggleScreen()}
+              onStopPresenting={() => handleScreenShare()}
               onShowVideo={incomingVideoOff ? () => onSetIncomingVideoOff?.(false) : undefined}
             />
             {/* Under the notices (z-30) and over the tiles. Only a value the page
@@ -1596,7 +1617,7 @@ export function CallStage({
                       onClick={() => {
                         if (screenSharing || screenShareSupported) {
                           setPresentMenuOpen(false);
-                          onToggleScreen();
+                          handleScreenShare();
                         } else if (canPresentFile) {
                           setPresentMenuOpen((o) => !o);
                           setMicMenuOpen(false);
@@ -1642,7 +1663,7 @@ export function CallStage({
                               const file = e.target.files?.[0];
                               if (!file) return;
                               setPresentMenuOpen(false);
-                              onToggleScreen(file);
+                              handleScreenShare(file);
                             }}
                           />
                         </label>
@@ -1661,7 +1682,7 @@ export function CallStage({
                               if (!files || files.length === 0) return;
                               setPresentMenuOpen(false);
                               setDeviceError(null);
-                              void Promise.resolve(onToggleScreen(Array.from(files))).then((reason) => {
+                              void Promise.resolve(handleScreenShare(Array.from(files))).then((reason) => {
                                 if (typeof reason === 'string') setDeviceError(reason);
                               });
                             }}
@@ -1673,7 +1694,7 @@ export function CallStage({
                             role="menuitem"
                             onClick={() => {
                               setPresentMenuOpen(false);
-                              onToggleScreen('rear-camera');
+                              handleScreenShare('rear-camera');
                             }}
                             className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-white/10"
                           >
@@ -1860,7 +1881,7 @@ export function CallStage({
                     <ControlButton icon="pause" text="Pause" label="Pause recording" onClick={handlePause} />
                   )}
                   {isHost ? (
-                    <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={onEnd} />
+                    <ControlButton icon="stop" text="End & save" label="End & save recording" shortcut="Alt+S" variant="active" onClick={handleEnd} />
                   ) : (
                     recordingError && recordingError.includes('Stop and save my recording') && (
                       <ControlButton
@@ -1868,7 +1889,7 @@ export function CallStage({
                         text="Stop and save"
                         label="Stop and save my recording"
                         variant="active"
-                        onClick={onEnd}
+                        onClick={handleEnd}
                       />
                     )
                   )}
